@@ -1,0 +1,61 @@
+name: build (reusable)
+
+# Reusable build & test for a single OS. The per-OS workflows
+# (build-*.yml) call this so each platform gets its own status badge while the
+# build/test steps live in exactly one place.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: GitHub-hosted runner label to build on (e.g. ubuntu-24.04).
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect build system
+        id: detect
+        run: |
+          if [ -f CMakeLists.txt ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No CMakeLists.txt found — skipping build and test."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies (Linux)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
+            libglfw3-dev libglm-dev
+          # make + a C/C++ toolchain ship preinstalled (build-essential).
+
+      - name: Install dependencies (macOS)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake molten-vk glfw glm \
+            vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross
+          # make ships with the Xcode command-line tools.
+
+      # Default ("Unix Makefiles") generator + a parallel make build, per
+      # project preference — no Ninja.
+      - name: Configure
+        if: steps.detect.outputs.present == 'true'
+        run: cmake -S . -B build
+
+      - name: Build
+        if: steps.detect.outputs.present == 'true'
+        run: cmake --build build --parallel
+
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        run: ctest --test-dir build --output-on-failure
