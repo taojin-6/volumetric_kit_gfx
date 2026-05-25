@@ -1,0 +1,45 @@
+# Build directories
+/build*/
+/cmake-build-*/
+/out/
+
+# Generated runtime env helper (configured by CMake)
+vkgfx-env.sh
+
+# Compiled shaders (built into the build tree, but ignore if any leak into src)
+*.spv
+
+# Rendered artifacts from examples/tests
+*.ppm
+*.png.actual
+
+# CMake/user state
+CMakeUserPresets.json
+.cache/
+compile_commands.json
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# GPU debugging captures (RenderDoc / Xcode Metal frame capture)
+*.rdc
+*.cap
+*.gputrace
+
+# Xcode-generator output (Apple/MoltenVK builds)
+*.xcodeproj/
+DerivedData/
+
+# CUDA/Metal interop compiled intermediates
+*.ptx
+*.cubin
+*.fatbin
+
+# Logs
+*.log
+
+# Internal design/migration doc — kept local, not published
+/DESIGN.md
