@@ -1,5 +1,7 @@
 # volumetric_kit_gfx
 
+[![CI](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/ci.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/ci.yml)
+
 A standalone, reusable **Vulkan** renderer library (MoltenVK on Apple) for volumetric
 workloads.
 
