@@ -3,7 +3,7 @@
 [![lint](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/lint.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/lint.yml)
 [![ubuntu-22.04](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-ubuntu-2204.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-ubuntu-2204.yml)
 [![ubuntu-24.04](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-ubuntu-2404.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-ubuntu-2404.yml)
-[![macOS](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-macos.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-macos.yml)
+[![macos-26](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-macos-26.yml/badge.svg)](https://github.com/taojin-6/volumetric_kit_gfx/actions/workflows/build-macos-26.yml)
 
 A standalone, reusable **Vulkan** renderer library (MoltenVK on Apple) for volumetric
 workloads.
