@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   build:
+    name: macos-26
     uses: ./.github/workflows/_build.yml
     with:
       os: macos-26
