@@ -10,6 +10,7 @@
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/gfx/core/texture.hpp"
 
 namespace vg = volumetric_kit::gfx;
 
@@ -224,4 +225,142 @@ TEST(BufferTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(buffer.handle(), VK_NULL_HANDLE);
   EXPECT_EQ(buffer.size(), 0u);
   EXPECT_EQ(buffer.mapped(), nullptr);
+}
+
+TEST_F(AllocatorTest, ColorImageHasImageAndView) {
+  vg::TextureDesc desc;
+  desc.extent = {64, 64};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_TRUE(texture.value().valid());
+  EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+  EXPECT_EQ(texture.value().extent().width, 64u);
+  EXPECT_EQ(texture.value().extent().height, 64u);
+  EXPECT_EQ(texture.value().format(), VK_FORMAT_R8G8B8A8_UNORM);
+}
+
+TEST_F(AllocatorTest, DepthImageGetsDepthAspectView) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_D32_SFLOAT;
+  desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+  // A depth format must yield a view; the wrong aspect would fail view
+  // creation.
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+}
+
+TEST_F(AllocatorTest, ExportableImageReturnsNotSupported) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.exportable = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().code(), VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+TEST_F(AllocatorTest, ZeroExtentImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {0, 0};  // invalid — reject before touching VMA
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+}
+
+TEST_F(AllocatorTest, ZeroUsageImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = 0;  // no usage flags — reject before touching VMA
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+}
+
+TEST_F(AllocatorTest, UndefinedFormatImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_UNDEFINED;  // invalid — reject before touching VMA
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+}
+
+TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto made = allocator_->create_image(desc);
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  vg::Texture source = std::move(made).value();
+  ASSERT_TRUE(source.valid());
+
+  vg::Texture moved(std::move(source));
+  EXPECT_TRUE(moved.valid());
+  EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source.image(), VK_NULL_HANDLE);
+  EXPECT_EQ(source.extent().width, 0u);
+  EXPECT_EQ(source.format(), VK_FORMAT_UNDEFINED);
+}
+
+TEST_F(AllocatorTest, TextureMoveAssignOverLiveLeavesSourceEmpty) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto a = allocator_->create_image(desc);
+  auto b = allocator_->create_image(desc);
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+  vg::Texture dst = std::move(a).value();
+  vg::Texture src = std::move(b).value();
+
+  dst = std::move(src);  // runs dst's deleter once, then adopts src's
+  EXPECT_TRUE(dst.valid());
+  EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(AllocatorTest, TextureSelfMoveAssignIsSafe) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto made = allocator_->create_image(desc);
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  vg::Texture texture = std::move(made).value();
+
+  // Pointer-laundered self-move (dodges -Wself-move); the this != &other guard
+  // must keep the texture intact and not run its deleter.
+  vg::Texture* alias = &texture;
+  texture = std::move(*alias);
+  EXPECT_TRUE(texture.valid());
+}
+
+// No device needed: a default-constructed Texture owns nothing.
+TEST(TextureTest, DefaultConstructedIsEmpty) {
+  vg::Texture texture;
+  EXPECT_FALSE(texture.valid());
+  EXPECT_EQ(texture.image(), VK_NULL_HANDLE);
+  EXPECT_EQ(texture.view(), VK_NULL_HANDLE);
+  EXPECT_EQ(texture.extent().width, 0u);
+  EXPECT_EQ(texture.format(), VK_FORMAT_UNDEFINED);
 }
