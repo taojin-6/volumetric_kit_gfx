@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// @file result.ipp
+/// @file core/impl/result.hpp
 /// Header-bound implementation of the `Result<T>` template. Included from
 /// `core/result.hpp`; not a standalone header.
 
