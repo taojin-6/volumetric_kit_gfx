@@ -21,7 +21,8 @@ target_sources(
           volumetric_kit/gfx/core/log.cpp
           volumetric_kit/gfx/core/check.cpp
           volumetric_kit/gfx/core/instance.cpp
-          volumetric_kit/gfx/core/device.cpp)
+          volumetric_kit/gfx/core/device.cpp
+          volumetric_kit/gfx/core/sync.cpp)
 
 # Generated headers: the VG_API export macro + the configured version header.
 generate_export_header(
