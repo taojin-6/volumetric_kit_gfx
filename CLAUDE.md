@@ -60,3 +60,8 @@ the single Vulkan path holds or a native-Metal fallback is needed.
 - Prefer plain, behavior-level tests over friend-class backdoors into private state.
 - Mark deferred/future work inline with a `TODO:` comment (e.g. `// TODO: adopt volk for the
   iOS static-MoltenVK path`) so it is greppable, rather than tracking it only in prose or commits.
+- Document public classes/functions with full Doxygen, matching `include/volumetric_kit/gfx/core/result.hpp`:
+  `@file`/`@brief` on the header, `@brief` + a `@code … @endcode` example per class, and
+  `@brief`/`@param`/`@return` (`@pre` where relevant) on methods; accessors may be a single `/// @return`.
+  Do **not** write "move-only" (or similar) in prose — the deleted-copy/defaulted-move declarations
+  already convey it.
