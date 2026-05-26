@@ -27,8 +27,7 @@ if(VG_INSTALL)
     DIRECTORY "${PROJECT_SOURCE_DIR}/include/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
-    PATTERN "*.hpp"
-    PATTERN "*.ipp")
+    PATTERN "*.hpp")
 
   install(
     EXPORT volumetric_kit_gfxTargets

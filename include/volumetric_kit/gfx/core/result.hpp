@@ -174,4 +174,4 @@ class Result {
       return ::volumetric_kit::gfx::vk_error(_vg_vk, #expr); \
   } while (0)
 
-#include "volumetric_kit/gfx/core/impl/result.ipp"
+#include "volumetric_kit/gfx/core/impl/result.hpp"
