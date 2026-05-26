@@ -74,9 +74,74 @@ TEST_F(SyncTest, SemaphoreCreates) {
 }
 
 TEST_F(SyncTest, FenceMoveLeavesSourceEmpty) {
-  auto fence = vg::Fence::create(device(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-  vg::Fence moved(std::move(fence).value());
+  auto created = vg::Fence::create(device(), /*signaled=*/true);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::Fence source = std::move(created).value();
+  ASSERT_NE(source.handle(), VK_NULL_HANDLE);
+
+  vg::Fence moved(std::move(source));
   EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
-  // Source's handle was nulled by the move, so only `moved` destroys the fence.
+  EXPECT_EQ(source.handle(),
+            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, FenceMoveAssignOverLiveLeavesSourceEmpty) {
+  auto a = vg::Fence::create(device(), /*signaled=*/true);
+  auto b = vg::Fence::create(device(), /*signaled=*/false);
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+  vg::Fence dst = std::move(a).value();
+  vg::Fence src = std::move(b).value();
+
+  dst = std::move(src);  // frees dst's original fence, then adopts src's
+  EXPECT_NE(dst.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, FenceSelfMoveAssignIsSafe) {
+  auto created = vg::Fence::create(device(), /*signaled=*/true);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::Fence fence = std::move(created).value();
+
+  // Launder through a pointer so the compiler can't see the self-move (which
+  // trips -Wself-move under -Werror); exercises operator='s this != &other
+  // guard.
+  vg::Fence* alias = &fence;
+  fence = std::move(*alias);
+  EXPECT_NE(fence.handle(), VK_NULL_HANDLE);
+}
+
+TEST_F(SyncTest, SemaphoreMoveLeavesSourceEmpty) {
+  auto created = vg::Semaphore::create(device());
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::Semaphore source = std::move(created).value();
+  ASSERT_NE(source.handle(), VK_NULL_HANDLE);
+
+  vg::Semaphore moved(std::move(source));
+  EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(source.handle(),
+            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, SemaphoreMoveAssignOverLiveLeavesSourceEmpty) {
+  auto a = vg::Semaphore::create(device());
+  auto b = vg::Semaphore::create(device());
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+  vg::Semaphore dst = std::move(a).value();
+  vg::Semaphore src = std::move(b).value();
+
+  dst = std::move(src);
+  EXPECT_NE(dst.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, SemaphoreSelfMoveAssignIsSafe) {
+  auto created = vg::Semaphore::create(device());
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::Semaphore semaphore = std::move(created).value();
+
+  vg::Semaphore* alias = &semaphore;
+  semaphore = std::move(*alias);
+  EXPECT_NE(semaphore.handle(), VK_NULL_HANDLE);
 }
