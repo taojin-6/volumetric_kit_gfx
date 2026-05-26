@@ -54,9 +54,13 @@ target_include_directories(
   gfx_core
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
          "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
-  # Absorbed private dep: VMA's header, implemented in vma_impl.cpp.
-  PRIVATE "${VG_VMA_INCLUDE_DIR}")
+         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+
+# VMA's header is a vendored private dep (implemented in vma_impl.cpp). Mark it
+# SYSTEM so its warnings -- nullability-extension/-completeness under
+# -Wall/-Wpedantic -- never reach our build, keeping first-party code clean
+# enough for -Werror.
+target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
 # Public deps (header packages) are independently re-findable, so the installed
 # package's find_dependency() calls stay simple. The Vulkan loader is PRIVATE:
