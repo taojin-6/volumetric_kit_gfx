@@ -123,6 +123,102 @@ TEST_F(SyncTest, SemaphoreMoveLeavesSourceEmpty) {
             VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
 }
 
+TEST_F(SyncTest, TimelineHostSignalAdvancesValue) {
+  auto timeline = vg::TimelineSemaphore::create(device(), /*initial_value=*/0);
+  if (!timeline.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << timeline.status().message();
+  }
+  auto initial = timeline.value().value();
+  ASSERT_TRUE(initial.ok()) << initial.status().message();
+  EXPECT_EQ(initial.value(), 0u);
+
+  ASSERT_TRUE(timeline.value().signal(5).ok());
+  auto raised = timeline.value().value();
+  ASSERT_TRUE(raised.ok()) << raised.status().message();
+  EXPECT_EQ(raised.value(), 5u);
+}
+
+TEST_F(SyncTest, TimelineWaitReturnsWhenReached) {
+  auto timeline = vg::TimelineSemaphore::create(device(), /*initial_value=*/0);
+  if (!timeline.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << timeline.status().message();
+  }
+  ASSERT_TRUE(timeline.value().signal(3).ok());
+  EXPECT_TRUE(
+      timeline.value().wait(3).ok());  // already at 3 → returns immediately
+}
+
+TEST_F(SyncTest, TimelineWaitTimesOutBeforeSignal) {
+  auto timeline = vg::TimelineSemaphore::create(device(), /*initial_value=*/0);
+  if (!timeline.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << timeline.status().message();
+  }
+  // Counter is 0; waiting for 1 with a zero timeout reports VK_TIMEOUT.
+  vg::Status waited = timeline.value().wait(/*value=*/1, /*timeout_ns=*/0);
+  EXPECT_FALSE(waited.ok());
+  EXPECT_EQ(waited.code(), VK_TIMEOUT);
+}
+
+TEST_F(SyncTest, TimelineMoveLeavesSourceEmpty) {
+  auto created = vg::TimelineSemaphore::create(device());
+  if (!created.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << created.status().message();
+  }
+  vg::TimelineSemaphore source = std::move(created).value();
+  ASSERT_NE(source.handle(), VK_NULL_HANDLE);
+
+  vg::TimelineSemaphore moved(std::move(source));
+  EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(source.handle(),
+            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, TimelineMoveAssignOverLiveLeavesSourceEmpty) {
+  auto a = vg::TimelineSemaphore::create(device());
+  if (!a.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: " << a.status().message();
+  }
+  auto b = vg::TimelineSemaphore::create(device());
+  ASSERT_TRUE(b.ok()) << b.status().message();
+  vg::TimelineSemaphore dst = std::move(a).value();
+  vg::TimelineSemaphore src = std::move(b).value();
+
+  dst = std::move(src);  // destroys dst's original semaphore, then adopts src's
+  EXPECT_NE(dst.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, TimelineSelfMoveAssignIsSafe) {
+  auto created = vg::TimelineSemaphore::create(device());
+  if (!created.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << created.status().message();
+  }
+  vg::TimelineSemaphore timeline = std::move(created).value();
+
+  // Pointer-laundered self-move (dodges -Wself-move); the this != &other guard
+  // must keep the semaphore intact.
+  vg::TimelineSemaphore* alias = &timeline;
+  timeline = std::move(*alias);
+  EXPECT_NE(timeline.handle(), VK_NULL_HANDLE);
+}
+
+TEST_F(SyncTest, TimelineInitialValueIsObserved) {
+  auto timeline = vg::TimelineSemaphore::create(device(), /*initial_value=*/7);
+  if (!timeline.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << timeline.status().message();
+  }
+  auto value = timeline.value().value();
+  ASSERT_TRUE(value.ok()) << value.status().message();
+  EXPECT_EQ(value.value(),
+            7u);  // create() must seed the counter at initial_value
+}
+
 TEST_F(SyncTest, SemaphoreMoveAssignOverLiveLeavesSourceEmpty) {
   auto a = vg::Semaphore::create(device());
   auto b = vg::Semaphore::create(device());
