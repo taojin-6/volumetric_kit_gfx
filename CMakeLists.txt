@@ -45,7 +45,14 @@ endif()
 option(VG_WITH_VALIDATION "Enable Vulkan validation layers + debug messenger"
        ${_vg_validation_default})
 
+# Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
+# globally — see cmake/vg_sanitizers.cmake for why.
+set(VG_SANITIZE
+    ""
+    CACHE STRING "Sanitizers to enable, e.g. address;undefined (empty = off)")
+
 include(vg_warnings)
+include(vg_sanitizers)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets (Vulkan::Headers,

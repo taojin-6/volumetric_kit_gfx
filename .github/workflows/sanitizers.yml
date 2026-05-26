@@ -1,0 +1,62 @@
+name: sanitizers
+
+# AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer, Linux-only
+# (LeakSanitizer isn't available on macOS). Builds against lavapipe (software
+# Vulkan) with validation layers on, so the GPU-touching tests run under the
+# sanitizers — this is what catches the leak / use-after-free / double-free
+# class the unit tests alone can't detect.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asan-ubsan-lsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
+    env:
+      # Absolute path: ctest changes cwd per test, so a relative suppressions
+      # path would silently fail to load.
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=0
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake clang \
+            libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
+            libglfw3-dev libglm-dev \
+            mesa-vulkan-drivers vulkan-tools
+          # lavapipe (software Vulkan) lets the GPU-dependent tests run on this
+          # GPU-less runner; point the loader at it.
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+
+      - name: GPU diagnostic
+        run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
+
+      # Debug turns VG_WITH_VALIDATION on (complementary handle/lifetime checking
+      # ASan can't see). clang gives the most reliable sanitizer + mesa interop.
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DVG_SANITIZE="address;undefined"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # If a future mesa bump produces leak noise tools/lsan.supp doesn't cover,
+      # the escape hatch is to split this run: CPU-only tests with full leak
+      # detection, driver-backed tests with ASAN_OPTIONS=detect_leaks=0 (ASan +
+      # UBSan still on). Prefer extending the suppressions first.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

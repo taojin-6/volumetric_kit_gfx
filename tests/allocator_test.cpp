@@ -48,6 +48,16 @@ class AllocatorTest : public ::testing::Test {
   std::optional<vg::Allocator> allocator_;
 };
 
+// A small host-visible, mapped buffer — the common fixture for the move tests.
+vg::BufferDesc host_visible_mapped_desc() {
+  vg::BufferDesc desc;
+  desc.size = 64;
+  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = vg::MemoryUsage::HostVisible;
+  desc.mapped = true;
+  return desc;
+}
+
 }  // namespace
 
 TEST_F(AllocatorTest, HostVisibleMappedBufferRoundTrips) {
@@ -98,17 +108,60 @@ TEST_F(AllocatorTest, ExportableBufferReturnsNotSupported) {
 }
 
 TEST_F(AllocatorTest, BufferMoveLeavesSourceEmpty) {
-  vg::BufferDesc desc;
-  desc.size = 64;
-  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
-
-  auto made = allocator_->create_buffer(desc);
+  auto made = allocator_->create_buffer(host_visible_mapped_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
-  vg::Buffer moved(std::move(made).value());
+  vg::Buffer source = std::move(made).value();
+  ASSERT_TRUE(source.valid());
+
+  vg::Buffer moved(std::move(source));
   EXPECT_TRUE(moved.valid());
-  EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
+  EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(source.size(), 0u);
+}
+
+TEST_F(AllocatorTest, BufferMoveAssignOverLiveLeavesSourceEmpty) {
+  auto a = allocator_->create_buffer(host_visible_mapped_desc());
+  auto b = allocator_->create_buffer(host_visible_mapped_desc());
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+  vg::Buffer dst = std::move(a).value();
+  vg::Buffer src = std::move(b).value();
+
+  dst = std::move(src);  // runs dst's deleter once, then adopts src's
+  EXPECT_TRUE(dst.valid());
+  EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(AllocatorTest, BufferSelfMoveAssignIsSafe) {
+  auto made = allocator_->create_buffer(host_visible_mapped_desc());
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  vg::Buffer buffer = std::move(made).value();
+
+  // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
+  // this != &other guard must keep the buffer intact and not run its deleter.
+  vg::Buffer* alias = &buffer;
+  buffer = std::move(*alias);
+  EXPECT_TRUE(buffer.valid());
+}
+
+TEST_F(AllocatorTest, AllocatorSelfMoveAssignIsSafe) {
+  vg::Allocator* alias = &*allocator_;
+  *allocator_ = std::move(*alias);
+  // Still usable after a self-move (no double-free of the VmaAllocator).
+  auto buffer = allocator_->create_buffer(host_visible_mapped_desc());
+  EXPECT_TRUE(buffer.ok()) << buffer.status().message();
+}
+
+TEST_F(AllocatorTest, AutoMemoryBufferIsValid) {
+  vg::BufferDesc desc;
+  desc.size = 128;
+  desc.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+  desc.memory = vg::MemoryUsage::Auto;
+
+  auto buffer = allocator_->create_buffer(desc);
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  EXPECT_TRUE(buffer.value().valid());
 }
 
 TEST_F(AllocatorTest, MoveAssignOverLiveAllocatorStaysUsable) {
@@ -162,4 +215,13 @@ TEST_F(AllocatorTest, DeviceLocalMappedIsRejected) {
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
   EXPECT_EQ(buffer.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+}
+
+// No device needed: a default-constructed Buffer owns nothing.
+TEST(BufferTest, DefaultConstructedIsEmpty) {
+  vg::Buffer buffer;
+  EXPECT_FALSE(buffer.valid());
+  EXPECT_EQ(buffer.handle(), VK_NULL_HANDLE);
+  EXPECT_EQ(buffer.size(), 0u);
+  EXPECT_EQ(buffer.mapped(), nullptr);
 }
