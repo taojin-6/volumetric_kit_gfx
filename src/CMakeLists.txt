@@ -7,14 +7,21 @@ include(GNUInstallDirs)
 set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
 # --- gfx_core: Tier 1 -------------------------------------------------------
-# A deliberately minimal core (just the version API) so the build, dependency,
-# export, and CI pipeline are proven end-to-end. The device / memory /
-# reflection surface lands later.
+# The core tier: version API, logging, contract checks, and Vulkan
+# instance/device setup.
+#
+# TODO: add the memory (VMA wrapper) and spirv-cross reflection surface.
 add_library(gfx_core)
 add_library(volumetric_kit::gfx_core ALIAS gfx_core)
 
-target_sources(gfx_core PRIVATE volumetric_kit/gfx/version.cpp
-                                volumetric_kit/gfx/core/vma_impl.cpp)
+target_sources(
+  gfx_core
+  PRIVATE volumetric_kit/gfx/version.cpp
+          volumetric_kit/gfx/core/vma_impl.cpp
+          volumetric_kit/gfx/core/log.cpp
+          volumetric_kit/gfx/core/check.cpp
+          volumetric_kit/gfx/core/instance.cpp
+          volumetric_kit/gfx/core/device.cpp)
 
 # Generated headers: the VG_API export macro + the configured version header.
 generate_export_header(
@@ -67,7 +74,9 @@ vg_target_warnings(gfx_core)
 
 # --- gfx: umbrella alias ----------------------------------------------------
 # Aggregates the component targets; consumers link `volumetric_kit::gfx` and get
-# whatever tiers are built. Grows as passes/pipelines/app land.
+# whatever tiers are built.
+#
+# TODO: link passes/pipelines/app here as those tiers are added.
 add_library(gfx INTERFACE)
 add_library(volumetric_kit::gfx ALIAS gfx)
 target_link_libraries(gfx INTERFACE gfx_core)
@@ -85,7 +94,8 @@ if(VG_INSTALL)
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../include/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
-    PATTERN "*.hpp")
+    PATTERN "*.hpp"
+    PATTERN "*.ipp")
   install(DIRECTORY "${_vg_generated_inc}/"
           DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 

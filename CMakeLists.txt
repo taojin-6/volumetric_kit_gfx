@@ -31,9 +31,11 @@ option(VG_BUILD_TESTS "Build tests" ${VG_IS_TOP_LEVEL})
 option(VG_INSTALL "Generate install/export rules" ${VG_IS_TOP_LEVEL})
 option(VG_WITH_GLFW "Enable GLFW desktop windowing" ON)
 option(VG_WITH_CUDA "Enable CUDA <-> Vulkan external-memory interop" OFF)
-# Off for now: gfx_core compiles the absorbed VMA implementation TU, and -Werror
-# trips on third-party warnings from it. Re-enable once that TU is isolated from
-# the first-party warning flags (see vg_target_warnings usage).
+# Off: gfx_core compiles the absorbed VMA implementation TU, and -Werror trips
+# on third-party warnings from it.
+#
+# TODO: isolate that TU from the first-party warning flags, then default this
+# ON.
 option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        OFF)
 
@@ -68,8 +70,9 @@ if(VG_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# examples/ arrives with the hello-triangle later; guard so we don't error
-# early.
+# Guard: examples/ may not exist yet, so don't error when it is absent.
+#
+# TODO: drop the guard once examples/ is added.
 if(VG_BUILD_EXAMPLES AND EXISTS
                          "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
   add_subdirectory(examples)
