@@ -32,6 +32,13 @@ The dependency rule is strict: a tier may only depend on tiers to its left.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.
+- **Vulkan via the link-time loader (`Vulkan::Vulkan`), accessed through one internal umbrella
+  header (`core/vulkan.hpp`, added in PR2).** No volk for now — the loader/dispatch ceremony
+  (`VK_NO_PROTOTYPES`, global function pointers, per-platform init) isn't worth it while iOS/Android
+  and CUDA interop are deferred. Because every call site includes only the umbrella header, adopting
+  volk later (for iOS/Android loader portability or `volkLoadDevice` dispatch perf) is a non-breaking
+  change to that one header + the link line — not a one-way door. VMA uses the linked Vulkan
+  prototypes (`VMA_STATIC_VULKAN_FUNCTIONS`).
 
 ## Key gotchas (verified)
 
@@ -44,10 +51,12 @@ The dependency rule is strict: a tier may only depend on tiers to its left.
 ## Where to start
 
 The repo is currently bare scaffolding (config + pre-commit only). First milestone: a repo
-skeleton (CMake + volk/VMA + third_party) and an `examples/01_triangle` hello-triangle smoke
+skeleton (CMake + VMA + third_party) and an `examples/01_triangle` hello-triangle smoke
 test. Validating MoltenVK on the target Apple GPU early is worth doing — it decides whether
 the single Vulkan path holds or a native-Metal fallback is needed.
 
 ## Working preferences
 
 - Prefer plain, behavior-level tests over friend-class backdoors into private state.
+- Mark deferred/future work inline with a `TODO:` comment (e.g. `// TODO: adopt volk for the
+  iOS static-MoltenVK path`) so it is greppable, rather than tracking it only in prose or commits.

@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#pragma once
+
+/// @file version.hpp
+/// Generated from version.hpp.in by CMake -- do not edit the generated copy.
+
+#include "volumetric_kit/gfx/export.hpp"
+
+#define VG_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define VG_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define VG_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define VG_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace volumetric_kit::gfx {
+
+/// @return the library version as "MAJOR.MINOR.PATCH".
+VG_API const char* version_string() noexcept;
+
+VG_API int version_major() noexcept;
+VG_API int version_minor() noexcept;
+VG_API int version_patch() noexcept;
+
+}  // namespace volumetric_kit::gfx
