@@ -139,13 +139,17 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
   }
 
-  // MoltenVK and other portability drivers are only enumerated when this is
-  // enabled.
+  // MoltenVK and other portability drivers are only enumerated when this flag
+  // is set. The extension's name macro is absent from older Vulkan headers
+  // (e.g. Ubuntu 22.04's libvulkan-dev), so guard on it: a platform old enough
+  // to lack the macro also has no portability driver to enumerate.
   VkInstanceCreateFlags flags = 0;
+#ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
   if (has_extension(available, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
   }
+#endif
 
   // Request 1.3, but never ask for more than the loader supports.
   uint32_t api_version = VK_API_VERSION_1_3;
