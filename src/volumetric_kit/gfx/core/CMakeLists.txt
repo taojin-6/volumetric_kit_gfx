@@ -3,10 +3,10 @@
 
 # --- gfx_core: Tier 1 -------------------------------------------------------
 # Foundation tier: version API, logging, contract checks, Vulkan instance/device
-# setup, and sync primitives. Every other tier depends on this; it depends only
-# on Vulkan + VMA.
+# setup, sync primitives, and GPU memory allocation (buffers/images via VMA).
+# Every other tier depends on this; it depends only on Vulkan + VMA.
 #
-# TODO: add the memory (VMA wrapper) and spirv-cross reflection surface.
+# TODO: add the spirv-cross reflection surface.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -26,7 +26,8 @@ target_sources(
           sync.cpp
           retire_queue.cpp
           allocator.cpp
-          buffer.cpp)
+          buffer.cpp
+          texture.cpp)
 
 # Generated headers: the VG_API export macro + the configured version header.
 generate_export_header(

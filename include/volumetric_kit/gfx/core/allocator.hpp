@@ -10,6 +10,7 @@
 
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
+#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/export.hpp"
 
@@ -35,12 +36,24 @@ struct BufferDesc {
       false;  ///< Reserve external memory for CUDA interop (see below).
 };
 
+/// @brief Parameters for @ref Allocator::create_image.
+struct TextureDesc {
+  VkExtent2D extent{};                    ///< Width/height in texels.
+  VkFormat format = VK_FORMAT_UNDEFINED;  ///< Texel format.
+  VkImageUsageFlags usage = 0;            ///< How the image will be used.
+  VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+  MemoryUsage memory =
+      MemoryUsage::DeviceLocal;  ///< Images default to GPU-only.
+  bool exportable =
+      false;  ///< Reserve external memory for CUDA interop (see below).
+};
+
 /// @brief Wraps the Vulkan Memory Allocator and produces RAII resources from
 /// it.
 ///
 /// One allocator per @ref Device. Resources it creates borrow the underlying
-/// allocator for their own destruction, so the `Allocator` must outlive every
-/// @ref Buffer it produced.
+/// allocator (and, for images, the device) for their own destruction, so the
+/// `Allocator` must outlive every @ref Buffer and @ref Texture it produced.
 ///
 /// @code
 /// Result<Allocator> allocator = Allocator::create(instance.handle(), device);
@@ -84,6 +97,17 @@ class VG_API Allocator {
   ///         @ref Buffer::mapped backed by host-coherent memory, so writes
   ///         through it reach the GPU without a manual flush.
   Result<Buffer> create_buffer(const BufferDesc& desc);
+
+  /// @brief Allocate a 2D image plus a default view over it.
+  /// @param desc  Extent, format, usage, tiling, and memory residence.
+  /// @return The texture on success, or a non-OK @ref Status:
+  ///         - a zero-area `extent`, `usage == 0`, or `VK_FORMAT_UNDEFINED`
+  ///           returns `VK_ERROR_INITIALIZATION_FAILED`;
+  ///         - `desc.exportable` currently returns
+  ///         `VK_ERROR_FEATURE_NOT_PRESENT`. The view's aspect mask is derived
+  ///         from the format (depth and/or stencil for depth formats, otherwise
+  ///         color).
+  Result<Texture> create_image(const TextureDesc& desc);
 
  private:
   Allocator() noexcept;

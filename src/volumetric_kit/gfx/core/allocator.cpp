@@ -10,9 +10,32 @@
 #include "volumetric_kit/gfx/core/device.hpp"
 
 namespace volumetric_kit::gfx {
+namespace {
+
+// The view aspect a format implies: depth and/or stencil for depth/stencil
+// formats, else color.
+VkImageAspectFlags aspect_mask_for(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+      return VK_IMAGE_ASPECT_DEPTH_BIT;
+    case VK_FORMAT_S8_UINT:
+      return VK_IMAGE_ASPECT_STENCIL_BIT;
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+      return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    default:
+      return VK_IMAGE_ASPECT_COLOR_BIT;
+  }
+}
+
+}  // namespace
 
 struct Allocator::Impl {
   VmaAllocator allocator = VK_NULL_HANDLE;
+  VkDevice device = VK_NULL_HANDLE;  // borrowed; for image-view create/destroy
 
   // Own the handle here, not in ~Allocator: the defaulted move-assignment
   // destroys the overwritten Impl via unique_ptr, so freeing in ~Impl is what
@@ -54,6 +77,7 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
 
   auto impl = std::make_unique<Impl>();
   VG_VK_TRY(vmaCreateAllocator(&info, &impl->allocator));
+  impl->device = device.handle();
 
   Allocator allocator;
   allocator.impl_ = std::move(impl);
@@ -138,6 +162,89 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   return Buffer(buffer, desc.size, mapped, [allocator, buffer, allocation]() {
     vmaDestroyBuffer(allocator, buffer, allocation);
   });
+}
+
+Result<Texture> Allocator::create_image(const TextureDesc& desc) {
+  if (desc.extent.width == 0 || desc.extent.height == 0) {
+    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
+                         "image extent must be non-zero");
+  }
+  if (desc.usage == 0) {
+    return Status::error(
+        VK_ERROR_INITIALIZATION_FAILED,
+        "image usage must name at least one VkImageUsageFlagBit");
+  }
+  if (desc.format == VK_FORMAT_UNDEFINED) {
+    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
+                         "image format must not be UNDEFINED");
+  }
+  if (desc.exportable) {
+    // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
+    // interop PR.
+    return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
+                         "exportable images are not yet supported");
+  }
+
+  VkImageCreateInfo image_info{};
+  image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  image_info.imageType = VK_IMAGE_TYPE_2D;
+  image_info.format = desc.format;
+  image_info.extent = {desc.extent.width, desc.extent.height, 1};
+  image_info.mipLevels = 1;
+  image_info.arrayLayers = 1;
+  image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+  image_info.tiling = desc.tiling;
+  image_info.usage = desc.usage;
+  image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+  VmaAllocationCreateInfo alloc_info{};
+  switch (desc.memory) {
+    case MemoryUsage::Auto:
+      alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+      break;
+    case MemoryUsage::DeviceLocal:
+      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+      break;
+    case MemoryUsage::HostVisible:
+      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+      break;
+  }
+
+  VkImage image = VK_NULL_HANDLE;
+  VmaAllocation allocation = VK_NULL_HANDLE;
+  VG_VK_TRY(vmaCreateImage(impl_->allocator, &image_info, &alloc_info, &image,
+                           &allocation, nullptr));
+
+  VkImageViewCreateInfo view_info{};
+  view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  view_info.image = image;
+  view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  view_info.format = desc.format;
+  view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
+  view_info.subresourceRange.baseMipLevel = 0;
+  view_info.subresourceRange.levelCount = 1;
+  view_info.subresourceRange.baseArrayLayer = 0;
+  view_info.subresourceRange.layerCount = 1;
+
+  VkImageView view = VK_NULL_HANDLE;
+  VkResult view_result =
+      vkCreateImageView(impl_->device, &view_info, nullptr, &view);
+  if (view_result != VK_SUCCESS) {
+    vmaDestroyImage(impl_->allocator, image, allocation);
+    return vk_error(view_result, "vkCreateImageView");
+  }
+
+  // Deleter destroys the view (which references the image) before the image,
+  // and hides device/VMA from Texture's API. Valid only while this allocator
+  // lives.
+  VmaAllocator allocator = impl_->allocator;
+  VkDevice device = impl_->device;
+  return Texture(image, view, desc.extent, desc.format,
+                 [device, view, allocator, image, allocation]() {
+                   vkDestroyImageView(device, view, nullptr);
+                   vmaDestroyImage(allocator, image, allocation);
+                 });
 }
 
 Allocator::Allocator(Allocator&& other) noexcept = default;
