@@ -99,4 +99,78 @@ void Semaphore::destroy() noexcept {
   }
 }
 
+// --- TimelineSemaphore ------------------------------------------------------
+
+Result<TimelineSemaphore> TimelineSemaphore::create(VkDevice device,
+                                                    uint64_t initial_value) {
+  VkSemaphoreTypeCreateInfo type_info{};
+  type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+  type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+  type_info.initialValue = initial_value;
+
+  VkSemaphoreCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  info.pNext = &type_info;
+
+  TimelineSemaphore semaphore;
+  semaphore.device_ = device;
+  VG_VK_TRY(vkCreateSemaphore(device, &info, nullptr, &semaphore.semaphore_));
+  return semaphore;
+}
+
+Result<uint64_t> TimelineSemaphore::value() const {
+  uint64_t value = 0;
+  VG_VK_TRY(vkGetSemaphoreCounterValue(device_, semaphore_, &value));
+  return value;
+}
+
+Status TimelineSemaphore::signal(uint64_t value) {
+  VkSemaphoreSignalInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+  info.semaphore = semaphore_;
+  info.value = value;
+  VG_VK_TRY(vkSignalSemaphore(device_, &info));
+  return Status{};
+}
+
+Status TimelineSemaphore::wait(uint64_t value, uint64_t timeout_ns) const {
+  VkSemaphoreWaitInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+  info.semaphoreCount = 1;
+  info.pSemaphores = &semaphore_;
+  info.pValues = &value;
+
+  VkResult result = vkWaitSemaphores(device_, &info, timeout_ns);
+  if (result != VK_SUCCESS) {
+    // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via code().
+    return vk_error(result, "vkWaitSemaphores");
+  }
+  return Status{};
+}
+
+TimelineSemaphore::TimelineSemaphore(TimelineSemaphore&& other) noexcept
+    : device_(other.device_), semaphore_(other.semaphore_) {
+  other.semaphore_ = VK_NULL_HANDLE;
+}
+
+TimelineSemaphore& TimelineSemaphore::operator=(
+    TimelineSemaphore&& other) noexcept {
+  if (this != &other) {
+    destroy();
+    device_ = other.device_;
+    semaphore_ = other.semaphore_;
+    other.semaphore_ = VK_NULL_HANDLE;
+  }
+  return *this;
+}
+
+TimelineSemaphore::~TimelineSemaphore() { destroy(); }
+
+void TimelineSemaphore::destroy() noexcept {
+  if (semaphore_ != VK_NULL_HANDLE) {
+    vkDestroySemaphore(device_, semaphore_, nullptr);
+    semaphore_ = VK_NULL_HANDLE;
+  }
+}
+
 }  // namespace volumetric_kit::gfx

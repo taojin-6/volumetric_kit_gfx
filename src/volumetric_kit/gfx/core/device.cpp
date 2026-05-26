@@ -114,6 +114,18 @@ Result<Device> Device::create(VkInstance /*instance*/,
     extensions.push_back(kPortabilitySubset);
   }
 
+  // Timeline semaphores are core in Vulkan 1.2; we target the core feature (the
+  // TimelineSemaphore calls use the core entry points), so we only query and
+  // enable the feature here — no pre-1.2 VK_KHR_timeline_semaphore path, which
+  // would need the *KHR function variants the rest of the code does not call.
+  VkPhysicalDeviceTimelineSemaphoreFeatures timeline_support{};
+  timeline_support.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  VkPhysicalDeviceFeatures2 supported{};
+  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  supported.pNext = &timeline_support;
+  vkGetPhysicalDeviceFeatures2(physical, &supported);
+
   const float priority = 1.0f;
   std::set<uint32_t> unique_families = {*graphics};
   if (present) {
@@ -129,16 +141,30 @@ Result<Device> Device::create(VkInstance /*instance*/,
     queue_infos.push_back(q);
   }
 
-  VkPhysicalDeviceFeatures features = config.features;
+  // Enable features through VkPhysicalDeviceFeatures2 (which supersedes
+  // pEnabledFeatures). timelineSemaphore is enabled only when the device
+  // reported support above; dynamicRendering/synchronization2 join this chain
+  // in the shaders/pipelines stage (2c).
+  VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
+  timeline_features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  timeline_features.timelineSemaphore = timeline_support.timelineSemaphore;
+
+  VkPhysicalDeviceFeatures2 features2{};
+  features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  features2.features = config.features;
+  features2.pNext =
+      timeline_support.timelineSemaphore ? &timeline_features : nullptr;
 
   VkDeviceCreateInfo create_info{};
   create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  create_info.pNext =
+      &features2;  // features come via features2, not pEnabledFeatures
   create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_infos.size());
   create_info.pQueueCreateInfos = queue_infos.data();
   create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
   create_info.ppEnabledExtensionNames =
       extensions.empty() ? nullptr : extensions.data();
-  create_info.pEnabledFeatures = &features;
 
   Device device;
   device.physical_ = physical;
