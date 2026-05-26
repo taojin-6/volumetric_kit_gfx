@@ -44,3 +44,9 @@ vulkaninfo --summary   # expect GPU0 ... driverID = DRIVER_ID_MOLTENVK
 ```bash
 pre-commit install   # clang-format + cmake-format + hygiene hooks
 ```
+
+## License
+
+Released under the [MIT License](LICENSE). Each source file carries an
+`SPDX-License-Identifier: MIT` header; vendored third-party code under
+`third_party/` keeps its own upstream license.

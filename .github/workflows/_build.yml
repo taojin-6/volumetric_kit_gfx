@@ -35,8 +35,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
-            libglfw3-dev libglm-dev
+            libglfw3-dev libglm-dev \
+            mesa-vulkan-drivers vulkan-tools
+          # mesa-vulkan-drivers provides lavapipe (software Vulkan) so GPU-dependent
+          # tests can run on these GPU-less runners; vulkan-tools provides vulkaninfo.
           # make + a C/C++ toolchain ship preinstalled (build-essential).
+          # Point the loader at lavapipe for the rest of the job.
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
 
       - name: Install dependencies (macOS)
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
@@ -45,6 +50,12 @@ jobs:
           brew install cmake molten-vk glfw glm \
             vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross
           # make ships with the Xcode command-line tools.
+
+      # Report the Vulkan device the runner sees (lavapipe on Linux, MoltenVK on
+      # macOS). Non-fatal: GPU-dependent tests skip themselves when no device exists.
+      - name: GPU diagnostic
+        if: steps.detect.outputs.present == 'true'
+        run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
 
       # Default ("Unix Makefiles") generator + a parallel make build, per
       # project preference — no Ninja.
