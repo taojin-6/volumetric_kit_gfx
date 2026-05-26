@@ -24,7 +24,9 @@ target_sources(
           instance.cpp
           device.cpp
           sync.cpp
-          retire_queue.cpp)
+          retire_queue.cpp
+          allocator.cpp
+          buffer.cpp)
 
 # Generated headers: the VG_API export macro + the configured version header.
 generate_export_header(
