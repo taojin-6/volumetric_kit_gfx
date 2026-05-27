@@ -3,47 +3,14 @@
 
 #include <gtest/gtest.h>
 
-#include <optional>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
-
-namespace vg = volumetric_kit::gfx;
+#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// A real instance, a portably-selected physical device, and a headless logical
-// device. Skips the whole suite when the runner exposes no Vulkan device (a
-// GPU-less CI runner without a software ICD). The instance is declared before
-// the device so reverse member-destruction tears the device down first —
-// exactly the ordering Device::create's contract requires.
-class DeviceTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    auto instance = vg::Instance::create(vg::InstanceConfig{});
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-    }
-    instance_.emplace(std::move(instance).value());
-
-    auto physical = instance_->select_physical_device();
-    if (!physical.ok()) {
-      GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
-    }
-    physical_ = physical.value();
-
-    auto device =
-        vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-    ASSERT_TRUE(device.ok())
-        << "device creation failed: " << device.status().message();
-    device_.emplace(std::move(device).value());
-  }
-
-  std::optional<vg::Instance> instance_;
-  VkPhysicalDevice physical_ = VK_NULL_HANDLE;
-  std::optional<vg::Device> device_;
-};
+// The shared instance + physical-device + headless logical-device fixture.
+using DeviceTest = VulkanDeviceTest;
 
 }  // namespace
 
@@ -82,6 +49,10 @@ TEST_F(DeviceTest, MoveConstructTransfersOwnership) {
   // `moved` would vkDestroyDevice the same handle at scope exit — a validation
   // error.
   EXPECT_EQ(source.handle(),
+            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+  // Metadata is zeroed too, not just the owned handles: a moved-from device
+  // reports an empty physical device (the recurring "forgot a scalar" miss).
+  EXPECT_EQ(source.physical_device(),
             VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
 }
 

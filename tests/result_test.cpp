@@ -82,6 +82,13 @@ TEST(Result, SupportsMoveOnlyValue) {
   EXPECT_EQ(taken.value, 7);
 }
 
+TEST(Result, OperatorStarMovesFromRvalue) {
+  vg::Result<MoveOnly> result(MoveOnly{9});
+  ASSERT_TRUE(result.ok());
+  MoveOnly taken = *std::move(result);  // operator*() && moves the value out
+  EXPECT_EQ(taken.value, 9);
+}
+
 namespace {
 
 vg::Status try_inner(bool fail) {

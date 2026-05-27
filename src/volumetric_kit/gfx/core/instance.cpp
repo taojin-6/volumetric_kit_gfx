@@ -7,6 +7,7 @@
 #include <cstring>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
 namespace volumetric_kit::gfx {
@@ -14,27 +15,8 @@ namespace {
 
 constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 
-bool has_extension(const std::vector<VkExtensionProperties>& available,
-                   const char* name) {
-  return std::any_of(available.begin(), available.end(),
-                     [&](const VkExtensionProperties& e) {
-                       return std::strcmp(e.extensionName, name) == 0;
-                     });
-}
-
-std::vector<VkExtensionProperties> available_instance_extensions() {
-  uint32_t count = 0;
-  vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
-  std::vector<VkExtensionProperties> exts(count);
-  vkEnumerateInstanceExtensionProperties(nullptr, &count, exts.data());
-  return exts;
-}
-
 bool validation_layer_available() {
-  uint32_t count = 0;
-  vkEnumerateInstanceLayerProperties(&count, nullptr);
-  std::vector<VkLayerProperties> layers(count);
-  vkEnumerateInstanceLayerProperties(&count, layers.data());
+  const std::vector<VkLayerProperties> layers = instance_layers();
   return std::any_of(layers.begin(), layers.end(),
                      [](const VkLayerProperties& l) {
                        return std::strcmp(l.layerName, kValidationLayer) == 0;
@@ -87,38 +69,10 @@ int device_type_score(VkPhysicalDeviceType type) {
   }
 }
 
-// First queue family with graphics support, or -1.
-int find_graphics_family(VkPhysicalDevice device) {
-  uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-  std::vector<VkQueueFamilyProperties> families(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
-  for (uint32_t i = 0; i < count; ++i) {
-    if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
-}
-
-bool has_present_family(VkPhysicalDevice device, VkSurfaceKHR surface) {
-  uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-  for (uint32_t i = 0; i < count; ++i) {
-    VkBool32 supported = VK_FALSE;
-    vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &supported);
-    if (supported == VK_TRUE) {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 Result<Instance> Instance::create(const InstanceConfig& config) {
-  const std::vector<VkExtensionProperties> available =
-      available_instance_extensions();
+  const std::vector<VkExtensionProperties> available = instance_extensions();
 
   std::vector<const char*> extensions = config.extra_instance_extensions;
 
@@ -193,8 +147,18 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
             vkGetInstanceProcAddr(instance.instance_,
                                   "vkCreateDebugUtilsMessengerEXT"));
     if (create_messenger != nullptr) {
-      create_messenger(instance.instance_, &messenger_info, nullptr,
-                       &instance.messenger_);
+      VkResult messenger_result = create_messenger(
+          instance.instance_, &messenger_info, nullptr, &instance.messenger_);
+      if (messenger_result != VK_SUCCESS) {
+        // Validation is best-effort: the layer is still enabled, but its
+        // messages won't reach our sink. Don't fail instance creation; report
+        // the degraded state and leave messenger_ null so validation_enabled()
+        // stays truthful.
+        instance.messenger_ = VK_NULL_HANDLE;
+        log_message(LogLevel::Warning,
+                    "validation layer enabled but debug messenger creation "
+                    "failed; messages will not reach the log handler");
+      }
     }
   }
 
@@ -203,22 +167,19 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
 
 Result<VkPhysicalDevice> Instance::select_physical_device(
     VkSurfaceKHR surface) const {
-  uint32_t count = 0;
-  vkEnumeratePhysicalDevices(instance_, &count, nullptr);
-  if (count == 0) {
+  const std::vector<VkPhysicalDevice> devices = physical_devices(instance_);
+  if (devices.empty()) {
     return Status::error(VK_ERROR_INITIALIZATION_FAILED,
                          "no Vulkan physical devices found");
   }
-  std::vector<VkPhysicalDevice> devices(count);
-  vkEnumeratePhysicalDevices(instance_, &count, devices.data());
 
   VkPhysicalDevice best = VK_NULL_HANDLE;
   int best_score = -1;
   for (VkPhysicalDevice device : devices) {
-    if (find_graphics_family(device) < 0) {
+    if (!find_graphics_family(device)) {
       continue;
     }
-    if (surface != VK_NULL_HANDLE && !has_present_family(device, surface)) {
+    if (surface != VK_NULL_HANDLE && !find_present_family(device, surface)) {
       continue;
     }
     VkPhysicalDeviceProperties props{};

@@ -8,44 +8,26 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
-
-namespace vg = volumetric_kit::gfx;
+#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// Allocation needs a real device + VMA allocator; skip when the runner has
-// none. instance_ -> device_ -> allocator_ declaration order means the
-// allocator is destroyed before the device, and buffers (local to each test)
-// before either.
-class AllocatorTest : public ::testing::Test {
+// Adds a VMA allocator on top of the shared device fixture. The derived
+// allocator_ is destroyed before the base's device_/instance_ (derived members
+// first), and buffers (local to each test) before any of them.
+class AllocatorTest : public VulkanDeviceTest {
  protected:
   void SetUp() override {
-    auto instance = vg::Instance::create(vg::InstanceConfig{});
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+    VulkanDeviceTest::SetUp();
+    if (IsSkipped()) {
+      return;  // no Vulkan device; the base already skipped
     }
-    instance_.emplace(std::move(instance).value());
-
-    auto physical = instance_->select_physical_device();
-    if (!physical.ok()) {
-      GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
-    }
-
-    auto device = vg::Device::create(instance_->handle(), physical.value(),
-                                     vg::DeviceConfig{});
-    ASSERT_TRUE(device.ok()) << device.status().message();
-    device_.emplace(std::move(device).value());
-
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
 
-  std::optional<vg::Instance> instance_;
-  std::optional<vg::Device> device_;
   std::optional<vg::Allocator> allocator_;
 };
 

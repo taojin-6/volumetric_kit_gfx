@@ -31,6 +31,21 @@ VkImageAspectFlags aspect_mask_for(VkFormat format) {
   }
 }
 
+// MemoryUsage -> VMA residency preference. The HostVisible host-access flag is
+// applied at the call site (it differs between buffers and images), so this
+// maps the residency only.
+VmaMemoryUsage vma_memory_usage(MemoryUsage memory) {
+  switch (memory) {
+    case MemoryUsage::Auto:
+      return VMA_MEMORY_USAGE_AUTO;
+    case MemoryUsage::DeviceLocal:
+      return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    case MemoryUsage::HostVisible:
+      return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+  }
+  return VMA_MEMORY_USAGE_AUTO;  // unreachable; satisfies -Wreturn-type
+}
+
 }  // namespace
 
 struct Allocator::Impl {
@@ -115,17 +130,9 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
   VmaAllocationCreateInfo alloc_info{};
-  switch (desc.memory) {
-    case MemoryUsage::Auto:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-      break;
-    case MemoryUsage::DeviceLocal:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-      break;
-    case MemoryUsage::HostVisible:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-      alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-      break;
+  alloc_info.usage = vma_memory_usage(desc.memory);
+  if (desc.memory == MemoryUsage::HostVisible) {
+    alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
   }
   if (desc.mapped) {
     // Mapping needs host-visible memory; request host access + a persistent
@@ -199,17 +206,7 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
   VmaAllocationCreateInfo alloc_info{};
-  switch (desc.memory) {
-    case MemoryUsage::Auto:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-      break;
-    case MemoryUsage::DeviceLocal:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-      break;
-    case MemoryUsage::HostVisible:
-      alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-      break;
-  }
+  alloc_info.usage = vma_memory_usage(desc.memory);
 
   VkImage image = VK_NULL_HANDLE;
   VmaAllocation allocation = VK_NULL_HANDLE;

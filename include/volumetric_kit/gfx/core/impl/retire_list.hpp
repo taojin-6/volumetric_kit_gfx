@@ -22,7 +22,12 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
   // Decide readiness and compact the survivors *before* running any deleter:
   // a deleter that throws (or re-enters push()) then cannot leave an
   // already-run entry behind for run_all()/the next poll to run a second time.
-  std::vector<std::function<void()>> ready;
+  //
+  // Reuse ready_scratch_'s capacity, but hold it in a local for the duration so
+  // a deleter that re-enters poll() operates on a fresh buffer and cannot
+  // corrupt the one this call is iterating.
+  std::vector<std::function<void()>> ready = std::move(ready_scratch_);
+  ready.clear();
   std::size_t keep = 0;
   for (std::size_t i = 0; i < entries_.size(); ++i) {
     if (is_ready(entries_[i].key)) {
@@ -37,7 +42,10 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
   }
   entries_.resize(keep);
   run_each(ready);
-  return ready.size();
+  const std::size_t ran = ready.size();
+  ready.clear();
+  ready_scratch_ = std::move(ready);  // return the buffer for the next poll()
+  return ran;
 }
 
 template <class Key>

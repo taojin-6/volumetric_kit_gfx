@@ -3,11 +3,11 @@
 
 #include "volumetric_kit/gfx/core/device.hpp"
 
-#include <algorithm>
-#include <cstring>
 #include <optional>
 #include <set>
 #include <vector>
+
+#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -17,56 +17,15 @@ namespace {
 // directly.
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
-bool has_extension(const std::vector<VkExtensionProperties>& available,
-                   const char* name) {
-  return std::any_of(available.begin(), available.end(),
-                     [&](const VkExtensionProperties& e) {
-                       return std::strcmp(e.extensionName, name) == 0;
-                     });
-}
-
-std::vector<VkExtensionProperties> available_device_extensions(
-    VkPhysicalDevice device) {
-  uint32_t count = 0;
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
-  std::vector<VkExtensionProperties> exts(count);
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, exts.data());
-  return exts;
-}
-
-std::optional<uint32_t> find_graphics_family(VkPhysicalDevice device) {
-  uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-  std::vector<VkQueueFamilyProperties> families(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
-  for (uint32_t i = 0; i < count; ++i) {
-    if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<uint32_t> find_present_family(VkPhysicalDevice device,
-                                            VkSurfaceKHR surface) {
-  uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-  for (uint32_t i = 0; i < count; ++i) {
-    VkBool32 supported = VK_FALSE;
-    vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &supported);
-    if (supported == VK_TRUE) {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
-
 }  // namespace
 
-Result<Device> Device::create(VkInstance /*instance*/,
+Result<Device> Device::create([[maybe_unused]] VkInstance instance,
                               VkPhysicalDevice physical,
                               const DeviceConfig& config,
                               VkSurfaceKHR surface) {
+  // `instance` is accepted for symmetry with Allocator::create and to document
+  // the instance-outlives-device contract; the device stores only handles, so
+  // it is intentionally unused at creation.
   std::optional<uint32_t> graphics = find_graphics_family(physical);
   if (!graphics) {
     return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
@@ -88,7 +47,7 @@ Result<Device> Device::create(VkInstance /*instance*/,
   }
 
   const std::vector<VkExtensionProperties> available =
-      available_device_extensions(physical);
+      device_extensions(physical);
   std::vector<const char*> extensions;
 
   auto require = [&](const char* name) -> Status {
@@ -118,12 +77,12 @@ Result<Device> Device::create(VkInstance /*instance*/,
   // TimelineSemaphore calls use the core entry points), so we only query and
   // enable the feature here — no pre-1.2 VK_KHR_timeline_semaphore path, which
   // would need the *KHR function variants the rest of the code does not call.
-  VkPhysicalDeviceTimelineSemaphoreFeatures timeline_support{};
-  timeline_support.sType =
+  VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
+  timeline_features.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
   VkPhysicalDeviceFeatures2 supported{};
   supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  supported.pNext = &timeline_support;
+  supported.pNext = &timeline_features;
   vkGetPhysicalDeviceFeatures2(physical, &supported);
 
   const float priority = 1.0f;
@@ -142,19 +101,15 @@ Result<Device> Device::create(VkInstance /*instance*/,
   }
 
   // Enable features through VkPhysicalDeviceFeatures2 (which supersedes
-  // pEnabledFeatures). timelineSemaphore is enabled only when the device
-  // reported support above; dynamicRendering/synchronization2 join this chain
-  // in the shaders/pipelines stage (2c).
-  VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
-  timeline_features.sType =
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
-  timeline_features.timelineSemaphore = timeline_support.timelineSemaphore;
-
+  // pEnabledFeatures). The query above already populated timeline_features with
+  // the device's timelineSemaphore support, so the same struct is fed back to
+  // enable it — only when supported. dynamicRendering/synchronization2 join
+  // this chain in the shaders/pipelines stage (2c).
   VkPhysicalDeviceFeatures2 features2{};
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features2.features = config.features;
   features2.pNext =
-      timeline_support.timelineSemaphore ? &timeline_features : nullptr;
+      timeline_features.timelineSemaphore ? &timeline_features : nullptr;
 
   VkDeviceCreateInfo create_info{};
   create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -228,7 +183,13 @@ Status Device::submit_single_time(
       VkResult submit_result =
           vkQueueSubmit(graphics_queue_, 1, &submit, fence);
       if (submit_result == VK_SUCCESS) {
-        vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+        VkResult wait_result =
+            vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+        if (wait_result != VK_SUCCESS) {
+          // A device loss (or other failure) while waiting means the submitted
+          // work did not complete; report it rather than claiming success.
+          status = vk_error(wait_result, "vkWaitForFences");
+        }
       } else {
         status = vk_error(submit_result, "vkQueueSubmit");
       }
@@ -250,8 +211,11 @@ Device::Device(Device&& other) noexcept
       present_family_(other.present_family_),
       graphics_queue_(other.graphics_queue_),
       present_queue_(other.present_queue_) {
+  other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
+  other.graphics_family_ = 0;
+  other.present_family_ = 0;
   other.graphics_queue_ = VK_NULL_HANDLE;
   other.present_queue_ = VK_NULL_HANDLE;
 }
@@ -266,8 +230,11 @@ Device& Device::operator=(Device&& other) noexcept {
     present_family_ = other.present_family_;
     graphics_queue_ = other.graphics_queue_;
     present_queue_ = other.present_queue_;
+    other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
+    other.graphics_family_ = 0;
+    other.present_family_ = 0;
     other.graphics_queue_ = VK_NULL_HANDLE;
     other.present_queue_ = VK_NULL_HANDLE;
   }
@@ -285,6 +252,11 @@ void Device::destroy() noexcept {
     vkDestroyDevice(device_, nullptr);
     device_ = VK_NULL_HANDLE;
   }
+  physical_ = VK_NULL_HANDLE;
+  graphics_family_ = 0;
+  present_family_ = 0;
+  graphics_queue_ = VK_NULL_HANDLE;
+  present_queue_ = VK_NULL_HANDLE;
 }
 
 }  // namespace volumetric_kit::gfx
