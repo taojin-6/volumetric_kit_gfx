@@ -27,7 +27,8 @@ target_sources(
           retire_queue.cpp
           allocator.cpp
           buffer.cpp
-          texture.cpp)
+          texture.cpp
+          shader.cpp)
 
 # Generated headers: the VG_API export macro + the configured version header.
 generate_export_header(
