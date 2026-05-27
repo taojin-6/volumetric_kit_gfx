@@ -17,3 +17,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - GPU-capable CI: lavapipe (Linux software Vulkan) + MoltenVK (macOS) so headless tests
   can run on GitHub-hosted runners; GPU tests skip gracefully when no device is present.
 - GoogleTest-based `tests/` with a version smoke test.
+- `ShaderModule`: an RAII wrapper around `VkShaderModule`, created from a SPIR-V blob with
+  validation (rejects null/empty/misaligned code) before Vulkan is touched.
+- GLSL→SPIR-V build step: `vg_compile_shaders()` (in `cmake/vg_shaders.cmake`) compiles
+  shaders via glslc/glslangValidator; the first shaders are `shaders/triangle.{vert,frag}`.

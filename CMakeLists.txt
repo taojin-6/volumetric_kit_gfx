@@ -53,6 +53,7 @@ set(VG_SANITIZE
 
 include(vg_warnings)
 include(vg_sanitizers)
+include(vg_shaders)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets (Vulkan::Headers,
