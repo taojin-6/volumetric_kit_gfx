@@ -133,6 +133,7 @@ class Result {
   const T* operator->() const;
   T& operator*() &;
   const T& operator*() const&;
+  T&& operator*() &&;
 
  private:
   Status status_;

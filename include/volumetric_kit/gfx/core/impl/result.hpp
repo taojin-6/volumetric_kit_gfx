@@ -61,4 +61,9 @@ const T& Result<T>::operator*() const& {
   return value();
 }
 
+template <class T>
+T&& Result<T>::operator*() && {
+  return std::move(value());
+}
+
 }  // namespace volumetric_kit::gfx

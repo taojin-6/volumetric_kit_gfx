@@ -11,11 +11,13 @@
 /// @ref Semaphore is a binary GPU-queue-to-queue primitive. @ref
 /// TimelineSemaphore is a counter-based primitive the host and GPU can both
 /// signal and wait on (Vulkan 1.2 core; @ref Device::create enables the feature
-/// when supported).
+/// when supported). Each owns its handle through a @ref UniqueHandle, so the
+/// move/destroy bookkeeping lives in one place.
 
 #include <cstdint>
 
 #include "volumetric_kit/gfx/core/result.hpp"
+#include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/export.hpp"
 
@@ -37,14 +39,14 @@ class VG_API Fence {
   /// @return The fence on success, or a non-OK @ref Status.
   static Result<Fence> create(VkDevice device, bool signaled = false);
 
-  ~Fence();
-  Fence(Fence&& other) noexcept;
-  Fence& operator=(Fence&& other) noexcept;
+  ~Fence() = default;
+  Fence(Fence&&) noexcept = default;
+  Fence& operator=(Fence&&) noexcept = default;
   Fence(const Fence&) = delete;
   Fence& operator=(const Fence&) = delete;
 
   /// @return The underlying `VkFence` handle.
-  VkFence handle() const noexcept { return fence_; }
+  VkFence handle() const noexcept { return handle_.get(); }
 
   /// @brief Block until the fence is signaled or the timeout elapses.
   /// @param timeout_ns  Maximum wait, in nanoseconds (default: wait forever).
@@ -62,10 +64,8 @@ class VG_API Fence {
 
  private:
   Fence() = default;
-  void destroy() noexcept;
 
-  VkDevice device_ = VK_NULL_HANDLE;
-  VkFence fence_ = VK_NULL_HANDLE;
+  UniqueHandle<VkFence, vkDestroyFence> handle_;
 };
 
 /// @brief A binary `VkSemaphore`: orders work between GPU queue submissions.
@@ -76,21 +76,19 @@ class VG_API Semaphore {
   /// @return The semaphore on success, or a non-OK @ref Status.
   static Result<Semaphore> create(VkDevice device);
 
-  ~Semaphore();
-  Semaphore(Semaphore&& other) noexcept;
-  Semaphore& operator=(Semaphore&& other) noexcept;
+  ~Semaphore() = default;
+  Semaphore(Semaphore&&) noexcept = default;
+  Semaphore& operator=(Semaphore&&) noexcept = default;
   Semaphore(const Semaphore&) = delete;
   Semaphore& operator=(const Semaphore&) = delete;
 
   /// @return The underlying `VkSemaphore` handle.
-  VkSemaphore handle() const noexcept { return semaphore_; }
+  VkSemaphore handle() const noexcept { return handle_.get(); }
 
  private:
   Semaphore() = default;
-  void destroy() noexcept;
 
-  VkDevice device_ = VK_NULL_HANDLE;
-  VkSemaphore semaphore_ = VK_NULL_HANDLE;
+  UniqueHandle<VkSemaphore, vkDestroySemaphore> handle_;
 };
 
 /// @brief A timeline `VkSemaphore`: a monotonically increasing 64-bit counter
@@ -120,14 +118,14 @@ class VG_API TimelineSemaphore {
   static Result<TimelineSemaphore> create(VkDevice device,
                                           uint64_t initial_value = 0);
 
-  ~TimelineSemaphore();
-  TimelineSemaphore(TimelineSemaphore&& other) noexcept;
-  TimelineSemaphore& operator=(TimelineSemaphore&& other) noexcept;
+  ~TimelineSemaphore() = default;
+  TimelineSemaphore(TimelineSemaphore&&) noexcept = default;
+  TimelineSemaphore& operator=(TimelineSemaphore&&) noexcept = default;
   TimelineSemaphore(const TimelineSemaphore&) = delete;
   TimelineSemaphore& operator=(const TimelineSemaphore&) = delete;
 
   /// @return The underlying `VkSemaphore` handle.
-  VkSemaphore handle() const noexcept { return semaphore_; }
+  VkSemaphore handle() const noexcept { return handle_.get(); }
 
   /// @return The current counter value, or a non-OK @ref Status.
   Result<uint64_t> value() const;
@@ -147,10 +145,8 @@ class VG_API TimelineSemaphore {
 
  private:
   TimelineSemaphore() = default;
-  void destroy() noexcept;
 
-  VkDevice device_ = VK_NULL_HANDLE;
-  VkSemaphore semaphore_ = VK_NULL_HANDLE;
+  UniqueHandle<VkSemaphore, vkDestroySemaphore> handle_;
 };
 
 }  // namespace volumetric_kit::gfx

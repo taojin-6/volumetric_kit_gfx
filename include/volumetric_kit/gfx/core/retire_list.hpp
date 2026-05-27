@@ -91,6 +91,10 @@ class RetireList {
   };
 
   std::vector<Entry> entries_;
+
+  // Reused across poll() calls so the per-frame poll does not reallocate the
+  // ready-deleter buffer each time; see poll() for the re-entrancy handling.
+  std::vector<std::function<void()>> ready_scratch_;
 };
 
 }  // namespace volumetric_kit::gfx

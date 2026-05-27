@@ -5,6 +5,10 @@
 
 namespace volumetric_kit::gfx {
 
+// The move/destroy lifecycle for all three primitives lives in UniqueHandle
+// (see unique_handle.hpp); here we only create the handle and expose the
+// domain operations.
+
 // --- Fence ------------------------------------------------------------------
 
 Result<Fence> Fence::create(VkDevice device, bool signaled) {
@@ -14,14 +18,18 @@ Result<Fence> Fence::create(VkDevice device, bool signaled) {
     info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
   }
 
+  VkFence handle = VK_NULL_HANDLE;
+  VG_VK_TRY(vkCreateFence(device, &info, nullptr, &handle));
+
   Fence fence;
-  fence.device_ = device;
-  VG_VK_TRY(vkCreateFence(device, &info, nullptr, &fence.fence_));
+  fence.handle_ = UniqueHandle<VkFence, vkDestroyFence>(device, handle);
   return fence;
 }
 
 Status Fence::wait(uint64_t timeout_ns) const {
-  VkResult result = vkWaitForFences(device_, 1, &fence_, VK_TRUE, timeout_ns);
+  VkFence fence = handle_.get();
+  VkResult result =
+      vkWaitForFences(handle_.device(), 1, &fence, VK_TRUE, timeout_ns);
   if (result != VK_SUCCESS) {
     // VK_TIMEOUT lands here too: surfaced as a non-OK Status the caller can
     // distinguish via status.code(), not treated as a hard failure.
@@ -31,36 +39,13 @@ Status Fence::wait(uint64_t timeout_ns) const {
 }
 
 Status Fence::reset() {
-  VG_VK_TRY(vkResetFences(device_, 1, &fence_));
+  VkFence fence = handle_.get();
+  VG_VK_TRY(vkResetFences(handle_.device(), 1, &fence));
   return Status{};
 }
 
 bool Fence::is_signaled() const {
-  return vkGetFenceStatus(device_, fence_) == VK_SUCCESS;
-}
-
-Fence::Fence(Fence&& other) noexcept
-    : device_(other.device_), fence_(other.fence_) {
-  other.fence_ = VK_NULL_HANDLE;
-}
-
-Fence& Fence::operator=(Fence&& other) noexcept {
-  if (this != &other) {
-    destroy();
-    device_ = other.device_;
-    fence_ = other.fence_;
-    other.fence_ = VK_NULL_HANDLE;
-  }
-  return *this;
-}
-
-Fence::~Fence() { destroy(); }
-
-void Fence::destroy() noexcept {
-  if (fence_ != VK_NULL_HANDLE) {
-    vkDestroyFence(device_, fence_, nullptr);
-    fence_ = VK_NULL_HANDLE;
-  }
+  return vkGetFenceStatus(handle_.device(), handle_.get()) == VK_SUCCESS;
 }
 
 // --- Semaphore --------------------------------------------------------------
@@ -69,34 +54,13 @@ Result<Semaphore> Semaphore::create(VkDevice device) {
   VkSemaphoreCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
+  VkSemaphore handle = VK_NULL_HANDLE;
+  VG_VK_TRY(vkCreateSemaphore(device, &info, nullptr, &handle));
+
   Semaphore semaphore;
-  semaphore.device_ = device;
-  VG_VK_TRY(vkCreateSemaphore(device, &info, nullptr, &semaphore.semaphore_));
+  semaphore.handle_ =
+      UniqueHandle<VkSemaphore, vkDestroySemaphore>(device, handle);
   return semaphore;
-}
-
-Semaphore::Semaphore(Semaphore&& other) noexcept
-    : device_(other.device_), semaphore_(other.semaphore_) {
-  other.semaphore_ = VK_NULL_HANDLE;
-}
-
-Semaphore& Semaphore::operator=(Semaphore&& other) noexcept {
-  if (this != &other) {
-    destroy();
-    device_ = other.device_;
-    semaphore_ = other.semaphore_;
-    other.semaphore_ = VK_NULL_HANDLE;
-  }
-  return *this;
-}
-
-Semaphore::~Semaphore() { destroy(); }
-
-void Semaphore::destroy() noexcept {
-  if (semaphore_ != VK_NULL_HANDLE) {
-    vkDestroySemaphore(device_, semaphore_, nullptr);
-    semaphore_ = VK_NULL_HANDLE;
-  }
 }
 
 // --- TimelineSemaphore ------------------------------------------------------
@@ -112,65 +76,45 @@ Result<TimelineSemaphore> TimelineSemaphore::create(VkDevice device,
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
   info.pNext = &type_info;
 
+  VkSemaphore handle = VK_NULL_HANDLE;
+  VG_VK_TRY(vkCreateSemaphore(device, &info, nullptr, &handle));
+
   TimelineSemaphore semaphore;
-  semaphore.device_ = device;
-  VG_VK_TRY(vkCreateSemaphore(device, &info, nullptr, &semaphore.semaphore_));
+  semaphore.handle_ =
+      UniqueHandle<VkSemaphore, vkDestroySemaphore>(device, handle);
   return semaphore;
 }
 
 Result<uint64_t> TimelineSemaphore::value() const {
   uint64_t value = 0;
-  VG_VK_TRY(vkGetSemaphoreCounterValue(device_, semaphore_, &value));
+  VG_VK_TRY(
+      vkGetSemaphoreCounterValue(handle_.device(), handle_.get(), &value));
   return value;
 }
 
 Status TimelineSemaphore::signal(uint64_t value) {
   VkSemaphoreSignalInfo info{};
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
-  info.semaphore = semaphore_;
+  info.semaphore = handle_.get();
   info.value = value;
-  VG_VK_TRY(vkSignalSemaphore(device_, &info));
+  VG_VK_TRY(vkSignalSemaphore(handle_.device(), &info));
   return Status{};
 }
 
 Status TimelineSemaphore::wait(uint64_t value, uint64_t timeout_ns) const {
+  VkSemaphore semaphore = handle_.get();
   VkSemaphoreWaitInfo info{};
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
   info.semaphoreCount = 1;
-  info.pSemaphores = &semaphore_;
+  info.pSemaphores = &semaphore;
   info.pValues = &value;
 
-  VkResult result = vkWaitSemaphores(device_, &info, timeout_ns);
+  VkResult result = vkWaitSemaphores(handle_.device(), &info, timeout_ns);
   if (result != VK_SUCCESS) {
     // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via code().
     return vk_error(result, "vkWaitSemaphores");
   }
   return Status{};
-}
-
-TimelineSemaphore::TimelineSemaphore(TimelineSemaphore&& other) noexcept
-    : device_(other.device_), semaphore_(other.semaphore_) {
-  other.semaphore_ = VK_NULL_HANDLE;
-}
-
-TimelineSemaphore& TimelineSemaphore::operator=(
-    TimelineSemaphore&& other) noexcept {
-  if (this != &other) {
-    destroy();
-    device_ = other.device_;
-    semaphore_ = other.semaphore_;
-    other.semaphore_ = VK_NULL_HANDLE;
-  }
-  return *this;
-}
-
-TimelineSemaphore::~TimelineSemaphore() { destroy(); }
-
-void TimelineSemaphore::destroy() noexcept {
-  if (semaphore_ != VK_NULL_HANDLE) {
-    vkDestroySemaphore(device_, semaphore_, nullptr);
-    semaphore_ = VK_NULL_HANDLE;
-  }
 }
 
 }  // namespace volumetric_kit::gfx
