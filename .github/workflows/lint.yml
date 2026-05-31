@@ -5,7 +5,7 @@ name: lint
 # operating systems, so one runner is enough.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 concurrency:
