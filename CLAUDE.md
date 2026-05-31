@@ -3,7 +3,7 @@
 A standalone, reusable **Vulkan** renderer library (MoltenVK on Apple) for volumetric
 workloads.
 
-One Vulkan path serves Linux / Windows / Android in addition to macOS / iOS, with a single
+One Vulkan path serves Linux / Android in addition to macOS / iOS, with a single
 GLSL → SPIR-V shader set.
 
 ## Naming conventions (use these consistently)
@@ -25,7 +25,7 @@ The dependency rule is strict: a tier may only depend on tiers to its left.
 ## Locked decisions
 
 - **Single rendering API: Vulkan + MoltenVK on Apple.** Chosen for cross-platform reach
-  (Linux/Windows/Android + Mac/iOS) and one shader source / one renderer to maintain. A
+  (Linux/Android + Mac/iOS) and one shader source / one renderer to maintain. A
   native-Metal iOS backend is a *fallback only*, gated on an iPad validation spike.
 - **Compute stays CUDA (desktop) + Metal (Apple)** — NOT unified to Vulkan compute. The renderer
   meets compute at a thin external-memory interop layer (`vg::interop::{Cuda,Metal}ExternalMemory`).
