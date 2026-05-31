@@ -36,6 +36,20 @@ VkImageAspectFlags aspect_mask_for(VkFormat format) {
   }
 }
 
+// The default view type for an image of @p type with @p array_layers layers:
+// 1D/2D gain their _ARRAY variant when arrayed; 3D images are never arrayed.
+VkImageViewType view_type_for(VkImageType type, uint32_t array_layers) {
+  const bool arrayed = array_layers > 1;
+  switch (type) {
+    case VK_IMAGE_TYPE_1D:
+      return arrayed ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+    case VK_IMAGE_TYPE_3D:
+      return VK_IMAGE_VIEW_TYPE_3D;
+    default:  // VK_IMAGE_TYPE_2D
+      return arrayed ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+  }
+}
+
 // MemoryUsage -> VMA residency preference. The HostVisible host-access flag is
 // applied at the call site (it differs between buffers and images), so this
 // maps the residency only.
@@ -119,10 +133,10 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
     return Status::invalid_argument(
         "buffer usage must name at least one VkBufferUsageFlagBit");
   }
-  if (desc.exportable) {
+  if (desc.external != ExternalHandleType::None) {
     // TODO: wire VkExportMemoryAllocateInfo + a VMA export pool in the interop
-    // tier.
-    return Status::unsupported("exportable buffers are not yet supported");
+    // tier (honoring the requested handle type).
+    return Status::unsupported("external-memory buffers are not yet supported");
   }
   if (desc.mapped && desc.memory == MemoryUsage::DeviceLocal) {
     // A persistent mapping needs host-visible memory; DeviceLocal asks for the
@@ -200,10 +214,21 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   if (desc.format == VK_FORMAT_UNDEFINED) {
     return Status::invalid_argument("image format must not be UNDEFINED");
   }
-  if (desc.exportable) {
+  if (desc.depth == 0 || desc.mip_levels == 0 || desc.array_layers == 0) {
+    return Status::invalid_argument(
+        "image depth, mip_levels, and array_layers must each be non-zero");
+  }
+  if (desc.depth > 1 && desc.type != VK_IMAGE_TYPE_3D) {
+    return Status::invalid_argument(
+        "image depth > 1 requires VK_IMAGE_TYPE_3D");
+  }
+  if (desc.type == VK_IMAGE_TYPE_3D && desc.array_layers != 1) {
+    return Status::invalid_argument("3D images cannot be arrayed");
+  }
+  if (desc.external != ExternalHandleType::None) {
     // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
-    // interop tier.
-    return Status::unsupported("exportable images are not yet supported");
+    // interop tier (honoring the requested handle type).
+    return Status::unsupported("external-memory images are not yet supported");
   }
   if (desc.memory == MemoryUsage::HostVisible) {
     // Texture exposes no host accessor and this path sets no host-access flags,
@@ -217,12 +242,12 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  image_info.imageType = VK_IMAGE_TYPE_2D;
+  image_info.imageType = desc.type;
   image_info.format = desc.format;
-  image_info.extent = {desc.extent.width, desc.extent.height, 1};
-  image_info.mipLevels = 1;
-  image_info.arrayLayers = 1;
-  image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+  image_info.extent = {desc.extent.width, desc.extent.height, desc.depth};
+  image_info.mipLevels = desc.mip_levels;
+  image_info.arrayLayers = desc.array_layers;
+  image_info.samples = desc.samples;
   image_info.tiling = desc.tiling;
   image_info.usage = desc.usage;
   image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -239,13 +264,13 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   VkImageViewCreateInfo view_info{};
   view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   view_info.image = image;
-  view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  view_info.viewType = view_type_for(desc.type, desc.array_layers);
   view_info.format = desc.format;
   view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
   view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = 1;
+  view_info.subresourceRange.levelCount = desc.mip_levels;
   view_info.subresourceRange.baseArrayLayer = 0;
-  view_info.subresourceRange.layerCount = 1;
+  view_info.subresourceRange.layerCount = desc.array_layers;
 
   VkImageView view = VK_NULL_HANDLE;
   VkResult view_result =
