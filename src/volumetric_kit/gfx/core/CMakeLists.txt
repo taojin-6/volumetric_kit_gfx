@@ -75,8 +75,8 @@ target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 # Public deps (header packages) are independently re-findable, so the installed
 # package's find_dependency() calls stay simple. The Vulkan loader is PRIVATE:
 # our implementation (VMA) links it, but it never surfaces in the public API.
-# glm is intentionally absent: no public gfx_core header names a glm type. The
-# camera/assets tiers add it (PUBLIC) when they land.
+# glm is intentionally absent: no public gfx_core header names a glm type (see
+# the rationale at the top-level find_package site in CMakeLists.txt).
 target_link_libraries(
   gfx_core
   PUBLIC Vulkan::Headers
