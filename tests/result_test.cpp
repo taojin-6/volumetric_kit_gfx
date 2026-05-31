@@ -135,8 +135,8 @@ vg::Result<int> make_int(bool fail) {
   return 21;
 }
 
-// Two VG_ASSIGNs in one scope (on different lines) prove the hidden temporaries
-// don't collide; a failing one early-returns its Status.
+// Two VG_ASSIGNs in one scope prove the __COUNTER__-keyed temporaries don't
+// collide (line number is irrelevant); a failing one early-returns its Status.
 vg::Result<int> sum_two(bool fail_second) {
   VG_ASSIGN(int a, make_int(false));
   VG_ASSIGN(int b, make_int(fail_second));

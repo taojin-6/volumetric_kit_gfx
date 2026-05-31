@@ -184,10 +184,13 @@ class Result {
 /// The `Result<T>` analogue of @ref VG_TRY: it removes the check-status-then-
 /// move-value boilerplate that fallible-value call sites otherwise repeat.
 /// Usable only inside a function returning `Status` or `Result<U>`. Because it
-/// declares @p decl in the enclosing scope, it is a statement sequence (not a
-/// `do { } while`); two `VG_ASSIGN`s on the *same source line* would collide
-/// (the hidden temporary is keyed on `__COUNTER__`, so different lines are
-/// fine).
+/// declares @p decl in the enclosing scope, it expands to a statement sequence
+/// (not a `do { } while`), so it is not a single statement -- never use it as
+/// the unbraced body of an `if`/`for`/`while`. The hidden temporary is keyed on
+/// `__COUNTER__` (not `__LINE__`), so multiple `VG_ASSIGN`s in one scope never
+/// collide -- even two on the same source line. @p decl is a single macro
+/// argument, so a type written with a top-level comma needs an alias first
+/// (e.g. `using Pair = std::pair<int, int>;` then `VG_ASSIGN(Pair p, expr)`).
 ///
 /// @code
 /// Result<Pipeline> build(VkDevice device) {
@@ -198,9 +201,9 @@ class Result {
 /// @endcode
 #define VG_ASSIGN(decl, expr) VG_ASSIGN_(decl, expr, __COUNTER__)
 #define VG_ASSIGN_(decl, expr, id) VG_ASSIGN_IMPL_(decl, expr, id)
-#define VG_ASSIGN_IMPL_(decl, expr, id)                                  \
-  auto _vg_result_##id = (expr);                                         \
-  if (!_vg_result_##id.ok()) return std::move(_vg_result_##id).status(); \
+#define VG_ASSIGN_IMPL_(decl, expr, id)                       \
+  auto _vg_result_##id = (expr);                              \
+  if (!_vg_result_##id.ok()) return _vg_result_##id.status(); \
   decl = std::move(_vg_result_##id).value()
 
 #include "volumetric_kit/gfx/core/impl/result.hpp"
