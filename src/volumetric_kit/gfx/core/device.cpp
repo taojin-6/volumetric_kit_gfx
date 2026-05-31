@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/gfx/core/device.hpp"
 
+#include <algorithm>
+#include <cstring>
 #include <optional>
 #include <set>
 #include <vector>
@@ -73,9 +75,25 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     VG_TRY(require(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME));
     VG_TRY(require(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME));
   }
+
+  auto already_enabled = [&](const char* name) {
+    return std::any_of(
+        extensions.begin(), extensions.end(),
+        [&](const char* e) { return std::strcmp(e, name) == 0; });
+  };
+  // Caller-requested extensions, validated through the same require() path and
+  // de-duplicated against the ones the flags above already added.
+  for (const char* name : config.extra_device_extensions) {
+    if (already_enabled(name)) {
+      continue;
+    }
+    VG_TRY(require(name));
+  }
+
   // The spec requires enabling VK_KHR_portability_subset whenever a device
-  // exposes it (e.g. MoltenVK).
-  if (has_extension(available, kPortabilitySubset)) {
+  // exposes it (e.g. MoltenVK); de-duplicate in case the caller also listed it.
+  if (has_extension(available, kPortabilitySubset) &&
+      !already_enabled(kPortabilitySubset)) {
     extensions.push_back(kPortabilitySubset);
   }
 
@@ -109,13 +127,29 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   // Enable features through VkPhysicalDeviceFeatures2 (which supersedes
   // pEnabledFeatures). The query above already populated timeline_features with
   // the device's timelineSemaphore support, so the same struct is fed back to
-  // enable it — only when supported. dynamicRendering/synchronization2 join
-  // this chain in the shaders/pipelines stage (2c).
+  // enable it — only when supported. Consumers add further features (dynamic
+  // rendering, synchronization2, …) through config.feature_chain, appended
+  // below.
   VkPhysicalDeviceFeatures2 features2{};
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features2.features = config.features;
   features2.pNext =
       timeline_features.timelineSemaphore ? &timeline_features : nullptr;
+
+  // Append the caller's feature chain to the TAIL of our chain, preserving our
+  // own timeline link. Walking from &features2 covers both cases (timeline
+  // present → tail is &timeline_features; absent → &features2 itself).
+  // VkBaseOutStructure exposes sType/pNext without knowing each concrete type;
+  // the const_cast is safe because vkCreateDevice treats the chain as
+  // input-only.
+  if (config.feature_chain != nullptr) {
+    auto* tail = reinterpret_cast<VkBaseOutStructure*>(&features2);
+    while (tail->pNext != nullptr) {
+      tail = tail->pNext;
+    }
+    tail->pNext = reinterpret_cast<VkBaseOutStructure*>(
+        const_cast<void*>(config.feature_chain));
+  }
 
   VkDeviceCreateInfo create_info{};
   create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -144,6 +178,9 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   pool_info.queueFamilyIndex = *graphics;
   VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
+
+  // Capture read-only capabilities for caps(); only runs on the success path.
+  device.caps_ = PhysicalDeviceInfo::query(physical);
 
   return device;
 }
@@ -216,7 +253,8 @@ Device::Device(Device&& other) noexcept
       graphics_family_(other.graphics_family_),
       present_family_(other.present_family_),
       graphics_queue_(other.graphics_queue_),
-      present_queue_(other.present_queue_) {
+      present_queue_(other.present_queue_),
+      caps_(std::move(other.caps_)) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
@@ -224,6 +262,7 @@ Device::Device(Device&& other) noexcept
   other.present_family_ = 0;
   other.graphics_queue_ = VK_NULL_HANDLE;
   other.present_queue_ = VK_NULL_HANDLE;
+  other.caps_ = PhysicalDeviceInfo{};
 }
 
 Device& Device::operator=(Device&& other) noexcept {
@@ -236,6 +275,7 @@ Device& Device::operator=(Device&& other) noexcept {
     present_family_ = other.present_family_;
     graphics_queue_ = other.graphics_queue_;
     present_queue_ = other.present_queue_;
+    caps_ = std::move(other.caps_);
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
@@ -243,6 +283,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.present_family_ = 0;
     other.graphics_queue_ = VK_NULL_HANDLE;
     other.present_queue_ = VK_NULL_HANDLE;
+    other.caps_ = PhysicalDeviceInfo{};
   }
   return *this;
 }
@@ -263,6 +304,7 @@ void Device::destroy() noexcept {
   present_family_ = 0;
   graphics_queue_ = VK_NULL_HANDLE;
   present_queue_ = VK_NULL_HANDLE;
+  caps_ = PhysicalDeviceInfo{};
 }
 
 }  // namespace volumetric_kit::gfx

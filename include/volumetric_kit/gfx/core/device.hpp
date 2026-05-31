@@ -8,8 +8,10 @@
 /// and setup helpers. Holds no surface/swapchain (that is the windowing tier).
 
 #include <functional>
+#include <vector>
 
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/physical_device_info.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -19,12 +21,28 @@ struct DeviceConfig {
   /// Require (and enable VK_KHR_swapchain for) a present-capable queue. Needs a
   /// surface.
   bool needs_present = false;
-  /// Enable the external-memory / -semaphore fd extensions — the CUDA interop
-  /// seam.
+  /// Enable the external-memory / -semaphore *fd* extensions — the CUDA interop
+  /// seam on Linux. Win32 / other handle types are requested through
+  /// @ref extra_device_extensions instead.
   bool needs_external_memory = false;
-  /// Core device features to enable.
-  /// TODO: layer in the 1.3 feature structs (VkPhysicalDeviceVulkan13Features).
+  /// Core (1.0) device features to enable (fed into
+  /// `VkPhysicalDeviceFeatures2`).
   VkPhysicalDeviceFeatures features = {};
+  /// Device extensions to enable beyond those implied by the flags above. Each
+  /// is validated against the device's supported list; a missing one fails
+  /// @ref create with @ref Status::Code::Unsupported. A name already implied by
+  /// a flag (e.g. `VK_KHR_swapchain`) is de-duplicated, not passed twice.
+  std::vector<const char*> extra_device_extensions;
+  /// Optional caller-owned `pNext` chain of feature structs (e.g.
+  /// `VkPhysicalDeviceVulkan13Features`, or any `*FeaturesKHR/EXT`) to enable.
+  /// @ref create appends it to the tail of the `VkPhysicalDeviceFeatures2`
+  /// chain it builds (after its own timeline-semaphore link). Query support
+  /// first via
+  /// @ref PhysicalDeviceInfo and request only features the device reports, or
+  /// device creation fails. Each struct must set its `sType`; the pointed-to
+  /// structs must outlive the @ref create call (they are consumed
+  /// synchronously, not stored).
+  const void* feature_chain = nullptr;
 };
 
 /// Owns a `VkDevice`, its queues, and a command pool.
@@ -53,6 +71,11 @@ class VG_CORE_API Device {
   VkDevice handle() const noexcept { return device_; }
   /// The physical device it was created on.
   VkPhysicalDevice physical_device() const noexcept { return physical_; }
+
+  /// Read-only capabilities of the physical device this was created on,
+  /// captured at create() time (extensions/features/limits cached; format
+  /// queries live).
+  const PhysicalDeviceInfo& caps() const noexcept { return caps_; }
 
   /// Index and queue of the graphics-capable family (always present).
   uint32_t graphics_family() const noexcept { return graphics_family_; }
@@ -85,6 +108,7 @@ class VG_CORE_API Device {
   uint32_t present_family_ = 0;
   VkQueue graphics_queue_ = VK_NULL_HANDLE;
   VkQueue present_queue_ = VK_NULL_HANDLE;
+  PhysicalDeviceInfo caps_;
 };
 
 }  // namespace volumetric_kit::gfx
