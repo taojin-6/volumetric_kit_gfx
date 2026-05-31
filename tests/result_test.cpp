@@ -72,6 +72,9 @@ TEST(Status, ToStringNamesAreStable) {
   EXPECT_EQ(vg::to_string(vg::Status::Code::Vulkan), "Vulkan");
   EXPECT_EQ(vg::to_string(VK_ERROR_DEVICE_LOST), "VK_ERROR_DEVICE_LOST");
   EXPECT_EQ(vg::to_string(VK_SUCCESS), "VK_SUCCESS");
+  // A non-core code still in the table resolves to its real name.
+  EXPECT_EQ(vg::to_string(VK_ERROR_FRAGMENTED_POOL),
+            "VK_ERROR_FRAGMENTED_POOL");
   // An unlisted code falls back to a stable, never-empty label.
   EXPECT_FALSE(vg::to_string(static_cast<VkResult>(0x7fffffff)).empty());
 }

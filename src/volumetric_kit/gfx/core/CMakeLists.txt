@@ -21,6 +21,7 @@ target_sources(
           vma_impl.cpp
           log.cpp
           check.cpp
+          result.cpp
           instance.cpp
           device.cpp
           sync.cpp

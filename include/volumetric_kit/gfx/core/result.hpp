@@ -34,6 +34,7 @@
 #include <string_view>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -51,8 +52,12 @@ namespace volumetric_kit::gfx {
 /// @code
 /// Status s = upload();
 /// if (!s) {
-///   log_message(LogLevel::Error,
-///               std::string(to_string(s.domain())) + ": " + s.message());
+///   std::string detail(to_string(s.domain()));
+///   if (s.domain() == Status::Code::Vulkan) {
+///     detail += '/';
+///     detail += to_string(s.code());  // recover the specific VkResult
+///   }
+///   log_message(LogLevel::Error, detail + ": " + s.message());
 ///   return s;
 /// }
 /// @endcode
@@ -81,6 +86,7 @@ class Status {
   /// @param message  Human-readable context (e.g. the failing call site).
   /// @return A non-OK `Status` carrying @p code and @p message.
   static Status error(VkResult code, std::string message) {
+    VG_CHECK(code != VK_SUCCESS, "Status::error needs a failed VkResult");
     return Status{Code::Vulkan, code, std::move(message)};
   }
 
@@ -89,19 +95,31 @@ class Status {
   /// @return A non-OK `Status` whose @ref domain is the factory's domain and
   ///         whose @ref code is `VK_SUCCESS` (no Vulkan call was involved).
   static Status invalid_argument(std::string message) {
-    return Status{Code::InvalidArgument, VK_SUCCESS, std::move(message)};
+    return Status{Code::InvalidArgument, std::move(message)};
   }
+  /// @copydoc invalid_argument
   static Status not_found(std::string message) {
-    return Status{Code::NotFound, VK_SUCCESS, std::move(message)};
+    // TODO: emitted by the assets tier (named resource / file lookup); no core
+    // producer yet.
+    return Status{Code::NotFound, std::move(message)};
   }
+  /// @copydoc invalid_argument
   static Status unsupported(std::string message) {
-    return Status{Code::Unsupported, VK_SUCCESS, std::move(message)};
+    return Status{Code::Unsupported, std::move(message)};
   }
+  /// @copydoc invalid_argument
   static Status out_of_memory(std::string message) {
-    return Status{Code::OutOfMemory, VK_SUCCESS, std::move(message)};
+    // TODO: map genuine VMA/Vulkan OOM (VK_ERROR_OUT_OF_*_MEMORY) into this
+    // domain in the allocator/interop tier; today such failures stay
+    // Code::Vulkan with the VkResult in code(), so this factory has no core
+    // producer yet.
+    return Status{Code::OutOfMemory, std::move(message)};
   }
+  /// @copydoc invalid_argument
   static Status io_error(std::string message) {
-    return Status{Code::IoError, VK_SUCCESS, std::move(message)};
+    // TODO: emitted by the assets tier (read/write/decode/encode); no core
+    // producer yet.
+    return Status{Code::IoError, std::move(message)};
   }
 
   /// @return `true` if this is a success status.
@@ -118,6 +136,11 @@ class Status {
   const std::string& message() const noexcept { return message_; }
 
  private:
+  // Non-Vulkan domains carry no VkResult; this overload fixes code_ to
+  // VK_SUCCESS so a domain factory cannot pair a real VkResult with a
+  // non-Vulkan domain. Only error() takes an explicit VkResult.
+  Status(Code domain, std::string message)
+      : domain_(domain), message_(std::move(message)) {}
   Status(Code domain, VkResult code, std::string message)
       : domain_(domain), code_(code), message_(std::move(message)) {}
 
@@ -154,7 +177,7 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 ///
 /// @code
 /// Result<Buffer> make_buffer(std::size_t bytes) {
-///   if (bytes == 0) return vk_error(VK_ERROR_INITIALIZATION_FAILED, "empty");
+///   if (bytes == 0) return Status::invalid_argument("empty");
 ///   return Buffer{bytes};   // implicit success
 /// }
 /// @endcode

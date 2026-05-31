@@ -34,8 +34,8 @@ struct BufferDesc {
                         ///< memory (not @ref MemoryUsage::DeviceLocal).
   bool exportable =
       false;  ///< Request externally-shareable memory for CUDA<->Vulkan
-              ///< interop; not yet wired (currently returns
-              ///< VK_ERROR_FEATURE_NOT_PRESENT). The interop tier wires it.
+              ///< interop; not yet wired (currently returns @ref
+              ///< Status::Code::Unsupported). The interop tier wires it.
 };
 
 /// @brief Parameters for @ref Allocator::create_image.
@@ -48,8 +48,8 @@ struct TextureDesc {
       MemoryUsage::DeviceLocal;  ///< Images default to GPU-only.
   bool exportable =
       false;  ///< Request externally-shareable memory for CUDA<->Vulkan
-              ///< interop; not yet wired (currently returns
-              ///< VK_ERROR_FEATURE_NOT_PRESENT). The interop tier wires it.
+              ///< interop; not yet wired (currently returns @ref
+              ///< Status::Code::Unsupported). The interop tier wires it.
 };
 
 /// @brief Wraps the Vulkan Memory Allocator and produces RAII resources from
@@ -87,14 +87,14 @@ class VG_CORE_API Allocator {
   /// @param desc  Size, usage, memory residence, and mapping.
   /// @return The buffer on success, or a non-OK @ref Status:
   ///         - `desc.size == 0`, `desc.usage == 0`, or `desc.mapped` with
-  ///           `MemoryUsage::DeviceLocal` return @ref
-  ///           Status::Code::InvalidArgument (malformed/contradictory
+  ///           `MemoryUsage::DeviceLocal` return domain
+  ///           @ref Status::Code::InvalidArgument (malformed/contradictory
   ///           arguments);
   ///         - `desc.exportable` returns @ref Status::Code::Unsupported (the
   ///           CUDA-interop export wiring is added by the interop tier);
-  ///         - if the chosen memory cannot satisfy `desc.mapped`, a
-  ///         Vulkan-domain
-  ///           Status carrying `VK_ERROR_MEMORY_MAP_FAILED`.
+  ///         - a failed allocation, or a chosen memory that cannot satisfy
+  ///           `desc.mapped`, returns a Vulkan-domain @ref Status carrying the
+  ///           `VkResult` (e.g. `VK_ERROR_MEMORY_MAP_FAILED`).
   ///         On success, a buffer created with `desc.mapped` has a non-null
   ///         @ref Buffer::mapped backed by host-coherent memory, so writes
   ///         through it reach the GPU without a manual flush.
@@ -104,10 +104,12 @@ class VG_CORE_API Allocator {
   /// @param desc  Extent, format, usage, tiling, and memory residence.
   /// @return The texture on success, or a non-OK @ref Status:
   ///         - a zero-area `extent`, `usage == 0`, or `VK_FORMAT_UNDEFINED`
-  ///           return @ref Status::Code::InvalidArgument;
-  ///         - `desc.exportable` returns @ref Status::Code::Unsupported. The
-  ///           view's aspect mask is derived from the format (depth and/or
-  ///           stencil for depth formats, otherwise color).
+  ///           return domain @ref Status::Code::InvalidArgument;
+  ///         - `desc.exportable` returns @ref Status::Code::Unsupported;
+  ///         - a failed image, allocation, or view creation returns a
+  ///           Vulkan-domain @ref Status carrying the `VkResult`.
+  ///         The view's aspect mask is derived from the format (depth and/or
+  ///         stencil for depth formats, otherwise color).
   Result<Texture> create_image(const TextureDesc& desc);
 
  private:
