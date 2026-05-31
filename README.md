@@ -8,7 +8,7 @@
 A standalone, reusable **Vulkan** renderer library (MoltenVK on Apple) for volumetric
 workloads.
 
-One Vulkan path serves Linux / Windows / Android in addition to macOS / iOS, with a single
+One Vulkan path serves Linux / Android in addition to macOS / iOS, with a single
 GLSL → SPIR-V shader set. See [`CLAUDE.md`](./CLAUDE.md) for naming conventions and locked
 design decisions.
 
