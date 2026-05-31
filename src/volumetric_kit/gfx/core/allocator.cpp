@@ -101,26 +101,23 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
 
 Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   if (desc.size == 0) {
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "buffer size must be non-zero");
+    return Status::invalid_argument("buffer size must be non-zero");
   }
   if (desc.usage == 0) {
-    return Status::error(
-        VK_ERROR_INITIALIZATION_FAILED,
+    return Status::invalid_argument(
         "buffer usage must name at least one VkBufferUsageFlagBit");
   }
   if (desc.exportable) {
     // TODO: wire VkExportMemoryAllocateInfo + a VMA export pool in the interop
-    // PR.
-    return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
-                         "exportable buffers are not yet supported");
+    // tier.
+    return Status::unsupported("exportable buffers are not yet supported");
   }
   if (desc.mapped && desc.memory == MemoryUsage::DeviceLocal) {
     // A persistent mapping needs host-visible memory; DeviceLocal asks for the
     // opposite. Reject rather than silently demote the residency.
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "mapped buffers need host-visible memory; DeviceLocal "
-                         "cannot be persistently mapped");
+    return Status::invalid_argument(
+        "mapped buffers need host-visible memory; DeviceLocal cannot be "
+        "persistently mapped");
   }
 
   VkBufferCreateInfo buffer_info{};
@@ -173,23 +170,19 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
 
 Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   if (desc.extent.width == 0 || desc.extent.height == 0) {
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "image extent must be non-zero");
+    return Status::invalid_argument("image extent must be non-zero");
   }
   if (desc.usage == 0) {
-    return Status::error(
-        VK_ERROR_INITIALIZATION_FAILED,
+    return Status::invalid_argument(
         "image usage must name at least one VkImageUsageFlagBit");
   }
   if (desc.format == VK_FORMAT_UNDEFINED) {
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "image format must not be UNDEFINED");
+    return Status::invalid_argument("image format must not be UNDEFINED");
   }
   if (desc.exportable) {
     // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
-    // interop PR.
-    return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
-                         "exportable images are not yet supported");
+    // interop tier.
+    return Status::unsupported("exportable images are not yet supported");
   }
 
   VkImageCreateInfo image_info{};

@@ -86,17 +86,15 @@ class VG_CORE_API Allocator {
   /// @brief Allocate a buffer.
   /// @param desc  Size, usage, memory residence, and mapping.
   /// @return The buffer on success, or a non-OK @ref Status:
-  ///         - `desc.size == 0` or `desc.usage == 0` returns
-  ///           `VK_ERROR_INITIALIZATION_FAILED` (both are invalid per the
-  ///           spec);
-  ///         - `desc.exportable` currently returns
-  ///         `VK_ERROR_FEATURE_NOT_PRESENT`
-  ///           (the CUDA-interop export wiring is added by the interop tier);
-  ///         - `desc.mapped` with `MemoryUsage::DeviceLocal` returns
-  ///           `VK_ERROR_INITIALIZATION_FAILED` (mapping needs host-visible
-  ///           memory);
-  ///         - `desc.mapped` the chosen memory cannot satisfy returns
-  ///           `VK_ERROR_MEMORY_MAP_FAILED`.
+  ///         - `desc.size == 0`, `desc.usage == 0`, or `desc.mapped` with
+  ///           `MemoryUsage::DeviceLocal` return @ref
+  ///           Status::Code::InvalidArgument (malformed/contradictory
+  ///           arguments);
+  ///         - `desc.exportable` returns @ref Status::Code::Unsupported (the
+  ///           CUDA-interop export wiring is added by the interop tier);
+  ///         - if the chosen memory cannot satisfy `desc.mapped`, a
+  ///         Vulkan-domain
+  ///           Status carrying `VK_ERROR_MEMORY_MAP_FAILED`.
   ///         On success, a buffer created with `desc.mapped` has a non-null
   ///         @ref Buffer::mapped backed by host-coherent memory, so writes
   ///         through it reach the GPU without a manual flush.
@@ -106,11 +104,10 @@ class VG_CORE_API Allocator {
   /// @param desc  Extent, format, usage, tiling, and memory residence.
   /// @return The texture on success, or a non-OK @ref Status:
   ///         - a zero-area `extent`, `usage == 0`, or `VK_FORMAT_UNDEFINED`
-  ///           returns `VK_ERROR_INITIALIZATION_FAILED`;
-  ///         - `desc.exportable` currently returns
-  ///         `VK_ERROR_FEATURE_NOT_PRESENT`. The view's aspect mask is derived
-  ///         from the format (depth and/or stencil for depth formats, otherwise
-  ///         color).
+  ///           return @ref Status::Code::InvalidArgument;
+  ///         - `desc.exportable` returns @ref Status::Code::Unsupported. The
+  ///           view's aspect mask is derived from the format (depth and/or
+  ///           stencil for depth formats, otherwise color).
   Result<Texture> create_image(const TextureDesc& desc);
 
  private:

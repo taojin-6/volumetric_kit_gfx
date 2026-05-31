@@ -10,7 +10,8 @@
 /// frequently build with `-fno-exceptions`, where a throwing API is unusable.
 /// Fallible calls therefore report failure by value:
 ///
-/// - @ref Status    -- success, or a `VkResult` code plus a context message.
+/// - @ref Status    -- success, or an error domain (@ref Status::Code) with an
+///                     optional `VkResult` detail and a context message.
 /// - @ref Result    -- a `T` on success, or a `Status` on failure.
 ///
 /// Two macros remove the check-and-propagate boilerplate: @ref VG_TRY (for a
@@ -33,49 +34,94 @@
 #include <string_view>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
-/// @brief Success, or a Vulkan error code paired with a human-readable message.
+/// @brief Success, or an error: a domain (@ref Code), an optional `VkResult`
+///        detail, and a human-readable message.
 ///
-/// A default-constructed `Status` is success; build a failure with @ref error.
-/// Convertible to `bool` (true == success) for terse checks.
+/// A default-constructed `Status` is success. Build a failure with a domain
+/// factory (@ref invalid_argument, @ref not_found, @ref unsupported,
+/// @ref out_of_memory, @ref io_error) or, for a failed Vulkan call, @ref error
+/// or @ref vk_error (which set @ref domain to @ref Code::Vulkan and carry the
+/// `VkResult`). Convertible to `bool` (true == success) for terse checks.
 ///
 /// @code
 /// Status s = upload();
 /// if (!s) {
-///   log_message(LogLevel::Error, s.message());
+///   log_message(LogLevel::Error,
+///               std::string(to_string(s.domain())) + ": " + s.message());
 ///   return s;
 /// }
 /// @endcode
 class Status {
  public:
+  /// @brief The kind of failure a non-OK `Status` reports.
+  ///
+  /// This is the primary discriminator. @ref code carries a meaningful
+  /// `VkResult` only when the domain is @ref Code::Vulkan; for every other
+  /// domain it is `VK_SUCCESS`.
+  enum class Code {
+    Ok,               ///< Success.
+    InvalidArgument,  ///< A malformed or contradictory argument value.
+    NotFound,         ///< A named resource or file does not exist.
+    Unsupported,      ///< A valid request the device or build cannot satisfy.
+    OutOfMemory,      ///< A host or device allocation failed.
+    IoError,          ///< A read/write/decode/encode operation failed.
+    Vulkan,           ///< A Vulkan call failed; @ref code holds the `VkResult`.
+  };
+
   /// Construct a success status.
   Status() = default;
 
-  /// @brief Build a failure status.
+  /// @brief Build a Vulkan failure status (domain @ref Code::Vulkan).
   /// @param code     Vulkan result code; must not be `VK_SUCCESS`.
   /// @param message  Human-readable context (e.g. the failing call site).
   /// @return A non-OK `Status` carrying @p code and @p message.
   static Status error(VkResult code, std::string message) {
-    return Status{code, std::move(message)};
+    return Status{Code::Vulkan, code, std::move(message)};
+  }
+
+  /// @brief Build a non-Vulkan failure status in the named domain.
+  /// @param message  Human-readable context.
+  /// @return A non-OK `Status` whose @ref domain is the factory's domain and
+  ///         whose @ref code is `VK_SUCCESS` (no Vulkan call was involved).
+  static Status invalid_argument(std::string message) {
+    return Status{Code::InvalidArgument, VK_SUCCESS, std::move(message)};
+  }
+  static Status not_found(std::string message) {
+    return Status{Code::NotFound, VK_SUCCESS, std::move(message)};
+  }
+  static Status unsupported(std::string message) {
+    return Status{Code::Unsupported, VK_SUCCESS, std::move(message)};
+  }
+  static Status out_of_memory(std::string message) {
+    return Status{Code::OutOfMemory, VK_SUCCESS, std::move(message)};
+  }
+  static Status io_error(std::string message) {
+    return Status{Code::IoError, VK_SUCCESS, std::move(message)};
   }
 
   /// @return `true` if this is a success status.
-  bool ok() const noexcept { return code_ == VK_SUCCESS; }
+  bool ok() const noexcept { return domain_ == Code::Ok; }
   /// @return `true` on success (same as @ref ok).
   explicit operator bool() const noexcept { return ok(); }
 
-  /// @return The Vulkan result code; `VK_SUCCESS` when @ref ok.
+  /// @return The error domain; @ref Code::Ok exactly when @ref ok.
+  Code domain() const noexcept { return domain_; }
+  /// @return The Vulkan result code. Meaningful only when @ref domain is
+  ///         @ref Code::Vulkan; `VK_SUCCESS` otherwise.
   VkResult code() const noexcept { return code_; }
   /// @return The failure context message; empty when @ref ok.
   const std::string& message() const noexcept { return message_; }
 
  private:
-  Status(VkResult code, std::string message)
-      : code_(code), message_(std::move(message)) {}
+  Status(Code domain, VkResult code, std::string message)
+      : domain_(domain), code_(code), message_(std::move(message)) {}
 
+  Code domain_ = Code::Ok;
   VkResult code_ = VK_SUCCESS;
   std::string message_;
 };
@@ -87,6 +133,17 @@ class Status {
 inline Status vk_error(VkResult code, std::string_view what) {
   return Status::error(code, std::string(what));
 }
+
+/// @brief Human-readable name for a @ref Status::Code (e.g. "InvalidArgument").
+/// @param code  A domain value.
+/// @return A static, never-empty `string_view`.
+VG_CORE_API std::string_view to_string(Status::Code code) noexcept;
+
+/// @brief Human-readable name for a `VkResult` (e.g. "VK_ERROR_DEVICE_LOST").
+/// @param result  Any `VkResult`.
+/// @return A static `string_view`; unrecognized codes yield
+/// "VK_RESULT_UNKNOWN".
+VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 
 /// @brief A value of type `T` on success, or a non-OK @ref Status on failure.
 /// @tparam T  The success value type (must be movable).
