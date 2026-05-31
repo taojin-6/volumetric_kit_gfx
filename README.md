@@ -64,10 +64,12 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
-Useful options (all default ON only when `volumetric_kit_gfx` is the top-level
-project): `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL`, `VG_WITH_GLFW`,
-`VG_WITH_CUDA`, `VG_WARNINGS_AS_ERRORS`, and `VG_SANITIZE` (e.g.
-`-DVG_SANITIZE="address;undefined"`).
+Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, and `VG_INSTALL` default
+ON only when `volumetric_kit_gfx` is the top-level project (OFF when it is
+consumed via FetchContent / `add_subdirectory`). `VG_WITH_GLFW` and
+`VG_WARNINGS_AS_ERRORS` default ON regardless; `VG_WITH_CUDA` defaults OFF.
+`VG_SANITIZE` is a semicolon list, empty (off) by default — e.g.
+`-DVG_SANITIZE="address;undefined"`.
 
 On Linux the prerequisites come from the package manager, e.g. on Ubuntu:
 
