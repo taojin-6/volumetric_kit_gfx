@@ -26,7 +26,8 @@ add_executable(
   retire_list_test.cpp
   retire_queue_test.cpp
   allocator_test.cpp
-  shader_test.cpp)
+  shader_test.cpp
+  command_buffer_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core
                                            GTest::gtest_main)
 vg_target_warnings(vg_core_test)
