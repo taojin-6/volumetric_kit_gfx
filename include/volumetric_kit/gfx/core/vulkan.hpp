@@ -9,8 +9,5 @@
 /// loader / dispatch choice (currently the link-time loader `Vulkan::Vulkan`)
 /// stays a detail of this one file: adopting volk for iOS/Android would be a
 /// change here plus the link line, with no churn at call sites.
-///
-/// TODO: add a CI guard that rejects raw `<vulkan/vulkan.h>` includes
-/// elsewhere.
 
 #include <vulkan/vulkan.h>

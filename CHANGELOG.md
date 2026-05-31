@@ -12,7 +12,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   target + `volumetric_kit::gfx` umbrella alias, and first-class install/export so the
   library is consumable via both FetchContent and `find_package(volumetric_kit_gfx)`.
 - Dependency strategy (hybrid): `VMA` and `spirv-cross` vendored via pinned FetchContent;
-  `Vulkan` and `glm` from the system. VMA is implemented in one translation unit and the
+  `Vulkan` from the system. VMA is implemented in one translation unit and the
   Vulkan loader is linked PRIVATE, so neither leaks into the public API.
 - GPU-capable CI: lavapipe (Linux software Vulkan) + MoltenVK (macOS) so headless tests
   can run on GitHub-hosted runners; GPU tests skip gracefully when no device is present.

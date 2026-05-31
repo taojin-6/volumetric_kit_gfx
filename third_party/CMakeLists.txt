@@ -2,11 +2,10 @@
 # Copyright (c) 2026 Tao Jin
 
 # Dependencies. System via find_package: Vulkan (headers + loader) -- widely
-# packaged and re-findable, keeping the installed export clean. (glm joins this
-# list when the camera/assets tiers land; no tier names a glm type yet.)
-# Vendored via pinned FetchContent: VMA (header-only, built in one gfx_core TU),
-# spirv-cross (reflection; built by tests now to prove it compiles), and
-# googletest.
+# packaged and re-findable, keeping the installed export clean. (glm is not a
+# dependency yet; see the top-level CMakeLists.txt.) Vendored via pinned
+# FetchContent: VMA (header-only, built in one gfx_core TU), spirv-cross
+# (reflection; built by tests now to prove it compiles), and googletest.
 #
 # Desktop foundation: Vulkan comes from the system; deferred iOS/Android work
 # will vendor a pinned Vulkan-Headers for those targets.
