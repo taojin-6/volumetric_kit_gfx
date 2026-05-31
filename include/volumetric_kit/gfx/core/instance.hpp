@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -26,7 +26,7 @@ struct InstanceConfig {
 };
 
 /// Owns a `VkInstance` and, when validation is enabled, its debug messenger.
-class VG_API Instance {
+class VG_CORE_API Instance {
  public:
   /// Create the instance: turns on validation + the debug messenger when
   /// requested and available, and portability enumeration when the loader

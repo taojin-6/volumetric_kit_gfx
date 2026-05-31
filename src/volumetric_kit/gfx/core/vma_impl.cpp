@@ -5,7 +5,6 @@
 /// The single translation unit that instantiates the (header-only) Vulkan
 /// Memory Allocator. This TU exists so VMA is compiled exactly once and so the
 /// VMA + Vulkan-headers toolchain is proven to build on every platform.
-/// TODO: wrap the allocator in a vg::core RAII type.
 ///
 /// VMA calls the Vulkan entry points directly through the linked loader
 /// prototypes

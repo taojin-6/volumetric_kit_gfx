@@ -33,17 +33,10 @@ option(VG_WITH_GLFW "Enable GLFW desktop windowing" ON)
 option(VG_WITH_CUDA "Enable CUDA <-> Vulkan external-memory interop" OFF)
 option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
-# Validation layers are useful in unoptimized builds and a needless cost
-# otherwise.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug"
-   OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
-   OR NOT CMAKE_BUILD_TYPE)
-  set(_vg_validation_default ON)
-else()
-  set(_vg_validation_default OFF)
-endif()
-option(VG_WITH_VALIDATION "Enable Vulkan validation layers + debug messenger"
-       ${_vg_validation_default})
+# Validation is a runtime decision (InstanceConfig::enable_validation), gated at
+# instance creation by layer availability — not a compile-time switch. The debug
+# messenger/layer wiring is negligible code size, so there is no build option to
+# strip it.
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally — see cmake/vg_sanitizers.cmake for why.
@@ -56,12 +49,12 @@ include(vg_sanitizers)
 include(vg_shaders)
 
 # --- Public dependencies -----------------------------------------------------
-# Resolved at the top level so their imported targets (Vulkan::Headers,
-# glm::glm) are visible to every subdirectory, not just the one find_package()
-# ran in. Provides Vulkan::Headers (the public-API types) and Vulkan::Vulkan
-# (the loader our implementation links privately).
+# Resolved at the top level so their imported targets are visible to every
+# subdirectory, not just the one find_package() ran in. Provides Vulkan::Headers
+# (the public-API types) and Vulkan::Vulkan (the loader our implementation links
+# privately). glm is not found here: no tier names a glm type yet — the
+# camera/assets tiers will add find_package(glm) when they land.
 find_package(Vulkan REQUIRED)
-find_package(glm REQUIRED)
 
 # --- Dependencies + library --------------------------------------------------
 add_subdirectory(third_party)

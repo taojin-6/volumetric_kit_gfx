@@ -8,8 +8,8 @@
 
 #include <functional>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -41,7 +41,7 @@ namespace volumetric_kit::gfx {
 /// if (!color) return color.status();
 /// VkImageView view = color.value().view();
 /// @endcode
-class VG_API Texture {
+class VG_CORE_API Texture {
  public:
   /// @brief Construct an empty texture (owns nothing; `valid()` is false).
   Texture() noexcept = default;

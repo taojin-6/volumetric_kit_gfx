@@ -6,9 +6,10 @@
 # Re-find the PUBLIC dependencies. VMA is a PRIVATE implementation detail (header-only,
 # implemented in one library TU), so it is deliberately absent here. find_dependency(Vulkan)
 # also re-supplies the loader (Vulkan::Vulkan) our static archive links privately.
+# glm is not re-found: no public gfx_core header names a glm type yet, so it is not a
+# dependency of the installed package. The camera/assets tiers will add it when they land.
 include(CMakeFindDependencyMacro)
 find_dependency(Vulkan)
-find_dependency(glm)
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_gfxTargets.cmake")
 

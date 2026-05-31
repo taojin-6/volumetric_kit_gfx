@@ -12,9 +12,13 @@ One Vulkan path serves Linux / Windows / Android in addition to macOS / iOS, wit
 GLSL → SPIR-V shader set. See [`CLAUDE.md`](./CLAUDE.md) for naming conventions and locked
 design decisions.
 
-> **Status:** Empty skeleton — only the repo scaffolding and pre-commit tooling are in
-> place. The `core` tier, windowing/swapchain, the `passes`/`pipelines` tiers, and
-> CUDA/Metal interop are not yet implemented.
+> **Status:** Early development. The `core` tier — instance/device bring-up, VMA
+> allocator + RAII buffer/texture, sync primitives (fence, binary + timeline semaphore),
+> deferred-destruction retire queue, shader modules, and the `Status`/`Result`/logging
+> foundation — is implemented and tested (GoogleTest suite, run under ASan/UBSan/LSan in
+> CI). The windowing/swapchain, `passes`/`pipelines`/`app` tiers, and CUDA/Metal interop
+> are not yet implemented. See [`CHANGELOG.md`](./CHANGELOG.md) for what has landed and
+> [`DESIGN.md`](./DESIGN.md) for the tier roadmap.
 
 ## Architecture (tiered)
 
@@ -37,6 +41,39 @@ Sanity-check that the loader sees your GPU through MoltenVK:
 
 ```bash
 vulkaninfo --summary   # expect GPU0 ... driverID = DRIVER_ID_MOLTENVK
+```
+
+## Use it in your project
+
+The library is consumable both via `FetchContent` and an installed
+`find_package`. Link the component target you need (today only `gfx_core` is
+built); the umbrella alias `volumetric_kit::gfx` pulls in whatever tiers exist.
+
+```cmake
+# Option A — FetchContent (pin GIT_TAG to a release tag or commit SHA):
+include(FetchContent)
+FetchContent_Declare(
+  volumetric_kit_gfx
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
+  GIT_TAG main)
+FetchContent_MakeAvailable(volumetric_kit_gfx)
+
+# Option B — installed package:
+#   find_package(volumetric_kit_gfx CONFIG REQUIRED)
+
+target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
+```
+
+Useful options (all default ON only when `volumetric_kit_gfx` is the top-level
+project): `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL`, `VG_WITH_GLFW`,
+`VG_WITH_CUDA`, `VG_WARNINGS_AS_ERRORS`, and `VG_SANITIZE` (e.g.
+`-DVG_SANITIZE="address;undefined"`).
+
+On Linux the prerequisites come from the package manager, e.g. on Ubuntu:
+
+```bash
+sudo apt-get install -y cmake libvulkan-dev glslang-tools \
+                        mesa-vulkan-drivers vulkan-tools   # lavapipe for headless tests
 ```
 
 ## Development

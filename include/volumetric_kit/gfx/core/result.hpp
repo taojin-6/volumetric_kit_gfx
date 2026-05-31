@@ -175,4 +175,32 @@ class Result {
       return ::volumetric_kit::gfx::vk_error(_vg_vk, #expr); \
   } while (0)
 
+/// @brief Evaluate a `Result<T>` expression, early-return its `Status` on
+///        failure, otherwise move the value into @p decl.
+/// @param decl  A variable declaration (e.g. `Device device`) bound to the
+///              unwrapped value on success.
+/// @param expr  An expression yielding a `Result<T>`.
+///
+/// The `Result<T>` analogue of @ref VG_TRY: it removes the check-status-then-
+/// move-value boilerplate that fallible-value call sites otherwise repeat.
+/// Usable only inside a function returning `Status` or `Result<U>`. Because it
+/// declares @p decl in the enclosing scope, it is a statement sequence (not a
+/// `do { } while`); two `VG_ASSIGN`s on the *same source line* would collide
+/// (the hidden temporary is keyed on `__COUNTER__`, so different lines are
+/// fine).
+///
+/// @code
+/// Result<Pipeline> build(VkDevice device) {
+///   VG_ASSIGN(ShaderModule vert, ShaderModule::create(device, code, bytes));
+///   // `vert` holds the value here; a failure already returned its Status.
+///   return assemble(vert);
+/// }
+/// @endcode
+#define VG_ASSIGN(decl, expr) VG_ASSIGN_(decl, expr, __COUNTER__)
+#define VG_ASSIGN_(decl, expr, id) VG_ASSIGN_IMPL_(decl, expr, id)
+#define VG_ASSIGN_IMPL_(decl, expr, id)                                  \
+  auto _vg_result_##id = (expr);                                         \
+  if (!_vg_result_##id.ok()) return std::move(_vg_result_##id).status(); \
+  decl = std::move(_vg_result_##id).value()
+
 #include "volumetric_kit/gfx/core/impl/result.hpp"

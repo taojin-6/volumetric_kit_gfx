@@ -11,7 +11,7 @@
 #include <functional>
 #include <string_view>
 
-#include "volumetric_kit/gfx/export.hpp"
+#include "volumetric_kit/gfx/core/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -21,10 +21,10 @@ using LogHandler = std::function<void(LogLevel, std::string_view)>;
 
 /// Install the diagnostic sink. Pass a default-constructed (empty) handler to
 /// restore the built-in default (warnings + errors to stderr). Thread-safe.
-VG_API void set_log_handler(LogHandler handler);
+VG_CORE_API void set_log_handler(LogHandler handler);
 
 /// Emit a diagnostic through the current handler (or the default sink).
 /// Thread-safe.
-VG_API void log_message(LogLevel level, std::string_view message);
+VG_CORE_API void log_message(LogLevel level, std::string_view message);
 
 }  // namespace volumetric_kit::gfx

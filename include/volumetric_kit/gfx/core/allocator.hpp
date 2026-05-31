@@ -9,10 +9,10 @@
 #include <memory>
 
 #include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -33,7 +33,9 @@ struct BufferDesc {
   bool mapped = false;  ///< Persistently map the memory; requires host-visible
                         ///< memory (not @ref MemoryUsage::DeviceLocal).
   bool exportable =
-      false;  ///< Reserve external memory for CUDA interop (see below).
+      false;  ///< Request externally-shareable memory for CUDA<->Vulkan
+              ///< interop; not yet wired (currently returns
+              ///< VK_ERROR_FEATURE_NOT_PRESENT). The interop tier wires it.
 };
 
 /// @brief Parameters for @ref Allocator::create_image.
@@ -45,7 +47,9 @@ struct TextureDesc {
   MemoryUsage memory =
       MemoryUsage::DeviceLocal;  ///< Images default to GPU-only.
   bool exportable =
-      false;  ///< Reserve external memory for CUDA interop (see below).
+      false;  ///< Request externally-shareable memory for CUDA<->Vulkan
+              ///< interop; not yet wired (currently returns
+              ///< VK_ERROR_FEATURE_NOT_PRESENT). The interop tier wires it.
 };
 
 /// @brief Wraps the Vulkan Memory Allocator and produces RAII resources from
@@ -65,7 +69,7 @@ struct TextureDesc {
 ///                                                           MemoryUsage::HostVisible,
 ///                                                           .mapped = true});
 /// @endcode
-class VG_API Allocator {
+class VG_CORE_API Allocator {
  public:
   /// @brief Create an allocator for @p device.
   /// @param instance  The instance @p device belongs to.
@@ -87,7 +91,7 @@ class VG_API Allocator {
   ///           spec);
   ///         - `desc.exportable` currently returns
   ///         `VK_ERROR_FEATURE_NOT_PRESENT`
-  ///           (the CUDA-interop export wiring lands in the interop PR);
+  ///           (the CUDA-interop export wiring is added by the interop tier);
   ///         - `desc.mapped` with `MemoryUsage::DeviceLocal` returns
   ///           `VK_ERROR_INITIALIZATION_FAILED` (mapping needs host-visible
   ///           memory);
