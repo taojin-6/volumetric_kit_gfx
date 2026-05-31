@@ -87,7 +87,7 @@ TEST_F(AllocatorTest, ExportableBufferReturnsNotSupported) {
 
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
-  EXPECT_EQ(buffer.status().code(), VK_ERROR_FEATURE_NOT_PRESENT);
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::Unsupported);
 }
 
 TEST_F(AllocatorTest, BufferMoveLeavesSourceEmpty) {
@@ -174,7 +174,7 @@ TEST_F(AllocatorTest, ZeroSizeBufferIsRejected) {
 
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
-  EXPECT_EQ(buffer.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, ZeroUsageBufferIsRejected) {
@@ -184,7 +184,7 @@ TEST_F(AllocatorTest, ZeroUsageBufferIsRejected) {
 
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
-  EXPECT_EQ(buffer.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, DeviceLocalMappedIsRejected) {
@@ -197,7 +197,7 @@ TEST_F(AllocatorTest, DeviceLocalMappedIsRejected) {
 
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
-  EXPECT_EQ(buffer.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 // No device needed: a default-constructed Buffer owns nothing.
@@ -247,7 +247,7 @@ TEST_F(AllocatorTest, ExportableImageReturnsNotSupported) {
 
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
-  EXPECT_EQ(texture.status().code(), VK_ERROR_FEATURE_NOT_PRESENT);
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::Unsupported);
 }
 
 TEST_F(AllocatorTest, ZeroExtentImageIsRejected) {
@@ -258,7 +258,7 @@ TEST_F(AllocatorTest, ZeroExtentImageIsRejected) {
 
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
-  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, ZeroUsageImageIsRejected) {
@@ -269,7 +269,7 @@ TEST_F(AllocatorTest, ZeroUsageImageIsRejected) {
 
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
-  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, UndefinedFormatImageIsRejected) {
@@ -280,7 +280,7 @@ TEST_F(AllocatorTest, UndefinedFormatImageIsRejected) {
 
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
-  EXPECT_EQ(texture.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {

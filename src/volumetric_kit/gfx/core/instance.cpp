@@ -169,8 +169,7 @@ Result<VkPhysicalDevice> Instance::select_physical_device(
     VkSurfaceKHR surface) const {
   const std::vector<VkPhysicalDevice> devices = physical_devices(instance_);
   if (devices.empty()) {
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "no Vulkan physical devices found");
+    return Status::unsupported("no Vulkan physical devices found");
   }
 
   VkPhysicalDevice best = VK_NULL_HANDLE;
@@ -192,8 +191,8 @@ Result<VkPhysicalDevice> Instance::select_physical_device(
   }
 
   if (best == VK_NULL_HANDLE) {
-    return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
-                         "no physical device has the required queue families");
+    return Status::unsupported(
+        "no physical device has the required queue families");
   }
   return best;
 }

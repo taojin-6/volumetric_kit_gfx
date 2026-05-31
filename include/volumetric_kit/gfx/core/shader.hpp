@@ -45,7 +45,7 @@ class VG_CORE_API ShaderModule {
   /// @param size_bytes Size of @p code in **bytes** — a non-zero multiple of 4.
   /// @pre @p code is non-null and @p size_bytes is a non-zero multiple of 4;
   ///      these are validated before Vulkan is touched and otherwise yield a
-  ///      non-OK @ref Status carrying `VK_ERROR_INITIALIZATION_FAILED`.
+  ///      non-OK @ref Status with domain @ref Status::Code::InvalidArgument.
   /// @return The module on success, or a non-OK @ref Status.
   static Result<ShaderModule> create(VkDevice device, const uint32_t* code,
                                      size_t size_bytes);

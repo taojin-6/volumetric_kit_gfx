@@ -33,7 +33,7 @@ TEST_F(DeviceTest, NeedsPresentWithoutSurfaceErrors) {
   auto device =
       vg::Device::create(instance_->handle(), physical_, config);  // no surface
   ASSERT_FALSE(device.ok());
-  EXPECT_EQ(device.status().code(), VK_ERROR_INITIALIZATION_FAILED);
+  EXPECT_EQ(device.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(DeviceTest, MoveConstructTransfersOwnership) {

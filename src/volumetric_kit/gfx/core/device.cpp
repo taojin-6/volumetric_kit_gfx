@@ -28,21 +28,18 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   // it is intentionally unused at creation.
   std::optional<uint32_t> graphics = find_graphics_family(physical);
   if (!graphics) {
-    return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
-                         "no graphics queue family");
+    return Status::unsupported("no graphics queue family");
   }
 
   std::optional<uint32_t> present;
   if (config.needs_present) {
     if (surface == VK_NULL_HANDLE) {
-      return Status::error(
-          VK_ERROR_INITIALIZATION_FAILED,
+      return Status::invalid_argument(
           "needs_present requires a surface to choose a present queue");
     }
     present = find_present_family(physical, surface);
     if (!present) {
-      return Status::error(VK_ERROR_FEATURE_NOT_PRESENT,
-                           "no present-capable queue family");
+      return Status::unsupported("no present-capable queue family");
     }
   }
 
@@ -52,8 +49,7 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
 
   auto require = [&](const char* name) -> Status {
     if (!has_extension(available, name)) {
-      return Status::error(
-          VK_ERROR_EXTENSION_NOT_PRESENT,
+      return Status::unsupported(
           std::string("required device extension missing: ") + name);
     }
     extensions.push_back(name);

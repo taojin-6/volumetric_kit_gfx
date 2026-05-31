@@ -15,22 +15,68 @@ TEST(Status, DefaultConstructedIsOk) {
   vg::Status status;
   EXPECT_TRUE(status.ok());
   EXPECT_TRUE(static_cast<bool>(status));
+  EXPECT_EQ(status.domain(), vg::Status::Code::Ok);
   EXPECT_EQ(status.code(), VK_SUCCESS);
 }
 
-TEST(Status, ErrorCarriesCodeAndMessage) {
+TEST(Status, ErrorCarriesDomainCodeAndMessage) {
   vg::Status status = vg::Status::error(VK_ERROR_OUT_OF_HOST_MEMORY, "boom");
   EXPECT_FALSE(status.ok());
   EXPECT_FALSE(static_cast<bool>(status));
+  EXPECT_EQ(status.domain(), vg::Status::Code::Vulkan);
   EXPECT_EQ(status.code(), VK_ERROR_OUT_OF_HOST_MEMORY);
   EXPECT_EQ(status.message(), "boom");
 }
 
-TEST(Status, VkErrorHelperBuildsError) {
+TEST(Status, VkErrorHelperBuildsVulkanDomainError) {
   vg::Status status = vg::vk_error(VK_ERROR_OUT_OF_DEVICE_MEMORY, "context");
   EXPECT_FALSE(status.ok());
+  EXPECT_EQ(status.domain(), vg::Status::Code::Vulkan);
   EXPECT_EQ(status.code(), VK_ERROR_OUT_OF_DEVICE_MEMORY);
   EXPECT_EQ(status.message(), "context");
+}
+
+// Non-Vulkan domain factories: not ok, carry their domain, and report a
+// VK_SUCCESS code() (there is no honest VkResult for them).
+TEST(Status, DomainFactoriesCarryDomainAndOkCode) {
+  using Code = vg::Status::Code;
+  const std::pair<vg::Status, Code> cases[] = {
+      {vg::Status::invalid_argument("a"), Code::InvalidArgument},
+      {vg::Status::not_found("b"), Code::NotFound},
+      {vg::Status::unsupported("c"), Code::Unsupported},
+      {vg::Status::out_of_memory("d"), Code::OutOfMemory},
+      {vg::Status::io_error("e"), Code::IoError},
+  };
+  for (const auto& [status, expected] : cases) {
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.domain(), expected);
+    EXPECT_EQ(status.code(), VK_SUCCESS);
+    EXPECT_FALSE(status.message().empty());
+  }
+}
+
+// A Result built from a non-Vulkan domain error must NOT abort (the
+// Result(Status) VG_CHECK keys on ok(), which is domain-driven) and must report
+// the error faithfully.
+TEST(Result, BuildsFromNonVulkanDomainErrorWithoutAbort) {
+  vg::Result<int> result(vg::Status::invalid_argument("bad"));
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(result.status().message(), "bad");
+}
+
+TEST(Status, ToStringNamesAreStable) {
+  EXPECT_EQ(vg::to_string(vg::Status::Code::Ok), "Ok");
+  EXPECT_EQ(vg::to_string(vg::Status::Code::InvalidArgument),
+            "InvalidArgument");
+  EXPECT_EQ(vg::to_string(vg::Status::Code::Vulkan), "Vulkan");
+  EXPECT_EQ(vg::to_string(VK_ERROR_DEVICE_LOST), "VK_ERROR_DEVICE_LOST");
+  EXPECT_EQ(vg::to_string(VK_SUCCESS), "VK_SUCCESS");
+  // A non-core code still in the table resolves to its real name.
+  EXPECT_EQ(vg::to_string(VK_ERROR_FRAGMENTED_POOL),
+            "VK_ERROR_FRAGMENTED_POOL");
+  // An unlisted code falls back to a stable, never-empty label.
+  EXPECT_FALSE(vg::to_string(static_cast<VkResult>(0x7fffffff)).empty());
 }
 
 TEST(Result, HoldsValueOnSuccess) {

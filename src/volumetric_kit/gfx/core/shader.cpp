@@ -14,9 +14,9 @@ Result<ShaderModule> ShaderModule::create(VkDevice device, const uint32_t* code,
   // SPIR-V is a stream of 32-bit words, so the byte size must be a non-zero
   // multiple of 4.
   if (code == nullptr || size_bytes == 0 || size_bytes % 4 != 0) {
-    return vk_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "ShaderModule::create: code must be non-null with a "
-                    "non-zero, 4-byte-aligned size");
+    return Status::invalid_argument(
+        "ShaderModule::create: code must be non-null with a non-zero, "
+        "4-byte-aligned size");
   }
 
   VkShaderModuleCreateInfo info{};
