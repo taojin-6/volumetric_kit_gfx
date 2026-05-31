@@ -17,13 +17,14 @@
 
 #include <string_view>
 
-#include "volumetric_kit/gfx/export.hpp"
+#include "volumetric_kit/gfx/core/export.hpp"
 
 namespace volumetric_kit::gfx::detail {
 
 /// Report a failed `VG_CHECK` (log + abort). Never returns.
-[[noreturn]] VG_API void check_failed(const char* file, int line,
-                                      const char* expr, std::string_view msg);
+[[noreturn]] VG_CORE_API void check_failed(const char* file, int line,
+                                           const char* expr,
+                                           std::string_view msg);
 
 }  // namespace volumetric_kit::gfx::detail
 

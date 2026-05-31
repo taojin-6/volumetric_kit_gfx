@@ -16,10 +16,10 @@
 
 #include <cstdint>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -31,7 +31,7 @@ namespace volumetric_kit::gfx {
 /// // ... submit work that signals fence.value().handle() ...
 /// fence.value().wait();
 /// @endcode
-class VG_API Fence {
+class VG_CORE_API Fence {
  public:
   /// @brief Create a fence.
   /// @param device    The logical device that owns the fence.
@@ -69,7 +69,7 @@ class VG_API Fence {
 };
 
 /// @brief A binary `VkSemaphore`: orders work between GPU queue submissions.
-class VG_API Semaphore {
+class VG_CORE_API Semaphore {
  public:
   /// @brief Create a binary semaphore.
   /// @param device  The logical device that owns the semaphore.
@@ -108,7 +108,7 @@ class VG_API Semaphore {
 /// timeline.value().signal(1);    // host raises the counter
 /// timeline.value().wait(1);      // returns once the counter reaches >= 1
 /// @endcode
-class VG_API TimelineSemaphore {
+class VG_CORE_API TimelineSemaphore {
  public:
   /// @brief Create a timeline semaphore.
   /// @param device         The logical device that owns the semaphore.

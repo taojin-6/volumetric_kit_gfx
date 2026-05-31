@@ -9,10 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -34,7 +34,7 @@ namespace volumetric_kit::gfx {
 /// if (!vert) return vert.status();
 /// // ... reference vert.value().handle() in a VkPipelineShaderStageCreateInfo
 /// @endcode
-class VG_API ShaderModule {
+class VG_CORE_API ShaderModule {
  public:
   /// @brief Construct an empty module (owns nothing; `valid()` is false).
   ShaderModule() = default;

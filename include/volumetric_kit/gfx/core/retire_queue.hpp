@@ -9,9 +9,9 @@
 #include <cstddef>
 #include <functional>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/retire_list.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -32,7 +32,7 @@ namespace volumetric_kit::gfx {
 /// retire.push(frame_fence, [buf = buffer]() { destroy(buf); });
 /// retire.poll();  // once per frame
 /// @endcode
-class VG_API RetireQueue {
+class VG_CORE_API RetireQueue {
  public:
   /// @brief Construct a queue that observes fences belonging to @p device.
   /// @param device  The logical device whose fences gate the deleters.

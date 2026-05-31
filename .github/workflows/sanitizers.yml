@@ -42,8 +42,9 @@ jobs:
       - name: GPU diagnostic
         run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
 
-      # Debug turns VG_WITH_VALIDATION on (complementary handle/lifetime checking
-      # ASan can't see). clang gives the most reliable sanitizer + mesa interop.
+      # Debug + clang gives the most reliable sanitizer + mesa interop. (Vulkan
+      # validation is a runtime opt-in via InstanceConfig; the test fixture can
+      # enable it for the complementary handle/lifetime checking ASan can't see.)
       - name: Configure
         run: |
           cmake -S . -B build \

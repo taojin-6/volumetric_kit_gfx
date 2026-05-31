@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# Dependencies. System via find_package: Vulkan (headers + loader) and glm --
-# widely packaged and re-findable, keeping the installed export clean. Vendored
-# via pinned FetchContent: VMA (header-only, built in one gfx_core TU),
+# Dependencies. System via find_package: Vulkan (headers + loader) -- widely
+# packaged and re-findable, keeping the installed export clean. (glm joins this
+# list when the camera/assets tiers land; no tier names a glm type yet.)
+# Vendored via pinned FetchContent: VMA (header-only, built in one gfx_core TU),
 # spirv-cross (reflection; built by tests now to prove it compiles), and
 # googletest.
 #
@@ -12,9 +13,9 @@
 
 include(FetchContent)
 
-# Public deps (Vulkan, glm) are resolved at the top level so their imported
-# targets are visible across sibling subdirectories. This file owns only the
-# vendored deps.
+# Public deps (Vulkan) are resolved at the top level so their imported targets
+# are visible across sibling subdirectories. This file owns only the vendored
+# deps.
 
 # --- VMA: Vulkan Memory Allocator (header-only; implemented in one gfx_core TU)
 # ----

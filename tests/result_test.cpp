@@ -128,6 +128,42 @@ TEST(VkTry, PassesSuccessAndPropagatesFailureWithExprContext) {
   EXPECT_NE(status.message().find("passthrough(r)"), std::string::npos);
 }
 
+namespace {
+
+vg::Result<int> make_int(bool fail) {
+  if (fail) return vg::Status::error(VK_ERROR_UNKNOWN, "no int");
+  return 21;
+}
+
+// Two VG_ASSIGNs in one scope (on different lines) prove the hidden temporaries
+// don't collide; a failing one early-returns its Status.
+vg::Result<int> sum_two(bool fail_second) {
+  VG_ASSIGN(int a, make_int(false));
+  VG_ASSIGN(int b, make_int(fail_second));
+  return a + b;
+}
+
+// VG_ASSIGN must move the value out, so it works for move-only T.
+vg::Status take_move_only() {
+  VG_ASSIGN(MoveOnly m, vg::Result<MoveOnly>(MoveOnly{5}));
+  if (m.value != 5) return vg::Status::error(VK_ERROR_UNKNOWN, "wrong");
+  return vg::Status{};
+}
+
+}  // namespace
+
+TEST(VgAssign, BindsValueOnSuccessAndPropagatesError) {
+  vg::Result<int> ok = sum_two(/*fail_second=*/false);
+  ASSERT_TRUE(ok.ok());
+  EXPECT_EQ(ok.value(), 42);
+
+  vg::Result<int> err = sum_two(/*fail_second=*/true);
+  EXPECT_FALSE(err.ok());
+  EXPECT_EQ(err.status().code(), VK_ERROR_UNKNOWN);
+}
+
+TEST(VgAssign, MovesMoveOnlyValue) { EXPECT_TRUE(take_move_only().ok()); }
+
 // Reading the value of an error Result is a contract violation: VG_CHECK logs
 // and aborts (SIGABRT). The "DeathTest" suffix makes gtest run this in
 // isolation.

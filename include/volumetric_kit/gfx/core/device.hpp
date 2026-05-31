@@ -9,9 +9,9 @@
 
 #include <functional>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -28,7 +28,7 @@ struct DeviceConfig {
 };
 
 /// Owns a `VkDevice`, its queues, and a command pool.
-class VG_API Device {
+class VG_CORE_API Device {
  public:
   /// Create a logical device on `physical` (belonging to `instance`). Pass a
   /// `surface` when `config.needs_present` so a present-capable queue family

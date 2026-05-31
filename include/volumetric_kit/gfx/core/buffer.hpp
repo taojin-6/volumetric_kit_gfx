@@ -8,8 +8,8 @@
 
 #include <functional>
 
+#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
-#include "volumetric_kit/gfx/export.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -39,7 +39,7 @@ namespace volumetric_kit::gfx {
 /// if (!staging) return staging.status();
 /// std::memcpy(staging.value().mapped(), src, bytes);
 /// @endcode
-class VG_API Buffer {
+class VG_CORE_API Buffer {
  public:
   /// @brief Construct an empty buffer (owns nothing; `valid()` is false).
   Buffer() noexcept = default;
