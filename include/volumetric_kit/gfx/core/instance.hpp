@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/physical_device_info.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -52,6 +53,12 @@ class VG_CORE_API Instance {
   /// provided — a present-capable family. Errors if none qualifies.
   Result<VkPhysicalDevice> select_physical_device(
       VkSurfaceKHR surface = VK_NULL_HANDLE) const;
+
+  /// Capture the read-only capabilities of @p physical (which must belong to
+  /// this instance). Use before @ref Device::create to pre-check the extensions
+  /// and features you intend to request, and for swapchain/volume/interop
+  /// format selection.
+  PhysicalDeviceInfo query_physical_device(VkPhysicalDevice physical) const;
 
  private:
   Instance() = default;

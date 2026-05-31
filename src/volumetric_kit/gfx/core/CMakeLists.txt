@@ -23,6 +23,7 @@ target_sources(
           check.cpp
           result.cpp
           instance.cpp
+          physical_device_info.cpp
           device.cpp
           sync.cpp
           retire_queue.cpp

@@ -205,6 +205,11 @@ Result<VkPhysicalDevice> Instance::select_physical_device(
   return best;
 }
 
+PhysicalDeviceInfo Instance::query_physical_device(
+    VkPhysicalDevice physical) const {
+  return PhysicalDeviceInfo::query(physical);
+}
+
 Instance::Instance(Instance&& other) noexcept
     : instance_(other.instance_), messenger_(other.messenger_) {
   other.instance_ = VK_NULL_HANDLE;

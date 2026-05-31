@@ -119,4 +119,18 @@ inline std::optional<uint32_t> find_present_family(VkPhysicalDevice device,
   return std::nullopt;
 }
 
+/// @return Whether @p format on @p device supports every bit in @p flags for
+/// the
+///         requested @p tiling: `VK_IMAGE_TILING_OPTIMAL` checks the optimal-
+///         tiling features, otherwise the linear-tiling features.
+inline bool format_supports(VkPhysicalDevice device, VkFormat format,
+                            VkImageTiling tiling, VkFormatFeatureFlags flags) {
+  VkFormatProperties props{};
+  vkGetPhysicalDeviceFormatProperties(device, format, &props);
+  const VkFormatFeatureFlags supported = tiling == VK_IMAGE_TILING_OPTIMAL
+                                             ? props.optimalTilingFeatures
+                                             : props.linearTilingFeatures;
+  return (supported & flags) == flags;
+}
+
 }  // namespace volumetric_kit::gfx
