@@ -159,6 +159,14 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
                     "validation layer enabled but debug messenger creation "
                     "failed; messages will not reach the log handler");
       }
+    } else {
+      // The extension was enabled but the loader resolved no creation entry
+      // point — surface the degraded state rather than silently dropping it.
+      log_message(
+          LogLevel::Warning,
+          "VK_EXT_debug_utils enabled but vkCreateDebugUtilsMessengerEXT "
+          "resolved to null; validation messages will not reach the log "
+          "handler");
     }
   }
 

@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include <vk_mem_alloc.h>
@@ -12,8 +13,8 @@
 namespace volumetric_kit::gfx {
 namespace {
 
-// The view aspect a format implies: depth and/or stencil for depth/stencil
-// formats, else color.
+// The view aspect a format implies: DEPTH for depth and combined
+// depth/stencil formats, STENCIL for stencil-only, else COLOR.
 VkImageAspectFlags aspect_mask_for(VkFormat format) {
   switch (format) {
     case VK_FORMAT_D16_UNORM:
@@ -25,7 +26,11 @@ VkImageAspectFlags aspect_mask_for(VkFormat format) {
     case VK_FORMAT_D16_UNORM_S8_UINT:
     case VK_FORMAT_D24_UNORM_S8_UINT:
     case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+      // DEPTH only: a single VkImageView may not mix depth and stencil for
+      // sampling, and depth is the dominant attachment/sample use. A stencil
+      // view (or a depth-peel pass needing stencil) requests its aspect once
+      // TextureDesc carries one.
+      return VK_IMAGE_ASPECT_DEPTH_BIT;
     default:
       return VK_IMAGE_ASPECT_COLOR_BIT;
   }
@@ -71,23 +76,30 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
   functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
 
-  // VMA must not be told a higher Vulkan version than the device actually
-  // supports, or it calls core 1.1 entry points
-  // (vkGetBufferMemoryRequirements2, vkBindBufferMemory2, …) on a 1.0 device
-  // that does not provide them. Cap our 1.1 floor at the device's reported
-  // apiVersion.
-  // TODO: bump to the negotiated 1.2/1.3 version once those device features
-  // land (2b-5 / 2c).
+  // VMA must not be told a higher Vulkan version than BOTH the instance was
+  // created with and the device supports, or it calls core 1.1 entry points
+  // (vkGetBufferMemoryRequirements2, vkBindBufferMemory2, …) the
+  // instance/device never loaded. The instance is created at min(1.3, loader)
+  // (see instance.cpp), so reconstruct that and take the min with the device's
+  // apiVersion. Cap at the 1.1 floor VMA currently needs.
+  // TODO: bump the 1.1 cap to the negotiated 1.2/1.3 version once those device
+  // features land.
+  uint32_t instance_version = VK_API_VERSION_1_0;
+  if (vkEnumerateInstanceVersion(&instance_version) != VK_SUCCESS) {
+    instance_version = VK_API_VERSION_1_0;
+  }
+  instance_version =
+      std::min(instance_version, static_cast<uint32_t>(VK_API_VERSION_1_3));
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
+  const uint32_t effective = std::min(instance_version, props.apiVersion);
 
   VmaAllocatorCreateInfo info{};
   info.instance = instance;
   info.physicalDevice = device.physical_device();
   info.device = device.handle();
-  info.vulkanApiVersion = props.apiVersion >= VK_API_VERSION_1_1
-                              ? VK_API_VERSION_1_1
-                              : VK_API_VERSION_1_0;
+  info.vulkanApiVersion =
+      effective >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
   info.pVulkanFunctions = &functions;
 
   auto impl = std::make_unique<Impl>();
@@ -118,6 +130,15 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
     return Status::invalid_argument(
         "mapped buffers need host-visible memory; DeviceLocal cannot be "
         "persistently mapped");
+  }
+  if (desc.memory == MemoryUsage::HostVisible && !desc.mapped) {
+    // Buffer exposes no separate map()/unmap(); host-visible memory is only
+    // reachable through the persistent mapping. Without `mapped`, a HostVisible
+    // buffer is unreachable from the host — a dead end. Require mapped=true, or
+    // use DeviceLocal/Auto for GPU-only memory.
+    return Status::invalid_argument(
+        "HostVisible buffers require mapped=true (Buffer has no separate map() "
+        "accessor); use DeviceLocal or Auto for GPU-only memory");
   }
 
   VkBufferCreateInfo buffer_info{};
@@ -183,6 +204,15 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
     // interop tier.
     return Status::unsupported("exportable images are not yet supported");
+  }
+  if (desc.memory == MemoryUsage::HostVisible) {
+    // Texture exposes no host accessor and this path sets no host-access flags,
+    // so a host-visible image would be unmappable — a dead end. Readback goes
+    // image -> host-visible Buffer via vkCmdCopyImageToBuffer; keep images
+    // DeviceLocal (the default) or Auto.
+    return Status::invalid_argument(
+        "host-visible images are not supported (no host accessor); copy to a "
+        "HostVisible buffer for readback");
   }
 
   VkImageCreateInfo image_info{};

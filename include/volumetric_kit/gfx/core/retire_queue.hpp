@@ -26,6 +26,15 @@ namespace volumetric_kit::gfx {
 /// `CLAUDE.md`) without any cross-API GPU event. Fences are observed, not
 /// owned. The GPU-independent bookkeeping lives in @ref RetireList.
 ///
+/// @warning The producers a queued deleter frees through -- the @ref Device,
+/// and
+///          any @ref Allocator whose @ref Buffer / @ref Texture deleters are
+///          enqueued here -- must outlive this queue: destruction drains (waits
+///          for + runs) every pending deleter, which calls back into them.
+///          Compose so the queue is destroyed first (declare it after the
+///          Device/Allocator in an owning struct, so reverse member-destruction
+///          tears the queue down first).
+///
 /// @code
 /// RetireQueue retire(device);
 /// // Defer freeing `buffer` until `frame_fence` signals:
@@ -38,19 +47,17 @@ class VG_CORE_API RetireQueue {
   /// @param device  The logical device whose fences gate the deleters.
   explicit RetireQueue(VkDevice device) noexcept;
 
-  /// @brief Runs every still-pending deleter, then destroys the queue.
-  /// @pre The device is idle (e.g. after `vkDeviceWaitIdle` or @ref drain), so
-  /// the
-  ///      remaining resources are safe to release without waiting on their
-  ///      fences.
+  /// @brief Waits for each pending fence, runs its deleter, then destroys the
+  ///        queue (as in @ref drain). Already-signaled fences -- the common
+  ///        idle-at-teardown case -- return immediately, so a
+  ///        `vkDeviceWaitIdle` beforehand is not required to free safely. A
+  ///        fence that never signals would block here (see @ref push).
   ~RetireQueue();
 
   /// @brief Take over @p other's pending deleters; @p other is left empty.
   RetireQueue(RetireQueue&& other) noexcept;
-  /// @brief Run this queue's still-pending deleters, then take over @p other's.
-  /// @pre As at destruction, the device is idle, so the resources this queue
-  /// still
-  ///      holds are safe to release without waiting on their fences.
+  /// @brief Drains this queue (waits for + runs its own pending deleters, as in
+  ///        @ref drain), then takes over @p other's pending deleters.
   RetireQueue& operator=(RetireQueue&& other) noexcept;
   RetireQueue(const RetireQueue&) = delete;
   RetireQueue& operator=(const RetireQueue&) = delete;

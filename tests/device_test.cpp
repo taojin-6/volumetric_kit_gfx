@@ -36,6 +36,15 @@ TEST_F(DeviceTest, NeedsPresentWithoutSurfaceErrors) {
   EXPECT_EQ(device.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(DeviceTest, SelectedDeviceMeetsVulkan12Floor) {
+  // Device::create rejects a sub-1.2 device (the timeline-semaphore path uses
+  // 1.2 core entry points); the fixture device was created successfully, so the
+  // selected physical device must report at least 1.2.
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(physical_, &props);
+  EXPECT_GE(props.apiVersion, VK_API_VERSION_1_2);
+}
+
 TEST_F(DeviceTest, MoveConstructTransfersOwnership) {
   auto made =
       vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});

@@ -86,8 +86,10 @@ class VG_CORE_API Allocator {
   /// @brief Allocate a buffer.
   /// @param desc  Size, usage, memory residence, and mapping.
   /// @return The buffer on success, or a non-OK @ref Status:
-  ///         - `desc.size == 0`, `desc.usage == 0`, or `desc.mapped` with
-  ///           `MemoryUsage::DeviceLocal` return domain
+  ///         - `desc.size == 0`, `desc.usage == 0`, `desc.mapped` with
+  ///           `MemoryUsage::DeviceLocal`, or `MemoryUsage::HostVisible`
+  ///           without `desc.mapped` (no separate map() accessor exists) return
+  ///           domain
   ///           @ref Status::Code::InvalidArgument (malformed/contradictory
   ///           arguments);
   ///         - `desc.exportable` returns @ref Status::Code::Unsupported (the
@@ -103,13 +105,16 @@ class VG_CORE_API Allocator {
   /// @brief Allocate a 2D image plus a default view over it.
   /// @param desc  Extent, format, usage, tiling, and memory residence.
   /// @return The texture on success, or a non-OK @ref Status:
-  ///         - a zero-area `extent`, `usage == 0`, or `VK_FORMAT_UNDEFINED`
-  ///           return domain @ref Status::Code::InvalidArgument;
+  ///         - a zero-area `extent`, `usage == 0`, `VK_FORMAT_UNDEFINED`, or
+  ///           `MemoryUsage::HostVisible` (images have no host accessor; copy
+  ///           to a HostVisible buffer for readback) return domain
+  ///           @ref Status::Code::InvalidArgument;
   ///         - `desc.exportable` returns @ref Status::Code::Unsupported;
   ///         - a failed image, allocation, or view creation returns a
   ///           Vulkan-domain @ref Status carrying the `VkResult`.
-  ///         The view's aspect mask is derived from the format (depth and/or
-  ///         stencil for depth formats, otherwise color).
+  ///         The default view's aspect is derived from the format: DEPTH for
+  ///         depth and combined depth/stencil formats, STENCIL for
+  ///         stencil-only, otherwise COLOR.
   Result<Texture> create_image(const TextureDesc& desc);
 
  private:
