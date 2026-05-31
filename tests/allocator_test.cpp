@@ -79,11 +79,11 @@ TEST_F(AllocatorTest, DeviceLocalBufferIsValidAndUnmapped) {
   EXPECT_EQ(buffer.value().mapped(), nullptr);
 }
 
-TEST_F(AllocatorTest, ExportableBufferReturnsNotSupported) {
+TEST_F(AllocatorTest, ExternalMemoryBufferUnsupported) {
   vg::BufferDesc desc;
   desc.size = 64;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.exportable = true;
+  desc.external = vg::ExternalHandleType::OpaqueFd;
 
   auto buffer = allocator_->create_buffer(desc);
   ASSERT_FALSE(buffer.ok());
@@ -250,12 +250,12 @@ TEST_F(AllocatorTest, DepthImageGetsDepthAspectView) {
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
 }
 
-TEST_F(AllocatorTest, ExportableImageReturnsNotSupported) {
+TEST_F(AllocatorTest, ExternalMemoryImageUnsupported) {
   vg::TextureDesc desc;
   desc.extent = {16, 16};
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-  desc.exportable = true;
+  desc.external = vg::ExternalHandleType::OpaqueFd;
 
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
@@ -321,6 +321,72 @@ TEST_F(AllocatorTest, CombinedDepthStencilImageGetsDepthOnlyView) {
   // A single VkImageView may not mix depth and stencil aspects; the DEPTH-only
   // default makes a valid, immediately-bindable view.
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+}
+
+TEST_F(AllocatorTest, Volume3DImageGets3DView) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.depth = 8;
+  desc.type = VK_IMAGE_TYPE_3D;
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);  // 3D view
+}
+
+TEST_F(AllocatorTest, MippedArrayImageIsValid) {
+  vg::TextureDesc desc;
+  desc.extent = {64, 64};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  desc.mip_levels = 4;
+  desc.array_layers = 3;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().view(),
+            VK_NULL_HANDLE);  // 2D-array view over 4 mips
+}
+
+TEST_F(AllocatorTest, DepthWithout3DTypeIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.depth = 4;  // depth > 1 but type is the default 2D
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, Arrayed3DImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.depth = 4;
+  desc.type = VK_IMAGE_TYPE_3D;
+  desc.array_layers = 2;  // 3D images cannot be arrayed
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, ZeroMipLevelsImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.mip_levels = 0;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {
