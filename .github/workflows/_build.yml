@@ -45,10 +45,28 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+        env:
+          # The formulae we need are bottled, so skip the slow, network-heavy
+          # auto-update — its `git fetch` is the step that flakes on transient
+          # runner DNS ("Could not resolve host: github.com").
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
-          brew update
-          brew install cmake molten-vk glfw \
-            vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross
+          # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
+          ok=0
+          for attempt in 1 2 3; do
+            if brew install cmake molten-vk glfw \
+                vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross; then
+              ok=1
+              break
+            fi
+            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::brew install failed after 3 attempts"
+            exit 1
+          }
           # make ships with the Xcode command-line tools.
 
       # Report the Vulkan device the runner sees (lavapipe on Linux, MoltenVK on
