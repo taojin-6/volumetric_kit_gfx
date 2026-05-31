@@ -200,6 +200,18 @@ TEST_F(AllocatorTest, DeviceLocalMappedIsRejected) {
   EXPECT_EQ(buffer.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(AllocatorTest, HostVisibleUnmappedBufferIsRejected) {
+  vg::BufferDesc desc;
+  desc.size = 64;
+  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = vg::MemoryUsage::HostVisible;
+  desc.mapped = false;  // unreachable from the host without a mapping — reject
+
+  auto buffer = allocator_->create_buffer(desc);
+  ASSERT_FALSE(buffer.ok());
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 // No device needed: a default-constructed Buffer owns nothing.
 TEST(BufferTest, DefaultConstructedIsEmpty) {
   vg::Buffer buffer;
@@ -281,6 +293,34 @@ TEST_F(AllocatorTest, UndefinedFormatImageIsRejected) {
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
   EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, HostVisibleImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.memory = vg::MemoryUsage::HostVisible;  // images have no host accessor
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CombinedDepthStencilImageGetsDepthOnlyView) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+  desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  if (!texture.ok()) {
+    GTEST_SKIP() << "combined depth/stencil format unsupported: "
+                 << texture.status().message();
+  }
+  // A single VkImageView may not mix depth and stencil aspects; the DEPTH-only
+  // default makes a valid, immediately-bindable view.
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
 }
 
 TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {

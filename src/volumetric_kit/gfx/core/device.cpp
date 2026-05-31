@@ -31,6 +31,16 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     return Status::unsupported("no graphics queue family");
   }
 
+  // Require a Vulkan 1.2 device: TimelineSemaphore and the feature plumbing
+  // here use the 1.2 *core* entry points (vkSignalSemaphore, vkWaitSemaphores,
+  // vkGetSemaphoreCounterValue), not the pre-1.2 *KHR variants. (The instance
+  // already negotiates >= 1.1, which the features2 query below needs.)
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(physical, &props);
+  if (props.apiVersion < VK_API_VERSION_1_2) {
+    return Status::unsupported("device does not support Vulkan 1.2");
+  }
+
   std::optional<uint32_t> present;
   if (config.needs_present) {
     if (surface == VK_NULL_HANDLE) {

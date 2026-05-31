@@ -93,3 +93,17 @@ TEST_F(RetireQueueTest, SelfMoveAssignKeepsDeletersPending) {
   EXPECT_EQ(queue.poll(), 1u);
   EXPECT_EQ(ran, 1);
 }
+
+TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
+  auto fence = vg::Fence::create(device(), /*signaled=*/true);
+  ASSERT_TRUE(fence.ok()) << fence.status().message();
+
+  int ran = 0;
+  {
+    vg::RetireQueue retire(device());
+    retire.push(fence.value().handle(), [&ran]() { ++ran; });
+    // No poll(): the destructor must drain (wait for the signaled fence, then
+    // run the deleter), not leak it.
+  }
+  EXPECT_EQ(ran, 1);
+}

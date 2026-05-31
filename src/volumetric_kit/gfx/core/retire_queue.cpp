@@ -10,7 +10,11 @@ namespace volumetric_kit::gfx {
 
 RetireQueue::RetireQueue(VkDevice device) noexcept : device_(device) {}
 
-RetireQueue::~RetireQueue() { list_.run_all(); }
+// Wait for each pending fence, then run its deleter — never free a resource the
+// GPU might still be reading. drain() returns immediately for already-signaled
+// fences (the common idle-at-teardown case), so this is safe without requiring
+// the caller to vkDeviceWaitIdle first.
+RetireQueue::~RetireQueue() { drain(); }
 
 RetireQueue::RetireQueue(RetireQueue&& other) noexcept
     : device_(other.device_), list_(std::move(other.list_)) {
@@ -19,8 +23,7 @@ RetireQueue::RetireQueue(RetireQueue&& other) noexcept
 
 RetireQueue& RetireQueue::operator=(RetireQueue&& other) noexcept {
   if (this != &other) {
-    list_.run_all();  // release deleters already queued here (device assumed
-                      // idle)
+    drain();  // wait + run this queue's own deleters before adopting other's
     device_ = other.device_;
     list_ = std::move(other.list_);
     other.device_ = VK_NULL_HANDLE;
