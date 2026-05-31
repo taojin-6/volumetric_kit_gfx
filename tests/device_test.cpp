@@ -45,6 +45,57 @@ TEST_F(DeviceTest, SelectedDeviceMeetsVulkan12Floor) {
   EXPECT_GE(props.apiVersion, VK_API_VERSION_1_2);
 }
 
+TEST_F(DeviceTest, BogusExtensionFailsUnsupported) {
+  vg::DeviceConfig config;
+  config.extra_device_extensions = {"VK_VG_definitely_not_a_real_extension"};
+  auto device = vg::Device::create(instance_->handle(), physical_, config);
+  ASSERT_FALSE(device.ok());
+  EXPECT_EQ(device.status().domain(), vg::Status::Code::Unsupported);
+}
+
+TEST_F(DeviceTest, KnownExtensionRequestSucceeds) {
+  // Request an extension the device actually reports, so create() must accept
+  // it.
+  auto caps = instance_->query_physical_device(physical_);
+  const char* candidate = nullptr;
+  if (caps.supports_device_extension("VK_KHR_portability_subset")) {
+    candidate = "VK_KHR_portability_subset";
+  } else if (caps.supports_device_extension(
+                 VK_KHR_MAINTENANCE2_EXTENSION_NAME)) {
+    candidate = VK_KHR_MAINTENANCE2_EXTENSION_NAME;
+  }
+  if (candidate == nullptr) {
+    GTEST_SKIP() << "device reports no extension to request";
+  }
+  vg::DeviceConfig config;
+  config.extra_device_extensions = {candidate};
+  auto device = vg::Device::create(instance_->handle(), physical_, config);
+  EXPECT_TRUE(device.ok()) << device.status().message();
+}
+
+TEST_F(DeviceTest, CapsReportsSaneExtensionsAndFormats) {
+  const vg::PhysicalDeviceInfo& caps = device_->caps();
+  EXPECT_EQ(caps.handle(), physical_);
+  EXPECT_FALSE(caps.supports_device_extension("VK_VG_not_real"));
+  // R8G8B8A8_UNORM as a sampled OPTIMAL image is required of every conformant
+  // implementation — true on MoltenVK and lavapipe.
+  EXPECT_TRUE(caps.format_supports(VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_IMAGE_TILING_OPTIMAL,
+                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
+  EXPECT_FALSE(caps.format_supports(VK_FORMAT_UNDEFINED,
+                                    VK_IMAGE_TILING_OPTIMAL,
+                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
+  EXPECT_GT(caps.limits().maxImageDimension2D, 0u);
+}
+
+TEST_F(DeviceTest, InstanceCapsMatchesDeviceCaps) {
+  // The same physical device, queried via the instance and via the created
+  // device, agrees on extension support.
+  auto via_instance = instance_->query_physical_device(physical_);
+  EXPECT_EQ(via_instance.supports_device_extension("VK_KHR_swapchain"),
+            device_->caps().supports_device_extension("VK_KHR_swapchain"));
+}
+
 TEST_F(DeviceTest, MoveConstructTransfersOwnership) {
   auto made =
       vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
