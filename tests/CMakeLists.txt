@@ -23,11 +23,13 @@ add_executable(
   device_test.cpp
   log_test.cpp
   sync_test.cpp
+  unique_handle_test.cpp
   retire_list_test.cpp
   retire_queue_test.cpp
   allocator_test.cpp
   shader_test.cpp
-  command_buffer_test.cpp)
+  command_buffer_test.cpp
+  render_readback_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core
                                            GTest::gtest_main)
 vg_target_warnings(vg_core_test)
