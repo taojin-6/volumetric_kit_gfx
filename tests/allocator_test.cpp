@@ -136,6 +136,14 @@ TEST_F(AllocatorTest, AllocatorSelfMoveAssignIsSafe) {
   EXPECT_TRUE(buffer.ok()) << buffer.status().message();
 }
 
+TEST_F(AllocatorTest, MoveConstructStaysUsable) {
+  // Move-construct from the fixture's allocator; the moved-to instance owns the
+  // VmaAllocator (transferred, not double-freed) and still produces buffers.
+  vg::Allocator moved(std::move(*allocator_));
+  auto buffer = moved.create_buffer(host_visible_mapped_desc());
+  EXPECT_TRUE(buffer.ok()) << buffer.status().message();
+}
+
 TEST_F(AllocatorTest, AutoMemoryBufferIsValid) {
   vg::BufferDesc desc;
   desc.size = 128;
@@ -219,6 +227,27 @@ TEST(BufferTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(buffer.handle(), VK_NULL_HANDLE);
   EXPECT_EQ(buffer.size(), 0u);
   EXPECT_EQ(buffer.mapped(), nullptr);
+}
+
+// No device needed: counting deleters via the public adopt-ctor make the
+// move-assign double-free/leak path a deterministic assertion (not just
+// something the sanitizers job catches).
+TEST(BufferTest, MoveAssignRunsOverwrittenDeleterExactlyOnce) {
+  int dst_runs = 0;
+  int src_runs = 0;
+  {
+    vg::Buffer dst(VK_NULL_HANDLE, 0, nullptr, [&dst_runs]() { ++dst_runs; });
+    vg::Buffer src(VK_NULL_HANDLE, 0, nullptr, [&src_runs]() { ++src_runs; });
+    dst = std::move(src);
+    EXPECT_EQ(dst_runs,
+              1);  // dst's original deleter ran once, during the assign
+    EXPECT_EQ(src_runs, 0);  // src's deleter was adopted, not run
+  }
+  // dst (now holding src's deleter) is destroyed -> src_runs == 1; the
+  // moved-from src runs nothing. A failure to null the moved-from deleter would
+  // make this 2.
+  EXPECT_EQ(dst_runs, 1);
+  EXPECT_EQ(src_runs, 1);
 }
 
 TEST_F(AllocatorTest, ColorImageHasImageAndView) {

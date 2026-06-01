@@ -107,3 +107,60 @@ TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
   }
   EXPECT_EQ(ran, 1);
 }
+
+// The defining behavior the CPU-token lifetime model depends on: a deleter
+// guarded by an UNSIGNALED fence is deferred, then released once the fence
+// signals. (Every other test here uses a pre-signaled fence.)
+TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
+  auto fence = vg::Fence::create(device(), /*signaled=*/false);
+  ASSERT_TRUE(fence.ok()) << fence.status().message();
+
+  int released = 0;
+  vg::RetireQueue retire(device());
+  retire.push(fence.value().handle(), [&released]() { ++released; });
+
+  EXPECT_EQ(retire.poll(), 0u);  // unsignaled -> deferred, not run
+  EXPECT_EQ(retire.pending(), 1u);
+  EXPECT_EQ(released, 0);
+
+  // Signal the fence with an empty submit, then poll releases the deleter.
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
+                          fence.value().handle()),
+            VK_SUCCESS);
+  ASSERT_TRUE(fence.value().wait().ok());
+
+  EXPECT_EQ(retire.poll(), 1u);
+  EXPECT_EQ(released, 1);
+  EXPECT_EQ(retire.pending(), 0u);
+}
+
+// poll() releases only the entries whose fence is ready, keeping the rest.
+TEST_F(RetireQueueTest, PollReleasesOnlyReadyFenceEntries) {
+  auto signaled = vg::Fence::create(device(), /*signaled=*/true);
+  auto deferred = vg::Fence::create(device(), /*signaled=*/false);
+  ASSERT_TRUE(signaled.ok()) << signaled.status().message();
+  ASSERT_TRUE(deferred.ok()) << deferred.status().message();
+
+  int ready_ran = 0;
+  int deferred_ran = 0;
+  vg::RetireQueue retire(device());
+  retire.push(signaled.value().handle(), [&ready_ran]() { ++ready_ran; });
+  retire.push(deferred.value().handle(), [&deferred_ran]() { ++deferred_ran; });
+
+  EXPECT_EQ(retire.poll(), 1u);  // only the signaled entry's deleter runs
+  EXPECT_EQ(ready_ran, 1);
+  EXPECT_EQ(deferred_ran, 0);
+  EXPECT_EQ(retire.pending(), 1u);
+
+  // Signal the deferred fence so the destructor's drain() does not block on a
+  // never-signaled fence (it runs deferred_ran while the int is still alive,
+  // since `retire` is destroyed before it).
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
+                          deferred.value().handle()),
+            VK_SUCCESS);
+  ASSERT_TRUE(deferred.value().wait().ok());
+}
