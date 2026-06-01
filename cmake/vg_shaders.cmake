@@ -31,6 +31,9 @@ function(vg_compile_shaders target)
         "shaderc (glslc) or glslang -- both ship with the Vulkan SDK (macOS: "
         "`brew install shaderc`).")
   endif()
+  # Surface the chosen compiler so the per-runner choice (glslc on macOS,
+  # glslangValidator on the Linux runners) is greppable in CI logs.
+  message(STATUS "vg_compile_shaders(${target}): ${_mode} -> ${_compiler}")
 
   set(_spv_outputs)
   set(_seen_names)

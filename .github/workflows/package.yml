@@ -1,0 +1,59 @@
+name: package
+
+# Validates the consumption surface a reuse-first library exists for: install
+# the library, then build a tiny downstream consumer against it both via
+# find_package(volumetric_kit_gfx) and via add_subdirectory (FetchContent-style).
+# Linux-only — the install / export / package-config logic is OS-independent, so
+# one runner is enough.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libvulkan-dev
+          # libvulkan-dev provides the headers + loader that the installed
+          # package's find_dependency(Vulkan) re-finds and the consumer links.
+          # No GLSL compiler is needed: the tests-off library build compiles no
+          # shaders, and the consumer makes no Vulkan calls.
+
+      - name: Build + install the library
+        run: |
+          cmake -S . -B build \
+            -DVG_BUILD_TESTS=OFF -DVG_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/_install"
+          cmake --build build --parallel
+          cmake --install build
+
+      # find_package against the installed prefix: exercises the export set,
+      # package config, and find_dependency wiring. Running the consumer proves
+      # the static archive's symbols link (version.cpp / result.cpp).
+      - name: Consume via find_package
+        run: |
+          cmake -S tests/package_consumer -B build-find-package \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/_install"
+          cmake --build build-find-package
+          ./build-find-package/consumer
+
+      # add_subdirectory of the source tree: exercises the FetchContent-style
+      # path (VG_IS_TOP_LEVEL OFF, so the subproject's tests/examples/install
+      # default off).
+      - name: Consume via add_subdirectory (FetchContent-style)
+        run: |
+          cmake -S tests/package_consumer -B build-add-subdir \
+            -DVG_CONSUMER_FETCH=ON -DVG_SOURCE_DIR="${GITHUB_WORKSPACE}"
+          cmake --build build-add-subdir
+          ./build-add-subdir/consumer
