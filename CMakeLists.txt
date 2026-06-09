@@ -29,8 +29,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(VG_BUILD_EXAMPLES "Build example programs" ${VG_IS_TOP_LEVEL})
 option(VG_BUILD_TESTS "Build tests" ${VG_IS_TOP_LEVEL})
 option(VG_INSTALL "Generate install/export rules" ${VG_IS_TOP_LEVEL})
-option(VG_WITH_GLFW "Enable GLFW desktop windowing" ON)
-option(VG_WITH_CUDA "Enable CUDA <-> Vulkan external-memory interop" OFF)
+# TODO: VG_WITH_GLFW / VG_WITH_CUDA are reserved for the windowing / interop
+# tiers and are not consumed yet (no target reads them, so toggling them is a
+# no-op). Wire them up — or drop them and the matching CI GLFW packages — when
+# those tiers land.
+option(VG_WITH_GLFW "Enable GLFW desktop windowing (reserved; not yet wired)"
+       ON)
+option(
+  VG_WITH_CUDA
+  "Enable CUDA <-> Vulkan external-memory interop (reserved; not yet wired)"
+  OFF)
 option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 # Validation is a runtime decision (InstanceConfig::enable_validation), gated at

@@ -15,6 +15,12 @@ jobs:
   build:
     runs-on: ${{ inputs.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Build + test both an unoptimized Debug and an optimized Release/NDEBUG
+      # configuration, so an NDEBUG-only or optimizer-exposed break is caught.
+      matrix:
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v6
 
@@ -75,11 +81,38 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
 
+      # Cache the FetchContent dependency tree (VMA / spirv-cross / googletest
+      # sources + builds) so they are not re-cloned and recompiled every run.
+      - name: Cache third-party deps
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          restore-keys: |
+            deps-${{ inputs.os }}-${{ matrix.build_type }}-
+            deps-${{ inputs.os }}-
+
       # Default ("Unix Makefiles") generator + a parallel make build, per
       # project preference — no Ninja.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
-        run: cmake -S . -B build
+        # Retry to ride out transient FetchContent git-clone DNS blips, matching
+        # the package-install retry above.
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
 
       - name: Build
         if: steps.detect.outputs.present == 'true'
