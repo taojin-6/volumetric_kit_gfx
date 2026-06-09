@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file device.hpp
-/// The logical device built on a chosen physical device: queues, command pool,
-/// and setup helpers. Holds no surface/swapchain (that is the windowing tier).
+/// @brief The logical device built on a chosen physical device: its queues,
+///        command pool, and setup helpers.
 
 #include <functional>
 #include <vector>
@@ -17,12 +17,13 @@
 
 namespace volumetric_kit::gfx {
 
+/// @brief Parameters for @ref Device::create.
 struct DeviceConfig {
   /// Require (and enable VK_KHR_swapchain for) a present-capable queue. Needs a
   /// surface.
   bool needs_present = false;
   /// Enable the external-memory / -semaphore *fd* extensions — the CUDA interop
-  /// seam on Linux. Win32 / other handle types are requested through
+  /// seam on Linux. Other POSIX-fd handle types are requested through
   /// @ref extra_device_extensions instead.
   bool needs_external_memory = false;
   /// Core (1.0) device features to enable (fed into
@@ -41,22 +42,48 @@ struct DeviceConfig {
   /// @ref PhysicalDeviceInfo and request only features the device reports, or
   /// device creation fails. Each struct must set its `sType`; the pointed-to
   /// structs must outlive the @ref create call (they are consumed
-  /// synchronously, not stored).
+  /// synchronously, not stored). If the chain includes a
+  /// `VkPhysicalDeviceVulkan12Features` (or a standalone
+  /// `VkPhysicalDeviceTimelineSemaphoreFeatures`), @ref create enables
+  /// `timelineSemaphore` within it rather than linking its own struct, so the
+  /// chain never holds both the 1.2 aggregate and the individual struct (which
+  /// Vulkan forbids).
   const void* feature_chain = nullptr;
 };
 
-/// Owns a `VkDevice`, its queues, and a command pool.
+/// @brief Owns a `VkDevice`, its graphics (and optional present) queues, and a
+///        graphics command pool. Holds no surface/swapchain — that is the
+///        windowing tier.
+///
+/// @warning The @ref Instance the device is created on must outlive it (see
+///          @ref create): the device stores only borrowed handles.
+///
+/// @code
+/// Result<Device> device = Device::create(instance.handle(), physical, {});
+/// if (!device) return device.status();
+/// VG_TRY(device.value().submit_single_time(
+///     [&](VkCommandBuffer cmd) { record_uploads(cmd); }));
+/// @endcode
 class VG_CORE_API Device {
  public:
-  /// Create a logical device on `physical` (belonging to `instance`). Pass a
-  /// `surface` when `config.needs_present` so a present-capable queue family
-  /// can be chosen.
-  ///
-  /// Precondition: `instance` must outlive the returned `Device`. The device
-  /// stores only handles, not ownership, so destroying the instance first is
-  /// undefined behavior. Compose them so the instance is destroyed last — e.g.
-  /// declare the instance before the device in an owning struct, so reverse
-  /// member-destruction order tears the device down first.
+  /// @brief Create a logical device on @p physical (a Vulkan 1.3+ device).
+  /// @param instance  The instance @p physical belongs to; it must outlive the
+  ///                  returned device (kept as a lifetime contract, not used at
+  ///                  creation).
+  /// @param physical  The physical device to build on (must report Vulkan
+  ///                  >= 1.3 and expose a graphics queue family).
+  /// @param config    Queues, features, and extensions to enable.
+  /// @param surface   Required when `config.needs_present`, to choose a
+  ///                  present-capable queue family; otherwise ignored.
+  /// @return The device on success, or a non-OK @ref Status: @ref
+  ///         Status::Code::InvalidArgument for a null @p physical or a
+  ///         `needs_present` without a @p surface; @ref
+  ///         Status::Code::Unsupported when @p physical is below Vulkan 1.3,
+  ///         lacks a required queue family, or is missing a requested
+  ///         extension.
+  /// @pre @p instance must outlive the returned `Device`; declare the instance
+  ///      before the device so reverse member-destruction tears the device down
+  ///      first.
   static Result<Device> create(VkInstance instance, VkPhysicalDevice physical,
                                const DeviceConfig& config,
                                VkSurfaceKHR surface = VK_NULL_HANDLE);
@@ -67,32 +94,44 @@ class VG_CORE_API Device {
   Device(const Device&) = delete;
   Device& operator=(const Device&) = delete;
 
-  /// The owned logical device.
+  /// @return The owned logical device (`VK_NULL_HANDLE` when moved-from).
   VkDevice handle() const noexcept { return device_; }
-  /// The physical device it was created on.
+  /// @return The physical device it was created on.
   VkPhysicalDevice physical_device() const noexcept { return physical_; }
 
-  /// Read-only capabilities of the physical device this was created on,
-  /// captured at create() time (extensions/features/limits cached; format
-  /// queries live).
+  /// @return Read-only capabilities of the physical device, captured at
+  ///         create() time (extensions/features/limits cached; format queries
+  ///         live).
   const PhysicalDeviceInfo& caps() const noexcept { return caps_; }
 
-  /// Index and queue of the graphics-capable family (always present).
+  /// @return The graphics-capable queue family index (always present).
   uint32_t graphics_family() const noexcept { return graphics_family_; }
+  /// @return The graphics queue.
   VkQueue graphics_queue() const noexcept { return graphics_queue_; }
 
-  /// Whether a present-capable queue was created (i.e. config.needs_present).
+  /// @return Whether a present-capable queue was created
+  /// (config.needs_present).
   bool has_present() const noexcept { return present_queue_ != VK_NULL_HANDLE; }
-  /// Present family and queue — valid only when has_present() is true.
+  /// @return The present queue family index — valid only when @ref has_present.
   uint32_t present_family() const noexcept { return present_family_; }
+  /// @return The present queue — valid only when @ref has_present.
   VkQueue present_queue() const noexcept { return present_queue_; }
 
-  /// Command pool on the graphics family (RESET_COMMAND_BUFFER_BIT).
+  /// @return The graphics-family command pool (created
+  ///         `RESET_COMMAND_BUFFER_BIT`).
   VkCommandPool command_pool() const noexcept { return command_pool_; }
 
-  /// Record + submit a one-shot command buffer on the graphics queue, blocking
-  /// on a fence until it completes. For setup/uploads only — never the
-  /// per-frame path.
+  /// @brief Record + submit a one-shot command buffer on the graphics queue,
+  ///        blocking on a fence until it completes. For setup/uploads only —
+  ///        never the per-frame path.
+  /// @param record  Callback that records into the command buffer between an
+  ///                implicit begin/end.
+  /// @return OK once the work completes, or a non-OK @ref Status (recording,
+  ///         submit, or wait failure).
+  /// @note Not internally synchronized despite being `const`: it allocates from
+  ///       and submits on the device's shared graphics pool/queue, which Vulkan
+  ///       requires be externally synchronized. Serialize concurrent calls, or
+  ///       give each thread its own @ref CommandPool.
   Status submit_single_time(
       const std::function<void(VkCommandBuffer)>& record) const;
 

@@ -25,6 +25,20 @@ enum class MemoryUsage {
   HostVisible,  ///< CPU-mappable memory (uploads, readback, uniforms).
 };
 
+/// @brief CPU access pattern for a mapped (host-visible) buffer.
+///
+/// Selects the VMA host-access flag, which in turn steers the memory type:
+/// `Random` permits both reads and writes (cached host-visible memory);
+/// `SequentialWrite` promises the CPU only writes, front to back, and never
+/// reads — letting VMA pick write-combined memory, which streams uploads faster
+/// on discrete GPUs. Reading through @ref Buffer::mapped after choosing
+/// `SequentialWrite` is undefined. Only meaningful when @ref BufferDesc::mapped
+/// is set.
+enum class HostAccess {
+  Random,           ///< CPU reads and writes the mapping (default).
+  SequentialWrite,  ///< CPU only writes, sequentially (enables write-combined).
+};
+
 /// @brief How a resource's memory may be shared with an external API.
 ///
 /// `None` is a plain Vulkan-only resource. `OpaqueFd` reserves externally
@@ -44,6 +58,9 @@ struct BufferDesc {
   MemoryUsage memory = MemoryUsage::Auto;
   bool mapped = false;  ///< Persistently map the memory; requires host-visible
                         ///< memory (not @ref MemoryUsage::DeviceLocal).
+  /// CPU access pattern for the mapping (see @ref HostAccess); only meaningful
+  /// when @ref mapped is set.
+  HostAccess host_access = HostAccess::Random;
   /// Export the memory for external-API interop (see @ref ExternalHandleType).
   ExternalHandleType external = ExternalHandleType::None;
 };
@@ -68,6 +85,12 @@ struct TextureDesc {
   VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
   MemoryUsage memory =
       MemoryUsage::DeviceLocal;  ///< Images default to GPU-only.
+  /// Create a default @ref Texture::view over the image (the common case). Set
+  /// false for a view-incompatible image — e.g. a transfer-only staging /
+  /// readback image whose `usage` names no view-compatible bit (SAMPLED,
+  /// STORAGE, COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, INPUT_ATTACHMENT) —
+  /// leaving @ref Texture::view as `VK_NULL_HANDLE`.
+  bool with_view = true;
   /// Export the memory for external-API interop (see @ref ExternalHandleType).
   ExternalHandleType external = ExternalHandleType::None;
 };
@@ -78,6 +101,13 @@ struct TextureDesc {
 /// One allocator per @ref Device. Resources it creates borrow the underlying
 /// allocator (and, for images, the device) for their own destruction, so the
 /// `Allocator` must outlive every @ref Buffer and @ref Texture it produced.
+///
+/// @warning The producing @ref Device must outlive the `Allocator`: it stores
+///          the device's raw `VkDevice` / `VkPhysicalDevice` (and VMA holds the
+///          `VkDevice`) but keeps nothing alive, so destroying — or
+///          move-assigning over — the `Device` while the `Allocator` lives is
+///          undefined behavior. Declare the device before the allocator so
+///          reverse member-destruction tears the allocator down first.
 ///
 /// @code
 /// Result<Allocator> allocator = Allocator::create(instance.handle(), device);
@@ -104,7 +134,8 @@ class VG_CORE_API Allocator {
   Allocator& operator=(const Allocator&) = delete;
 
   /// @brief Allocate a buffer.
-  /// @param desc  Size, usage, memory residence, and mapping.
+  /// @param desc  Size, usage, memory residence, mapping, and (for mapped
+  ///              buffers) CPU access pattern.
   /// @return The buffer on success, or a non-OK @ref Status:
   ///         - `desc.size == 0`, `desc.usage == 0`, `desc.mapped` with
   ///           `MemoryUsage::DeviceLocal`, or `MemoryUsage::HostVisible`
@@ -130,17 +161,22 @@ class VG_CORE_API Allocator {
   ///         - a zero `extent`/`depth`/`mip_levels`/`array_layers`, `usage ==
   ///         0`,
   ///           `VK_FORMAT_UNDEFINED`, `depth > 1` without `VK_IMAGE_TYPE_3D`, a
-  ///           3D image with `array_layers > 1`, or `MemoryUsage::HostVisible`
+  ///           3D image with `array_layers > 1`, a multisampled image that is
+  ///           not 2D/optimal/single-mip, `desc.with_view` with a `usage` that
+  ///           names no view-compatible bit, or `MemoryUsage::HostVisible`
   ///           (images have no host accessor; copy to a HostVisible buffer for
   ///           readback) return domain @ref Status::Code::InvalidArgument;
   ///         - `desc.external != None` returns @ref Status::Code::Unsupported;
   ///         - a failed image, allocation, or view creation returns a
   ///           Vulkan-domain @ref Status carrying the `VkResult`.
-  ///         The default view spans all mips/layers; its type follows
-  ///         `desc.type` and `array_layers` (1D/2D/3D, with the `_ARRAY`
-  ///         variant when `array_layers > 1`), and its aspect follows the
-  ///         format: DEPTH for depth and combined depth/stencil formats,
-  ///         STENCIL for stencil-only, otherwise COLOR.
+  ///         The full `extent` × `depth` is recoverable from the returned
+  ///         @ref Texture (`extent()` + `depth()`). When `desc.with_view`, the
+  ///         default view spans all mips/layers; its type follows `desc.type`
+  ///         and `array_layers` (1D/2D/3D, with the `_ARRAY` variant when
+  ///         `array_layers > 1`), and its aspect follows the format: DEPTH for
+  ///         depth and combined depth/stencil formats, STENCIL for
+  ///         stencil-only, otherwise COLOR. When `!desc.with_view`, @ref
+  ///         Texture::view is `VK_NULL_HANDLE`.
   Result<Texture> create_image(const TextureDesc& desc);
 
  private:

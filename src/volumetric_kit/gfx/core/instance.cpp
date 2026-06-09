@@ -52,8 +52,7 @@ VkDebugUtilsMessengerCreateInfoEXT make_messenger_info() {
 }
 
 // Score by device class so we prefer a real GPU but still accept a software/CPU
-// device (lavapipe) or Apple GPU (MoltenVK) — unlike the legacy NVIDIA-only
-// logic.
+// device (lavapipe) or Apple GPU (MoltenVK).
 int device_type_score(VkPhysicalDeviceType type) {
   switch (type) {
     case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
@@ -111,6 +110,16 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
   if (vkEnumerateInstanceVersion(&loader_version) == VK_SUCCESS &&
       loader_version < api_version) {
     api_version = loader_version;
+  }
+  // vkGetPhysicalDeviceFeatures2 (used by PhysicalDeviceInfo::query and
+  // Device::create) is core 1.1, so the instance must negotiate >= 1.1. Fail
+  // clearly on an ancient loader rather than emit invalid 1.1 calls on a 1.0
+  // instance.
+  if (api_version < VK_API_VERSION_1_1) {
+    return Status::unsupported(
+        "a Vulkan 1.1+ loader is required (vkGetPhysicalDeviceFeatures2 is "
+        "core "
+        "1.1)");
   }
 
   VkApplicationInfo app_info{};
@@ -191,6 +200,10 @@ Result<VkPhysicalDevice> Instance::select_physical_device(
     }
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(device, &props);
+    if (props.apiVersion < VK_API_VERSION_1_3) {
+      continue;  // Device::create requires 1.3; keep selection in sync so a
+                 // chosen device is creatable.
+    }
     const int score = device_type_score(props.deviceType);
     if (score > best_score) {
       best_score = score;

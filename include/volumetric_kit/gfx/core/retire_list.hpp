@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace volumetric_kit::gfx {
@@ -31,9 +32,8 @@ namespace volumetric_kit::gfx {
 /// the closures (and so any captured resources) without invoking the deleter
 /// bodies, so call @ref run_all or @ref drain first when a body must execute.
 /// @ref run_all is `noexcept` — a throwing deleter calls `std::terminate`, so
-/// deleters must not throw. The list owns its deleters (it is move-only) and is
-/// not thread-safe: serialize @ref push against
-/// @ref poll / @ref drain.
+/// deleters must not throw. The list owns its deleters and is not thread-safe:
+/// serialize @ref push against @ref poll / @ref drain.
 ///
 /// @code
 /// RetireList<int> list;
@@ -47,7 +47,16 @@ class RetireList {
   RetireList() = default;
   ~RetireList() = default;
   RetireList(RetireList&&) noexcept = default;
-  RetireList& operator=(RetireList&&) noexcept = default;
+  // Hand-written (not defaulted) to guard self-move: a defaulted move-assign
+  // would `entries_ = std::move(entries_)`, a std::vector self-move that is
+  // valid-but-unspecified and can silently drop every pending deleter.
+  RetireList& operator=(RetireList&& other) noexcept {
+    if (this != &other) {
+      entries_ = std::move(other.entries_);
+      ready_scratch_ = std::move(other.ready_scratch_);
+    }
+    return *this;
+  }
   RetireList(const RetireList&) = delete;
   RetireList& operator=(const RetireList&) = delete;
 

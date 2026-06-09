@@ -50,9 +50,8 @@ VkImageViewType view_type_for(VkImageType type, uint32_t array_layers) {
   }
 }
 
-// MemoryUsage -> VMA residency preference. The HostVisible host-access flag is
-// applied at the call site (it differs between buffers and images), so this
-// maps the residency only.
+// MemoryUsage -> VMA residency preference. The host-access flag (set only for
+// mapped buffers) is applied at the call site, so this maps the residency only.
 VmaMemoryUsage vma_memory_usage(MemoryUsage memory) {
   switch (memory) {
     case MemoryUsage::Auto:
@@ -84,6 +83,12 @@ struct Allocator::Impl {
 Allocator::Allocator() noexcept = default;
 
 Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
+  if (instance == VK_NULL_HANDLE || device.handle() == VK_NULL_HANDLE ||
+      device.physical_device() == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "Allocator::create: instance and device must be non-null (a "
+        "moved-from Device has null handles)");
+  }
   // Feed VMA the loader entry points; we link them statically (see
   // vma_impl.cpp).
   VmaVulkanFunctions functions{};
@@ -126,6 +131,10 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
 }
 
 Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument(
+        "create_buffer: allocator is empty (moved-from)");
+  }
   if (desc.size == 0) {
     return Status::invalid_argument("buffer size must be non-zero");
   }
@@ -163,17 +172,21 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
 
   VmaAllocationCreateInfo alloc_info{};
   alloc_info.usage = vma_memory_usage(desc.memory);
-  if (desc.memory == MemoryUsage::HostVisible) {
-    alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-  }
   if (desc.mapped) {
     // Mapping needs host-visible memory; request host access + a persistent
     // map. Require HOST_COHERENT so writes through mapped() reach the GPU
     // without an explicit flush — Buffer hides the VmaAllocation, so callers
     // have no flush path. The spec guarantees a HOST_VISIBLE|HOST_COHERENT
-    // memory type exists, so this requirement is always satisfiable.
-    alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    // memory type exists, so this requirement is always satisfiable. The
+    // host-access flag follows desc.host_access: SEQUENTIAL_WRITE lets VMA pick
+    // write-combined memory for streaming uploads; RANDOM keeps the mapping
+    // readable. (A HostVisible buffer without mapped is rejected above, so this
+    // is the only path that needs a host-access flag.)
+    alloc_info.flags |=
+        VMA_ALLOCATION_CREATE_MAPPED_BIT |
+        (desc.host_access == HostAccess::SequentialWrite
+             ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+             : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
     alloc_info.requiredFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   }
 
@@ -204,6 +217,10 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
 }
 
 Result<Texture> Allocator::create_image(const TextureDesc& desc) {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument(
+        "create_image: allocator is empty (moved-from)");
+  }
   if (desc.extent.width == 0 || desc.extent.height == 0) {
     return Status::invalid_argument("image extent must be non-zero");
   }
@@ -239,6 +256,30 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
         "host-visible images are not supported (no host accessor); copy to a "
         "HostVisible buffer for readback");
   }
+  if (desc.samples != VK_SAMPLE_COUNT_1_BIT &&
+      (desc.type != VK_IMAGE_TYPE_2D ||
+       desc.tiling != VK_IMAGE_TILING_OPTIMAL || desc.mip_levels != 1)) {
+    // Vulkan permits multisampling only on single-mip, optimal-tiling 2D images
+    // (VUID-VkImageCreateInfo-samples-02257/02258). Reject the contradiction
+    // here so it reads as a domain error like every other malformed desc,
+    // instead of an opaque VkResult out of vmaCreateImage.
+    return Status::invalid_argument(
+        "multisampled images must be 2D, optimal-tiling, and single-mip");
+  }
+  // A view is creatable only over a usage that names a view-compatible bit
+  // (VUID-VkImageViewCreateInfo-image-04441). Reject a with_view/usage
+  // contradiction up front; a transfer-only image must set with_view = false.
+  constexpr VkImageUsageFlags kViewCompatibleUsage =
+      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+  if (desc.with_view && (desc.usage & kViewCompatibleUsage) == 0) {
+    return Status::invalid_argument(
+        "with_view image usage must name a view-compatible bit (SAMPLED, "
+        "STORAGE, COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or "
+        "INPUT_ATTACHMENT); set with_view = false for a transfer-only image");
+  }
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -261,33 +302,37 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   VG_VK_TRY(vmaCreateImage(impl_->allocator, &image_info, &alloc_info, &image,
                            &allocation, nullptr));
 
-  VkImageViewCreateInfo view_info{};
-  view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  view_info.image = image;
-  view_info.viewType = view_type_for(desc.type, desc.array_layers);
-  view_info.format = desc.format;
-  view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
-  view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = desc.mip_levels;
-  view_info.subresourceRange.baseArrayLayer = 0;
-  view_info.subresourceRange.layerCount = desc.array_layers;
-
   VkImageView view = VK_NULL_HANDLE;
-  VkResult view_result =
-      vkCreateImageView(impl_->device, &view_info, nullptr, &view);
-  if (view_result != VK_SUCCESS) {
-    vmaDestroyImage(impl_->allocator, image, allocation);
-    return vk_error(view_result, "vkCreateImageView");
+  if (desc.with_view) {
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = image;
+    view_info.viewType = view_type_for(desc.type, desc.array_layers);
+    view_info.format = desc.format;
+    view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = desc.mip_levels;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = desc.array_layers;
+
+    VkResult view_result =
+        vkCreateImageView(impl_->device, &view_info, nullptr, &view);
+    if (view_result != VK_SUCCESS) {
+      vmaDestroyImage(impl_->allocator, image, allocation);
+      return vk_error(view_result, "vkCreateImageView");
+    }
   }
 
   // Deleter destroys the view (which references the image) before the image,
   // and hides device/VMA from Texture's API. Valid only while this allocator
-  // lives.
+  // lives. A viewless image (view == VK_NULL_HANDLE) skips the view destroy.
   VmaAllocator allocator = impl_->allocator;
   VkDevice device = impl_->device;
-  return Texture(image, view, desc.extent, desc.format,
+  return Texture(image, view, desc.extent, desc.depth, desc.format,
                  [device, view, allocator, image, allocation]() {
-                   vkDestroyImageView(device, view, nullptr);
+                   if (view != VK_NULL_HANDLE) {
+                     vkDestroyImageView(device, view, nullptr);
+                   }
                    vmaDestroyImage(allocator, image, allocation);
                  });
 }

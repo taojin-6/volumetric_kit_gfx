@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/log.hpp"
+
 namespace volumetric_kit::gfx {
 
 RetireQueue::RetireQueue(VkDevice device) noexcept : device_(device) {}
@@ -46,8 +48,18 @@ std::size_t RetireQueue::poll() {
 
 void RetireQueue::drain() {
   list_.drain([this](VkFence fence) {
-    vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+    VkResult result = vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) {
+      // Device loss (or an invalid fence) means the guarded work won't
+      // complete; the deleter still runs to reclaim the resource, but record it
+      // -- this noexcept teardown path has no other observability hook.
+      log_message(LogLevel::Warning,
+                  "RetireQueue::drain: vkWaitForFences did not return "
+                  "VK_SUCCESS; freeing the resource regardless");
+    }
   });
 }
+
+void RetireQueue::reclaim() { list_.run_all(); }
 
 }  // namespace volumetric_kit::gfx

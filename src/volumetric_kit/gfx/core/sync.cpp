@@ -12,6 +12,9 @@ namespace volumetric_kit::gfx {
 // --- Fence ------------------------------------------------------------------
 
 Result<Fence> Fence::create(VkDevice device, bool signaled) {
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument("Fence::create: device is null");
+  }
   VkFenceCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   if (signaled) {
@@ -51,6 +54,9 @@ bool Fence::is_signaled() const {
 // --- Semaphore --------------------------------------------------------------
 
 Result<Semaphore> Semaphore::create(VkDevice device) {
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument("Semaphore::create: device is null");
+  }
   VkSemaphoreCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -67,6 +73,10 @@ Result<Semaphore> Semaphore::create(VkDevice device) {
 
 Result<TimelineSemaphore> TimelineSemaphore::create(VkDevice device,
                                                     uint64_t initial_value) {
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "TimelineSemaphore::create: device is null");
+  }
   VkSemaphoreTypeCreateInfo type_info{};
   type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
   type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -93,6 +103,19 @@ Result<uint64_t> TimelineSemaphore::value() const {
 }
 
 Status TimelineSemaphore::signal(uint64_t value) {
+  // A host signal must strictly advance the counter
+  // (VUID-VkSemaphoreSignalInfo-value-03258). Read the current value and reject
+  // a non-increasing signal up front, so a deterministic misuse is a domain
+  // error rather than undefined behavior in a release build (validation off).
+  uint64_t current = 0;
+  VG_VK_TRY(
+      vkGetSemaphoreCounterValue(handle_.device(), handle_.get(), &current));
+  if (value <= current) {
+    return Status::invalid_argument(
+        "TimelineSemaphore::signal value must exceed the current counter "
+        "value");
+  }
+
   VkSemaphoreSignalInfo info{};
   info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
   info.semaphore = handle_.get();

@@ -39,6 +39,10 @@ CommandPool& CommandPool::operator=(CommandPool&& other) noexcept {
 }
 
 Result<CommandBuffer> CommandPool::allocate_primary() {
+  if (!valid()) {
+    return Status::invalid_argument(
+        "CommandPool::allocate_primary on an empty pool (moved-from)");
+  }
   VkCommandBufferAllocateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   info.commandPool = pool_.get();

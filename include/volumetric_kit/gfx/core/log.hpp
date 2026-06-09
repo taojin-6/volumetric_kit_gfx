@@ -4,6 +4,8 @@
 #pragma once
 
 /// @file log.hpp
+/// @brief A pluggable logging seam — a caller-installable diagnostic handler.
+///
 /// A pluggable logging seam. The library imposes no logging framework on
 /// consumers: it emits through a handler they can install, defaulting to stderr
 /// for warnings and errors. The Vulkan debug messenger routes here too.

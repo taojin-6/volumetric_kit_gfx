@@ -91,7 +91,8 @@ class VG_CORE_API PhysicalDeviceInfo {
  private:
   VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   // Extension names are stored as owned strings (not VkExtensionProperties) so
-  // this type stays trivially copyable/movable and self-contained.
+  // this type is self-contained and copyable/movable, with no dangling pointers
+  // into driver-owned memory.
   std::vector<std::string> extension_names_;
   VkPhysicalDeviceFeatures2 features2_{};
   VkPhysicalDeviceProperties properties_{};

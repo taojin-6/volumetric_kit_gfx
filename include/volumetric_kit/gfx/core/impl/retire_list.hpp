@@ -51,25 +51,35 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
 template <class Key>
 template <class WaitFn>
 void RetireList<Key>::drain(WaitFn wait) {
-  // Detach the entries first so a throwing deleter can't leave run entries to
-  // be re-run at destruction; unrun deleters still release via their captures.
-  std::vector<Entry> pending = std::move(entries_);
-  entries_.clear();
-  for (Entry& entry : pending) {
-    wait(entry.key);
-    if (entry.deleter) {
-      entry.deleter();
+  // Process in rounds until nothing remains: a deleter may re-enter push() to
+  // enqueue a follow-up resource, and drain() promises to run *every* deleter
+  // (matching poll(), which re-checks each iteration). Detaching each round's
+  // entries before running them keeps a throwing deleter from leaving a run
+  // entry to be re-run at destruction; unrun deleters still release via their
+  // captures.
+  while (!entries_.empty()) {
+    std::vector<Entry> pending = std::move(entries_);
+    entries_.clear();
+    for (Entry& entry : pending) {
+      wait(entry.key);
+      if (entry.deleter) {
+        entry.deleter();
+      }
     }
   }
 }
 
 template <class Key>
 void RetireList<Key>::run_all() noexcept {
-  std::vector<Entry> pending = std::move(entries_);
-  entries_.clear();
-  for (Entry& entry : pending) {
-    if (entry.deleter) {
-      entry.deleter();
+  // Loop until empty so a deleter that re-enters push() is still run (see
+  // drain()).
+  while (!entries_.empty()) {
+    std::vector<Entry> pending = std::move(entries_);
+    entries_.clear();
+    for (Entry& entry : pending) {
+      if (entry.deleter) {
+        entry.deleter();
+      }
     }
   }
 }

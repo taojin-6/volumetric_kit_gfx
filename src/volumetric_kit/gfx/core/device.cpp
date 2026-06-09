@@ -7,6 +7,7 @@
 #include <cstring>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
@@ -28,19 +29,26 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   // `instance` is accepted for symmetry with Allocator::create and to document
   // the instance-outlives-device contract; the device stores only handles, so
   // it is intentionally unused at creation.
+  if (physical == VK_NULL_HANDLE) {
+    return Status::invalid_argument("Device::create: physical device is null");
+  }
   std::optional<uint32_t> graphics = find_graphics_family(physical);
   if (!graphics) {
     return Status::unsupported("no graphics queue family");
   }
 
-  // Require a Vulkan 1.2 device: TimelineSemaphore and the feature plumbing
-  // here use the 1.2 *core* entry points (vkSignalSemaphore, vkWaitSemaphores,
-  // vkGetSemaphoreCounterValue), not the pre-1.2 *KHR variants. (The instance
-  // already negotiates >= 1.1, which the features2 query below needs.)
-  VkPhysicalDeviceProperties props{};
-  vkGetPhysicalDeviceProperties(physical, &props);
-  if (props.apiVersion < VK_API_VERSION_1_2) {
-    return Status::unsupported("device does not support Vulkan 1.2");
+  // Capture the physical-device capabilities once, up front: the version and
+  // extension checks below read from it instead of re-querying the driver, and
+  // caps_ adopts the same data on the success path (no second round-trip).
+  PhysicalDeviceInfo caps = PhysicalDeviceInfo::query(physical);
+
+  // Require a Vulkan 1.3 device: shaders target SPIR-V 1.6 (--target-env=
+  // vulkan1.3, see vg_shaders.cmake), and the TimelineSemaphore plumbing uses
+  // the 1.2 *core* entry points (vkSignalSemaphore, vkWaitSemaphores,
+  // vkGetSemaphoreCounterValue). The instance negotiates >= 1.1, which the
+  // features2 query below needs.
+  if (caps.properties().apiVersion < VK_API_VERSION_1_3) {
+    return Status::unsupported("device does not support Vulkan 1.3");
   }
 
   std::optional<uint32_t> present;
@@ -55,12 +63,10 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     }
   }
 
-  const std::vector<VkExtensionProperties> available =
-      device_extensions(physical);
   std::vector<const char*> extensions;
 
   auto require = [&](const char* name) -> Status {
-    if (!has_extension(available, name)) {
+    if (!caps.supports_device_extension(name)) {
       return Status::unsupported(
           std::string("required device extension missing: ") + name);
     }
@@ -92,7 +98,7 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
 
   // The spec requires enabling VK_KHR_portability_subset whenever a device
   // exposes it (e.g. MoltenVK); de-duplicate in case the caller also listed it.
-  if (has_extension(available, kPortabilitySubset) &&
+  if (caps.supports_device_extension(kPortabilitySubset) &&
       !already_enabled(kPortabilitySubset)) {
     extensions.push_back(kPortabilitySubset);
   }
@@ -125,23 +131,51 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   }
 
   // Enable features through VkPhysicalDeviceFeatures2 (which supersedes
-  // pEnabledFeatures). The query above already populated timeline_features with
-  // the device's timelineSemaphore support, so the same struct is fed back to
-  // enable it — only when supported. Consumers add further features (dynamic
-  // rendering, synchronization2, …) through config.feature_chain, appended
-  // below.
+  // pEnabledFeatures). Consumers add further features (dynamic rendering,
+  // synchronization2, …) through config.feature_chain, appended below.
   VkPhysicalDeviceFeatures2 features2{};
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features2.features = config.features;
-  features2.pNext =
-      timeline_features.timelineSemaphore ? &timeline_features : nullptr;
 
-  // Append the caller's feature chain to the TAIL of our chain, preserving our
-  // own timeline link. Walking from &features2 covers both cases (timeline
-  // present → tail is &timeline_features; absent → &features2 itself).
-  // VkBaseOutStructure exposes sType/pNext without knowing each concrete type;
-  // the const_cast is safe because vkCreateDevice treats the chain as
-  // input-only.
+  // Enable timelineSemaphore exactly once. If the caller's feature_chain
+  // already carries a struct that subsumes it — the 1.2 aggregate
+  // VkPhysicalDeviceVulkan12Features or a standalone
+  // VkPhysicalDeviceTimelineSemaphoreFeatures — raise the bit there instead of
+  // linking our own struct: a chain holding both the 1.2 aggregate and the
+  // individual struct violates VUID-VkDeviceCreateInfo-pNext-02830. The
+  // const_cast is safe (vkCreateDevice treats the chain as input-only); the bit
+  // is only raised toward what the device reported as supported.
+  bool caller_carries_timeline = false;
+  if (config.feature_chain != nullptr) {
+    for (auto* node = reinterpret_cast<VkBaseOutStructure*>(
+             const_cast<void*>(config.feature_chain));
+         node != nullptr; node = node->pNext) {
+      if (node->sType ==
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+        if (timeline_features.timelineSemaphore) {
+          reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(node)
+              ->timelineSemaphore = VK_TRUE;
+        }
+        caller_carries_timeline = true;
+      } else if (
+          node->sType ==
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES) {
+        if (timeline_features.timelineSemaphore) {
+          reinterpret_cast<VkPhysicalDeviceTimelineSemaphoreFeatures*>(node)
+              ->timelineSemaphore = VK_TRUE;
+        }
+        caller_carries_timeline = true;
+      }
+    }
+  }
+  if (!caller_carries_timeline && timeline_features.timelineSemaphore) {
+    features2.pNext = &timeline_features;
+  }
+
+  // Append the caller's chain to the TAIL of ours. Walking from &features2
+  // covers both cases (our timeline link present → tail is &timeline_features;
+  // absent → &features2 itself). VkBaseOutStructure exposes sType/pNext without
+  // knowing each concrete type.
   if (config.feature_chain != nullptr) {
     auto* tail = reinterpret_cast<VkBaseOutStructure*>(&features2);
     while (tail->pNext != nullptr) {
@@ -179,8 +213,8 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
 
-  // Capture read-only capabilities for caps(); only runs on the success path.
-  device.caps_ = PhysicalDeviceInfo::query(physical);
+  // Adopt the capabilities captured up front (success path only).
+  device.caps_ = std::move(caps);
 
   return device;
 }

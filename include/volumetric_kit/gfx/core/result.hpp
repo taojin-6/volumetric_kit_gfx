@@ -245,6 +245,13 @@ class Result {
 ///              stringified (via `#expr`) as the error context, so the failing
 ///              call names itself -- no separate message argument.
 ///
+/// @warning Valid only for calls whose sole success code is `VK_SUCCESS`: it
+///          treats every other code -- including the positive success codes
+///          `VK_SUBOPTIMAL_KHR`, `VK_INCOMPLETE`, `VK_NOT_READY`, and
+///          `VK_TIMEOUT` -- as a failure to early-return. For a call that can
+///          return more than one success code (e.g. `vkAcquireNextImageKHR`),
+///          hand-roll the check as @ref Fence::wait does.
+///
 /// @code
 /// VG_VK_TRY(vkCreateDevice(phys, &ci, nullptr, &dev_));
 /// @endcode

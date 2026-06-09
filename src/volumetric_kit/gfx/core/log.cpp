@@ -30,8 +30,12 @@ const char* level_name(LogLevel level) {
 // Default sink: warnings and errors to stderr, quieter levels dropped.
 void default_sink(LogLevel level, std::string_view message) {
   if (level == LogLevel::Warning || level == LogLevel::Error) {
-    std::fprintf(stderr, "[vg %s] %.*s\n", level_name(level),
-                 static_cast<int>(message.size()), message.data());
+    // fwrite the body by its exact length rather than printf's %.*s: a
+    // string_view need not be NUL-terminated, and its size can exceed INT_MAX
+    // (a negative %.*s precision would scan for a NUL that isn't there).
+    std::fprintf(stderr, "[vg %s] ", level_name(level));
+    std::fwrite(message.data(), 1, message.size(), stderr);
+    std::fputc('\n', stderr);
   }
 }
 
