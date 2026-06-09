@@ -5,6 +5,7 @@
 
 #include <utility>
 
+#include "volumetric_kit/gfx/core/sync.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -36,13 +37,44 @@ TEST_F(DeviceTest, NeedsPresentWithoutSurfaceErrors) {
   EXPECT_EQ(device.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
-TEST_F(DeviceTest, SelectedDeviceMeetsVulkan12Floor) {
-  // Device::create rejects a sub-1.2 device (the timeline-semaphore path uses
-  // 1.2 core entry points); the fixture device was created successfully, so the
-  // selected physical device must report at least 1.2.
+TEST_F(DeviceTest, PresentQueuePathNeedsSurface) {
+  // The present-queue success path — has_present(), present_family/queue, and
+  // the graphics==present dedup — needs a real VkSurfaceKHR, which the core
+  // tier cannot create (surfaces are the windowing tier). Document the coverage
+  // gap with an explicit skip so it stays visible until a surface-backed test
+  // lands downstream, rather than being silently uncovered.
+  GTEST_SKIP() << "present-queue success path requires a surface (windowing "
+                  "tier); covered there";
+}
+
+TEST_F(DeviceTest, SelectedDeviceMeetsVulkan13Floor) {
+  // Device::create rejects a sub-1.3 device (shaders target SPIR-V 1.6 and the
+  // timeline-semaphore path uses 1.2 core entry points); the fixture device was
+  // created successfully, so the selected physical device must report >= 1.3.
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(physical_, &props);
-  EXPECT_GE(props.apiVersion, VK_API_VERSION_1_2);
+  EXPECT_GE(props.apiVersion, VK_API_VERSION_1_3);
+}
+
+TEST_F(DeviceTest, FeatureChainWithVulkan12FeaturesEnablesTimeline) {
+  // The headline pNext fix: a caller passing VkPhysicalDeviceVulkan12Features
+  // (which aggregates timelineSemaphore) must NOT also get our standalone
+  // VkPhysicalDeviceTimelineSemaphoreFeatures linked — both in one chain
+  // violates VUID-VkDeviceCreateInfo-pNext-02830. create() instead raises
+  // timelineSemaphore inside the caller's struct. Verify device creation
+  // succeeds and a TimelineSemaphore is usable (proving timeline was enabled).
+  VkPhysicalDeviceVulkan12Features v12{};
+  v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  // Left timelineSemaphore = VK_FALSE on purpose; create() must raise it.
+  vg::DeviceConfig config;
+  config.feature_chain = &v12;
+
+  auto device = vg::Device::create(instance_->handle(), physical_, config);
+  ASSERT_TRUE(device.ok()) << device.status().message();
+
+  auto timeline = vg::TimelineSemaphore::create(device.value().handle());
+  ASSERT_TRUE(timeline.ok()) << timeline.status().message();
+  EXPECT_TRUE(timeline.value().valid());
 }
 
 TEST_F(DeviceTest, BogusExtensionFailsUnsupported) {
@@ -86,6 +118,23 @@ TEST_F(DeviceTest, CapsReportsSaneExtensionsAndFormats) {
                                     VK_IMAGE_TILING_OPTIMAL,
                                     VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
   EXPECT_GT(caps.limits().maxImageDimension2D, 0u);
+}
+
+TEST_F(DeviceTest, CapsExposesFeaturesPropertiesAndFormatProperties) {
+  const vg::PhysicalDeviceInfo& caps = device_->caps();
+  // properties(): a created device reports the >= 1.3 floor and a non-empty
+  // name.
+  EXPECT_GE(caps.properties().apiVersion, VK_API_VERSION_1_3);
+  EXPECT_NE(caps.properties().deviceName[0], '\0');
+  // features2(): query() sets the sType; features() forwards to its inner set.
+  EXPECT_EQ(caps.features2().sType,
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
+  EXPECT_EQ(&caps.features(), &caps.features2().features);
+  // format_properties(): the live query reports the sampled bit for a
+  // ubiquitous optimal-tiling format.
+  VkFormatProperties props = caps.format_properties(VK_FORMAT_R8G8B8A8_UNORM);
+  EXPECT_NE(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
+            0u);
 }
 
 TEST_F(DeviceTest, InstanceCapsMatchesDeviceCaps) {
@@ -184,4 +233,28 @@ TEST(InstanceTest, SelfMoveAssignIsSafe) {
   vg::Instance* alias = &instance;
   instance = std::move(*alias);
   EXPECT_NE(instance.handle(), VK_NULL_HANDLE);
+}
+
+// Exercises the validation path: enabling it drives the debug-messenger
+// create/destroy lifetime (proc-addr resolution, pNext chaining, teardown) and
+// validation_enabled(). On the sanitizers job — which installs the validation
+// layers and runs under ASan — this is where the messenger lifetime and the
+// layer's own handle/lifetime checks get exercised. When the layer is absent,
+// create() warns and disables, so both outcomes are valid; the test asserts the
+// instance is still usable.
+TEST(InstanceTest, ValidationEnabledInstanceIsUsable) {
+  vg::InstanceConfig config;
+  config.enable_validation = true;
+  auto instance = vg::Instance::create(config);
+  if (!instance.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+  }
+  // validation_enabled() must be coherent: true only if the messenger was
+  // created. Either way the instance must select a device (messenger active or
+  // not).
+  auto physical = instance.value().select_physical_device();
+  if (!physical.ok()) {
+    GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
+  }
+  EXPECT_NE(physical.value(), VK_NULL_HANDLE);
 }

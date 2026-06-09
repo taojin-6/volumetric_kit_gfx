@@ -33,6 +33,23 @@ TEST_F(RetireQueueTest, SignaledFenceReleasesDeleterOnPoll) {
   EXPECT_EQ(retire.pending(), 0u);
 }
 
+TEST_F(RetireQueueTest, ReclaimRunsDeletersWithoutWaitingOnFence) {
+  // An unsignaled fence: poll() defers and drain() would block on it forever.
+  // reclaim() runs the deleter immediately — the no-wait forced-reclaim path
+  // for an idle/lost-device teardown.
+  auto fence = vg::Fence::create(device(), /*signaled=*/false);
+  ASSERT_TRUE(fence.ok()) << fence.status().message();
+
+  int released = 0;
+  vg::RetireQueue retire(device());
+  retire.push(fence.value().handle(), [&released]() { ++released; });
+  EXPECT_EQ(retire.poll(), 0u);  // unsignaled → deferred
+
+  retire.reclaim();
+  EXPECT_EQ(released, 1);  // ran despite the fence never signaling
+  EXPECT_EQ(retire.pending(), 0u);
+}
+
 TEST_F(RetireQueueTest, MoveConstructTransfersPendingDeleters) {
   auto fence = vg::Fence::create(device(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();

@@ -95,6 +95,82 @@ TEST(RetireList, ThrowingDeleterDoesNotLeaveEntriesToReRun) {
   EXPECT_EQ(first, 1);
 }
 
+TEST(RetireList, MoveConstructTransfersPendingAndEmptiesSource) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&ran]() { ++ran; });
+  list.push(2, [&ran]() { ++ran; });
+
+  vg::RetireList<int> moved(std::move(list));
+  EXPECT_EQ(moved.pending(), 2u);
+  EXPECT_EQ(list.pending(),
+            0u);  // NOLINT(bugprone-use-after-move): source empty
+
+  moved.run_all();
+  EXPECT_EQ(ran, 2);
+}
+
+TEST(RetireList, MoveAssignOverLiveReleasesDstWithoutRunningThenAdoptsSource) {
+  vg::RetireList<int> dst;
+  vg::RetireList<int> src;
+  int dst_ran = 0;
+  int src_ran = 0;
+  dst.push(1, [&dst_ran]() { ++dst_ran; });
+  src.push(2, [&src_ran]() { ++src_ran; });
+
+  dst = std::move(src);
+  // Move-assignment releases dst's pending closures WITHOUT running their
+  // bodies (run via drain/run_all first if a body must execute), then adopts
+  // src's.
+  EXPECT_EQ(dst_ran, 0);
+  EXPECT_EQ(dst.pending(), 1u);
+  EXPECT_EQ(src.pending(), 0u);  // NOLINT(bugprone-use-after-move)
+
+  dst.run_all();
+  EXPECT_EQ(src_ran, 1);  // the adopted deleter ran
+  EXPECT_EQ(dst_ran, 0);  // dst's original was released, never run
+}
+
+TEST(RetireList, SelfMoveAssignKeepsPending) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&ran]() { ++ran; });
+
+  vg::RetireList<int>* alias = &list;  // launder past -Wself-move under -Werror
+  list = std::move(*alias);
+  EXPECT_EQ(list.pending(), 1u);  // self-move must not drop the pending deleter
+
+  list.run_all();
+  EXPECT_EQ(ran, 1);
+}
+
+TEST(RetireList, DrainRunsDeleterThatEnqueuesDuringDrain) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&list, &ran]() {
+    ++ran;
+    list.push(2, [&ran]() { ++ran; });  // re-enter push() from within drain()
+  });
+
+  // drain() promises to run *every* deleter, including one pushed mid-drain.
+  list.drain([](int) {});
+  EXPECT_EQ(ran, 2);
+  EXPECT_EQ(list.pending(), 0u);
+}
+
+TEST(RetireList, RunAllRunsDeleterThatEnqueuesDuringRunAll) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&list, &ran]() {
+    ++ran;
+    list.push(2, [&ran]() { ++ran; });  // re-enter push() from within run_all()
+  });
+
+  list.run_all();
+  EXPECT_EQ(ran, 2);
+  EXPECT_EQ(list.pending(), 0u);
+}
+
 TEST(RetireList, DeleterMayEnqueueDuringPoll) {
   vg::RetireList<int> list;
   int ran = 0;
