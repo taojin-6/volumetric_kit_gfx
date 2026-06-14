@@ -38,8 +38,10 @@ struct GraphicsPipelineDesc {
   /// Index of the subpass within @ref render_pass the pipeline runs in.
   uint32_t subpass = 0;
   /// How vertices are assembled into primitives.
+  /// `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST` is rejected — it needs tessellation
+  /// stages this pipeline does not provide.
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-  /// Entry-point name used for both stages.
+  /// Entry-point name used for both stages. Must be non-null.
   const char* entry_point = "main";
 };
 
@@ -72,10 +74,12 @@ class VG_CORE_API GraphicsPipeline {
   /// @brief Create a graphics pipeline from @p desc.
   /// @param device  The logical device that owns the pipeline and its layout.
   /// @param desc    The stages, render pass, and assembly state to build from.
-  /// @pre @p desc.vertex_shader, @p desc.fragment_shader, and
-  ///      @p desc.render_pass are non-`VK_NULL_HANDLE`; these are validated
-  ///      before Vulkan is touched and otherwise yield a non-OK @ref Status
-  ///      with domain @ref Status::Code::InvalidArgument.
+  /// @pre @p device is non-`VK_NULL_HANDLE`; @p desc.vertex_shader,
+  ///      @p desc.fragment_shader, and @p desc.render_pass are
+  ///      non-`VK_NULL_HANDLE`; @p desc.entry_point is non-null; and
+  ///      @p desc.topology is not `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`. These are
+  ///      validated before Vulkan is touched and otherwise yield a non-OK
+  ///      @ref Status with domain @ref Status::Code::InvalidArgument.
   /// @return The pipeline on success, or a non-OK @ref Status.
   static Result<GraphicsPipeline> create(VkDevice device,
                                          const GraphicsPipelineDesc& desc);

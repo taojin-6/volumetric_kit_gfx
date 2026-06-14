@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
@@ -20,7 +19,6 @@
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -98,15 +96,6 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
                                                                handle);
   }
 
-  vg::ShaderModule load_module(const char* spv) {
-    std::vector<uint32_t> code = vg_test::load_spirv(vg_test::spirv_path(spv));
-    EXPECT_FALSE(code.empty()) << "missing/empty " << spv;
-    auto module = vg::ShaderModule::create(device(), code.data(),
-                                           code.size() * sizeof(uint32_t));
-    EXPECT_TRUE(module.ok()) << module.status().message();
-    return std::move(module).value();
-  }
-
   vg::GraphicsPipeline build_pipeline(VkRenderPass render_pass,
                                       VkShaderModule vert,
                                       VkShaderModule frag) {
@@ -122,8 +111,8 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
 
 TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
   auto render_pass = make_render_pass();
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipeline pipeline =
       build_pipeline(render_pass.get(), vert.handle(), frag.handle());
@@ -133,8 +122,8 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, NullRenderPassRejected) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = vert.handle();
@@ -145,10 +134,57 @@ TEST_F(GraphicsPipelineDeviceTest, NullRenderPassRejected) {
   EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
+  auto render_pass = make_render_pass();
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.render_pass = render_pass.get();
+  desc.entry_point = nullptr;  // rejected before Vulkan is touched
+  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
+  auto render_pass = make_render_pass();
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.render_pass = render_pass.get();
+  // Patch-list needs tessellation stages this pipeline does not provide.
+  desc.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
+  // Every desc field is valid, so the null device -- checked last, just before
+  // the first Vulkan call -- is what create() rejects.
+  auto render_pass = make_render_pass();
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.render_pass = render_pass.get();
+  auto pipeline = vg::GraphicsPipeline::create(VK_NULL_HANDLE, desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
   auto render_pass = make_render_pass();
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline source =
       build_pipeline(render_pass.get(), vert.handle(), frag.handle());
   ASSERT_TRUE(source.valid());
@@ -162,8 +198,8 @@ TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
 
 TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
   auto render_pass = make_render_pass();
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline dst =
       build_pipeline(render_pass.get(), vert.handle(), frag.handle());
   vg::GraphicsPipeline src =
@@ -176,8 +212,8 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   auto render_pass = make_render_pass();
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
       build_pipeline(render_pass.get(), vert.handle(), frag.handle());
 
@@ -228,8 +264,8 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   vg::UniqueHandle<VkFramebuffer, vkDestroyFramebuffer> framebuffer(device(),
                                                                     fb_handle);
 
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
       build_pipeline(render_pass.get(), vert.handle(), frag.handle());
   ASSERT_TRUE(pipeline.valid());
@@ -273,39 +309,14 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   vkCmdDraw(raw, 3, 1, 0, 0);
   vkCmdEndRenderPass(raw);
 
-  // The render pass left the image in TRANSFER_SRC_OPTIMAL; copy it out.
-  VkBufferImageCopy copy{};
-  copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  copy.imageExtent = {kSize, kSize, 1};
-  vkCmdCopyImageToBuffer(raw, image.value().image(),
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         readback.value().handle(), 1, &copy);
-
-  VkBufferMemoryBarrier to_host{};
-  to_host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-  to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_host.buffer = readback.value().handle();
-  to_host.offset = 0;
-  to_host.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(raw, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &to_host,
-                       0, nullptr);
+  // The render pass left the image in TRANSFER_SRC_OPTIMAL; copy it out and
+  // make the result visible to the host read below.
+  record_copy_image_to_host(raw, image.value().image(),
+                            readback.value().handle(), {kSize, kSize});
 
   ASSERT_TRUE(cmd.value().end().ok());
 
-  auto fence = vg::Fence::create(device());
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &raw;
-  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          fence.value().handle()),
-            VK_SUCCESS);
-  ASSERT_TRUE(fence.value().wait().ok());
+  submit_and_wait(raw);
 
   const auto* px = static_cast<const unsigned char*>(readback.value().mapped());
 

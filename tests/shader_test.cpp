@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
@@ -17,21 +16,9 @@ namespace {
 
 // Creating a real module needs a device, so these tests use the shared
 // VulkanDeviceTest fixture (skips when the runner has none). Modules are local
-// to each test, so they tear down before the fixture's device.
-class ShaderTest : public VulkanDeviceTest {
- protected:
-  // Loads + creates the triangle vertex module; aborts via value() only if the
-  // compiled shader is genuinely missing or rejected (the build depends on it).
-  vg::ShaderModule load_triangle_vert() {
-    std::vector<uint32_t> code =
-        vg_test::load_spirv(vg_test::spirv_path("triangle.vert.spv"));
-    EXPECT_FALSE(code.empty()) << "missing/empty triangle.vert.spv";
-    auto module = vg::ShaderModule::create(device(), code.data(),
-                                           code.size() * sizeof(uint32_t));
-    EXPECT_TRUE(module.ok()) << module.status().message();
-    return std::move(module).value();
-  }
-};
+// to each test, so they tear down before the fixture's device. The triangle
+// vertex module is loaded via the shared vg_test::load_module helper.
+using ShaderTest = VulkanDeviceTest;
 
 }  // namespace
 
@@ -67,13 +54,13 @@ TEST(ShaderModuleTest, DefaultConstructedIsEmpty) {
 // --- Real module creation + move semantics: needs a device ------------------
 
 TEST_F(ShaderTest, LoadsTriangleVertexShader) {
-  vg::ShaderModule module = load_triangle_vert();
+  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
   EXPECT_TRUE(module.valid());
   EXPECT_NE(module.handle(), VK_NULL_HANDLE);
 }
 
 TEST_F(ShaderTest, MoveLeavesSourceEmpty) {
-  vg::ShaderModule source = load_triangle_vert();
+  vg::ShaderModule source = vg_test::load_module(device(), "triangle.vert.spv");
   ASSERT_TRUE(source.valid());
 
   vg::ShaderModule moved(std::move(source));
@@ -83,8 +70,8 @@ TEST_F(ShaderTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(ShaderTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vg::ShaderModule dst = load_triangle_vert();
-  vg::ShaderModule src = load_triangle_vert();
+  vg::ShaderModule dst = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule src = vg_test::load_module(device(), "triangle.vert.spv");
 
   dst = std::move(src);  // runs dst's deleter once, then adopts src's
   EXPECT_TRUE(dst.valid());
@@ -92,7 +79,7 @@ TEST_F(ShaderTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(ShaderTest, SelfMoveAssignIsSafe) {
-  vg::ShaderModule module = load_triangle_vert();
+  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
 
   // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
   // this != &other guard must keep the module intact and not run its deleter.

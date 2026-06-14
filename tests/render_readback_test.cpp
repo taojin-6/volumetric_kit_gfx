@@ -16,7 +16,6 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -95,40 +94,13 @@ TEST_F(ReadbackTest, ClearedOffscreenImageReadsBackThroughHostBuffer) {
                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &to_src);
 
-  VkBufferImageCopy copy{};
-  copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  copy.imageExtent = {kWidth, kHeight, 1};
-  vkCmdCopyImageToBuffer(cmd.value().handle(), img,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         readback.value().handle(), 1, &copy);
-
-  // Make the copy available to the host read.
-  VkBufferMemoryBarrier to_host{};
-  to_host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-  to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_host.buffer = readback.value().handle();
-  to_host.offset = 0;
-  to_host.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(cmd.value().handle(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &to_host,
-                       0, nullptr);
+  // Copy the cleared image out and make it visible to the host read below.
+  record_copy_image_to_host(cmd.value().handle(), img,
+                            readback.value().handle(), {kWidth, kHeight});
 
   ASSERT_TRUE(cmd.value().end().ok());
 
-  auto fence = vg::Fence::create(device());
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-  VkCommandBuffer raw = cmd.value().handle();
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &raw;
-  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          fence.value().handle()),
-            VK_SUCCESS);
-  ASSERT_TRUE(fence.value().wait().ok());
+  submit_and_wait(cmd.value().handle());
 
   const auto* px = static_cast<const unsigned char*>(readback.value().mapped());
   // The whole image was cleared to opaque red, so the first and last texels

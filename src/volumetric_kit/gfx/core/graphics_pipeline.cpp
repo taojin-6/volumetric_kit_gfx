@@ -13,7 +13,11 @@ namespace volumetric_kit::gfx {
 
 Result<GraphicsPipeline> GraphicsPipeline::create(
     VkDevice device, const GraphicsPipelineDesc& desc) {
-  // Validate before touching Vulkan, so misuse is caught even without a device.
+  // Validate before touching Vulkan, so misuse yields a clean Status instead of
+  // a crash in the driver (validation off is the shipping default). The desc
+  // fields are checked first because they need no device -- that keeps the
+  // no-device validation tests meaningful -- and the device handle is checked
+  // last, just before the first Vulkan call below.
   if (desc.vertex_shader == VK_NULL_HANDLE ||
       desc.fragment_shader == VK_NULL_HANDLE) {
     return Status::invalid_argument(
@@ -23,6 +27,21 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   if (desc.render_pass == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "GraphicsPipeline::create: render_pass must be non-null");
+  }
+  if (desc.entry_point == nullptr) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: entry_point must be non-null");
+  }
+  // Only vertex + fragment stages exist here, so a patch-list topology -- which
+  // requires tessellation stages -- could never assemble a valid pipeline.
+  if (desc.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: patch-list topology requires tessellation "
+        "stages, which this pipeline does not provide");
+  }
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: device must be non-null");
   }
 
   // Empty layout: the procedural-vertex path binds no descriptor sets and no
@@ -73,6 +92,15 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+  // Depth/stencil testing is disabled. The color-only hello-triangle pass has
+  // no depth attachment, so Vulkan ignores this state -- but supplying a valid,
+  // zero-initialized one (instead of leaving pDepthStencilState null) keeps the
+  // pipeline correct if the caller's render pass *does* carry a depth/stencil
+  // attachment, where a null pointer would be a spec violation.
+  VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+  depth_stencil.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
   // Single opaque color attachment; must match the subpass's color-attachment
   // count (one) and the attachment's sample count (one).
   VkPipelineColorBlendAttachmentState blend_attachment{};
@@ -102,6 +130,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   info.pViewportState = &viewport_state;
   info.pRasterizationState = &raster;
   info.pMultisampleState = &multisample;
+  info.pDepthStencilState = &depth_stencil;
   info.pColorBlendState = &color_blend;
   info.pDynamicState = &dynamic_state;
   info.layout = layout;

@@ -8,7 +8,6 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -88,18 +87,7 @@ TEST_F(CommandTest, RecordFillSubmitReadback) {
                   VK_WHOLE_SIZE, 0xABABABABu);
   ASSERT_TRUE(cmd.value().end().ok());
 
-  auto fence = vg::Fence::create(device());
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
-  VkCommandBuffer raw = cmd.value().handle();
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &raw;
-  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          fence.value().handle()),
-            VK_SUCCESS);
-  ASSERT_TRUE(fence.value().wait().ok());
+  submit_and_wait(cmd.value().handle());
 
   const auto* bytes =
       static_cast<const unsigned char*>(buffer.value().mapped());
