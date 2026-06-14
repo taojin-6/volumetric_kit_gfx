@@ -121,3 +121,23 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
+
+  # Single matrix-independent status check for branch protection to require
+  # (surfaces as "<os> / result"). It passes only if every leg of the build
+  # matrix above passed, so the protected-branch required-checks list stays
+  # stable when the build_type matrix changes — adding/renaming a leg otherwise
+  # leaves the old required "<os> / build" context unreported and blocks every
+  # PR indefinitely.
+  result:
+    needs: build
+    # always() so a failed leg reports failure here rather than skipping this
+    # job; a skipped required check never reports and would block merges forever.
+    if: always()
+    runs-on: ubuntu-24.04 # gate does no platform-specific work — cheap Linux runner
+    steps:
+      - name: Assert build matrix succeeded
+        run: |
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::build matrix did not succeed (result: ${{ needs.build.result }})"
+            exit 1
+          fi
