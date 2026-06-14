@@ -29,8 +29,9 @@ add_executable(
   allocator_test.cpp
   shader_test.cpp
   graphics_pipeline_test.cpp
-  command_buffer_test.cpp
-  render_readback_test.cpp)
+  render_target_test.cpp
+  offscreen_target_test.cpp
+  command_buffer_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core
                                            GTest::gtest_main)
 vg_target_warnings(vg_core_test)

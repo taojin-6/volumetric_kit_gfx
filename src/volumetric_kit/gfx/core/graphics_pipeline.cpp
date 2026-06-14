@@ -24,9 +24,21 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
         "GraphicsPipeline::create: vertex_shader and fragment_shader must be "
         "non-null");
   }
-  if (desc.render_pass == VK_NULL_HANDLE) {
+  if (desc.layout.color_count == 0) {
     return Status::invalid_argument(
-        "GraphicsPipeline::create: render_pass must be non-null");
+        "GraphicsPipeline::create: layout must have at least one color "
+        "attachment");
+  }
+  if (desc.layout.color_count > RenderTargetLayout::kMaxColorAttachments) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: layout color_count exceeds "
+        "kMaxColorAttachments");
+  }
+  for (uint32_t i = 0; i < desc.layout.color_count; ++i) {
+    if (desc.layout.color_formats[i] == VK_FORMAT_UNDEFINED) {
+      return Status::invalid_argument(
+          "GraphicsPipeline::create: layout color formats must be defined");
+    }
   }
   if (desc.entry_point == nullptr) {
     return Status::invalid_argument(
@@ -90,29 +102,33 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
 
   VkPipelineMultisampleStateCreateInfo multisample{};
   multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-  multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  multisample.rasterizationSamples = desc.layout.samples;
 
-  // Depth/stencil testing is disabled. The color-only hello-triangle pass has
-  // no depth attachment, so Vulkan ignores this state -- but supplying a valid,
+  // Depth/stencil testing is disabled. The color-only hello-triangle has no
+  // depth attachment, so Vulkan ignores this state -- but supplying a valid,
   // zero-initialized one (instead of leaving pDepthStencilState null) keeps the
-  // pipeline correct if the caller's render pass *does* carry a depth/stencil
-  // attachment, where a null pointer would be a spec violation.
+  // pipeline correct when the layout *does* carry a depth format, where a null
+  // pointer would be a spec violation.
   VkPipelineDepthStencilStateCreateInfo depth_stencil{};
   depth_stencil.sType =
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 
-  // Single opaque color attachment; must match the subpass's color-attachment
-  // count (one) and the attachment's sample count (one).
-  VkPipelineColorBlendAttachmentState blend_attachment{};
-  blend_attachment.blendEnable = VK_FALSE;
-  blend_attachment.colorWriteMask =
-      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  // One non-blended, fully-writable state per color attachment in the layout;
+  // attachmentCount must match the color count the draw's render target
+  // carries.
+  VkPipelineColorBlendAttachmentState
+      blend_attachments[RenderTargetLayout::kMaxColorAttachments]{};
+  for (uint32_t i = 0; i < desc.layout.color_count; ++i) {
+    blend_attachments[i].blendEnable = VK_FALSE;
+    blend_attachments[i].colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  }
 
   VkPipelineColorBlendStateCreateInfo color_blend{};
   color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-  color_blend.attachmentCount = 1;
-  color_blend.pAttachments = &blend_attachment;
+  color_blend.attachmentCount = desc.layout.color_count;
+  color_blend.pAttachments = blend_attachments;
 
   const VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT,
                                             VK_DYNAMIC_STATE_SCISSOR};
@@ -121,8 +137,18 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   dynamic_state.dynamicStateCount = 2;
   dynamic_state.pDynamicStates = dynamic_states;
 
+  // Dynamic rendering: the pipeline carries the attachment formats directly
+  // instead of a VkRenderPass + subpass, so it is compatible with any
+  // RenderTarget whose layout matches (offscreen, swapchain, or XR view).
+  VkPipelineRenderingCreateInfo rendering_info{};
+  rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+  rendering_info.colorAttachmentCount = desc.layout.color_count;
+  rendering_info.pColorAttachmentFormats = desc.layout.color_formats.data();
+  rendering_info.depthAttachmentFormat = desc.layout.depth_format;
+
   VkGraphicsPipelineCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  info.pNext = &rendering_info;
   info.stageCount = 2;
   info.pStages = stages;
   info.pVertexInputState = &vertex_input;
@@ -134,8 +160,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   info.pColorBlendState = &color_blend;
   info.pDynamicState = &dynamic_state;
   info.layout = layout;
-  info.renderPass = desc.render_pass;
-  info.subpass = desc.subpass;
+  info.renderPass = VK_NULL_HANDLE;
 
   VkPipeline pipeline = VK_NULL_HANDLE;
   VG_VK_TRY(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
