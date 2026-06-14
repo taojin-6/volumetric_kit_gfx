@@ -90,6 +90,10 @@ leak/double-free detectors — a green normal build is necessary but not suffici
 
 ## Working preferences
 
+- Implement every change in a dedicated **git worktree**, not by `git checkout`-ing a branch
+  in the primary checkout. Create it locally under `.worktrees/` (e.g. `git worktree add
+  .worktrees/<branch> -b <branch>`) — never as a sibling in the parent folder — and remove it
+  with `git worktree remove` once the PR merges.
 - Prefer plain, behavior-level tests over friend-class backdoors into private state.
 - Mark deferred/future work inline with a `TODO:` comment (e.g. `// TODO: adopt volk for the
   iOS static-MoltenVK path`) so it is greppable, rather than tracking it only in prose or commits.
