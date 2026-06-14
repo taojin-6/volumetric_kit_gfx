@@ -3,47 +3,17 @@
 
 #include <gtest/gtest.h>
 
-#include <cstddef>
 #include <cstdint>
-#include <fstream>
-#include <string>
 #include <utility>
 #include <vector>
 
+#include "spirv_test_util.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace vg = volumetric_kit::gfx;
 
 namespace {
-
-// Reads a .spv file into 32-bit words -- SPIR-V's natural unit and the
-// alignment vkCreateShaderModule requires. Returns empty on any read failure.
-// The read is capped to the word-aligned buffer size, so a stray non-SPIR-V
-// file can't overrun it.
-std::vector<uint32_t> load_spirv(const std::string& path) {
-  std::ifstream file(path, std::ios::binary | std::ios::ate);
-  if (!file) {
-    return {};
-  }
-  const std::streampos end = file.tellg();
-  if (end < 0) {  // tellg() failed; -1 would wrap to a huge allocation below.
-    return {};
-  }
-  const auto size = static_cast<size_t>(end);
-  file.seekg(0);
-  std::vector<uint32_t> words(size / sizeof(uint32_t));
-  file.read(reinterpret_cast<char*>(words.data()),
-            static_cast<std::streamsize>(words.size() * sizeof(uint32_t)));
-  if (!file) {
-    return {};
-  }
-  return words;
-}
-
-std::string triangle_vert_spv() {
-  return std::string(VG_SHADER_DIR) + "/triangle.vert.spv";
-}
 
 // Creating a real module needs a device, so these tests use the shared
 // VulkanDeviceTest fixture (skips when the runner has none). Modules are local
@@ -53,8 +23,9 @@ class ShaderTest : public VulkanDeviceTest {
   // Loads + creates the triangle vertex module; aborts via value() only if the
   // compiled shader is genuinely missing or rejected (the build depends on it).
   vg::ShaderModule load_triangle_vert() {
-    std::vector<uint32_t> code = load_spirv(triangle_vert_spv());
-    EXPECT_FALSE(code.empty()) << "missing/empty " << triangle_vert_spv();
+    std::vector<uint32_t> code =
+        vg_test::load_spirv(vg_test::spirv_path("triangle.vert.spv"));
+    EXPECT_FALSE(code.empty()) << "missing/empty triangle.vert.spv";
     auto module = vg::ShaderModule::create(device(), code.data(),
                                            code.size() * sizeof(uint32_t));
     EXPECT_TRUE(module.ok()) << module.status().message();

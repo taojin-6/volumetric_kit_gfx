@@ -28,6 +28,7 @@ add_executable(
   retire_queue_test.cpp
   allocator_test.cpp
   shader_test.cpp
+  graphics_pipeline_test.cpp
   command_buffer_test.cpp
   render_readback_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core

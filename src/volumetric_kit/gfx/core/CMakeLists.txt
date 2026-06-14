@@ -31,6 +31,7 @@ target_sources(
           buffer.cpp
           texture.cpp
           shader.cpp
+          graphics_pipeline.cpp
           command_pool.cpp
           command_buffer.cpp)
 
