@@ -4,6 +4,9 @@
 #pragma once
 
 /// @file vulkan.hpp
+/// @brief The single umbrella header through which first-party code includes
+///        Vulkan.
+///
 /// The single point where first-party code pulls in Vulkan. Always include this
 /// header — never `<vulkan/vulkan.h>` or a loader header directly — so the
 /// loader / dispatch choice (currently the link-time loader `Vulkan::Vulkan`)

@@ -35,11 +35,16 @@ namespace volumetric_kit::gfx {
 ///          Device/Allocator in an owning struct, so reverse member-destruction
 ///          tears the queue down first).
 ///
+/// The deleter is a `std::function`, so it must be copyable: capture copyable
+/// state (raw handles, a `shared_ptr`), not a move-only @ref Buffer / @ref
+/// Texture by value.
+///
 /// @code
-/// RetireQueue retire(device);
-/// // Defer freeing `buffer` until `frame_fence` signals:
-/// retire.push(frame_fence, [buf = buffer]() { destroy(buf); });
-/// retire.poll();  // once per frame
+/// RetireQueue retire(device.handle());
+/// // Defer destroying a transient view until `frame_fence` signals:
+/// VkDevice dev = device.handle();
+/// retire.push(frame_fence, [dev, view]() { vkDestroyImageView(dev, view,
+/// nullptr); }); retire.poll();  // once per frame
 /// @endcode
 class VG_CORE_API RetireQueue {
  public:
@@ -51,7 +56,9 @@ class VG_CORE_API RetireQueue {
   ///        queue (as in @ref drain). Already-signaled fences -- the common
   ///        idle-at-teardown case -- return immediately, so a
   ///        `vkDeviceWaitIdle` beforehand is not required to free safely. A
-  ///        fence that never signals would block here (see @ref push).
+  ///        fence that never signals would block here (see @ref push); call
+  ///        @ref reclaim first for a no-wait teardown when the device is
+  ///        already idle or lost.
   ~RetireQueue();
 
   /// @brief Take over @p other's pending deleters; @p other is left empty.
@@ -81,8 +88,22 @@ class VG_CORE_API RetireQueue {
   std::size_t poll();
 
   /// @brief Wait for every pending fence to signal, then run all deleters.
+  ///        Logs a warning (and frees anyway) if a wait fails, e.g. on device
+  ///        loss. Blocks indefinitely on a fence that never signals -- use
+  ///        @ref reclaim instead when the device is idle/lost.
   /// @note Not thread-safe: serialize @ref push against @ref poll / @ref drain.
   void drain();
+
+  /// @brief Run every pending deleter immediately WITHOUT waiting on its fence,
+  ///        then clear -- a no-wait forced reclaim for teardown.
+  /// @pre Every guarding fence is already signaled, or the device is idle (e.g.
+  ///      after `vkDeviceWaitIdle`) or lost; the deleters run without
+  ///      consulting the fences, so running early while the GPU still reads a
+  ///      resource is undefined behavior.
+  /// @note Not thread-safe: serialize @ref push against @ref poll / @ref drain
+  /// /
+  ///       @ref reclaim.
+  void reclaim();
 
   /// @return The number of deleters still pending.
   std::size_t pending() const noexcept { return list_.pending(); }

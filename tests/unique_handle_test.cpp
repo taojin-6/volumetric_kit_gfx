@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <utility>
 
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
@@ -28,6 +29,12 @@ using Stub = vg::UniqueHandle<void*, count_destroy>;
 
 // A non-null stub handle; its value is never used, only its non-nullness.
 void* fake_handle() { return &g_destroyed; }
+
+// A non-null sentinel VkDevice; never dereferenced (count_destroy ignores it),
+// only checked for transfer/reset so the device_ move/reset is observable.
+VkDevice fake_device() {
+  return reinterpret_cast<VkDevice>(static_cast<std::uintptr_t>(0x1234));
+}
 
 }  // namespace
 
@@ -53,12 +60,16 @@ TEST(UniqueHandle, DefaultConstructedDestroysNothing) {
 TEST(UniqueHandle, MoveConstructTransfersOwnershipAndDestroysOnce) {
   g_destroyed = 0;
   {
-    Stub source(VK_NULL_HANDLE, fake_handle());
+    // Build with a non-null device so the device_ transfer/reset is real, not a
+    // tautology against VK_NULL_HANDLE.
+    Stub source(fake_device(), fake_handle());
     Stub moved(std::move(source));
     EXPECT_TRUE(moved.valid());
+    EXPECT_EQ(moved.get(), fake_handle());
+    EXPECT_EQ(moved.device(), fake_device());  // device transferred to `moved`
     EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
     EXPECT_EQ(source.get(), VK_NULL_HANDLE);
-    EXPECT_EQ(source.device(), VK_NULL_HANDLE);  // device zeroed too
+    EXPECT_EQ(source.device(), VK_NULL_HANDLE);  // device zeroed on the source
   }
   EXPECT_EQ(g_destroyed, 1);  // freed once, by `moved`
 }

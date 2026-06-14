@@ -101,6 +101,9 @@ TEST_F(AllocatorTest, BufferMoveLeavesSourceEmpty) {
   EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(source.handle(), VK_NULL_HANDLE);
   EXPECT_EQ(source.size(), 0u);
+  // A non-null moved-from mapped() would dangle, aliasing `moved`'s host
+  // memory.
+  EXPECT_EQ(source.mapped(), nullptr);
 }
 
 TEST_F(AllocatorTest, BufferMoveAssignOverLiveLeavesSourceEmpty) {
@@ -114,6 +117,8 @@ TEST_F(AllocatorTest, BufferMoveAssignOverLiveLeavesSourceEmpty) {
   dst = std::move(src);  // runs dst's deleter once, then adopts src's
   EXPECT_TRUE(dst.valid());
   EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(src.mapped(), nullptr);
+  EXPECT_NE(dst.mapped(), nullptr);  // dst adopted src's live mapping
 }
 
 TEST_F(AllocatorTest, BufferSelfMoveAssignIsSafe) {
@@ -364,6 +369,8 @@ TEST_F(AllocatorTest, Volume3DImageGets3DView) {
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);  // 3D view
+  EXPECT_EQ(texture.value().extent().width, 16u);
+  EXPECT_EQ(texture.value().depth(), 8u);  // slice count recoverable
 }
 
 TEST_F(AllocatorTest, MippedArrayImageIsValid) {
@@ -418,6 +425,64 @@ TEST_F(AllocatorTest, ZeroMipLevelsImageIsRejected) {
   EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(AllocatorTest, MultisampledMippedImageIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  desc.samples = VK_SAMPLE_COUNT_4_BIT;
+  desc.mip_levels = 2;  // MSAA images must be single-mip — contradiction
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, ViewlessTransferImageHasNoView) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage =
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  desc.with_view = false;  // transfer-only image: no view-compatible usage
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
+  EXPECT_EQ(texture.value().view(), VK_NULL_HANDLE);  // viewless
+}
+
+TEST_F(AllocatorTest, ViewIncompatibleUsageWithViewIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;  // names no view-compatible bit
+  // desc.with_view defaults to true → contradiction.
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, SequentialWriteMappedBufferRoundTrips) {
+  vg::BufferDesc desc;
+  desc.size = 64;
+  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = vg::MemoryUsage::HostVisible;
+  desc.mapped = true;
+  desc.host_access = vg::HostAccess::SequentialWrite;
+
+  auto buffer = allocator_->create_buffer(desc);
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  ASSERT_NE(buffer.value().mapped(), nullptr);
+  // Write-combined memory is write-only from the CPU; exercise sequential
+  // writes (reading it back would be undefined for SequentialWrite).
+  auto* bytes = static_cast<unsigned char*>(buffer.value().mapped());
+  for (int i = 0; i < 64; ++i) {
+    bytes[i] = static_cast<unsigned char>(i);
+  }
+}
+
 TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {
   vg::TextureDesc desc;
   desc.extent = {16, 16};
@@ -433,7 +498,11 @@ TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(source.image(), VK_NULL_HANDLE);
+  // A stale moved-from view() would name a VkImageView the deleter already
+  // freed.
+  EXPECT_EQ(source.view(), VK_NULL_HANDLE);
   EXPECT_EQ(source.extent().width, 0u);
+  EXPECT_EQ(source.depth(), 1u);
   EXPECT_EQ(source.format(), VK_FORMAT_UNDEFINED);
 }
 
@@ -453,6 +522,7 @@ TEST_F(AllocatorTest, TextureMoveAssignOverLiveLeavesSourceEmpty) {
   dst = std::move(src);  // runs dst's deleter once, then adopts src's
   EXPECT_TRUE(dst.valid());
   EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(src.view(), VK_NULL_HANDLE);
 }
 
 TEST_F(AllocatorTest, TextureSelfMoveAssignIsSafe) {
@@ -479,5 +549,27 @@ TEST(TextureTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(texture.image(), VK_NULL_HANDLE);
   EXPECT_EQ(texture.view(), VK_NULL_HANDLE);
   EXPECT_EQ(texture.extent().width, 0u);
+  EXPECT_EQ(texture.depth(), 1u);
   EXPECT_EQ(texture.format(), VK_FORMAT_UNDEFINED);
+}
+
+// No device needed: counting deleters via the public adopt-ctor makes Texture's
+// move-assign double-free/leak path a deterministic assertion (mirrors the
+// BufferTest counting test), not just something the sanitizers job catches.
+TEST(TextureTest, MoveAssignRunsOverwrittenDeleterExactlyOnce) {
+  int dst_runs = 0;
+  int src_runs = 0;
+  {
+    vg::Texture dst(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, VK_FORMAT_UNDEFINED,
+                    [&dst_runs]() { ++dst_runs; });
+    vg::Texture src(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, VK_FORMAT_UNDEFINED,
+                    [&src_runs]() { ++src_runs; });
+    dst = std::move(src);
+    EXPECT_EQ(dst_runs,
+              1);  // dst's original deleter ran once, during the assign
+    EXPECT_EQ(src_runs, 0);  // src's deleter was adopted, not run
+  }
+  // A failure to null the moved-from deleter would make dst_runs/src_runs == 2.
+  EXPECT_EQ(dst_runs, 1);
+  EXPECT_EQ(src_runs, 1);
 }

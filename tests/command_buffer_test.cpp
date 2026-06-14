@@ -49,6 +49,19 @@ TEST_F(CommandTest, BeginEndRoundTrips) {
   EXPECT_TRUE(cmd.value().end().ok());
 }
 
+TEST_F(CommandTest, BufferReRecordsAcrossBeginEndCycles) {
+  vg::CommandPool pool = make_pool(*device_);
+  auto cmd = pool.allocate_primary();
+  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+  // The pool's default RESET_COMMAND_BUFFER_BIT lets begin() implicitly reset,
+  // so a second record cycle on the same buffer must also succeed (a dropped
+  // flag would fail the second begin under the validation layers).
+  EXPECT_TRUE(cmd.value().begin().ok());
+  EXPECT_TRUE(cmd.value().end().ok());
+  EXPECT_TRUE(cmd.value().begin().ok());
+  EXPECT_TRUE(cmd.value().end().ok());
+}
+
 // End-to-end: record vkCmdFillBuffer into a host-visible buffer, submit on the
 // graphics queue, fence-wait, then read the result back through the mapping.
 // Proves CommandPool + CommandBuffer + Fence + Allocator compose into a real
@@ -164,4 +177,20 @@ TEST(CommandBufferTest, DefaultConstructedIsEmpty) {
   vg::CommandBuffer cmd;
   EXPECT_FALSE(cmd.valid());
   EXPECT_EQ(cmd.handle(), VK_NULL_HANDLE);
+}
+
+// No device needed: begin()/end() must guard the null handle and return a
+// domain error instead of dispatching VK_NULL_HANDLE into the driver (a crash
+// with validation off, the shipping default).
+TEST(CommandBufferTest, BeginEndOnEmptyBufferReturnInvalidArgument) {
+  vg::CommandBuffer cmd;  // default-constructed, empty
+  ASSERT_FALSE(cmd.valid());
+
+  vg::Status began = cmd.begin();
+  EXPECT_FALSE(began.ok());
+  EXPECT_EQ(began.domain(), vg::Status::Code::InvalidArgument);
+
+  vg::Status ended = cmd.end();
+  EXPECT_FALSE(ended.ok());
+  EXPECT_EQ(ended.domain(), vg::Status::Code::InvalidArgument);
 }

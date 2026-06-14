@@ -32,6 +32,10 @@ function(vg_compile_shaders target)
         "`brew install shaderc`).")
   endif()
 
+  # spirv-val (SPIRV-Tools) is an optional post-compile validation pass, run
+  # only when found on PATH so a toolchain without it still builds.
+  find_program(VG_SPIRV_VAL NAMES spirv-val)
+
   set(_spv_outputs)
   set(_seen_names)
   foreach(_src IN LISTS ARG_SHADERS)
@@ -46,25 +50,60 @@ function(vg_compile_shaders target)
     list(APPEND _seen_names "${_name}")
 
     set(_out "${ARG_OUTPUT_DIR}/${_name}.spv")
+
+    # The per-call _seen_names check above only sees one invocation; also track
+    # outputs build-globally so two vg_compile_shaders() calls writing the same
+    # path (shared basename + OUTPUT_DIR) are rejected instead of silently
+    # clobbering under Make / erroring under Ninja.
+    get_property(_all_outputs GLOBAL PROPERTY _vg_shader_outputs)
+    if(_out IN_LIST _all_outputs)
+      message(
+        FATAL_ERROR
+          "vg_compile_shaders(${target}): output '${_out}' is already produced "
+          "by another vg_compile_shaders() call; pass a distinct OUTPUT_DIR")
+    endif()
+    set_property(GLOBAL APPEND PROPERTY _vg_shader_outputs "${_out}")
+
+    # Emit a depfile alongside the .spv so an edited GLSL #include triggers a
+    # recompile (the top-level source mtime alone would miss it).
+    set(_dep "${_out}.d")
     if(_mode STREQUAL glslc)
-      set(_cmd "${_compiler}" --target-env=vulkan1.3 -o "${_out}" "${_src}")
+      set(_cmd
+          "${_compiler}"
+          --target-env=vulkan1.3
+          -MD
+          -MF
+          "${_dep}"
+          -o
+          "${_out}"
+          "${_src}")
     else()
       set(_cmd
           "${_compiler}"
           -V
           --target-env
           vulkan1.3
+          --depfile
+          "${_dep}"
           -o
           "${_out}"
           "${_src}")
     endif()
+
+    # Optional: validate the emitted SPIR-V against Vulkan 1.3 rules.
+    set(_validate)
+    if(VG_SPIRV_VAL)
+      set(_validate COMMAND "${VG_SPIRV_VAL}" --target-env vulkan1.3 "${_out}")
+    endif()
+
     # make_directory runs at build time (not just configure), so the compile
     # still works if the output dir was cleaned without re-running CMake.
     add_custom_command(
       OUTPUT "${_out}"
       COMMAND ${CMAKE_COMMAND} -E make_directory "${ARG_OUTPUT_DIR}"
-      COMMAND ${_cmd}
+      COMMAND ${_cmd} ${_validate}
       DEPENDS "${_src}"
+      DEPFILE "${_dep}"
       COMMENT "Compiling shader ${_name}"
       VERBATIM)
     list(APPEND _spv_outputs "${_out}")

@@ -42,6 +42,27 @@ TEST_F(SyncTest, SemaphoreCreates) {
   auto semaphore = vg::Semaphore::create(device());
   ASSERT_TRUE(semaphore.ok()) << semaphore.status().message();
   EXPECT_NE(semaphore.value().handle(), VK_NULL_HANDLE);
+  EXPECT_TRUE(semaphore.value().valid());
+}
+
+TEST_F(SyncTest, FenceValidReflectsOwnership) {
+  auto created = vg::Fence::create(device());
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::Fence fence = std::move(created).value();
+  EXPECT_TRUE(fence.valid());
+
+  vg::Fence moved(std::move(fence));
+  EXPECT_TRUE(moved.valid());
+  EXPECT_FALSE(fence.valid());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(SyncTest, CreateRejectsNullDevice) {
+  EXPECT_EQ(vg::Fence::create(VK_NULL_HANDLE).status().domain(),
+            vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(vg::Semaphore::create(VK_NULL_HANDLE).status().domain(),
+            vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(vg::TimelineSemaphore::create(VK_NULL_HANDLE).status().domain(),
+            vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(SyncTest, FenceMoveLeavesSourceEmpty) {
@@ -188,6 +209,27 @@ TEST_F(SyncTest, TimelineInitialValueIsObserved) {
   ASSERT_TRUE(value.ok()) << value.status().message();
   EXPECT_EQ(value.value(),
             7u);  // create() must seed the counter at initial_value
+}
+
+TEST_F(SyncTest, TimelineSignalRejectsNonIncreasingValue) {
+  auto created = vg::TimelineSemaphore::create(device(), /*initial_value=*/5);
+  if (!created.ok()) {
+    GTEST_SKIP() << "no timeline-semaphore support: "
+                 << created.status().message();
+  }
+  vg::TimelineSemaphore timeline = std::move(created).value();
+  EXPECT_TRUE(timeline.valid());
+
+  // Equal-to and below-current host signals must be rejected up front with
+  // InvalidArgument, not passed to vkSignalSemaphore (UB in a release build).
+  EXPECT_EQ(timeline.signal(5).domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(timeline.signal(3).domain(), vg::Status::Code::InvalidArgument);
+
+  // A strictly-increasing signal succeeds and advances the counter.
+  ASSERT_TRUE(timeline.signal(6).ok());
+  auto value = timeline.value();
+  ASSERT_TRUE(value.ok()) << value.status().message();
+  EXPECT_EQ(value.value(), 6u);
 }
 
 TEST_F(SyncTest, SemaphoreMoveAssignOverLiveLeavesSourceEmpty) {

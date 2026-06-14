@@ -25,6 +25,10 @@ namespace volumetric_kit::gfx {
 
 /// @brief A `VkFence`: the host waits on it for submitted GPU work to finish.
 ///
+/// @warning The @p device passed to @ref create must outlive the fence: the
+///          destructor frees through it, so destroying the device first is
+///          undefined behavior.
+///
 /// @code
 /// Result<Fence> fence = Fence::create(device);
 /// if (!fence) return fence.status();
@@ -45,8 +49,11 @@ class VG_CORE_API Fence {
   Fence(const Fence&) = delete;
   Fence& operator=(const Fence&) = delete;
 
-  /// @return The underlying `VkFence` handle.
+  /// @return The underlying `VkFence` handle (`VK_NULL_HANDLE` when empty).
   VkFence handle() const noexcept { return handle_.get(); }
+
+  /// @return `true` if this owns a fence.
+  bool valid() const noexcept { return handle_.valid(); }
 
   /// @brief Block until the fence is signaled or the timeout elapses.
   /// @param timeout_ns  Maximum wait, in nanoseconds (default: wait forever).
@@ -59,7 +66,11 @@ class VG_CORE_API Fence {
   /// @return OK on success, or a non-OK @ref Status.
   Status reset();
 
-  /// @return `true` if the fence is currently signaled (non-blocking query).
+  /// @return `true` if the fence is currently signaled (non-blocking query). A
+  ///         query error — including device loss — also yields `false`,
+  ///         indistinguishable from unsignaled; use @ref wait (which surfaces
+  ///         the `VkResult` as a @ref Status) when device loss must be
+  ///         detected.
   bool is_signaled() const;
 
  private:
@@ -69,6 +80,17 @@ class VG_CORE_API Fence {
 };
 
 /// @brief A binary `VkSemaphore`: orders work between GPU queue submissions.
+///
+/// @warning The @p device passed to @ref create must outlive the semaphore: the
+///          destructor frees through it, so destroying the device first is
+///          undefined behavior.
+///
+/// @code
+/// Result<Semaphore> render_done = Semaphore::create(device);
+/// if (!render_done) return render_done.status();
+/// // Wire render_done.value().handle() as a signal semaphore of one queue
+/// // submit and a wait semaphore of the next, to order them on the GPU.
+/// @endcode
 class VG_CORE_API Semaphore {
  public:
   /// @brief Create a binary semaphore.
@@ -82,8 +104,11 @@ class VG_CORE_API Semaphore {
   Semaphore(const Semaphore&) = delete;
   Semaphore& operator=(const Semaphore&) = delete;
 
-  /// @return The underlying `VkSemaphore` handle.
+  /// @return The underlying `VkSemaphore` handle (`VK_NULL_HANDLE` when empty).
   VkSemaphore handle() const noexcept { return handle_.get(); }
+
+  /// @return `true` if this owns a semaphore.
+  bool valid() const noexcept { return handle_.valid(); }
 
  private:
   Semaphore() = default;
@@ -101,6 +126,10 @@ class VG_CORE_API Semaphore {
 /// Vulkan 1.2), which
 /// @ref Device::create enables when supported; creating one on a device without
 /// it is invalid use, reported by the validation layers.
+///
+/// @warning The @p device passed to @ref create must outlive the semaphore: the
+///          destructor frees through it, so destroying the device first is
+///          undefined behavior.
 ///
 /// @code
 /// Result<TimelineSemaphore> timeline = TimelineSemaphore::create(device);
@@ -124,14 +153,18 @@ class VG_CORE_API TimelineSemaphore {
   TimelineSemaphore(const TimelineSemaphore&) = delete;
   TimelineSemaphore& operator=(const TimelineSemaphore&) = delete;
 
-  /// @return The underlying `VkSemaphore` handle.
+  /// @return The underlying `VkSemaphore` handle (`VK_NULL_HANDLE` when empty).
   VkSemaphore handle() const noexcept { return handle_.get(); }
+
+  /// @return `true` if this owns a semaphore.
+  bool valid() const noexcept { return handle_.valid(); }
 
   /// @return The current counter value, or a non-OK @ref Status.
   Result<uint64_t> value() const;
 
   /// @brief Host-signal the counter to @p value.
-  /// @param value  The new counter value; must exceed the current value.
+  /// @param value  The new counter value; must exceed the current value, or the
+  ///               call returns @ref Status::Code::InvalidArgument.
   /// @return OK on success, or a non-OK @ref Status.
   Status signal(uint64_t value);
 

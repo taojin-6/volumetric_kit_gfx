@@ -43,6 +43,11 @@ void CommandBuffer::destroy() noexcept {
 }
 
 Status CommandBuffer::begin(VkCommandBufferUsageFlags flags) {
+  if (command_buffer_ == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "CommandBuffer::begin on an empty buffer (default-constructed or "
+        "moved-from)");
+  }
   VkCommandBufferBeginInfo info{};
   info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   info.flags = flags;
@@ -51,6 +56,11 @@ Status CommandBuffer::begin(VkCommandBufferUsageFlags flags) {
 }
 
 Status CommandBuffer::end() {
+  if (command_buffer_ == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "CommandBuffer::end on an empty buffer (default-constructed or "
+        "moved-from)");
+  }
   VG_VK_TRY(vkEndCommandBuffer(command_buffer_));
   return Status{};
 }

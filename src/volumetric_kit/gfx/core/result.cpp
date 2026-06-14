@@ -84,6 +84,10 @@ std::string_view to_string(VkResult result) noexcept {
       return "VK_ERROR_OUT_OF_DATE_KHR";
     case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR:
       return "VK_ERROR_INCOMPATIBLE_DISPLAY_KHR";
+    case VK_ERROR_VALIDATION_FAILED_EXT:
+      return "VK_ERROR_VALIDATION_FAILED_EXT";
+    case VK_PIPELINE_COMPILE_REQUIRED:
+      return "VK_PIPELINE_COMPILE_REQUIRED";
     case VK_ERROR_UNKNOWN:
       return "VK_ERROR_UNKNOWN";
     default:

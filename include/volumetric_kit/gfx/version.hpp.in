@@ -4,7 +4,8 @@
 #pragma once
 
 /// @file version.hpp
-/// Generated from version.hpp.in by CMake -- do not edit the generated copy.
+/// @brief Compile-time and runtime accessors for the library version. Generated
+///        from version.hpp.in by CMake -- do not edit the generated copy.
 
 #include "volumetric_kit/gfx/core/export.hpp"
 
@@ -15,11 +16,14 @@
 
 namespace volumetric_kit::gfx {
 
-/// @return the library version as "MAJOR.MINOR.PATCH".
+/// @return The library version as "MAJOR.MINOR.PATCH".
 VG_CORE_API const char* version_string() noexcept;
 
+/// @return The major version component.
 VG_CORE_API int version_major() noexcept;
+/// @return The minor version component.
 VG_CORE_API int version_minor() noexcept;
+/// @return The patch version component.
 VG_CORE_API int version_patch() noexcept;
 
 }  // namespace volumetric_kit::gfx

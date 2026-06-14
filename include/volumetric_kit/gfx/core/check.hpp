@@ -4,6 +4,8 @@
 #pragma once
 
 /// @file check.hpp
+/// @brief Fail-fast contract checks (`VG_CHECK`) for programmer errors.
+///
 /// Fail-fast contract checks for *programmer errors* (precondition violations),
 /// as distinct from Vulkan runtime errors -- those flow through `Status` /
 /// `Result`. On failure `VG_CHECK` logs at Error through the diagnostic sink,
