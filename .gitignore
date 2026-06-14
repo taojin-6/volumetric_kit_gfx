@@ -3,6 +3,9 @@
 /cmake-build-*/
 /out/
 
+# Local git worktrees (one per in-flight change; see CLAUDE.md)
+/.worktrees/
+
 # Generated runtime env helper (configured by CMake)
 vkgfx-env.sh
 
