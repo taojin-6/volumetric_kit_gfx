@@ -9,32 +9,10 @@
 #include <vk_mem_alloc.h>
 
 #include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
-
-// The view aspect a format implies: DEPTH for depth and combined
-// depth/stencil formats, STENCIL for stencil-only, else COLOR.
-VkImageAspectFlags aspect_mask_for(VkFormat format) {
-  switch (format) {
-    case VK_FORMAT_D16_UNORM:
-    case VK_FORMAT_X8_D24_UNORM_PACK32:
-    case VK_FORMAT_D32_SFLOAT:
-      return VK_IMAGE_ASPECT_DEPTH_BIT;
-    case VK_FORMAT_S8_UINT:
-      return VK_IMAGE_ASPECT_STENCIL_BIT;
-    case VK_FORMAT_D16_UNORM_S8_UINT:
-    case VK_FORMAT_D24_UNORM_S8_UINT:
-    case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      // DEPTH only: a single VkImageView may not mix depth and stencil for
-      // sampling, and depth is the dominant attachment/sample use. A stencil
-      // view (or a depth-peel pass needing stencil) requests its aspect once
-      // TextureDesc carries one.
-      return VK_IMAGE_ASPECT_DEPTH_BIT;
-    default:
-      return VK_IMAGE_ASPECT_COLOR_BIT;
-  }
-}
 
 // The default view type for an image of @p type with @p array_layers layers:
 // 1D/2D gain their _ARRAY variant when arrayed; 3D images are never arrayed.

@@ -23,9 +23,7 @@ bool RenderTargetLayout::compatible_with(
 
 RenderTarget::RenderTarget(VkExtent2D extent,
                            const RenderTargetAttachment* color,
-                           uint32_t color_count,
-                           const RenderTargetAttachment* depth,
-                           VkSampleCountFlagBits samples)
+                           uint32_t color_count, VkSampleCountFlagBits samples)
     : extent_(extent), color_count_(color_count), samples_(samples) {
   VG_CHECK(color != nullptr && color_count > 0,
            "RenderTarget needs at least one color attachment");
@@ -33,10 +31,6 @@ RenderTarget::RenderTarget(VkExtent2D extent,
            "RenderTarget color count exceeds kMaxColorAttachments");
   for (uint32_t i = 0; i < color_count; ++i) {
     color_[i] = color[i];
-  }
-  if (depth != nullptr) {
-    depth_ = *depth;
-    has_depth_ = true;
   }
 }
 
@@ -46,7 +40,8 @@ RenderTargetLayout RenderTarget::layout() const noexcept {
   for (uint32_t i = 0; i < color_count_; ++i) {
     layout.color_formats[i] = color_[i].format;
   }
-  layout.depth_format = has_depth_ ? depth_.format : VK_FORMAT_UNDEFINED;
+  layout.depth_format =
+      VK_FORMAT_UNDEFINED;  // depth deferred (see header TODO)
   layout.samples = samples_;
   return layout;
 }
@@ -67,24 +62,14 @@ void RenderTarget::begin(VkCommandBuffer cmd,
     color_attachments[i].clearValue.color = info.clear_color;
   }
 
-  const bool has_depth = has_depth_;
-  VkRenderingAttachmentInfo depth_attachment{};
-  if (has_depth) {
-    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depth_attachment.imageView = depth_.view;
-    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depth_attachment.loadOp = info.load_op;
-    depth_attachment.storeOp = info.store_op;
-    depth_attachment.clearValue.depthStencil = info.clear_depth;
-  }
-
   VkRenderingInfo rendering{};
   rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
   rendering.renderArea.extent = extent_;
   rendering.layerCount = 1;
   rendering.colorAttachmentCount = color_count_;
   rendering.pColorAttachments = color_attachments.data();
-  rendering.pDepthAttachment = has_depth ? &depth_attachment : nullptr;
+  // pDepthAttachment stays null: depth is deferred (see render_target.hpp
+  // TODO).
 
   vkCmdBeginRendering(cmd, &rendering);
 }

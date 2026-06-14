@@ -72,7 +72,7 @@ TEST(RenderTargetTest, DerivesLayoutAndExtentFromAttachments) {
   // matters to the derived layout.
   vg::RenderTargetAttachment color{};
   color.format = kColor;
-  vg::RenderTarget target({64, 48}, &color, 1, nullptr, VK_SAMPLE_COUNT_1_BIT);
+  vg::RenderTarget target({64, 48}, &color, 1, VK_SAMPLE_COUNT_1_BIT);
 
   EXPECT_TRUE(target.valid());
   EXPECT_EQ(target.extent().width, 64u);
@@ -81,16 +81,6 @@ TEST(RenderTargetTest, DerivesLayoutAndExtentFromAttachments) {
   EXPECT_EQ(layout.color_count, 1u);
   EXPECT_EQ(layout.color_formats[0], kColor);
   EXPECT_EQ(layout.depth_format, VK_FORMAT_UNDEFINED);
-}
-
-TEST(RenderTargetTest, DepthAttachmentShowsInDerivedLayout) {
-  vg::RenderTargetAttachment color{};
-  color.format = kColor;
-  vg::RenderTargetAttachment depth{};
-  depth.format = VK_FORMAT_D32_SFLOAT;
-  vg::RenderTarget target({16, 16}, &color, 1, &depth, VK_SAMPLE_COUNT_1_BIT);
-
-  EXPECT_EQ(target.layout().depth_format, VK_FORMAT_D32_SFLOAT);
 }
 
 }  // namespace

@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
@@ -59,15 +58,6 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
     return layout;
   }
 
-  vg::ShaderModule load_module(const char* spv) {
-    std::vector<uint32_t> code = vg_test::load_spirv(vg_test::spirv_path(spv));
-    EXPECT_FALSE(code.empty()) << "missing/empty " << spv;
-    auto module = vg::ShaderModule::create(device(), code.data(),
-                                           code.size() * sizeof(uint32_t));
-    EXPECT_TRUE(module.ok()) << module.status().message();
-    return std::move(module).value();
-  }
-
   vg::GraphicsPipeline build_pipeline(const vg::RenderTargetLayout& layout,
                                       VkShaderModule vert,
                                       VkShaderModule frag) {
@@ -82,8 +72,8 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
 };
 
 TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipeline pipeline =
       build_pipeline(color_layout(), vert.handle(), frag.handle());
@@ -93,8 +83,8 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = vert.handle();
@@ -105,9 +95,53 @@ TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {
   EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.layout = color_layout();
+  desc.entry_point = nullptr;  // rejected before Vulkan is touched
+  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.layout = color_layout();
+  // Patch-list needs tessellation stages this pipeline does not provide.
+  desc.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
+  // Every desc field is valid, so the null device -- checked last, just before
+  // the first Vulkan call -- is what create() rejects.
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.layout = color_layout();
+  auto pipeline = vg::GraphicsPipeline::create(VK_NULL_HANDLE, desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline source =
       build_pipeline(color_layout(), vert.handle(), frag.handle());
   ASSERT_TRUE(source.valid());
@@ -120,8 +154,8 @@ TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline dst =
       build_pipeline(color_layout(), vert.handle(), frag.handle());
   vg::GraphicsPipeline src =
@@ -133,8 +167,8 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
       build_pipeline(color_layout(), vert.handle(), frag.handle());
 
@@ -157,8 +191,8 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
 
-  vg::ShaderModule vert = load_module("triangle.vert.spv");
-  vg::ShaderModule frag = load_module("triangle.frag.spv");
+  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
       build_pipeline(target.value().layout(), vert.handle(), frag.handle());
   ASSERT_TRUE(pipeline.valid());

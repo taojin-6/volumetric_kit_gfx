@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file offscreen_target.hpp
-/// @brief A headless render target: device-local color (+ optional depth)
-///        images plus a host-visible readback buffer.
+/// @brief A headless render target: a device-local color image plus a
+///        host-visible readback buffer.
 
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
@@ -24,9 +24,6 @@ struct OffscreenTargetDesc {
   VkExtent2D extent{};
   /// Color attachment format. Must not be `VK_FORMAT_UNDEFINED`.
   VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
-  /// Optional depth(/stencil) attachment format; `VK_FORMAT_UNDEFINED` for
-  /// none.
-  VkFormat depth_format = VK_FORMAT_UNDEFINED;
   /// Allocate a host-visible buffer sized to the color attachment so the render
   /// can be copied back to the CPU (see @ref OffscreenTarget::record_readback).
   bool readback = true;
@@ -38,7 +35,7 @@ struct OffscreenTargetDesc {
 ///
 /// The color attachment is created `COLOR_ATTACHMENT | TRANSFER_SRC` so it can
 /// be both rendered into and copied out. @ref target hands out a non-owning
-/// @ref RenderTarget over the images, @ref layout gives the matching pipeline
+/// @ref RenderTarget over the image, @ref layout gives the matching pipeline
 /// signature, and @ref record_readback records the copy-to-buffer the readback
 /// path needs. This is the headless sibling of the windowing tier's swapchain;
 /// both produce a @ref RenderTarget, so a pass renders into either unchanged.
@@ -117,7 +114,6 @@ class VG_CORE_API OffscreenTarget {
 
  private:
   Texture color_;
-  Texture depth_;    // empty (valid() == false) when no depth was requested
   Buffer readback_;  // empty when created without readback
 };
 

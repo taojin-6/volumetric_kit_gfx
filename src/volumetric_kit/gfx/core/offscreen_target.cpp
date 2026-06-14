@@ -7,55 +7,9 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
+#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
-namespace {
-
-// Bytes per texel for the color formats a readback target can size a staging
-// buffer for. Returns 0 for a format whose layout this kit does not yet handle,
-// so create() can reject a readback request rather than under-allocate.
-uint32_t color_texel_size(VkFormat format) {
-  switch (format) {
-    case VK_FORMAT_R8_UNORM:
-    case VK_FORMAT_R8_SNORM:
-    case VK_FORMAT_R8_UINT:
-    case VK_FORMAT_R8_SINT:
-    case VK_FORMAT_R8_SRGB:
-      return 1;
-    case VK_FORMAT_R8G8_UNORM:
-    case VK_FORMAT_R8G8_UINT:
-    case VK_FORMAT_R16_UNORM:
-    case VK_FORMAT_R16_SFLOAT:
-    case VK_FORMAT_R16_UINT:
-      return 2;
-    case VK_FORMAT_R8G8B8A8_UNORM:
-    case VK_FORMAT_R8G8B8A8_SNORM:
-    case VK_FORMAT_R8G8B8A8_UINT:
-    case VK_FORMAT_R8G8B8A8_SINT:
-    case VK_FORMAT_R8G8B8A8_SRGB:
-    case VK_FORMAT_B8G8R8A8_UNORM:
-    case VK_FORMAT_B8G8R8A8_SRGB:
-    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-    case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-    case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
-    case VK_FORMAT_R16G16_SFLOAT:
-    case VK_FORMAT_R32_SFLOAT:
-    case VK_FORMAT_R32_UINT:
-      return 4;
-    case VK_FORMAT_R16G16B16A16_SFLOAT:
-    case VK_FORMAT_R16G16B16A16_UNORM:
-    case VK_FORMAT_R16G16B16A16_UINT:
-    case VK_FORMAT_R32G32_SFLOAT:
-      return 8;
-    case VK_FORMAT_R32G32B32A32_SFLOAT:
-    case VK_FORMAT_R32G32B32A32_UINT:
-      return 16;
-    default:
-      return 0;
-  }
-}
-
-}  // namespace
 
 Result<OffscreenTarget> OffscreenTarget::create(
     Allocator& allocator, const OffscreenTargetDesc& desc) {
@@ -71,7 +25,7 @@ Result<OffscreenTarget> OffscreenTarget::create(
 
   VkDeviceSize readback_size = 0;
   if (desc.readback) {
-    const uint32_t texel = color_texel_size(desc.color_format);
+    const uint32_t texel = texel_size(desc.color_format);
     if (texel == 0) {
       return Status::unsupported(
           "OffscreenTarget::create: readback unsupported for this color "
@@ -92,15 +46,6 @@ Result<OffscreenTarget> OffscreenTarget::create(
   OffscreenTarget target;
   target.color_ = std::move(color);
 
-  if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    TextureDesc depth_desc;
-    depth_desc.extent = desc.extent;
-    depth_desc.format = desc.depth_format;
-    depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    VG_ASSIGN(Texture depth, allocator.create_image(depth_desc));
-    target.depth_ = std::move(depth);
-  }
-
   if (desc.readback) {
     BufferDesc readback_desc;
     readback_desc.size = readback_size;
@@ -117,16 +62,19 @@ Result<OffscreenTarget> OffscreenTarget::create(
 RenderTarget OffscreenTarget::target() const {
   const RenderTargetAttachment color{color_.image(), color_.view(),
                                      color_.format()};
-  RenderTargetAttachment depth{};
-  const bool has_depth = depth_.valid();
-  if (has_depth) {
-    depth = {depth_.image(), depth_.view(), depth_.format()};
-  }
-  return RenderTarget(color_.extent(), &color, 1, has_depth ? &depth : nullptr,
-                      VK_SAMPLE_COUNT_1_BIT);
+  return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
 }
 
-RenderTargetLayout OffscreenTarget::layout() const { return target().layout(); }
+RenderTargetLayout OffscreenTarget::layout() const {
+  // Built directly from the owned color attachment rather than via a throwaway
+  // target(), since the format signature is all a caller needs to build a
+  // compatible pipeline.
+  RenderTargetLayout layout;
+  layout.color_formats[0] = color_.format();
+  layout.color_count = 1;
+  layout.samples = VK_SAMPLE_COUNT_1_BIT;
+  return layout;
+}
 
 void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
   VG_CHECK(valid(), "OffscreenTarget::record_readback on an empty target");

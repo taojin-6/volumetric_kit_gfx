@@ -34,7 +34,8 @@ namespace volumetric_kit::gfx {
 struct RenderTargetLayout {
   /// Upper bound on simultaneous color attachments this kit supports. The
   /// Vulkan-guaranteed minimum `maxColorAttachments` is 4; 8 covers real
-  /// hardware. A pipeline validates `color_count` against the device limit.
+  /// hardware. A pipeline rejects a `color_count` above this cap; the driver
+  /// enforces the device's actual `maxColorAttachments` at pipeline creation.
   static constexpr uint32_t kMaxColorAttachments = 8;
 
   /// Color attachment formats; only the first @ref color_count are significant.
@@ -66,20 +67,16 @@ struct RenderTargetAttachment {
   VkFormat format = VK_FORMAT_UNDEFINED;  ///< The attachment's format.
 };
 
-/// @brief Per-begin load/store ops and clear values passed to @ref
+/// @brief Per-begin load/store ops and clear value passed to @ref
 ///        RenderTarget::begin.
 ///
-/// The ops apply uniformly to every color attachment (and the depth attachment,
-/// when present); @ref clear_color is used by each color attachment when @ref
-/// load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`, and @ref clear_depth by the depth
-/// attachment. Per-attachment clears arrive with multi-attachment (MRT)
-/// support.
+/// The ops apply uniformly to every color attachment; @ref clear_color is used
+/// by each color attachment when @ref load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`.
+/// Per-attachment clears arrive with multi-attachment (MRT) support.
 struct RenderTargetBeginInfo {
   VkAttachmentLoadOp load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
   VkAttachmentStoreOp store_op = VK_ATTACHMENT_STORE_OP_STORE;
   VkClearColorValue clear_color{};  ///< When @ref load_op clears.
-  VkClearDepthStencilValue clear_depth{1.0f,
-                                       0};  ///< When depth present+clears.
 };
 
 /// @brief A non-owning view of the attachments a draw renders into, plus the
@@ -115,16 +112,14 @@ class VG_CORE_API RenderTarget {
   /// @brief Construct an empty target (no attachments; `valid()` is false).
   RenderTarget() = default;
 
-  /// @brief Bundle @p color (and optional @p depth) attachments at @p extent.
+  /// @brief Bundle @p color attachments at @p extent.
   /// @param extent       Render-area size in texels (every attachment's size).
   /// @param color        Pointer to @p color_count color attachments.
   /// @param color_count  Number of color attachments
   ///                     (1..@ref RenderTargetLayout::kMaxColorAttachments).
-  /// @param depth        Optional depth attachment, or `nullptr` for none.
   /// @param samples      Sample count shared by every attachment.
   RenderTarget(VkExtent2D extent, const RenderTargetAttachment* color,
-               uint32_t color_count, const RenderTargetAttachment* depth,
-               VkSampleCountFlagBits samples);
+               uint32_t color_count, VkSampleCountFlagBits samples);
 
   /// @brief Begin a dynamic-rendering scope over these attachments.
   /// @param cmd   A command buffer in the recording state.
@@ -147,12 +142,13 @@ class VG_CORE_API RenderTarget {
   bool valid() const noexcept { return color_count_ > 0; }
 
  private:
+  // TODO: add a depth attachment once a depth-testing pipeline needs one.
+  // RenderTargetLayout already carries depth_format as the forward-looking
+  // compatibility currency, so this is an additive change, not an API break.
   VkExtent2D extent_{};
   std::array<RenderTargetAttachment, RenderTargetLayout::kMaxColorAttachments>
       color_{};
   uint32_t color_count_ = 0;
-  RenderTargetAttachment depth_{};
-  bool has_depth_ = false;
   VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
 };
 

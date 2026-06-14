@@ -102,6 +102,9 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
 
   VkPipelineMultisampleStateCreateInfo multisample{};
   multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  // TODO: validate desc.layout.samples against the device's framebuffer sample
+  // counts once create() has the physical-device limits; today an unsupported
+  // count is caught by the driver at vkCreateGraphicsPipelines.
   multisample.rasterizationSamples = desc.layout.samples;
 
   // Depth/stencil testing is disabled. The color-only hello-triangle has no
