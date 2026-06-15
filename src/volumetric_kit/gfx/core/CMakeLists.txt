@@ -79,6 +79,19 @@ target_include_directories(
 # enough for -Werror.
 target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
+# Compile gfx_core's own TUs against the pinned Vulkan-Headers +
+# Vulkan-Utility-Libraries (the vkuFormat* metadata in core/impl/vk_format.hpp),
+# not the system Vulkan headers: BEFORE so they win over the Vulkan::Headers
+# include the link below brings in, SYSTEM so their (generated-code) warnings
+# stay out of -Werror, and PRIVATE so only this library is repointed -- no
+# public header pulls vkuFormat*, so in-tree tests/examples and
+# installed-package consumers keep compiling against the system Vulkan::Headers
+# (the public API is ABI-stable across Vulkan versions). The system loader links
+# privately below; only the headers are vendored.
+target_include_directories(
+  gfx_core SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
+                                 "${VG_VULKAN_UTILITY_INCLUDE}")
+
 # Public deps (header packages) are independently re-findable, so the installed
 # package's find_dependency() calls stay simple. The Vulkan loader is PRIVATE:
 # our implementation (VMA) links it, but it never surfaces in the public API.
