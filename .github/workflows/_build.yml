@@ -41,7 +41,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
-            libglfw3-dev \
+            libglfw3-dev xvfb \
             mesa-vulkan-drivers vulkan-tools
           # mesa-vulkan-drivers provides lavapipe (software Vulkan) so GPU-dependent
           # tests can run on these GPU-less runners; vulkan-tools provides vulkaninfo.
@@ -121,6 +121,23 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
+
+      # Runtime-validate the windowing tier through the real window -> surface ->
+      # swapchain -> present path. lavapipe has no VK_EXT_headless_surface (so the
+      # headless windowing test skips), but it supports the X11 WSI, so drive the
+      # windowed example through a virtual X server with validation layers on.
+      # macOS runners are display-less, so the example is build-only there (it is
+      # runtime-validated locally on MoltenVK).
+      - name: Run windowed example (Linux, Xvfb)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          xvfb-run -a build/examples/example_01_triangle --frames 30 2>&1 \
+            | tee example.log
+          if grep -qE 'VUID-' example.log; then
+            echo "::error::Vulkan validation errors from the windowed example"
+            exit 1
+          fi
 
   # Single matrix-independent status check for branch protection to require
   # (surfaces as "<os> / result"). It passes only if every leg of the build
