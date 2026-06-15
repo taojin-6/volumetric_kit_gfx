@@ -62,31 +62,6 @@ class VulkanDeviceTest : public ::testing::Test {
     ASSERT_TRUE(fence.value().wait().ok());
   }
 
-  // Records a copy of `image` (which must already be in TRANSFER_SRC_OPTIMAL)
-  // into the host-visible `buffer`, followed by a buffer barrier making the
-  // copy visible to a host read. Shared by every offscreen-readback test.
-  static void record_copy_image_to_host(VkCommandBuffer cmd, VkImage image,
-                                        VkBuffer buffer, VkExtent2D extent) {
-    VkBufferImageCopy copy{};
-    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageExtent = {extent.width, extent.height, 1};
-    vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           buffer, 1, &copy);
-
-    VkBufferMemoryBarrier to_host{};
-    to_host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_host.buffer = buffer;
-    to_host.offset = 0;
-    to_host.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &to_host,
-                         0, nullptr);
-  }
-
   std::optional<vg::Instance> instance_;
   VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   std::optional<vg::Device> device_;

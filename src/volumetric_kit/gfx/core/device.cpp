@@ -110,10 +110,21 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
   timeline_features.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  // dynamicRendering is core (and required) in Vulkan 1.3; RenderTarget records
+  // vkCmdBeginRendering, so it is the renderer's only path to a draw. Query it
+  // alongside timelineSemaphore and enable it unconditionally below.
+  VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features{};
+  dynamic_rendering_features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+  timeline_features.pNext = &dynamic_rendering_features;
   VkPhysicalDeviceFeatures2 supported{};
   supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   supported.pNext = &timeline_features;
   vkGetPhysicalDeviceFeatures2(physical, &supported);
+  if (!dynamic_rendering_features.dynamicRendering) {
+    return Status::unsupported(
+        "device does not support dynamicRendering (core in Vulkan 1.3)");
+  }
 
   const float priority = 1.0f;
   std::set<uint32_t> unique_families = {*graphics};
@@ -137,15 +148,16 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features2.features = config.features;
 
-  // Enable timelineSemaphore exactly once. If the caller's feature_chain
-  // already carries a struct that subsumes it — the 1.2 aggregate
-  // VkPhysicalDeviceVulkan12Features or a standalone
-  // VkPhysicalDeviceTimelineSemaphoreFeatures — raise the bit there instead of
-  // linking our own struct: a chain holding both the 1.2 aggregate and the
-  // individual struct violates VUID-VkDeviceCreateInfo-pNext-02830. The
-  // const_cast is safe (vkCreateDevice treats the chain as input-only); the bit
-  // is only raised toward what the device reported as supported.
+  // Enable timelineSemaphore (1.2 core) and dynamicRendering (1.3 core) exactly
+  // once each. If the caller's feature_chain already carries a struct that
+  // subsumes one — a version aggregate (VkPhysicalDeviceVulkan1{2,3}Features)
+  // or the standalone feature struct — raise the bit there instead of linking
+  // our own: a chain holding both the aggregate and the individual struct
+  // violates VUID-VkDeviceCreateInfo-pNext-02830. The const_cast is safe
+  // (vkCreateDevice treats the chain as input-only); each bit is only raised
+  // toward what the device reported as supported.
   bool caller_carries_timeline = false;
+  bool caller_carries_dynamic_rendering = false;
   if (config.feature_chain != nullptr) {
     for (auto* node = reinterpret_cast<VkBaseOutStructure*>(
              const_cast<void*>(config.feature_chain));
@@ -165,23 +177,44 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
               ->timelineSemaphore = VK_TRUE;
         }
         caller_carries_timeline = true;
+      } else if (node->sType ==
+                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+        if (dynamic_rendering_features.dynamicRendering) {
+          reinterpret_cast<VkPhysicalDeviceVulkan13Features*>(node)
+              ->dynamicRendering = VK_TRUE;
+        }
+        caller_carries_dynamic_rendering = true;
+      } else if (node->sType ==
+                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES) {
+        if (dynamic_rendering_features.dynamicRendering) {
+          reinterpret_cast<VkPhysicalDeviceDynamicRenderingFeatures*>(node)
+              ->dynamicRendering = VK_TRUE;
+        }
+        caller_carries_dynamic_rendering = true;
       }
     }
   }
-  if (!caller_carries_timeline && timeline_features.timelineSemaphore) {
-    features2.pNext = &timeline_features;
-  }
 
-  // Append the caller's chain to the TAIL of ours. Walking from &features2
-  // covers both cases (our timeline link present → tail is &timeline_features;
-  // absent → &features2 itself). VkBaseOutStructure exposes sType/pNext without
-  // knowing each concrete type.
+  // Link the feature structs this device owns (those the caller did not bring)
+  // onto the tail of features2, then append the caller's chain after them. Each
+  // link_owned drops the pNext set during the support query above so the chain
+  // is rebuilt cleanly. VkBaseOutStructure exposes sType/pNext generically.
+  auto* features_tail = reinterpret_cast<VkBaseOutStructure*>(&features2);
+  auto link_owned = [&features_tail](void* feature) {
+    auto* node = reinterpret_cast<VkBaseOutStructure*>(feature);
+    node->pNext = nullptr;
+    features_tail->pNext = node;
+    features_tail = node;
+  };
+  if (!caller_carries_timeline && timeline_features.timelineSemaphore) {
+    link_owned(&timeline_features);
+  }
+  if (!caller_carries_dynamic_rendering &&
+      dynamic_rendering_features.dynamicRendering) {
+    link_owned(&dynamic_rendering_features);
+  }
   if (config.feature_chain != nullptr) {
-    auto* tail = reinterpret_cast<VkBaseOutStructure*>(&features2);
-    while (tail->pNext != nullptr) {
-      tail = tail->pNext;
-    }
-    tail->pNext = reinterpret_cast<VkBaseOutStructure*>(
+    features_tail->pNext = reinterpret_cast<VkBaseOutStructure*>(
         const_cast<void*>(config.feature_chain));
   }
 

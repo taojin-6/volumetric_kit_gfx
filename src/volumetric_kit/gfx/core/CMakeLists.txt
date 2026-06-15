@@ -32,6 +32,8 @@ target_sources(
           texture.cpp
           shader.cpp
           graphics_pipeline.cpp
+          render_target.cpp
+          offscreen_target.cpp
           command_pool.cpp
           command_buffer.cpp)
 

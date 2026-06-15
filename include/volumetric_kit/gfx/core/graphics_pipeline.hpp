@@ -5,11 +5,10 @@
 
 /// @file graphics_pipeline.hpp
 /// @brief A graphics `VkPipeline` and its `VkPipelineLayout`, built from a
-///        vertex + fragment stage against a render pass.
-
-#include <cstdint>
+///        vertex + fragment stage for a render-target layout.
 
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -22,21 +21,21 @@ namespace volumetric_kit::gfx {
 /// computes positions from `gl_VertexIndex`, so there is no vertex-buffer input
 /// and the pipeline layout is empty (no descriptor sets, no push constants).
 /// The fixed-function state is fixed at sensible hello-triangle defaults:
-/// a single non-blended color attachment, no depth/stencil, no culling, and
-/// dynamic viewport + scissor (set at record time). Vertex input, blending,
-/// depth, multisampling, and reflection-driven descriptor layouts are added as
-/// the pipelines tier grows.
+/// non-blended color attachments, no culling, and dynamic viewport + scissor
+/// (set at record time). The color/depth formats and sample count come from
+/// @ref layout — the pipeline renders dynamically (`vkCmdBeginRendering`), so
+/// there is no `VkRenderPass`. Vertex input, blending, depth testing, and
+/// reflection-driven descriptor layouts are added as the pipelines tier grows.
 struct GraphicsPipelineDesc {
   /// Vertex-stage module. Must be non-`VK_NULL_HANDLE`.
   VkShaderModule vertex_shader = VK_NULL_HANDLE;
   /// Fragment-stage module. Must be non-`VK_NULL_HANDLE`.
   VkShaderModule fragment_shader = VK_NULL_HANDLE;
-  /// The render pass the pipeline executes in. Must be non-`VK_NULL_HANDLE`. It
-  /// is consumed for compatibility (attachment formats/samples) at create time
-  /// and need not outlive the pipeline.
-  VkRenderPass render_pass = VK_NULL_HANDLE;
-  /// Index of the subpass within @ref render_pass the pipeline runs in.
-  uint32_t subpass = 0;
+  /// The format + sample signature of the targets this pipeline draws into,
+  /// baked in via `VkPipelineRenderingCreateInfo`. Must carry at least one
+  /// color attachment; the pipeline is then compatible with any @ref
+  /// RenderTarget whose @ref RenderTarget::layout matches.
+  RenderTargetLayout layout;
   /// How vertices are assembled into primitives.
   /// `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST` is rejected — it needs tessellation
   /// stages this pipeline does not provide.
@@ -48,9 +47,9 @@ struct GraphicsPipelineDesc {
 /// @brief Owns a graphics `VkPipeline` and the `VkPipelineLayout` it was built
 ///        with, freeing both on destruction.
 ///
-/// Produced by @ref create from two @ref ShaderModule stages and a render pass.
-/// A default-constructed `GraphicsPipeline` is empty (`valid()` is false) and
-/// safe to move-assign into.
+/// Produced by @ref create from two @ref ShaderModule stages and a
+/// @ref RenderTargetLayout. A default-constructed `GraphicsPipeline` is empty
+/// (`valid()` is false) and safe to move-assign into.
 ///
 /// @warning The @p device passed to @ref create must outlive the pipeline: the
 ///          destructor frees through it, so destroying the device first is
@@ -60,7 +59,7 @@ struct GraphicsPipelineDesc {
 /// GraphicsPipelineDesc desc;
 /// desc.vertex_shader = vert.handle();
 /// desc.fragment_shader = frag.handle();
-/// desc.render_pass = render_pass;
+/// desc.layout = offscreen.layout();  // or any RenderTarget's layout
 /// Result<GraphicsPipeline> pipeline = GraphicsPipeline::create(device, desc);
 /// if (!pipeline) return pipeline.status();
 /// // ... vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -73,13 +72,16 @@ class VG_CORE_API GraphicsPipeline {
 
   /// @brief Create a graphics pipeline from @p desc.
   /// @param device  The logical device that owns the pipeline and its layout.
-  /// @param desc    The stages, render pass, and assembly state to build from.
-  /// @pre @p device is non-`VK_NULL_HANDLE`; @p desc.vertex_shader,
-  ///      @p desc.fragment_shader, and @p desc.render_pass are
-  ///      non-`VK_NULL_HANDLE`; @p desc.entry_point is non-null; and
-  ///      @p desc.topology is not `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`. These are
-  ///      validated before Vulkan is touched and otherwise yield a non-OK
-  ///      @ref Status with domain @ref Status::Code::InvalidArgument.
+  /// @param desc    The stages, target layout, and assembly state to build
+  /// from.
+  /// @pre @p device is non-`VK_NULL_HANDLE`; @p desc.vertex_shader and
+  ///      @p desc.fragment_shader are non-`VK_NULL_HANDLE`; @p desc.layout has
+  ///      between 1 and @ref RenderTargetLayout::kMaxColorAttachments color
+  ///      attachments, each with a defined format; @p desc.entry_point is
+  ///      non-null; and @p desc.topology is not
+  ///      `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`. These are validated before Vulkan
+  ///      is touched and otherwise yield a non-OK @ref Status with domain
+  ///      @ref Status::Code::InvalidArgument.
   /// @return The pipeline on success, or a non-OK @ref Status.
   static Result<GraphicsPipeline> create(VkDevice device,
                                          const GraphicsPipelineDesc& desc);
