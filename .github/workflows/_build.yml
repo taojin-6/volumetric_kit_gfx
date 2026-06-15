@@ -132,6 +132,13 @@ jobs:
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
           set -o pipefail
+          # Skip (don't fail) when no Vulkan device is present, matching how the
+          # GPU-dependent ctest cases skip themselves — e.g. a runner where
+          # lavapipe is unavailable.
+          if ! vulkaninfo --summary >/dev/null 2>&1; then
+            echo "::notice::no Vulkan device — skipping windowed example"
+            exit 0
+          fi
           xvfb-run -a build/examples/example_01_triangle --frames 30 2>&1 \
             | tee example.log
           if grep -qE 'VUID-' example.log; then
