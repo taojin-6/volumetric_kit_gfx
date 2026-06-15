@@ -32,7 +32,7 @@ FetchContent_Declare(
 # --- Vulkan-Headers + Vulkan-Utility-Libraries (authoritative VkFormat info) --
 # The library compiles against these *pinned* headers (the system loader still
 # links at runtime), so format metadata comes from Khronos' vkuFormat* helpers
-# -- one source of truth, complete for every format -- rather than a
+# -- one source of truth, complete as of its pinned tag -- rather than a
 # hand-maintained table. Fetched headers-only: SOURCE_SUBDIR names a nonexistent
 # dir so MakeAvailable populates the sources without running their CMakeLists,
 # which would otherwise redefine the Vulkan::Headers target that

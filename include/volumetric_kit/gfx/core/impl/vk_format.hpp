@@ -6,12 +6,12 @@
 /// @file core/impl/vk_format.hpp
 /// Internal `VkFormat` lookups shared by the resource and render-target code:
 /// the view aspect a format implies and the byte size of one texel. Both defer
-/// to Khronos' Vulkan-Utility-Libraries (`vkuFormat*`) -- the authoritative,
-/// complete, regenerated-per-release source of truth -- rather than a
-/// hand-maintained table, so new formats and colorspaces are covered with no
-/// edits here. The library vendors these headers (some platforms' system Vulkan
-/// ships neither them nor recent format enums); see third_party/CMakeLists.txt.
-/// Not a public header.
+/// to Khronos' Vulkan-Utility-Libraries (`vkuFormat*`) -- an authoritative
+/// source of truth regenerated each Vulkan release -- rather than a
+/// hand-maintained table, so covering new formats and colorspaces is a single
+/// pinned-tag bump (see third_party/CMakeLists.txt), not a per-format edit
+/// here. The library vendors these headers (some platforms' system Vulkan ships
+/// neither them nor recent format enums). Not a public header.
 
 #include <cstdint>
 
@@ -48,9 +48,12 @@ inline VkImageAspectFlags aspect_mask_for(VkFormat format) {
 inline uint32_t texel_size(VkFormat format) {
   // Only uncompressed, single-plane color formats have a 1:1 texel-to-block
   // mapping where the block size is the per-texel stride. vkuFormatIsColor
-  // excludes depth/stencil, multi-planar, and undefined; texels-per-block == 1
-  // additionally rules out compressed and 422-subsampled formats.
-  if (!vkuFormatIsColor(format) || vkuFormatTexelsPerBlock(format) != 1) {
+  // excludes depth/stencil, multi-planar, and undefined;
+  // vkuFormatIsBlockedImage excludes the rest a flat copy cannot size --
+  // compressed and single-plane 4:2:2, whose blocks span several texels yet
+  // report texels-per-block == 1 (so that field alone would let PVRTC and 4:2:2
+  // slip through and return a bogus non-zero stride).
+  if (!vkuFormatIsColor(format) || vkuFormatIsBlockedImage(format)) {
     return 0;
   }
   return vkuFormatTexelBlockSize(format);

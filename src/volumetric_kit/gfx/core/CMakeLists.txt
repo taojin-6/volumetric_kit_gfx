@@ -79,18 +79,18 @@ target_include_directories(
 # enough for -Werror.
 target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
-# Compile against the pinned Vulkan-Headers + Vulkan-Utility-Libraries (the
-# vkuFormat* metadata in core/impl/vk_format.hpp), not the system Vulkan
-# headers: BEFORE so they win over the Vulkan::Headers include from the link
-# below, SYSTEM so their (generated-code) warnings stay out of -Werror, and
-# BUILD_INTERFACE-only so the installed package is unchanged -- consumers still
-# find_dependency(Vulkan) and compile against their own system headers (the
-# public API is ABI-stable across Vulkan versions). The system loader links
+# Compile gfx_core's own TUs against the pinned Vulkan-Headers +
+# Vulkan-Utility-Libraries (the vkuFormat* metadata in core/impl/vk_format.hpp),
+# not the system Vulkan headers: BEFORE so they win over the Vulkan::Headers
+# include the link below brings in, SYSTEM so their (generated-code) warnings
+# stay out of -Werror, and PRIVATE so only this library is repointed -- no
+# public header pulls vkuFormat*, so in-tree tests/examples and
+# installed-package consumers keep compiling against the system Vulkan::Headers
+# (the public API is ABI-stable across Vulkan versions). The system loader links
 # privately below; only the headers are vendored.
 target_include_directories(
-  gfx_core SYSTEM BEFORE
-  PUBLIC "$<BUILD_INTERFACE:${VG_VULKAN_HEADERS_INCLUDE}>"
-         "$<BUILD_INTERFACE:${VG_VULKAN_UTILITY_INCLUDE}>")
+  gfx_core SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
+                                 "${VG_VULKAN_UTILITY_INCLUDE}")
 
 # Public deps (header packages) are independently re-findable, so the installed
 # package's find_dependency() calls stay simple. The Vulkan loader is PRIVATE:
