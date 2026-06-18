@@ -85,8 +85,8 @@ class VG_WINDOWING_API FrameLoop {
                                   uint32_t frames_in_flight = 2);
 
   ~FrameLoop() = default;
-  FrameLoop(FrameLoop&&) noexcept = default;
-  FrameLoop& operator=(FrameLoop&&) noexcept = default;
+  FrameLoop(FrameLoop&& other) noexcept;
+  FrameLoop& operator=(FrameLoop&& other) noexcept;
   FrameLoop(const FrameLoop&) = delete;
   FrameLoop& operator=(const FrameLoop&) = delete;
 
@@ -96,6 +96,13 @@ class VG_WINDOWING_API FrameLoop {
   /// @return The @ref Frame to record into; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` (recreate the swapchain and retry) or
   ///         another failed `VkResult`.
+  /// @note A *successful* `begin_frame` must be paired with exactly one @ref
+  ///       end_frame for the returned @ref Frame: the acquire signals this
+  ///       slot's image-available semaphore, and only @ref end_frame consumes
+  ///       it. Dropping a returned @ref Frame leaves that semaphore signalled.
+  ///       A failed `begin_frame` returns no @ref Frame and needs no pairing.
+  /// @note Adapts automatically when @ref Swapchain::recreate changes the image
+  ///       count: the per-image sync objects are rebuilt to match on entry.
   Result<Frame> begin_frame();
 
   /// @brief End the frame from @ref begin_frame: transition the image to
@@ -116,6 +123,11 @@ class VG_WINDOWING_API FrameLoop {
   bool valid() const noexcept { return !in_flight_.empty(); }
 
  private:
+  // Rebuild the per-image sync objects (render_finished_ / images_in_flight_)
+  // when they no longer match the swapchain's image count — i.e. after a
+  // Swapchain::recreate. A no-op (one size comparison) on the common path.
+  Status ensure_image_sync();
+
   const Device* device_ = nullptr;  // borrowed; outlives this
   Swapchain* swapchain_ = nullptr;  // borrowed; outlives this
   // Optional only because CommandPool is create-only (no public default ctor);
@@ -129,10 +141,6 @@ class VG_WINDOWING_API FrameLoop {
   // Per image (M): the in-flight fence of the slot that last rendered to it, so
   // a re-acquired image still in use is waited on before reuse. Non-owning.
   std::vector<VkFence> images_in_flight_;
-  // Derived state (frames_in_flight() / valid()) reads in_flight_, which
-  // empties on move, so the defaulted move pair needs no scalar reset.
-  // current_slot_ is a ring position, meaningless (but harmless) on a
-  // moved-from loop.
   uint32_t current_slot_ = 0;
 };
 

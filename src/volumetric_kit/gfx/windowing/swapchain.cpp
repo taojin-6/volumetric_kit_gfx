@@ -105,6 +105,13 @@ Status Swapchain::build(VkExtent2D desired) {
   uint32_t image_count = requested_min_image_count_ != 0
                              ? requested_min_image_count_
                              : caps.minImageCount + 1;
+  // MAILBOX is only non-blocking with a third image (one on screen, one queued,
+  // one being rendered); raise the floor when we selected it and the caller did
+  // not pin a count. Still clamped to the surface's supported range below.
+  if (present_mode_ == VK_PRESENT_MODE_MAILBOX_KHR &&
+      requested_min_image_count_ == 0) {
+    image_count = std::max(image_count, 3u);
+  }
   image_count = std::max(image_count, caps.minImageCount);
   if (caps.maxImageCount != 0) {
     image_count = std::min(image_count, caps.maxImageCount);
@@ -131,14 +138,52 @@ Status Swapchain::build(VkExtent2D desired) {
   } else {
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
   }
-  info.preTransform = caps.currentTransform;
-  info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  // Prefer an identity transform so the compositor resolves any device
+  // rotation; fall back to the surface's current transform when identity is
+  // unsupported.
+  // TODO: a rotation-aware present path would pre-rotate and swap the extent
+  // for 90/270 transforms (Android) instead of leaning on the compositor.
+  info.preTransform =
+      (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+          ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+          : caps.currentTransform;
+  // OPAQUE is the common case but not guaranteed (some Android/Wayland surfaces
+  // expose only INHERIT/PRE_MULTIPLIED); take the first supported mode in
+  // preference order. supportedCompositeAlpha always has at least one bit set.
+  const VkCompositeAlphaFlagBitsKHR alpha_prefs[] = {
+      VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+      VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+      VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+      VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+  };
+  info.compositeAlpha = alpha_prefs[0];
+  for (VkCompositeAlphaFlagBitsKHR a : alpha_prefs) {
+    if (caps.supportedCompositeAlpha & a) {
+      info.compositeAlpha = a;
+      break;
+    }
+  }
   info.presentMode = present_mode_;
   info.clipped = VK_TRUE;
   info.oldSwapchain = VK_NULL_HANDLE;
 
   VG_VK_TRY(vkCreateSwapchainKHR(dev, &info, nullptr, &swapchain_));
+
+  // Build the image views + render targets. On any failure, roll back to an
+  // empty state (valid() == false) rather than leaving a half-built swapchain
+  // with a stale extent and a partial target list. extent_ is committed only
+  // once everything succeeds.
+  const Status images = create_image_resources(extent);
+  if (!images.ok()) {
+    destroy_resources();
+    return images;
+  }
   extent_ = extent;
+  return Status{};
+}
+
+Status Swapchain::create_image_resources(VkExtent2D extent) {
+  VkDevice dev = device_->handle();
 
   uint32_t count = 0;
   VG_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, nullptr));
@@ -159,7 +204,7 @@ Status Swapchain::build(VkExtent2D desired) {
     views_.push_back(view);
 
     const RenderTargetAttachment attachment{image, view, format_};
-    targets_.emplace_back(extent_, &attachment, 1, VK_SAMPLE_COUNT_1_BIT);
+    targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT);
   }
   return Status{};
 }
@@ -196,7 +241,9 @@ Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
 }
 
 Status Swapchain::recreate(VkExtent2D extent) {
-  vkDeviceWaitIdle(device_->handle());
+  // Drain the device before tearing the old images down; surface a device-loss
+  // rather than destroying resources that may still be referenced by the GPU.
+  VG_VK_TRY(vkDeviceWaitIdle(device_->handle()));
   destroy_resources();
   return build(extent);
 }
@@ -214,11 +261,9 @@ VkImage Swapchain::image(uint32_t image_index) const {
 }
 
 RenderTargetLayout Swapchain::layout() const noexcept {
-  RenderTargetLayout layout;
-  layout.color_formats[0] = format_;
-  layout.color_count = 1;
-  layout.samples = VK_SAMPLE_COUNT_1_BIT;
-  return layout;
+  // Derive from a live target so the signature always matches the actual images
+  // (and tracks depth/MSAA once RenderTarget grows them); empty when none.
+  return targets_.empty() ? RenderTargetLayout{} : targets_.front().layout();
 }
 
 void Swapchain::destroy_resources() noexcept {
@@ -238,11 +283,20 @@ void Swapchain::destroy_resources() noexcept {
   }
 }
 
-void Swapchain::destroy() noexcept {
-  destroy_resources();
+void Swapchain::reset_state() noexcept {
   device_ = nullptr;
   surface_ = VK_NULL_HANDLE;
+  swapchain_ = VK_NULL_HANDLE;
   extent_ = VkExtent2D{};
+  format_ = VK_FORMAT_UNDEFINED;
+  color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+  present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+  requested_min_image_count_ = 0;
+}
+
+void Swapchain::destroy() noexcept {
+  destroy_resources();
+  reset_state();
 }
 
 Swapchain::~Swapchain() { destroy(); }
@@ -259,10 +313,7 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
       present_mode_(other.present_mode_),
       extent_(other.extent_),
       requested_min_image_count_(other.requested_min_image_count_) {
-  other.device_ = nullptr;
-  other.surface_ = VK_NULL_HANDLE;
-  other.swapchain_ = VK_NULL_HANDLE;
-  other.extent_ = VkExtent2D{};
+  other.reset_state();
 }
 
 Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
@@ -279,10 +330,7 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     present_mode_ = other.present_mode_;
     extent_ = other.extent_;
     requested_min_image_count_ = other.requested_min_image_count_;
-    other.device_ = nullptr;
-    other.surface_ = VK_NULL_HANDLE;
-    other.swapchain_ = VK_NULL_HANDLE;
-    other.extent_ = VkExtent2D{};
+    other.reset_state();
   }
   return *this;
 }

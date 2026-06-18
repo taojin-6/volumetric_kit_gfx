@@ -141,7 +141,9 @@ class VG_WINDOWING_API Swapchain {
  private:
   Status select_surface_properties(const SwapchainConfig& config);
   Status build(VkExtent2D extent);
-  void destroy_resources() noexcept;  // image views + swapchain
+  Status create_image_resources(VkExtent2D extent);  // views + render targets
+  void destroy_resources() noexcept;                 // image views + swapchain
+  void reset_state() noexcept;  // null handles + zero metadata to empty
   void destroy() noexcept;
 
   const Device* device_ = nullptr;         // borrowed; outlives this
