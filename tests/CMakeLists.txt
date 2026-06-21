@@ -55,3 +55,11 @@ target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
                                                 GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
 gtest_discover_tests(vg_windowing_test)
+
+# camera tier: Camera / OrbitCamera math. Pure CPU (glm only, no Vulkan), so
+# every case runs on every platform regardless of device availability.
+add_executable(vg_camera_test camera_test.cpp)
+target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
+                                             GTest::gtest_main)
+vg_target_warnings(vg_camera_test)
+gtest_discover_tests(vg_camera_test)
