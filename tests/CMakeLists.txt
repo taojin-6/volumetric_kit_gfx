@@ -39,9 +39,14 @@ vg_target_warnings(vg_core_test)
 # shader_test loads a compiled SPIR-V blob; compile the triangle shaders next to
 # the test binary and pass it the directory via VG_SHADER_DIR.
 vg_compile_shaders(
-  vg_core_test OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
+  vg_core_test
+  OUTPUT_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/triangle.vert"
-  "${PROJECT_SOURCE_DIR}/shaders/triangle.frag")
+  "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/mesh.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/mesh.frag")
 target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 

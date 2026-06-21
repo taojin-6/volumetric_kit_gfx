@@ -162,4 +162,28 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   EXPECT_EQ(px[last + 3], 255);
 }
 
+// --- Optional depth attachment ---------------------------------------------
+
+TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
+  vg::Allocator allocator = make_allocator();
+
+  // Color-only (the default): no depth image, and the layout reports no depth.
+  vg::OffscreenTarget color_only = make_target(allocator);
+  EXPECT_EQ(color_only.depth_image(), VK_NULL_HANDLE);
+  EXPECT_EQ(color_only.layout().depth_format, VK_FORMAT_UNDEFINED);
+
+  // With a depth format: a depth image is allocated and surfaced both in the
+  // target's layout and in the RenderTarget it hands out.
+  vg::OffscreenTargetDesc desc;
+  desc.extent = {32, 32};
+  desc.color_format = kFormat;
+  desc.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto target = vg::OffscreenTarget::create(allocator, desc);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+  EXPECT_NE(target.value().depth_image(), VK_NULL_HANDLE);
+  EXPECT_EQ(target.value().layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_EQ(target.value().target().layout().depth_format,
+            VK_FORMAT_D32_SFLOAT);
+}
+
 }  // namespace

@@ -51,6 +51,18 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
         "GraphicsPipeline::create: patch-list topology requires tessellation "
         "stages, which this pipeline does not provide");
   }
+  if ((desc.vertex_binding_count > 0 && desc.vertex_bindings == nullptr) ||
+      (desc.vertex_attribute_count > 0 && desc.vertex_attributes == nullptr)) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: vertex binding/attribute pointers must be "
+        "non-null when their counts are non-zero");
+  }
+  if ((desc.depth_test || desc.depth_write) &&
+      desc.layout.depth_format == VK_FORMAT_UNDEFINED) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: depth_test/depth_write require layout to "
+        "carry a depth format");
+  }
   if (device == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "GraphicsPipeline::create: device must be non-null");
@@ -75,10 +87,16 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   stages[1].module = desc.fragment_shader;
   stages[1].pName = desc.entry_point;
 
-  // No bindings/attributes: vertices are computed from gl_VertexIndex.
+  // Empty bindings/attributes (counts 0) drive the procedural path where the
+  // vertex shader computes positions from gl_VertexIndex; a non-zero count
+  // binds the vertex-buffer layout the desc describes.
   VkPipelineVertexInputStateCreateInfo vertex_input{};
   vertex_input.sType =
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  vertex_input.vertexBindingDescriptionCount = desc.vertex_binding_count;
+  vertex_input.pVertexBindingDescriptions = desc.vertex_bindings;
+  vertex_input.vertexAttributeDescriptionCount = desc.vertex_attribute_count;
+  vertex_input.pVertexAttributeDescriptions = desc.vertex_attributes;
 
   VkPipelineInputAssemblyStateCreateInfo input_assembly{};
   input_assembly.sType =
@@ -107,14 +125,16 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   // count is caught by the driver at vkCreateGraphicsPipelines.
   multisample.rasterizationSamples = desc.layout.samples;
 
-  // Depth/stencil testing is disabled. The color-only hello-triangle has no
-  // depth attachment, so Vulkan ignores this state -- but supplying a valid,
-  // zero-initialized one (instead of leaving pDepthStencilState null) keeps the
-  // pipeline correct when the layout *does* carry a depth format, where a null
-  // pointer would be a spec violation.
+  // Depth/stencil state is always supplied (a null pDepthStencilState would be
+  // a spec violation once the layout carries a depth format). With depth_test
+  // off the zeroed state is inert -- correct for a color-only target.
   VkPipelineDepthStencilStateCreateInfo depth_stencil{};
   depth_stencil.sType =
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+  depth_stencil.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
+  depth_stencil.depthWriteEnable = desc.depth_write ? VK_TRUE : VK_FALSE;
+  depth_stencil.depthCompareOp =
+      desc.depth_test ? desc.depth_compare : VK_COMPARE_OP_NEVER;
 
   // One non-blended, fully-writable state per color attachment in the layout;
   // attachmentCount must match the color count the draw's render target

@@ -47,6 +47,17 @@ Result<OffscreenTarget> OffscreenTarget::create(
   OffscreenTarget target;
   target.color_ = std::move(color);
 
+  // Optional depth attachment: device-local, depth-stencil usage; the view's
+  // aspect follows the format (Allocator::create_image picks DEPTH).
+  if (desc.depth_format != VK_FORMAT_UNDEFINED) {
+    TextureDesc depth_desc;
+    depth_desc.extent = desc.extent;
+    depth_desc.format = desc.depth_format;
+    depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    VG_ASSIGN(Texture depth, allocator.create_image(depth_desc));
+    target.depth_ = std::move(depth);
+  }
+
   if (desc.readback) {
     BufferDesc readback_desc;
     readback_desc.size = readback_size;
@@ -63,6 +74,12 @@ Result<OffscreenTarget> OffscreenTarget::create(
 RenderTarget OffscreenTarget::target() const {
   const RenderTargetAttachment color{color_.image(), color_.view(),
                                      color_.format()};
+  if (depth_.valid()) {
+    const RenderTargetAttachment depth{depth_.image(), depth_.view(),
+                                       depth_.format()};
+    return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT,
+                        &depth);
+  }
   return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
 }
 
@@ -73,6 +90,7 @@ RenderTargetLayout OffscreenTarget::layout() const {
   RenderTargetLayout layout;
   layout.color_formats[0] = color_.format();
   layout.color_count = 1;
+  layout.depth_format = depth_.valid() ? depth_.format() : VK_FORMAT_UNDEFINED;
   layout.samples = VK_SAMPLE_COUNT_1_BIT;
   return layout;
 }

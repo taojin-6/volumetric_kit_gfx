@@ -17,14 +17,16 @@ namespace volumetric_kit::gfx {
 
 /// @brief Parameters for @ref GraphicsPipeline::create.
 ///
-/// This first iteration drives *procedural-vertex* draws — the vertex shader
-/// computes positions from `gl_VertexIndex`, so there is no vertex-buffer input
-/// and the pipeline layout is empty (no descriptor sets, no push constants).
-/// The fixed-function state is fixed at sensible hello-triangle defaults:
+/// Drives both procedural-vertex draws (leave the vertex-input fields empty and
+/// the vertex shader computes positions from `gl_VertexIndex`) and
+/// vertex-buffer draws (describe @ref vertex_bindings + @ref
+/// vertex_attributes). The pipeline layout is still empty (no descriptor sets,
+/// no push constants). The fixed-function state is fixed at sensible defaults:
 /// non-blended color attachments, no culling, and dynamic viewport + scissor
-/// (set at record time). The color/depth formats and sample count come from
-/// @ref layout — the pipeline renders dynamically (`vkCmdBeginRendering`), so
-/// there is no `VkRenderPass`. Vertex input, blending, depth testing, and
+/// (set at record time). Depth testing is off unless @ref depth_test is set,
+/// which requires @ref layout to carry a depth format. The color/depth formats
+/// and sample count come from @ref layout — the pipeline renders dynamically
+/// (`vkCmdBeginRendering`), so there is no `VkRenderPass`. Blending and
 /// reflection-driven descriptor layouts are added as the pipelines tier grows.
 struct GraphicsPipelineDesc {
   /// Vertex-stage module. Must be non-`VK_NULL_HANDLE`.
@@ -36,10 +38,28 @@ struct GraphicsPipelineDesc {
   /// color attachment; the pipeline is then compatible with any @ref
   /// RenderTarget whose @ref RenderTarget::layout matches.
   RenderTargetLayout layout;
+  /// Vertex-buffer input bindings (stride + input rate), or `nullptr` with a
+  /// @ref vertex_binding_count of `0` for a procedural-vertex pipeline.
+  const VkVertexInputBindingDescription* vertex_bindings = nullptr;
+  /// Number of @ref vertex_bindings.
+  uint32_t vertex_binding_count = 0;
+  /// Vertex-buffer input attributes (location/binding/format/offset), paired
+  /// with @ref vertex_bindings; `nullptr` with a `0` count for procedural
+  /// draws.
+  const VkVertexInputAttributeDescription* vertex_attributes = nullptr;
+  /// Number of @ref vertex_attributes.
+  uint32_t vertex_attribute_count = 0;
   /// How vertices are assembled into primitives.
   /// `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST` is rejected — it needs tessellation
   /// stages this pipeline does not provide.
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  /// Enable depth testing; requires @ref layout to carry a depth format.
+  bool depth_test = false;
+  /// Write passing fragments' depth to the attachment (only with @ref
+  /// depth_test).
+  bool depth_write = false;
+  /// Depth comparison used when @ref depth_test is set.
+  VkCompareOp depth_compare = VK_COMPARE_OP_LESS;
   /// Entry-point name used for both stages. Must be non-null.
   const char* entry_point = "main";
 };
@@ -78,9 +98,11 @@ class VG_CORE_API GraphicsPipeline {
   ///      @p desc.fragment_shader are non-`VK_NULL_HANDLE`; @p desc.layout has
   ///      between 1 and @ref RenderTargetLayout::kMaxColorAttachments color
   ///      attachments, each with a defined format; @p desc.entry_point is
-  ///      non-null; and @p desc.topology is not
-  ///      `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`. These are validated before Vulkan
-  ///      is touched and otherwise yield a non-OK @ref Status with domain
+  ///      non-null; @p desc.topology is not `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`;
+  ///      each non-zero vertex binding/attribute count has a non-null pointer;
+  ///      and depth test/write is requested only when @p desc.layout carries a
+  ///      depth format. These are validated before Vulkan is touched and
+  ///      otherwise yield a non-OK @ref Status with domain
   ///      @ref Status::Code::InvalidArgument.
   /// @return The pipeline on success, or a non-OK @ref Status.
   static Result<GraphicsPipeline> create(VkDevice device,
