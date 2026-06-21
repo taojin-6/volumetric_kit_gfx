@@ -4,9 +4,8 @@
 # --- gfx_core: Tier 1 -------------------------------------------------------
 # Foundation tier: version API, logging, contract checks, Vulkan instance/device
 # setup, sync primitives, and GPU memory allocation (buffers/images via VMA).
-# Every other tier depends on this; it depends only on Vulkan + VMA.
-#
-# TODO: add the spirv-cross reflection surface.
+# Every other tier depends on this; it depends only on Vulkan + VMA +
+# spirv-cross (a private impl detail backing SPIR-V reflection in shader.cpp).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -101,6 +100,17 @@ target_link_libraries(
   gfx_core
   PUBLIC Vulkan::Headers
   PRIVATE Vulkan::Vulkan)
+
+# spirv-cross: SPIR-V reflection for descriptor-set layouts, used privately in
+# shader.cpp -- its headers/types never reach gfx_core's public API. SYSTEM-mark
+# its include dir so its third-party-header warnings stay out of -Werror (the
+# same treatment VMA gets above). spirv-cross runs its own install/export under
+# VG_INSTALL (see third_party/CMakeLists.txt), so the installed package's
+# find_dependency(spirv_cross_core) re-supplies this private static link.
+target_include_directories(
+  gfx_core SYSTEM
+  PRIVATE $<TARGET_PROPERTY:spirv-cross-core,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(gfx_core PRIVATE spirv-cross-core)
 
 vg_target_warnings(gfx_core)
 

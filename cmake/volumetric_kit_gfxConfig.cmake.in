@@ -16,6 +16,13 @@ find_dependency(Vulkan)
 # discoverable glm.
 find_dependency(glm)
 
+# spirv-cross is a PRIVATE dependency of gfx_core (SPIR-V reflection in
+# shader.cpp). Unlike VMA/tinygltf -- header-only and compiled into a gfx_core
+# TU -- spirv-cross is a separate static archive, so gfx_core's own archive
+# still references its symbols at consumer link time. It self-installs under
+# VG_INSTALL, so the package re-finds the vendored copy here.
+find_dependency(spirv_cross_core)
+
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_gfxTargets.cmake")
 
 check_required_components(volumetric_kit_gfx)
