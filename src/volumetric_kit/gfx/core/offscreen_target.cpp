@@ -23,6 +23,22 @@ Result<OffscreenTarget> OffscreenTarget::create(
         "OffscreenTarget::create: color_format must not be "
         "VK_FORMAT_UNDEFINED");
   }
+  if (desc.depth_format != VK_FORMAT_UNDEFINED) {
+    if (!format_has_depth(desc.depth_format)) {
+      return Status::invalid_argument(
+          "OffscreenTarget::create: depth_format must be a depth format (or "
+          "VK_FORMAT_UNDEFINED for a color-only target)");
+    }
+    // TODO: support combined depth/stencil formats -- needs a stencil
+    // attachment wired through RenderTarget and the separateDepthStencilLayouts
+    // device feature; today only depth-only formats render correctly.
+    if (format_has_stencil(desc.depth_format)) {
+      return Status::unsupported(
+          "OffscreenTarget::create: combined depth/stencil depth_format is not "
+          "yet supported; use a depth-only format such as "
+          "VK_FORMAT_D32_SFLOAT");
+    }
+  }
 
   VkDeviceSize readback_size = 0;
   if (desc.readback) {
@@ -47,6 +63,17 @@ Result<OffscreenTarget> OffscreenTarget::create(
   OffscreenTarget target;
   target.color_ = std::move(color);
 
+  // Optional depth attachment: device-local, depth-stencil usage. depth_format
+  // is validated depth-only above, so create_image derives a DEPTH-aspect view.
+  if (desc.depth_format != VK_FORMAT_UNDEFINED) {
+    TextureDesc depth_desc;
+    depth_desc.extent = desc.extent;
+    depth_desc.format = desc.depth_format;
+    depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    VG_ASSIGN(Texture depth, allocator.create_image(depth_desc));
+    target.depth_ = std::move(depth);
+  }
+
   if (desc.readback) {
     BufferDesc readback_desc;
     readback_desc.size = readback_size;
@@ -63,6 +90,12 @@ Result<OffscreenTarget> OffscreenTarget::create(
 RenderTarget OffscreenTarget::target() const {
   const RenderTargetAttachment color{color_.image(), color_.view(),
                                      color_.format()};
+  if (depth_.valid()) {
+    const RenderTargetAttachment depth{depth_.image(), depth_.view(),
+                                       depth_.format()};
+    return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT,
+                        &depth);
+  }
   return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
 }
 
@@ -73,6 +106,7 @@ RenderTargetLayout OffscreenTarget::layout() const {
   RenderTargetLayout layout;
   layout.color_formats[0] = color_.format();
   layout.color_count = 1;
+  layout.depth_format = depth_.valid() ? depth_.format() : VK_FORMAT_UNDEFINED;
   layout.samples = VK_SAMPLE_COUNT_1_BIT;
   return layout;
 }

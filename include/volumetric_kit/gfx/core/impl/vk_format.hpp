@@ -39,6 +39,18 @@ inline VkImageAspectFlags aspect_mask_for(VkFormat format) {
   return VK_IMAGE_ASPECT_COLOR_BIT;
 }
 
+/// @brief Whether @p format carries a depth aspect (depth-only or combined
+///        depth/stencil).
+inline bool format_has_depth(VkFormat format) {
+  return vkuFormatHasDepth(format);
+}
+
+/// @brief Whether @p format carries a stencil aspect (stencil-only or combined
+///        depth/stencil).
+inline bool format_has_stencil(VkFormat format) {
+  return vkuFormatHasStencil(format);
+}
+
 /// @brief Size in bytes of one texel of an uncompressed, single-plane color
 ///        format -- the per-texel stride a tightly packed image<->buffer copy
 ///        uses (e.g. to size an offscreen readback buffer).

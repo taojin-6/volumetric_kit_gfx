@@ -67,16 +67,20 @@ struct RenderTargetAttachment {
   VkFormat format = VK_FORMAT_UNDEFINED;  ///< The attachment's format.
 };
 
-/// @brief Per-begin load/store ops and clear value passed to @ref
+/// @brief Per-begin load/store ops and clear values passed to @ref
 ///        RenderTarget::begin.
 ///
-/// The ops apply uniformly to every color attachment; @ref clear_color is used
-/// by each color attachment when @ref load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`.
-/// Per-attachment clears arrive with multi-attachment (MRT) support.
+/// The ops apply uniformly to every attachment; @ref clear_color is used by
+/// each color attachment, and @ref clear_depth by the depth attachment, when
+/// @ref load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`. Per-attachment clears arrive
+/// with multi-attachment (MRT) support.
 struct RenderTargetBeginInfo {
   VkAttachmentLoadOp load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
   VkAttachmentStoreOp store_op = VK_ATTACHMENT_STORE_OP_STORE;
-  VkClearColorValue clear_color{};  ///< When @ref load_op clears.
+  VkClearColorValue clear_color{};  ///< When @ref load_op clears a color view.
+  /// When @ref load_op clears a depth attachment; `depth = 1.0` pairs with a
+  /// `VK_COMPARE_OP_LESS` test (clear to the far plane).
+  VkClearDepthStencilValue clear_depth{1.0f, 0};
 };
 
 /// @brief A non-owning view of the attachments a draw renders into, plus the
@@ -112,14 +116,17 @@ class VG_CORE_API RenderTarget {
   /// @brief Construct an empty target (no attachments; `valid()` is false).
   RenderTarget() = default;
 
-  /// @brief Bundle @p color attachments at @p extent.
+  /// @brief Bundle @p color attachments and an optional @p depth attachment.
   /// @param extent       Render-area size in texels (every attachment's size).
   /// @param color        Pointer to @p color_count color attachments.
   /// @param color_count  Number of color attachments
   ///                     (1..@ref RenderTargetLayout::kMaxColorAttachments).
   /// @param samples      Sample count shared by every attachment.
+  /// @param depth        Optional depth attachment, or `nullptr` for a
+  ///                     color-only target.
   RenderTarget(VkExtent2D extent, const RenderTargetAttachment* color,
-               uint32_t color_count, VkSampleCountFlagBits samples);
+               uint32_t color_count, VkSampleCountFlagBits samples,
+               const RenderTargetAttachment* depth = nullptr);
 
   /// @brief Begin a dynamic-rendering scope over these attachments.
   /// @param cmd   A command buffer in the recording state.
@@ -142,13 +149,14 @@ class VG_CORE_API RenderTarget {
   bool valid() const noexcept { return color_count_ > 0; }
 
  private:
-  // TODO: add a depth attachment once a depth-testing pipeline needs one.
-  // RenderTargetLayout already carries depth_format as the forward-looking
-  // compatibility currency, so this is an additive change, not an API break.
+  /// @return Whether a depth attachment is bundled (its view is non-null).
+  bool has_depth() const noexcept { return depth_.view != VK_NULL_HANDLE; }
+
   VkExtent2D extent_{};
   std::array<RenderTargetAttachment, RenderTargetLayout::kMaxColorAttachments>
       color_{};
   uint32_t color_count_ = 0;
+  RenderTargetAttachment depth_{};  ///< Null view for a color-only target.
   VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
 };
 
