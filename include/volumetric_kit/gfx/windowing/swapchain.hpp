@@ -120,6 +120,14 @@ class VG_WINDOWING_API Swapchain {
   /// @pre @p image_index < @ref image_count.
   VkImage image(uint32_t image_index) const;
 
+  /// @return The color `VkImageView` for swapchain image @p image_index — the
+  ///         view `vkCmdBeginRendering` draws through. Exposed so a caller can
+  ///         assemble its own @ref RenderTarget over this image (e.g. pairing
+  ///         it with an externally-owned depth attachment) instead of using the
+  ///         color-only @ref render_target.
+  /// @pre @p image_index < @ref image_count.
+  VkImageView image_view(uint32_t image_index) const;
+
   /// @return The format + sample signature shared by every image, for building
   /// a
   ///         compatible pipeline.

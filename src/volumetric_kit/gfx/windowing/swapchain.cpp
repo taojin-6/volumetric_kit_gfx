@@ -260,6 +260,12 @@ VkImage Swapchain::image(uint32_t image_index) const {
   return images_[image_index];
 }
 
+VkImageView Swapchain::image_view(uint32_t image_index) const {
+  VG_CHECK(image_index < image_count(),
+           "Swapchain::image_view: image_index out of range");
+  return views_[image_index];
+}
+
 RenderTargetLayout Swapchain::layout() const noexcept {
   // Derive from a live target so the signature always matches the actual images
   // (and tracks depth/MSAA once RenderTarget grows them); empty when none.
