@@ -35,7 +35,6 @@ RenderTarget::RenderTarget(VkExtent2D extent,
   }
   if (depth != nullptr && depth->view != VK_NULL_HANDLE) {
     depth_ = *depth;
-    has_depth_ = true;
   }
 }
 
@@ -45,7 +44,7 @@ RenderTargetLayout RenderTarget::layout() const noexcept {
   for (uint32_t i = 0; i < color_count_; ++i) {
     layout.color_formats[i] = color_[i].format;
   }
-  layout.depth_format = has_depth_ ? depth_.format : VK_FORMAT_UNDEFINED;
+  layout.depth_format = has_depth() ? depth_.format : VK_FORMAT_UNDEFINED;
   layout.samples = samples_;
   return layout;
 }
@@ -66,8 +65,15 @@ void RenderTarget::begin(VkCommandBuffer cmd,
     color_attachments[i].clearValue.color = info.clear_color;
   }
 
+  // The depth attachment reuses the color load/store ops (RenderTargetBeginInfo
+  // documents uniform ops); only the clear value is depth-specific. The target
+  // is depth-only (OffscreenTarget rejects combined depth/stencil formats), so
+  // DEPTH_ATTACHMENT_OPTIMAL is valid without the separateDepthStencilLayouts
+  // feature.
+  // TODO: per-attachment load/store ops (e.g. load color while clearing depth)
+  // arrive with the per-attachment MRT controls.
   VkRenderingAttachmentInfo depth_attachment{};
-  if (has_depth_) {
+  if (has_depth()) {
     depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depth_attachment.imageView = depth_.view;
     depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -82,7 +88,7 @@ void RenderTarget::begin(VkCommandBuffer cmd,
   rendering.layerCount = 1;
   rendering.colorAttachmentCount = color_count_;
   rendering.pColorAttachments = color_attachments.data();
-  if (has_depth_) {
+  if (has_depth()) {
     rendering.pDepthAttachment = &depth_attachment;
   }
 

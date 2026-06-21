@@ -24,9 +24,11 @@ struct OffscreenTargetDesc {
   VkExtent2D extent{};
   /// Color attachment format. Must not be `VK_FORMAT_UNDEFINED`.
   VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
-  /// Optional depth(/stencil) attachment format, or `VK_FORMAT_UNDEFINED` for a
-  /// color-only target. Set it (e.g. `VK_FORMAT_D32_SFLOAT`) to render with a
-  /// depth-testing pipeline; the chosen format is reported by @ref layout.
+  /// Optional depth attachment format, or `VK_FORMAT_UNDEFINED` for a
+  /// color-only target. Must be a depth-only format (e.g.
+  /// `VK_FORMAT_D32_SFLOAT`) to render with a depth-testing pipeline; combined
+  /// depth/stencil formats are not yet supported. The chosen format is reported
+  /// by @ref layout.
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
   /// Allocate a host-visible buffer sized to the color attachment so the render
   /// can be copied back to the CPU (see @ref OffscreenTarget::record_readback).
@@ -76,6 +78,9 @@ class VG_CORE_API OffscreenTarget {
   ///         - a @ref OffscreenTargetDesc::readback request on a color format
   ///           whose texel size this kit does not yet know returns
   ///           @ref Status::Code::Unsupported;
+  ///         - a non-depth @ref OffscreenTargetDesc::depth_format returns
+  ///           @ref Status::Code::InvalidArgument, and a combined depth/stencil
+  ///           one @ref Status::Code::Unsupported (depth-only for now);
   ///         - a failed image/buffer allocation propagates its @ref Status.
   static Result<OffscreenTarget> create(Allocator& allocator,
                                         const OffscreenTargetDesc& desc);

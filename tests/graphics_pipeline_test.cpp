@@ -47,6 +47,52 @@ TEST(GraphicsPipelineTest, NullShaderHandlesRejected) {
   EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+// Command-recording helpers shared by the draw tests below.
+void barrier_to_color(VkCommandBuffer cmd, VkImage image) {
+  VkImageMemoryBarrier b{};
+  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  b.srcAccessMask = 0;
+  b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.image = image;
+  b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                       nullptr, 0, nullptr, 1, &b);
+}
+
+void barrier_to_depth(VkCommandBuffer cmd, VkImage image) {
+  VkImageMemoryBarrier b{};
+  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  b.srcAccessMask = 0;
+  b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  b.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.image = image;
+  b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                       0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+void set_full_viewport_scissor(VkCommandBuffer cmd, uint32_t size) {
+  VkViewport viewport{};
+  viewport.width = static_cast<float>(size);
+  viewport.height = static_cast<float>(size);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(cmd, 0, 1, &viewport);
+  VkRect2D scissor{};
+  scissor.extent = {size, size};
+  vkCmdSetScissor(cmd, 0, 1, &scissor);
+}
+
 // --- Real pipeline creation + move semantics + draw: needs a device ----------
 
 class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
@@ -70,6 +116,48 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
     auto pipeline = vg::GraphicsPipeline::create(device(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
     return std::move(pipeline).value();
+  }
+
+  // Records a one-time-submit mesh draw into `target` and blocks until it
+  // retires: barriers the color (and, when present, depth) attachment into its
+  // attachment layout, clears to opaque black, binds `pipeline` + `vbuf`, then
+  // draws `count` vertices -- or, when `ibuf` is non-null, `count` indices.
+  void render_mesh(vg::OffscreenTarget& target,
+                   const vg::GraphicsPipeline& pipeline, VkBuffer vbuf,
+                   VkBuffer ibuf, uint32_t count) {
+    auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+    ASSERT_TRUE(pool.ok()) << pool.status().message();
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(
+        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+    const VkCommandBuffer raw = cmd.value().handle();
+
+    barrier_to_color(raw, target.color_image());
+    if (target.depth_image() != VK_NULL_HANDLE) {
+      barrier_to_depth(raw, target.depth_image());
+    }
+
+    vg::RenderTargetBeginInfo begin_info;
+    begin_info.clear_color.float32[3] = 1.0f;  // opaque-black clear
+    const vg::RenderTarget rt = target.target();
+    rt.begin(raw, begin_info);
+
+    vkCmdBindPipeline(raw, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    set_full_viewport_scissor(raw, target.extent().width);
+    const VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(raw, 0, 1, &vbuf, &offset);
+    if (ibuf != VK_NULL_HANDLE) {
+      vkCmdBindIndexBuffer(raw, ibuf, 0, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexed(raw, count, 1, 0, 0, 0);
+    } else {
+      vkCmdDraw(raw, count, 1, 0, 0);
+    }
+
+    rt.end(raw);
+    target.record_readback(raw);
+    ASSERT_TRUE(cmd.value().end().ok());
+    submit_and_wait(raw);
   }
 };
 
@@ -331,51 +419,6 @@ vg::GraphicsPipeline build_mesh_pipeline(
   return std::move(pipeline).value();
 }
 
-void barrier_to_color(VkCommandBuffer cmd, VkImage image) {
-  VkImageMemoryBarrier b{};
-  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  b.srcAccessMask = 0;
-  b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.image = image;
-  b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
-                       nullptr, 0, nullptr, 1, &b);
-}
-
-void barrier_to_depth(VkCommandBuffer cmd, VkImage image) {
-  VkImageMemoryBarrier b{};
-  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  b.srcAccessMask = 0;
-  b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  b.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.image = image;
-  b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                       0, 0, nullptr, 0, nullptr, 1, &b);
-}
-
-void set_full_viewport_scissor(VkCommandBuffer cmd, uint32_t size) {
-  VkViewport viewport{};
-  viewport.width = static_cast<float>(size);
-  viewport.height = static_cast<float>(size);
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(cmd, 0, 1, &viewport);
-  VkRect2D scissor{};
-  scissor.extent = {size, size};
-  vkCmdSetScissor(cmd, 0, 1, &scissor);
-}
-
 TEST_F(GraphicsPipelineDeviceTest, DepthTestWithoutDepthFormatRejected) {
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
@@ -397,6 +440,22 @@ TEST_F(GraphicsPipelineDeviceTest, VertexBindingCountWithoutPointerRejected) {
   desc.fragment_shader = frag.handle();
   desc.layout = color_layout();
   desc.vertex_binding_count = 1;  // but vertex_bindings stays null
+  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::RenderTargetLayout layout = color_layout();
+  layout.depth_format = kDepthFormat;  // a depth format is present...
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = vert.handle();
+  desc.fragment_shader = frag.handle();
+  desc.layout = layout;
+  desc.depth_write = true;  // ...but depth_write without depth_test is a no-op
+  desc.depth_test = false;  // in Vulkan, so create() rejects the combination.
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
@@ -431,32 +490,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
       1, attrs.data(), static_cast<uint32_t>(attrs.size()), false);
   ASSERT_TRUE(pipeline.valid());
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
-  ASSERT_TRUE(pool.ok()) << pool.status().message();
-  auto cmd = pool.value().allocate_primary();
-  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
-  ASSERT_TRUE(
-      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
-  const VkCommandBuffer raw = cmd.value().handle();
-
-  barrier_to_color(raw, target.value().color_image());
-
-  vg::RenderTargetBeginInfo begin_info;
-  begin_info.clear_color.float32[3] = 1.0f;
-  const vg::RenderTarget rt = target.value().target();
-  rt.begin(raw, begin_info);
-
-  vkCmdBindPipeline(raw, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-  set_full_viewport_scissor(raw, kSize);
-  const VkDeviceSize offset = 0;
-  const VkBuffer vb = vbuf.handle();
-  vkCmdBindVertexBuffers(raw, 0, 1, &vb, &offset);
-  vkCmdDraw(raw, 3, 1, 0, 0);
-
-  rt.end(raw);
-  target.value().record_readback(raw);
-  ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  render_mesh(target.value(), pipeline, vbuf.handle(), VK_NULL_HANDLE, 3);
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);
@@ -511,34 +545,7 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
       1, attrs.data(), static_cast<uint32_t>(attrs.size()), true);
   ASSERT_TRUE(pipeline.valid());
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
-  ASSERT_TRUE(pool.ok()) << pool.status().message();
-  auto cmd = pool.value().allocate_primary();
-  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
-  ASSERT_TRUE(
-      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
-  const VkCommandBuffer raw = cmd.value().handle();
-
-  barrier_to_color(raw, target.value().color_image());
-  barrier_to_depth(raw, target.value().depth_image());
-
-  vg::RenderTargetBeginInfo begin_info;
-  begin_info.clear_color.float32[3] = 1.0f;
-  const vg::RenderTarget rt = target.value().target();
-  rt.begin(raw, begin_info);
-
-  vkCmdBindPipeline(raw, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-  set_full_viewport_scissor(raw, kSize);
-  const VkDeviceSize offset = 0;
-  const VkBuffer vb = vbuf.handle();
-  vkCmdBindVertexBuffers(raw, 0, 1, &vb, &offset);
-  vkCmdBindIndexBuffer(raw, ibuf.handle(), 0, VK_INDEX_TYPE_UINT32);
-  vkCmdDrawIndexed(raw, 6, 1, 0, 0, 0);
-
-  rt.end(raw);
-  target.value().record_readback(raw);
-  ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  render_mesh(target.value(), pipeline, vbuf.handle(), ibuf.handle(), 6);
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);

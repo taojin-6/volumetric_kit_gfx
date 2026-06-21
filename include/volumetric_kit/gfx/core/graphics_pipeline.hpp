@@ -55,8 +55,9 @@ struct GraphicsPipelineDesc {
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   /// Enable depth testing; requires @ref layout to carry a depth format.
   bool depth_test = false;
-  /// Write passing fragments' depth to the attachment (only with @ref
-  /// depth_test).
+  /// Write passing fragments' depth to the attachment. Requires @ref depth_test
+  /// — Vulkan disables depth writes when depth testing is off, so @ref create
+  /// rejects @ref depth_write without it.
   bool depth_write = false;
   /// Depth comparison used when @ref depth_test is set.
   VkCompareOp depth_compare = VK_COMPARE_OP_LESS;
@@ -100,7 +101,8 @@ class VG_CORE_API GraphicsPipeline {
   ///      attachments, each with a defined format; @p desc.entry_point is
   ///      non-null; @p desc.topology is not `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`;
   ///      each non-zero vertex binding/attribute count has a non-null pointer;
-  ///      and depth test/write is requested only when @p desc.layout carries a
+  ///      @p desc.depth_write is set only with @p desc.depth_test; and
+  ///      @p desc.depth_test is requested only when @p desc.layout carries a
   ///      depth format. These are validated before Vulkan is touched and
   ///      otherwise yield a non-OK @ref Status with domain
   ///      @ref Status::Code::InvalidArgument.

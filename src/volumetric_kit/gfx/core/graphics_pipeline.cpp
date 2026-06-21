@@ -57,11 +57,15 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
         "GraphicsPipeline::create: vertex binding/attribute pointers must be "
         "non-null when their counts are non-zero");
   }
-  if ((desc.depth_test || desc.depth_write) &&
-      desc.layout.depth_format == VK_FORMAT_UNDEFINED) {
+  if (desc.depth_write && !desc.depth_test) {
     return Status::invalid_argument(
-        "GraphicsPipeline::create: depth_test/depth_write require layout to "
-        "carry a depth format");
+        "GraphicsPipeline::create: depth_write requires depth_test (Vulkan "
+        "disables depth writes when depth testing is off)");
+  }
+  if (desc.depth_test && desc.layout.depth_format == VK_FORMAT_UNDEFINED) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: depth_test requires layout to carry a depth "
+        "format");
   }
   if (device == VK_NULL_HANDLE) {
     return Status::invalid_argument(
@@ -127,14 +131,16 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
 
   // Depth/stencil state is always supplied (a null pDepthStencilState would be
   // a spec violation once the layout carries a depth format). With depth_test
-  // off the zeroed state is inert -- correct for a color-only target.
+  // off, depthTestEnable is VK_FALSE, so depthWriteEnable/depthCompareOp are
+  // inert -- correct for a color-only target.
   VkPipelineDepthStencilStateCreateInfo depth_stencil{};
   depth_stencil.sType =
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
   depth_stencil.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
   depth_stencil.depthWriteEnable = desc.depth_write ? VK_TRUE : VK_FALSE;
-  depth_stencil.depthCompareOp =
-      desc.depth_test ? desc.depth_compare : VK_COMPARE_OP_NEVER;
+  // Ignored unless depthTestEnable is VK_TRUE (create() rejects depth_write
+  // without depth_test), so no test-gated guard is needed here.
+  depth_stencil.depthCompareOp = desc.depth_compare;
 
   // One non-blended, fully-writable state per color attachment in the layout;
   // attachmentCount must match the color count the draw's render target

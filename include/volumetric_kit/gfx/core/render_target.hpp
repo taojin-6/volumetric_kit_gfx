@@ -149,12 +149,14 @@ class VG_CORE_API RenderTarget {
   bool valid() const noexcept { return color_count_ > 0; }
 
  private:
+  /// @return Whether a depth attachment is bundled (its view is non-null).
+  bool has_depth() const noexcept { return depth_.view != VK_NULL_HANDLE; }
+
   VkExtent2D extent_{};
   std::array<RenderTargetAttachment, RenderTargetLayout::kMaxColorAttachments>
       color_{};
   uint32_t color_count_ = 0;
   RenderTargetAttachment depth_{};  ///< Null view for a color-only target.
-  bool has_depth_ = false;
   VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
 };
 

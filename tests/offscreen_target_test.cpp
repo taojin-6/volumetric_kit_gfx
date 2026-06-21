@@ -47,6 +47,19 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
   }
+
+  // A target that also owns a depth attachment, for exercising the depth member
+  // through the move-only lifecycle.
+  vg::OffscreenTarget make_depth_target(vg::Allocator& allocator,
+                                        VkExtent2D extent = {32, 32}) {
+    vg::OffscreenTargetDesc desc;
+    desc.extent = extent;
+    desc.color_format = kFormat;
+    desc.depth_format = VK_FORMAT_D32_SFLOAT;
+    auto target = vg::OffscreenTarget::create(allocator, desc);
+    EXPECT_TRUE(target.ok()) << target.status().message();
+    return std::move(target).value();
+  }
 };
 
 // --- Validation: rejected before any allocation ----------------------------
@@ -103,6 +116,31 @@ TEST_F(OffscreenTargetDeviceTest, SelfMoveAssignIsSafe) {
   vg::OffscreenTarget* alias = &target;
   target = std::move(*alias);
   EXPECT_TRUE(target.valid());
+}
+
+TEST_F(OffscreenTargetDeviceTest,
+       MoveConstructCarriesDepthAndLeavesSourceEmpty) {
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTarget source = make_depth_target(allocator);
+  ASSERT_TRUE(source.valid());
+  ASSERT_NE(source.depth_image(), VK_NULL_HANDLE);
+
+  vg::OffscreenTarget moved(std::move(source));
+  EXPECT_NE(moved.depth_image(), VK_NULL_HANDLE);  // depth transferred...
+  EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source.depth_image(), VK_NULL_HANDLE);  // ...and cleared in source
+}
+
+TEST_F(OffscreenTargetDeviceTest,
+       MoveAssignOverLiveDepthTargetLeavesSourceEmpty) {
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTarget dst = make_depth_target(allocator);
+  vg::OffscreenTarget src = make_depth_target(allocator);
+
+  dst = std::move(src);  // frees dst's depth + color, then adopts src's
+  EXPECT_NE(dst.depth_image(), VK_NULL_HANDLE);
+  EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(src.depth_image(), VK_NULL_HANDLE);
 }
 
 // --- Clear + readback through dynamic rendering ----------------------------
