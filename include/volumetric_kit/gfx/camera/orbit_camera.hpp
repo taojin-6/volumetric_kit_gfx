@@ -14,6 +14,7 @@
 /// @ref to_camera (adding a projection) for submission.
 
 #include "volumetric_kit/gfx/camera/camera.hpp"
+#include "volumetric_kit/gfx/camera/export.hpp"
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
 //
 #include <glm/mat4x4.hpp>
@@ -42,7 +43,7 @@ namespace volumetric_kit::gfx::camera {
 /// orbit.dolly(-1.0f);                                     // wheel to zoom in
 /// Camera cam = orbit.to_camera(glm::radians(60.0f), 16.0f / 9, 0.1f, 100.0f);
 /// @endcode
-class OrbitCamera {
+class VG_CAMERA_API OrbitCamera {
  public:
   /// @brief Elevation clamp magnitude: just under a quarter turn (`~89.5°`).
   ///

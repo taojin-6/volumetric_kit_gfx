@@ -50,6 +50,18 @@ target_include_directories(
 # Vulkan -- which keeps the camera tier CPU-only and the tier rule enforced.
 target_link_libraries(gfx_camera PUBLIC glm::glm)
 
+# Pin glm's clip-space depth convention as a PUBLIC compile definition, not just
+# in a header. GLM_FORCE_DEPTH_ZERO_TO_ONE selects Vulkan's [0, 1] depth (vs
+# GL's [-1, 1]); because glm is header-only it changes the *definition* of
+# glm::perspective/ortho, so it must be identical in every TU that instantiates
+# them -- the library's own and every consumer's. PUBLIC puts it on the command
+# line of anything linking gfx_camera (build tree and, via the install
+# interface, installed consumers), so the guarantee no longer depends on a
+# consumer including camera.hpp before any <glm/...>. impl/glm_config.hpp
+# mirrors the define at the include site; this is the authoritative,
+# order-independent half.
+target_compile_definitions(gfx_camera PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
+
 vg_target_warnings(gfx_camera)
 
 # Install the target into the shared export set + the headers this tier

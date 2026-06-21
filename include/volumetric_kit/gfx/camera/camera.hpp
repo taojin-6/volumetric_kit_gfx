@@ -30,6 +30,7 @@
 ///   pipeline using these matrices should cull with
 ///   `VK_FRONT_FACE_COUNTER_CLOCKWISE`.
 
+#include "volumetric_kit/gfx/camera/export.hpp"
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
 //
 #include <glm/mat4x4.hpp>
@@ -56,7 +57,7 @@ namespace volumetric_kit::gfx::camera {
 ///     /*z_near=*/0.1f, /*z_far=*/100.0f);
 /// glm::mat4 mvp = cam.view_proj() * model;  // feed to a uniform / push const
 /// @endcode
-class Camera {
+class VG_CAMERA_API Camera {
  public:
   /// Construct an identity camera (identity view and projection).
   Camera() = default;

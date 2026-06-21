@@ -67,9 +67,10 @@ find_package(Vulkan REQUIRED)
 # Prefer a system glm (its config defines glm::glm); fall back to the pinned
 # vendored copy from third_party/ when none is installed -- so the build is
 # self-contained on CI runners that don't ship glm, matching how the other deps
-# are vendored. VG_HAVE_SYSTEM_GLM records which path won, so the installed
-# package config only emits find_dependency(glm) when consumers really need to
-# re-find it.
+# are vendored. VG_HAVE_SYSTEM_GLM records which path won, so third_party/ only
+# vendors glm (and lets it run its own install/export) when no system copy
+# exists. glm is a PUBLIC dependency either way, so the installed package config
+# re-finds it unconditionally (find_dependency(glm)).
 find_package(glm CONFIG QUIET)
 if(glm_FOUND)
   set(VG_HAVE_SYSTEM_GLM ON)
