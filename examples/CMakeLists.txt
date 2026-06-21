@@ -26,3 +26,24 @@ vg_compile_shaders(
 target_compile_definitions(
   example_01_triangle
   PRIVATE VG_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
+
+# 02_imgui: a Dear ImGui debug overlay over the swapchain, via the ui tier. The
+# example owns the platform backend (imgui_impl_glfw) — the GLFW-free ui tier
+# wraps only imgui_impl_vulkan — so it compiles that one ImGui TU here. imgui.h
+# comes transitively from gfx_ui (SYSTEM); the backends/ dir is added for
+# imgui_impl_glfw.h. Vulkan loader is linked directly for the vkDeviceWaitIdle.
+add_executable(
+  example_02_imgui 02_imgui/main.cpp
+                   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+target_include_directories(example_02_imgui SYSTEM
+                           PRIVATE "${VG_IMGUI_SOURCE_DIR}/backends")
+target_link_libraries(
+  example_02_imgui PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_windowing
+                           glfw Vulkan::Vulkan)
+# Strict first-party warnings apply to the example's own main.cpp; the bundled
+# third-party imgui_impl_glfw.cpp opts out (the source-level -w follows the
+# target flags on the command line, so it wins over -Werror).
+vg_target_warnings(example_02_imgui)
+set_source_files_properties(
+  "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+  PROPERTIES COMPILE_OPTIONS "-w")

@@ -91,6 +91,22 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
+# --- Dear ImGui: immediate-mode debug UI (ui tier; Vulkan backend only) -------
+# ImGui ships no root CMakeLists -- you compile its sources into your own
+# target. SOURCE_SUBDIR names a nonexistent dir so MakeAvailable only populates
+# the sources (no add_subdirectory), exactly as VulkanHeaders/tinygltf above;
+# the ui tier compiles imgui core + backends/imgui_impl_vulkan into a vendored
+# static lib (see src/.../ui/CMakeLists.txt). The GLFW platform backend
+# (imgui_impl_glfw) is deliberately NOT built here -- it stays in examples, so
+# this tier inherits the windowing tier's GLFW-free rule. Pinned to a tag whose
+# Vulkan backend supports dynamic rendering (the kit's only rendering path).
+FetchContent_Declare(
+  imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG v1.92.8
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR _headers_only_)
+
 # --- spirv-cross: SPIR-V reflection (reflection-driven descriptor layouts) ----
 # Build spirv-cross-core as a static archive. SPIRV_CROSS_STATIC defaults ON
 # upstream, but spirv-cross *gates the install/export of the core lib* on it
@@ -146,10 +162,11 @@ FetchContent_Declare(
   GIT_TAG vulkan-sdk-1.4.350.0
   GIT_SHALLOW TRUE)
 
-# VMA + the vendored Vulkan headers + tinygltf + spirv-cross are all needed by
-# the library: spirv-cross backs gfx_core's SPIR-V reflection (shader.cpp).
+# VMA + the vendored Vulkan headers + tinygltf + spirv-cross + ImGui are all
+# needed by the library: spirv-cross backs gfx_core's SPIR-V reflection
+# (shader.cpp), and ImGui backs the ui tier's overlay (imgui_overlay.cpp).
 FetchContent_MakeAvailable(VulkanMemoryAllocator VulkanHeaders
-                           VulkanUtilityLibraries tinygltf spirv-cross)
+                           VulkanUtilityLibraries tinygltf spirv-cross imgui)
 
 # glm only when no system copy was found (see the declaration guard above).
 if(NOT VG_HAVE_SYSTEM_GLM)
@@ -173,6 +190,12 @@ set(VG_VULKAN_UTILITY_INCLUDE
 # compiles against this dir and implements the library in one TU.
 set(VG_TINYGLTF_INCLUDE_DIR
     "${tinygltf_SOURCE_DIR}"
+    PARENT_SCOPE)
+
+# ImGui sources live in the repo root (imgui.cpp, ...) with the renderer backend
+# under backends/; the ui tier compiles a curated subset from this dir.
+set(VG_IMGUI_SOURCE_DIR
+    "${imgui_SOURCE_DIR}"
     PARENT_SCOPE)
 
 if(VG_BUILD_TESTS)
