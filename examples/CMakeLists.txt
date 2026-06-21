@@ -50,3 +50,21 @@ vg_target_warnings(example_02_imgui)
 set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp" PROPERTIES COMPILE_OPTIONS "-w")
+
+# 03_orbit_cube: an interactive orbit-camera RGB cube -- ties the camera tier to
+# the core descriptor/MVP path over the swapchain, with a wireframe toggle. It
+# reuses the mesh_mvp shaders and links gfx_camera (OrbitCamera) alongside
+# gfx_windowing (which brings gfx_core); the Vulkan loader is linked directly
+# for the vkCmd* it records.
+add_executable(example_03_orbit_cube 03_orbit_cube/main.cpp)
+target_link_libraries(
+  example_03_orbit_cube PRIVATE volumetric_kit::gfx_windowing
+                                volumetric_kit::gfx_camera glfw Vulkan::Vulkan)
+vg_target_warnings(example_03_orbit_cube)
+vg_compile_shaders(
+  example_03_orbit_cube OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  SHADERS "${PROJECT_SOURCE_DIR}/shaders/mesh_mvp.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/mesh.frag")
+target_compile_definitions(
+  example_03_orbit_cube
+  PRIVATE VG_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
