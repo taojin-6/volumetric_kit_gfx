@@ -116,19 +116,32 @@ set(SPIRV_CROSS_ENABLE_REFLECT
 set(SPIRV_CROSS_ENABLE_UTIL
     OFF
     CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_SKIP_INSTALL
-    ON
-    CACHE BOOL "" FORCE)
+# Tie spirv-cross's own install to VG_INSTALL: gfx_core links spirv-cross-core
+# (privately, for SPIR-V reflection), so when we install/export,
+# spirv-cross-core must live in an export set too. Letting spirv-cross run its
+# own install (exporting its targets + shipping spirv_cross_*Config into our
+# prefix) satisfies that and lets the package's
+# find_dependency(spirv_cross_core) resolve it -- the same arrangement glm uses
+# above.
+if(VG_INSTALL)
+  set(SPIRV_CROSS_SKIP_INSTALL
+      OFF
+      CACHE BOOL "" FORCE)
+else()
+  set(SPIRV_CROSS_SKIP_INSTALL
+      ON
+      CACHE BOOL "" FORCE)
+endif()
 FetchContent_Declare(
   spirv-cross
   GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
   GIT_TAG vulkan-sdk-1.4.350.0
   GIT_SHALLOW TRUE)
 
-# VMA + the vendored Vulkan headers + tinygltf are always needed by the library;
-# only the SPIR-V sources wait for the test build.
+# VMA + the vendored Vulkan headers + tinygltf + spirv-cross are all needed by
+# the library: spirv-cross backs gfx_core's SPIR-V reflection (shader.cpp).
 FetchContent_MakeAvailable(VulkanMemoryAllocator VulkanHeaders
-                           VulkanUtilityLibraries tinygltf)
+                           VulkanUtilityLibraries tinygltf spirv-cross)
 
 # glm only when no system copy was found (see the declaration guard above).
 if(NOT VG_HAVE_SYSTEM_GLM)
@@ -155,9 +168,7 @@ set(VG_TINYGLTF_INCLUDE_DIR
     PARENT_SCOPE)
 
 if(VG_BUILD_TESTS)
-  # spirv-cross + googletest are only needed when building the test suite.
-  # Pulling spirv-cross now (even before the core tier uses it) proves the
-  # reflection toolchain compiles on every CI platform ahead of its first use.
+  # googletest is only needed when building the test suite.
   set(INSTALL_GTEST
       OFF
       CACHE BOOL "" FORCE)
@@ -166,5 +177,5 @@ if(VG_BUILD_TESTS)
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG v1.17.0
     GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(spirv-cross googletest)
+  FetchContent_MakeAvailable(googletest)
 endif()

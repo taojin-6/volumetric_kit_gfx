@@ -46,7 +46,8 @@ vg_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/triangle.vert"
   "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
   "${PROJECT_SOURCE_DIR}/shaders/mesh.vert"
-  "${PROJECT_SOURCE_DIR}/shaders/mesh.frag")
+  "${PROJECT_SOURCE_DIR}/shaders/mesh.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/reflect_probe.frag")
 target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 

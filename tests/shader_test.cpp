@@ -59,6 +59,56 @@ TEST_F(ShaderTest, LoadsTriangleVertexShader) {
   EXPECT_NE(module.handle(), VK_NULL_HANDLE);
 }
 
+// --- SPIR-V reflection: the descriptor interface recovered at create() -------
+
+TEST_F(ShaderTest, ReflectsDescriptorBindingsAndPushConstants) {
+  vg::ShaderModule module =
+      vg_test::load_module(device(), "reflect_probe.frag.spv");
+  ASSERT_TRUE(module.valid());
+
+  // The probe is a fragment shader (stage recovered from the execution model).
+  EXPECT_EQ(module.stage(), VK_SHADER_STAGE_FRAGMENT_BIT);
+
+  // It declares exactly two descriptor-bound resources: a uniform buffer at
+  // set 0 / binding 0 and a combined image sampler at set 0 / binding 1.
+  const std::vector<vg::ReflectedResource>& res = module.resources();
+  ASSERT_EQ(res.size(), 2u);
+
+  const vg::ReflectedResource* ubo = nullptr;
+  const vg::ReflectedResource* sampler = nullptr;
+  for (const vg::ReflectedResource& r : res) {
+    if (r.type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+      ubo = &r;
+    } else if (r.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+      sampler = &r;
+    }
+  }
+
+  ASSERT_NE(ubo, nullptr);
+  EXPECT_EQ(ubo->set, 0u);
+  EXPECT_EQ(ubo->binding, 0u);
+  EXPECT_EQ(ubo->count, 1u);
+  EXPECT_NE(ubo->stages & VK_SHADER_STAGE_FRAGMENT_BIT, 0u);
+
+  ASSERT_NE(sampler, nullptr);
+  EXPECT_EQ(sampler->set, 0u);
+  EXPECT_EQ(sampler->binding, 1u);
+
+  // The push-constant block is a single vec2 -- 8 bytes.
+  EXPECT_EQ(module.push_constant_size(), 8u);
+}
+
+TEST_F(ShaderTest, ResourcelessShaderReflectsEmpty) {
+  // The hello-triangle vertex shader binds no descriptors and declares no push
+  // constants, so reflection reports an empty interface -- with the stage still
+  // recovered from the SPIR-V.
+  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
+  ASSERT_TRUE(module.valid());
+  EXPECT_EQ(module.stage(), VK_SHADER_STAGE_VERTEX_BIT);
+  EXPECT_TRUE(module.resources().empty());
+  EXPECT_EQ(module.push_constant_size(), 0u);
+}
+
 TEST_F(ShaderTest, MoveLeavesSourceEmpty) {
   vg::ShaderModule source = vg_test::load_module(device(), "triangle.vert.spv");
   ASSERT_TRUE(source.valid());
