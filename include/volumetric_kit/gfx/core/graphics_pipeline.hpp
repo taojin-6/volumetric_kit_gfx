@@ -63,6 +63,13 @@ struct GraphicsPipelineDesc {
   /// `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST` is rejected — it needs tessellation
   /// stages this pipeline does not provide.
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  /// Polygon fill mode. `VK_POLYGON_MODE_LINE` (wireframe) / `..._POINT` need
+  /// the device's `fillModeNonSolid` feature — enable it via @ref DeviceConfig.
+  VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
+  /// Face-culling mode. Front faces are counter-clockwise (the winding the
+  /// camera tier's Y-flipped projection yields for outward geometry), so
+  /// `VK_CULL_MODE_BACK_BIT` draws a convex mesh correctly without depth.
+  VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
   /// Enable depth testing; requires @ref layout to carry a depth format.
   bool depth_test = false;
   /// Write passing fragments' depth to the attachment. Requires @ref depth_test

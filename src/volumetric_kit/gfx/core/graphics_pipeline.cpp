@@ -184,9 +184,10 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
 
   VkPipelineRasterizationStateCreateInfo raster{};
   raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  raster.polygonMode = VK_POLYGON_MODE_FILL;
-  // No culling: the hello-triangle should draw regardless of winding order.
-  raster.cullMode = VK_CULL_MODE_NONE;
+  raster.polygonMode = desc.polygon_mode;
+  raster.cullMode = desc.cull_mode;
+  // Front faces are counter-clockwise -- the winding the camera tier's
+  // Y-flipped projection produces for outward-facing geometry (see camera.hpp).
   raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   raster.lineWidth = 1.0f;
 
