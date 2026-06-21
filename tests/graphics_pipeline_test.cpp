@@ -719,6 +719,12 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
     render_mesh(target.value(), pipeline.value(), vbuf.handle(), VK_NULL_HANDLE,
                 3);
     const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+    // EXPECT (not ASSERT) + early return: ASSERT's void return can't compile in
+    // this bool-returning lambda, so guard the deref explicitly.
+    EXPECT_NE(px, nullptr);
+    if (px == nullptr) {
+      return false;
+    }
     const size_t c = (static_cast<size_t>(kSize / 2) * kSize + kSize / 2) * 4;
     return px[c + 1] > 128;
   };
