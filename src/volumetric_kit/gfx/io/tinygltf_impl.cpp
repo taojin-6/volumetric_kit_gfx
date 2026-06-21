@@ -9,7 +9,7 @@
 // Only the _IMPLEMENTATION switches are local to this TU. The feature macros
 // that change the header's *declarations* (TINYGLTF_NO_STB_IMAGE_WRITE, which
 // drops the default write callback this read-only tier never uses) are set
-// target-wide in CMake so every assets TU sees the same TinyGLTF definition --
+// target-wide in CMake so every io TU sees the same TinyGLTF definition --
 // a per-file define here would mismatch the gltf_loader.cpp TU and break the
 // one-definition rule (the missing WriteImageData symbol).
 

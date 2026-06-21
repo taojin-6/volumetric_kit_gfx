@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "volumetric_kit/gfx/assets/gltf_loader.hpp"
+#include "volumetric_kit/gfx/io/gltf_loader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,7 +22,12 @@
 // split.
 #include <tiny_gltf.h>
 
-namespace volumetric_kit::gfx::assets {
+namespace volumetric_kit::gfx::io {
+
+// The loaders fill the gfx_assets value types; bring them in unqualified so the
+// conversion helpers below read naturally (Mesh, Material, Image, Node, ...).
+using namespace volumetric_kit::gfx::assets;
+
 namespace {
 
 // Lower-case file extension including the dot (e.g. ".glb"); empty if none.
@@ -564,4 +569,4 @@ std::optional<Model> load_gltf(std::string_view path, std::string* error) {
   return model;
 }
 
-}  // namespace volumetric_kit::gfx::assets
+}  // namespace volumetric_kit::gfx::io

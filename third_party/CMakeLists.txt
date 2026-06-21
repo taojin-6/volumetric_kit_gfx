@@ -76,13 +76,14 @@ if(NOT VG_HAVE_SYSTEM_GLM)
     GIT_SHALLOW TRUE)
 endif()
 
-# --- tinygltf: glTF 2.0 loader for the assets tier (header-only) -------------
+# --- tinygltf: glTF 2.0 loader for the io tier (header-only) -----------------
 # tinygltf bundles its deps (nlohmann/json + stb_image) in the repo root and is
-# implemented in one gfx_assets TU (tinygltf_impl.cpp), exactly like VMA above.
+# implemented in one gfx_io TU (tinygltf_impl.cpp), exactly like VMA above.
 # SOURCE_SUBDIR names a nonexistent dir so MakeAvailable populates the sources
 # without running tinygltf's own CMakeLists (which builds its loader_example and
-# installs targets we do not want). The assets tier compiles against this single
-# include dir and links no Vulkan -- it is pure CPU (glm + tinygltf only).
+# installs targets we do not want). The io tier compiles against this single
+# include dir and links no Vulkan -- it is pure CPU (gfx_assets + tinygltf
+# only).
 FetchContent_Declare(
   tinygltf
   GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
@@ -147,7 +148,7 @@ set(VG_VULKAN_UTILITY_INCLUDE
     "${vulkanutilitylibraries_SOURCE_DIR}/include"
     PARENT_SCOPE)
 
-# tinygltf + its bundled json/stb headers live in the repo root; the assets tier
+# tinygltf + its bundled json/stb headers live in the repo root; the io tier
 # compiles against this dir and implements the library in one TU.
 set(VG_TINYGLTF_INCLUDE_DIR
     "${tinygltf_SOURCE_DIR}"
