@@ -22,14 +22,26 @@ namespace volumetric_kit::gfx::assets {
 /// deliberately data only: the library defines no runtime scene-graph behavior
 /// (no traversal, no transform caching). A consumer that wants world transforms
 /// walks @ref children itself, composing @ref transform down the tree.
+///
+/// A glTF mesh is flattened to one @ref Mesh per primitive, all pushed
+/// contiguously, so a node draws the range `[mesh, mesh + mesh_count)` of
+/// @ref Model::meshes -- not only the first primitive. @ref mesh is @ref
+/// kNoMesh and @ref mesh_count is 0 when the node has no drawable mesh.
+///
+/// @code
+/// if (node.mesh != assets::Node::kNoMesh)
+///   for (std::uint32_t m = node.mesh; m < node.mesh + node.mesh_count; ++m)
+///     draw(model.meshes[m], node.transform);  // consumer-defined traversal
+/// @endcode
 struct Node {
   /// @brief Sentinel @ref mesh value meaning "this node draws nothing".
   static constexpr std::uint32_t kNoMesh = 0xFFFFFFFFu;
 
-  std::string name;                     ///< Node name (may be empty).
-  glm::mat4 transform{1.0f};            ///< Node-local transform (identity if
-                                        ///< none).
-  std::uint32_t mesh = kNoMesh;         ///< Index into @ref Model::meshes.
+  std::string name;              ///< Node name (may be empty).
+  glm::mat4 transform{1.0f};     ///< Node-local transform (identity if none).
+  std::uint32_t mesh = kNoMesh;  ///< First @ref Model::meshes index drawn.
+  std::uint32_t mesh_count = 0;  ///< Contiguous meshes drawn from @ref
+                                 ///< mesh (one per glTF primitive).
   std::vector<std::uint32_t> children;  ///< Child indices into @ref
                                         ///< Scene::nodes.
 };

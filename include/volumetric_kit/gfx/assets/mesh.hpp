@@ -7,11 +7,9 @@
 /// @brief Triangle mesh: interleaved vertices + a 32-bit index buffer.
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
-#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -38,10 +36,10 @@ struct Vertex {
 ///
 /// Indices are 32-bit and address @ref vertices; their count is a multiple of
 /// three (triangle list). @ref material indexes @ref Model::materials, or is
-/// @ref kNoMaterial when the source assigned none. @ref transform is the node-
-/// local model matrix glTF attaches at the node that referenced this mesh;
-/// composing it with parent node transforms is the consumer's job (the @ref
-/// Scene node tree is data only).
+/// @ref kNoMaterial when the source assigned none. A mesh is pure geometry and
+/// carries no transform of its own: the same mesh may be instanced by several
+/// @ref Node entries, so placement lives on the referencing node (@ref
+/// Node::transform), which a consumer composes down the @ref Scene tree.
 ///
 /// @code
 /// for (const assets::Mesh& mesh : model.meshes) {
@@ -59,8 +57,6 @@ struct Mesh {
   std::vector<std::uint32_t> indices;    ///< Triangle-list indices into @ref
                                          ///< vertices (size % 3 == 0).
   std::uint32_t material = kNoMaterial;  ///< Index into @ref Model::materials.
-  glm::mat4 transform{1.0f};  ///< Node-local model matrix (identity if
-                              ///< none).
 
   /// @return Number of triangles (`indices.size() / 3`).
   std::size_t triangle_count() const noexcept { return indices.size() / 3; }

@@ -4,6 +4,7 @@
 #include "volumetric_kit/gfx/assets/gltf_loader.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <glm/gtc/matrix_transform.hpp>  // translate, scale
+#include <glm/gtc/quaternion.hpp>        // quat, mat4_cast
+#include <glm/gtc/type_ptr.hpp>          // make_mat4
 
 // tinygltf is compiled once in tinygltf_impl.cpp; here it is a
 // declarations-only header. Keep stb out of this TU's macro state to match that
@@ -22,8 +27,14 @@ namespace {
 
 // Lower-case file extension including the dot (e.g. ".glb"); empty if none.
 std::string extension_of(std::string_view path) {
+  // Search only the final path component, so a dot in a parent directory (e.g.
+  // "/home/user.v2/model") is not mistaken for the file's extension.
+  const std::size_t sep = path.find_last_of("/\\");
   const std::size_t dot = path.rfind('.');
-  if (dot == std::string_view::npos) return {};
+  if (dot == std::string_view::npos ||
+      (sep != std::string_view::npos && dot < sep)) {
+    return {};
+  }
   std::string ext(path.substr(dot));
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
@@ -47,28 +58,66 @@ int component_count(int type) {
   }
 }
 
-// Read accessor `index` as float vectors into `out` (count * comps floats,
-// element-major). Handles the byte stride and the common component types,
-// normalizing integer colors to [0,1]. Returns false on an unsupported layout.
-bool read_float_accessor(const tinygltf::Model& gltf, int index,
-                         std::vector<float>& out, int& comps) {
-  if (index < 0 || index >= static_cast<int>(gltf.accessors.size())) {
-    return false;
-  }
-  const tinygltf::Accessor& acc =
-      gltf.accessors[static_cast<std::size_t>(index)];
-  comps = component_count(acc.type);
-  if (comps == 0) return false;
+// True when the half-open byte range [offset, offset + span) lies within
+// `buffer`. Written without `offset + span` so a forged offset/span cannot
+// overflow std::size_t past the check.
+bool range_in_buffer(const tinygltf::Buffer& buffer, std::size_t offset,
+                     std::size_t span) {
+  return offset <= buffer.data.size() && span <= buffer.data.size() - offset;
+}
+
+// Resolve an accessor's backing bytes, validating every file-supplied index and
+// offset so a malformed glTF cannot drive an out-of-bounds read: the bufferView
+// index, the buffer index (which defaults to -1), and the full strided extent
+// of `acc.count` elements against the buffer size. On success `base` points at
+// the first element and `stride` is the element-to-element byte step. Returns
+// false on any inconsistency.
+bool resolve_accessor(const tinygltf::Model& gltf,
+                      const tinygltf::Accessor& acc, std::size_t element_size,
+                      const unsigned char*& base, std::size_t& stride) {
   if (acc.bufferView < 0 ||
       acc.bufferView >= static_cast<int>(gltf.bufferViews.size())) {
     return false;
   }
   const tinygltf::BufferView& view =
       gltf.bufferViews[static_cast<std::size_t>(acc.bufferView)];
+  if (view.buffer < 0 || view.buffer >= static_cast<int>(gltf.buffers.size())) {
+    return false;
+  }
   const tinygltf::Buffer& buffer =
       gltf.buffers[static_cast<std::size_t>(view.buffer)];
-  const unsigned char* base =
-      buffer.data.data() + view.byteOffset + acc.byteOffset;
+  stride = view.byteStride != 0 ? static_cast<std::size_t>(view.byteStride)
+                                : element_size;
+  const std::size_t start = view.byteOffset + acc.byteOffset;
+  if (acc.count > 0) {
+    // Highest byte touched = start + (count-1)*stride + element_size.
+    const std::size_t span = (acc.count - 1) * stride + element_size;
+    if (!range_in_buffer(buffer, start, span)) return false;
+  }
+  base = buffer.data.data() + start;
+  return true;
+}
+
+// Read accessor `index` as float vectors into `out` (count * comps floats,
+// element-major). Validates the layout against the backing buffer, then handles
+// the byte stride and the common component types. Integer components are scaled
+// to [0,1] (unsigned) / [-1,1] (signed) when the accessor sets `normalized` or
+// when `force_normalize_int` is set (glTF requires COLOR_0 integers normalized
+// regardless of the flag). Returns false on an unsupported / out-of-bounds
+// layout.
+bool read_float_accessor(const tinygltf::Model& gltf, int index,
+                         std::vector<float>& out, int& comps,
+                         bool force_normalize_int = false) {
+  if (index < 0 || index >= static_cast<int>(gltf.accessors.size())) {
+    return false;
+  }
+  const tinygltf::Accessor& acc =
+      gltf.accessors[static_cast<std::size_t>(index)];
+  if (acc.sparse.isSparse) {
+    return false;  // TODO: apply sparse accessor substitutions
+  }
+  comps = component_count(acc.type);
+  if (comps == 0) return false;
 
   const int comp_type = acc.componentType;
   std::size_t comp_size = 0;
@@ -76,9 +125,11 @@ bool read_float_accessor(const tinygltf::Model& gltf, int index,
     case TINYGLTF_COMPONENT_TYPE_FLOAT:
       comp_size = 4;
       break;
+    case TINYGLTF_COMPONENT_TYPE_BYTE:
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
       comp_size = 1;
       break;
+    case TINYGLTF_COMPONENT_TYPE_SHORT:
     case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
       comp_size = 2;
       break;
@@ -86,9 +137,12 @@ bool read_float_accessor(const tinygltf::Model& gltf, int index,
       return false;  // unsupported attribute component type
   }
   const std::size_t element_size = comp_size * static_cast<std::size_t>(comps);
-  const std::size_t stride =
-      view.byteStride != 0 ? view.byteStride : element_size;
 
+  const unsigned char* base = nullptr;
+  std::size_t stride = 0;
+  if (!resolve_accessor(gltf, acc, element_size, base, stride)) return false;
+
+  const bool normalize = acc.normalized || force_normalize_int;
   out.resize(acc.count * static_cast<std::size_t>(comps));
   for (std::size_t i = 0; i < acc.count; ++i) {
     const unsigned char* element = base + i * stride;
@@ -97,20 +151,33 @@ bool read_float_accessor(const tinygltf::Model& gltf, int index,
           element + static_cast<std::size_t>(c) * comp_size;
       float value = 0.0f;
       switch (comp_type) {
-        case TINYGLTF_COMPONENT_TYPE_FLOAT: {
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
           std::memcpy(&value, p, sizeof(float));
           break;
-        }
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: {
-          value = acc.normalized ? static_cast<float>(*p) / 255.0f
-                                 : static_cast<float>(*p);
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+          value = normalize ? static_cast<float>(*p) / 255.0f
+                            : static_cast<float>(*p);
+          break;
+        case TINYGLTF_COMPONENT_TYPE_BYTE: {
+          std::int8_t raw = 0;
+          std::memcpy(&raw, p, sizeof(raw));
+          value = normalize ? std::max(static_cast<float>(raw) / 127.0f, -1.0f)
+                            : static_cast<float>(raw);
           break;
         }
         case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
           std::uint16_t raw = 0;
-          std::memcpy(&raw, p, sizeof(std::uint16_t));
-          value = acc.normalized ? static_cast<float>(raw) / 65535.0f
-                                 : static_cast<float>(raw);
+          std::memcpy(&raw, p, sizeof(raw));
+          value = normalize ? static_cast<float>(raw) / 65535.0f
+                            : static_cast<float>(raw);
+          break;
+        }
+        case TINYGLTF_COMPONENT_TYPE_SHORT: {
+          std::int16_t raw = 0;
+          std::memcpy(&raw, p, sizeof(raw));
+          value = normalize
+                      ? std::max(static_cast<float>(raw) / 32767.0f, -1.0f)
+                      : static_cast<float>(raw);
           break;
         }
         default:
@@ -123,94 +190,105 @@ bool read_float_accessor(const tinygltf::Model& gltf, int index,
   return true;
 }
 
-// Append `primitive`'s indices (offset by base_vertex) to `out` as uint32. When
-// the primitive is non-indexed, emit a sequential 0..vertex_count list.
+// Append `primitive`'s indices to `out` as uint32. When the primitive is
+// non-indexed, emit a sequential 0..vertex_count list. Every emitted index is
+// validated to address one of the `vertex_count` vertices, and the source bytes
+// are bounds-checked, so a malformed accessor is rejected rather than producing
+// out-of-range indices or reading past the buffer. Returns false on an
+// unsupported / out-of-bounds layout.
 bool read_indices(const tinygltf::Model& gltf,
                   const tinygltf::Primitive& primitive,
-                  std::uint32_t base_vertex, std::size_t vertex_count,
-                  std::vector<std::uint32_t>& out) {
+                  std::size_t vertex_count, std::vector<std::uint32_t>& out) {
   if (primitive.indices < 0) {
+    out.reserve(out.size() + vertex_count);
     for (std::size_t i = 0; i < vertex_count; ++i) {
-      out.push_back(base_vertex + static_cast<std::uint32_t>(i));
+      out.push_back(static_cast<std::uint32_t>(i));
     }
     return true;
   }
+  if (primitive.indices >= static_cast<int>(gltf.accessors.size())) {
+    return false;
+  }
   const tinygltf::Accessor& acc =
       gltf.accessors[static_cast<std::size_t>(primitive.indices)];
-  if (acc.bufferView < 0) return false;
-  const tinygltf::BufferView& view =
-      gltf.bufferViews[static_cast<std::size_t>(acc.bufferView)];
-  const tinygltf::Buffer& buffer =
-      gltf.buffers[static_cast<std::size_t>(view.buffer)];
-  const unsigned char* base =
-      buffer.data.data() + view.byteOffset + acc.byteOffset;
+  if (acc.sparse.isSparse) return false;  // TODO: sparse index accessors
+
+  std::size_t comp_size = 0;
+  switch (acc.componentType) {
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+      comp_size = 1;
+      break;
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+      comp_size = 2;
+      break;
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+      comp_size = 4;
+      break;
+    default:
+      return false;
+  }
+  const unsigned char* base = nullptr;
+  std::size_t stride = 0;
+  if (!resolve_accessor(gltf, acc, comp_size, base, stride)) return false;
 
   out.reserve(out.size() + acc.count);
   for (std::size_t i = 0; i < acc.count; ++i) {
+    const unsigned char* p = base + i * stride;
     std::uint32_t value = 0;
     switch (acc.componentType) {
       case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-        value = base[i];
+        value = *p;
         break;
       case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
         std::uint16_t raw = 0;
-        std::memcpy(&raw, base + i * sizeof(std::uint16_t), sizeof(raw));
+        std::memcpy(&raw, p, sizeof(raw));
         value = raw;
         break;
       }
       case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT: {
         std::uint32_t raw = 0;
-        std::memcpy(&raw, base + i * sizeof(std::uint32_t), sizeof(raw));
+        std::memcpy(&raw, p, sizeof(raw));
         value = raw;
         break;
       }
       default:
         return false;
     }
-    out.push_back(base_vertex + value);
+    if (value >= vertex_count) return false;  // index addresses no vertex
+    out.push_back(value);
   }
   return true;
 }
 
 glm::mat4 node_local_transform(const tinygltf::Node& node) {
+  // glTF node.matrix is 16 doubles in column-major order -- the same layout
+  // glm::make_mat4 expects, so it maps across directly.
   if (node.matrix.size() == 16) {
-    glm::mat4 m(1.0f);
-    for (int col = 0; col < 4; ++col) {
-      for (int row = 0; row < 4; ++row) {
-        m[col][row] = static_cast<float>(
-            node.matrix[static_cast<std::size_t>(col * 4 + row)]);
-      }
+    std::array<float, 16> m{};
+    for (std::size_t i = 0; i < 16; ++i) {
+      m[i] = static_cast<float>(node.matrix[i]);
     }
-    return m;
+    return glm::make_mat4(m.data());
   }
   glm::mat4 t(1.0f);
   if (node.translation.size() == 3) {
-    t[3][0] = static_cast<float>(node.translation[0]);
-    t[3][1] = static_cast<float>(node.translation[1]);
-    t[3][2] = static_cast<float>(node.translation[2]);
+    t = glm::translate(t, glm::vec3(static_cast<float>(node.translation[0]),
+                                    static_cast<float>(node.translation[1]),
+                                    static_cast<float>(node.translation[2])));
   }
   glm::mat4 r(1.0f);
   if (node.rotation.size() == 4) {
-    const float x = static_cast<float>(node.rotation[0]);
-    const float y = static_cast<float>(node.rotation[1]);
-    const float z = static_cast<float>(node.rotation[2]);
-    const float w = static_cast<float>(node.rotation[3]);
-    // Column-major rotation from a unit quaternion (glTF stores [x,y,z,w]).
-    r[0][0] = 1.0f - 2.0f * (y * y + z * z);
-    r[0][1] = 2.0f * (x * y + z * w);
-    r[0][2] = 2.0f * (x * z - y * w);
-    r[1][0] = 2.0f * (x * y - z * w);
-    r[1][1] = 1.0f - 2.0f * (x * x + z * z);
-    r[1][2] = 2.0f * (y * z + x * w);
-    r[2][0] = 2.0f * (x * z + y * w);
-    r[2][1] = 2.0f * (y * z - x * w);
-    r[2][2] = 1.0f - 2.0f * (x * x + y * y);
+    // glTF stores the quaternion as [x,y,z,w]; glm::quat takes (w,x,y,z).
+    r = glm::mat4_cast(glm::quat(static_cast<float>(node.rotation[3]),
+                                 static_cast<float>(node.rotation[0]),
+                                 static_cast<float>(node.rotation[1]),
+                                 static_cast<float>(node.rotation[2])));
   }
   glm::mat4 s(1.0f);
   if (node.scale.size() == 3) {
-    s[0][0] = static_cast<float>(node.scale[0]);
-    s[1][1] = static_cast<float>(node.scale[1]);
-    s[2][2] = static_cast<float>(node.scale[2]);
+    s = glm::scale(s, glm::vec3(static_cast<float>(node.scale[0]),
+                                static_cast<float>(node.scale[1]),
+                                static_cast<float>(node.scale[2])));
   }
   return t * r * s;  // glTF: M = T * R * S
 }
@@ -268,22 +346,38 @@ Material convert_material(const tinygltf::Model& gltf,
   return m;
 }
 
-Image convert_image(const tinygltf::Image& src) {
+// `src` is taken by non-const ref so its decoded pixel buffer can be moved out
+// rather than copied (textures are megabytes); `gltf` is a local in load_gltf
+// and is discarded afterwards, so mutating it is safe.
+Image convert_image(tinygltf::Image& src) {
   Image img;
-  img.name = src.name.empty() ? src.uri : src.name;
-  img.width = static_cast<std::uint32_t>(std::max(src.width, 0));
-  img.height = static_cast<std::uint32_t>(std::max(src.height, 0));
-  img.channels = static_cast<std::uint32_t>(std::max(src.component, 0));
-  img.pixels.assign(src.image.begin(), src.image.end());
+  // Only adopt the pixels when they are dimensionally consistent (8-bit,
+  // tightly packed). A decode failure or an unsupported depth (e.g. 16-bit)
+  // leaves an empty, default Image -- valid() == false -- instead of one whose
+  // width/height/channels lie about a too-small buffer.
+  if (src.width <= 0 || src.height <= 0 || src.component <= 0 ||
+      src.bits != 8) {
+    return img;
+  }
+  const std::size_t expected = static_cast<std::size_t>(src.width) *
+                               static_cast<std::size_t>(src.height) *
+                               static_cast<std::size_t>(src.component);
+  if (src.image.size() != expected) return img;
+
+  img.name = !src.name.empty() ? std::move(src.name) : std::move(src.uri);
+  img.width = static_cast<std::uint32_t>(src.width);
+  img.height = static_cast<std::uint32_t>(src.height);
+  img.channels = static_cast<std::uint32_t>(src.component);
+  img.pixels = std::move(src.image);
   return img;
 }
 
-// Convert one primitive into a Mesh. Returns false if it has no POSITION or an
-// unsupported layout. Skips non-triangle primitives (mode != TRIANGLES).
+// Convert one primitive into a Mesh. Returns false if it has no POSITION, an
+// unsupported layout, or indices that do not form whole triangles. Skips
+// non-triangle primitives (mode != TRIANGLES).
 bool convert_primitive(const tinygltf::Model& gltf,
                        const tinygltf::Primitive& primitive,
-                       const std::string& name, const glm::mat4& transform,
-                       Mesh& out) {
+                       const std::string& name, Mesh& out) {
   if (primitive.mode != TINYGLTF_MODE_TRIANGLES && primitive.mode != -1) {
     return false;  // TODO: line/point primitive modes
   }
@@ -298,24 +392,32 @@ bool convert_primitive(const tinygltf::Model& gltf,
   }
   const std::size_t vertex_count = positions.size() / 3;
 
-  auto channel = [&](const char* attr, std::vector<float>& dst,
-                     int& comps) -> bool {
+  // Read an attribute channel and accept it only when it has the expected
+  // component count *and* one element per vertex. A glTF whose attribute
+  // accessor is shorter than POSITION would otherwise overrun the channel
+  // buffer in the de-interleave loop below.
+  auto channel = [&](const char* attr, std::vector<float>& dst, int want_comps,
+                     bool force_norm = false) -> bool {
     const auto it = primitive.attributes.find(attr);
     if (it == primitive.attributes.end()) return false;
-    return read_float_accessor(gltf, it->second, dst, comps);
+    int comps = 0;
+    if (!read_float_accessor(gltf, it->second, dst, comps, force_norm)) {
+      return false;
+    }
+    return comps == want_comps &&
+           dst.size() == vertex_count * static_cast<std::size_t>(want_comps);
   };
 
-  std::vector<float> normals, tangents, uvs, colors;
-  int n_comps = 0, t_comps = 0, uv_comps = 0, c_comps = 0;
-  const bool has_normals = channel("NORMAL", normals, n_comps) && n_comps == 3;
-  const bool has_tangents =
-      channel("TANGENT", tangents, t_comps) && t_comps == 4;
-  const bool has_uvs = channel("TEXCOORD_0", uvs, uv_comps) && uv_comps == 2;
-  const bool has_colors =
-      channel("COLOR_0", colors, c_comps) && (c_comps == 3 || c_comps == 4);
+  std::vector<float> normals, tangents, uvs, colors3, colors4;
+  const bool has_normals = channel("NORMAL", normals, 3);
+  const bool has_tangents = channel("TANGENT", tangents, 4);
+  const bool has_uvs = channel("TEXCOORD_0", uvs, 2);
+  // COLOR_0 is VEC3 or VEC4; glTF requires its integer forms normalized.
+  const bool has_colors3 = channel("COLOR_0", colors3, 3, /*force_norm=*/true);
+  const bool has_colors4 =
+      !has_colors3 && channel("COLOR_0", colors4, 4, /*force_norm=*/true);
 
   out.name = name;
-  out.transform = transform;
   out.vertices.resize(vertex_count);
   for (std::size_t i = 0; i < vertex_count; ++i) {
     Vertex& v = out.vertices[i];
@@ -331,18 +433,23 @@ bool convert_primitive(const tinygltf::Model& gltf,
     if (has_uvs) {
       v.uv0 = {uvs[i * 2 + 0], uvs[i * 2 + 1]};
     }
-    if (has_colors) {
-      v.color = {colors[i * c_comps + 0], colors[i * c_comps + 1],
-                 colors[i * c_comps + 2],
-                 c_comps == 4 ? colors[i * c_comps + 3] : 1.0f};
+    if (has_colors3) {
+      v.color = {colors3[i * 3 + 0], colors3[i * 3 + 1], colors3[i * 3 + 2],
+                 1.0f};
+    } else if (has_colors4) {
+      v.color = {colors4[i * 4 + 0], colors4[i * 4 + 1], colors4[i * 4 + 2],
+                 colors4[i * 4 + 3]};
     }
   }
 
-  if (!read_indices(gltf, primitive, /*base_vertex=*/0, vertex_count,
-                    out.indices)) {
+  if (!read_indices(gltf, primitive, vertex_count, out.indices)) {
     return false;
   }
-  out.material = primitive.material >= 0
+  if (out.indices.size() % 3 != 0) {
+    return false;  // triangle list must be whole triangles
+  }
+  out.material = (primitive.material >= 0 &&
+                  primitive.material < static_cast<int>(gltf.materials.size()))
                      ? static_cast<std::uint32_t>(primitive.material)
                      : Mesh::kNoMaterial;
   return true;
@@ -381,7 +488,7 @@ std::optional<Model> load_gltf(std::string_view path, std::string* error) {
   Model model;
 
   model.images.reserve(gltf.images.size());
-  for (const tinygltf::Image& img : gltf.images) {
+  for (tinygltf::Image& img : gltf.images) {
     model.images.push_back(convert_image(img));
   }
 
@@ -390,55 +497,67 @@ std::optional<Model> load_gltf(std::string_view path, std::string* error) {
     model.materials.push_back(convert_material(gltf, mat));
   }
 
-  // Flatten every mesh's primitives. Each primitive becomes a Mesh; the glTF
-  // mesh index alone is not enough to address a primitive, so meshes here are
-  // primitive-granular. A node referencing glTF mesh M points (in our flat
-  // node) at the first primitive's Mesh index; mesh_first_primitive maps that.
-  std::vector<std::uint32_t> mesh_first_primitive(gltf.meshes.size(),
-                                                  Node::kNoMesh);
+  // Flatten every glTF mesh's primitives: each primitive becomes one Mesh, and
+  // a glTF mesh maps to the contiguous range [first, first + count) it produced
+  // (count 0 when every primitive was skipped). A node references that whole
+  // range, so a multi-primitive mesh stays fully reachable from the scene.
+  struct MeshRange {
+    std::uint32_t first = Node::kNoMesh;
+    std::uint32_t count = 0;
+  };
+  std::vector<MeshRange> mesh_ranges(gltf.meshes.size());
   for (std::size_t mi = 0; mi < gltf.meshes.size(); ++mi) {
     const tinygltf::Mesh& gmesh = gltf.meshes[mi];
-    for (std::size_t pi = 0; pi < gmesh.primitives.size(); ++pi) {
+    const std::uint32_t first = static_cast<std::uint32_t>(model.meshes.size());
+    std::uint32_t count = 0;
+    for (const tinygltf::Primitive& prim : gmesh.primitives) {
       Mesh mesh;
-      if (!convert_primitive(gltf, gmesh.primitives[pi], gmesh.name,
-                             glm::mat4(1.0f), mesh)) {
+      if (!convert_primitive(gltf, prim, gmesh.name, mesh)) {
         continue;  // skip empty / unsupported primitive
       }
-      if (mesh_first_primitive[mi] == Node::kNoMesh) {
-        mesh_first_primitive[mi] =
-            static_cast<std::uint32_t>(model.meshes.size());
-      }
       model.meshes.push_back(std::move(mesh));
+      ++count;
     }
+    if (count > 0) mesh_ranges[mi] = {first, count};
   }
 
-  // Flatten the node tree (data only). Child/mesh references stay as indices.
+  // Flatten the node tree (data only). Child/mesh references stay as indices,
+  // each validated against the array it addresses so no dangling index escapes.
   model.scene.nodes.reserve(gltf.nodes.size());
   for (const tinygltf::Node& gnode : gltf.nodes) {
     Node node;
     node.name = gnode.name;
     node.transform = node_local_transform(gnode);
-    if (gnode.mesh >= 0 &&
-        gnode.mesh < static_cast<int>(mesh_first_primitive.size())) {
-      node.mesh = mesh_first_primitive[static_cast<std::size_t>(gnode.mesh)];
+    if (gnode.mesh >= 0 && gnode.mesh < static_cast<int>(mesh_ranges.size())) {
+      const MeshRange& range =
+          mesh_ranges[static_cast<std::size_t>(gnode.mesh)];
+      node.mesh = range.first;
+      node.mesh_count = range.count;
     }
     for (int child : gnode.children) {
-      if (child >= 0)
+      if (child >= 0 && child < static_cast<int>(gltf.nodes.size())) {
         node.children.push_back(static_cast<std::uint32_t>(child));
+      }
     }
     model.scene.nodes.push_back(std::move(node));
   }
 
-  const int scene_index = gltf.defaultScene >= 0
-                              ? gltf.defaultScene
-                              : (gltf.scenes.empty() ? -1 : 0);
-  if (scene_index >= 0 && scene_index < static_cast<int>(gltf.scenes.size())) {
+  // Pick the default scene, falling back to scene 0 when defaultScene is unset
+  // or out of range -- a positive-but-invalid value must not yield an empty
+  // scene when valid scenes exist.
+  int scene_index = gltf.scenes.empty() ? -1 : 0;
+  if (gltf.defaultScene >= 0 &&
+      gltf.defaultScene < static_cast<int>(gltf.scenes.size())) {
+    scene_index = gltf.defaultScene;
+  }
+  if (scene_index >= 0) {
     const tinygltf::Scene& gscene =
         gltf.scenes[static_cast<std::size_t>(scene_index)];
     model.scene.name = gscene.name;
     for (int root : gscene.nodes) {
-      if (root >= 0)
+      if (root >= 0 && root < static_cast<int>(gltf.nodes.size())) {
         model.scene.roots.push_back(static_cast<std::uint32_t>(root));
+      }
     }
   }
 

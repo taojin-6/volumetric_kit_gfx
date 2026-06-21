@@ -77,13 +77,28 @@ gtest_discover_tests(vg_camera_test)
 # is defined only when the fixture is present.
 set(_vg_assets_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets")
 set(_vg_box_glb "${_vg_assets_dir}/Box.glb")
+# Pinned to a specific glTF-Sample-Assets commit (not the moving `main`) plus a
+# content hash, so the fixture is reproducible and a tampered/truncated payload
+# is rejected rather than silently tested against.
+set(_vg_box_url
+    "https://github.com/KhronosGroup/glTF-Sample-Assets/raw/2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf/Models/Box/glTF-Binary/Box.glb"
+)
+set(_vg_box_sha256
+    "ed52f7192b8311d700ac0ce80644e3852cd01537e4d62241b9acba023da3d54e")
+# Drop a stale/corrupt prior download (e.g. a truncated file from an interrupted
+# run) so the verified fetch below replaces it instead of testing against junk.
+if(EXISTS "${_vg_box_glb}")
+  file(SHA256 "${_vg_box_glb}" _vg_box_have)
+  if(NOT _vg_box_have STREQUAL _vg_box_sha256)
+    file(REMOVE "${_vg_box_glb}")
+  endif()
+endif()
 if(NOT EXISTS "${_vg_box_glb}")
   file(MAKE_DIRECTORY "${_vg_assets_dir}")
   message(STATUS "assets test: fetching Box.glb fixture")
   file(
-    DOWNLOAD
-    "https://github.com/KhronosGroup/glTF-Sample-Assets/raw/main/Models/Box/glTF-Binary/Box.glb"
-    "${_vg_box_glb}"
+    DOWNLOAD "${_vg_box_url}" "${_vg_box_glb}"
+    EXPECTED_HASH SHA256=${_vg_box_sha256}
     STATUS _vg_box_status
     TIMEOUT 30)
   list(GET _vg_box_status 0 _vg_box_rc)
@@ -91,8 +106,10 @@ if(NOT EXISTS "${_vg_box_glb}")
     list(GET _vg_box_status 1 _vg_box_err)
     message(
       STATUS
-        "assets test: Box.glb download failed (${_vg_box_err}); glTF tests will skip"
+        "assets test: Box.glb unavailable (${_vg_box_err}); glTF tests will skip"
     )
+    # A failed EXPECTED_HASH download can leave a partial file; remove it so a
+    # later configure refetches and the tests skip cleanly in the meantime.
     file(REMOVE "${_vg_box_glb}")
   endif()
 endif()
