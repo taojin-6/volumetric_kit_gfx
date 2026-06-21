@@ -22,6 +22,7 @@ add_executable(
   retire_queue_test.cpp
   allocator_test.cpp
   shader_test.cpp
+  descriptor_test.cpp
   graphics_pipeline_test.cpp
   render_target_test.cpp
   offscreen_target_test.cpp
@@ -41,6 +42,7 @@ vg_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
   "${PROJECT_SOURCE_DIR}/shaders/mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/mesh.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/mesh_mvp.vert"
   "${PROJECT_SOURCE_DIR}/shaders/reflect_probe.frag"
   "${PROJECT_SOURCE_DIR}/shaders/reflect_storage.comp")
 target_compile_definitions(

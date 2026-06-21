@@ -125,8 +125,8 @@ int run(GLFWwindow* window, int max_frames) {
   }
 
   vg::GraphicsPipelineDesc pipeline_desc;
-  pipeline_desc.vertex_shader = vert.value().handle();
-  pipeline_desc.fragment_shader = frag.value().handle();
+  pipeline_desc.vertex_shader = &vert.value();
+  pipeline_desc.fragment_shader = &frag.value();
   pipeline_desc.layout = swapchain.value().layout();
   auto pipeline =
       vg::GraphicsPipeline::create(device.value().handle(), pipeline_desc);

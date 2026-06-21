@@ -3,7 +3,9 @@
 
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace volumetric_kit::gfx {
 
@@ -18,11 +20,11 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   // fields are checked first because they need no device -- that keeps the
   // no-device validation tests meaningful -- and the device handle is checked
   // last, just before the first Vulkan call below.
-  if (desc.vertex_shader == VK_NULL_HANDLE ||
-      desc.fragment_shader == VK_NULL_HANDLE) {
+  if (desc.vertex_shader == nullptr || desc.fragment_shader == nullptr ||
+      !desc.vertex_shader->valid() || !desc.fragment_shader->valid()) {
     return Status::invalid_argument(
         "GraphicsPipeline::create: vertex_shader and fragment_shader must be "
-        "non-null");
+        "non-null, valid modules");
   }
   if (desc.layout.color_count == 0) {
     return Status::invalid_argument(
@@ -72,10 +74,76 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
         "GraphicsPipeline::create: device must be non-null");
   }
 
-  // Empty layout: the procedural-vertex path binds no descriptor sets and no
-  // push constants. Own it immediately so any early return below frees it.
+  // Build the pipeline layout from the shaders' reflected interface: merge the
+  // two stages' resources by (set, binding) -- OR-ing stage flags for a binding
+  // both declare -- into one descriptor-set layout per set, then a pipeline
+  // layout over those + a push-constant range. A set index no resource uses
+  // gets an empty layout so set numbering stays contiguous. Shaders that bind
+  // nothing yield an empty layout, exactly like the procedural path before.
+  std::vector<std::vector<VkDescriptorSetLayoutBinding>> bindings_per_set;
+  const auto add_resource = [&bindings_per_set](const ReflectedResource& r) {
+    if (r.set >= bindings_per_set.size()) {
+      bindings_per_set.resize(r.set + 1);
+    }
+    for (VkDescriptorSetLayoutBinding& b : bindings_per_set[r.set]) {
+      if (b.binding == r.binding) {
+        b.stageFlags |= r.stages;  // same binding declared in the other stage
+        return;
+      }
+    }
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = r.binding;
+    b.descriptorType = r.type;
+    b.descriptorCount = r.count;
+    b.stageFlags = r.stages;
+    bindings_per_set[r.set].push_back(b);
+  };
+  for (const ReflectedResource& r : desc.vertex_shader->resources()) {
+    add_resource(r);
+  }
+  for (const ReflectedResource& r : desc.fragment_shader->resources()) {
+    add_resource(r);
+  }
+
+  std::vector<DescriptorSetLayout> set_layouts;
+  std::vector<VkDescriptorSetLayout> set_layout_handles;
+  set_layouts.reserve(bindings_per_set.size());
+  set_layout_handles.reserve(bindings_per_set.size());
+  for (const std::vector<VkDescriptorSetLayoutBinding>& bindings :
+       bindings_per_set) {
+    auto set_layout = DescriptorSetLayout::create(
+        device, bindings.data(), static_cast<uint32_t>(bindings.size()));
+    if (!set_layout) {
+      return set_layout.status();
+    }
+    set_layout_handles.push_back(set_layout.value().handle());
+    set_layouts.push_back(std::move(set_layout).value());
+  }
+
+  // One push-constant range spanning the larger of the two stages' blocks
+  // (shaders sharing a block declare the same size), visible to whichever
+  // stage(s) declare one.
+  const uint32_t push_constant_size =
+      std::max(desc.vertex_shader->push_constant_size(),
+               desc.fragment_shader->push_constant_size());
+  VkPushConstantRange push_range{};
+  push_range.size = push_constant_size;
+  if (desc.vertex_shader->push_constant_size() > 0) {
+    push_range.stageFlags |= VK_SHADER_STAGE_VERTEX_BIT;
+  }
+  if (desc.fragment_shader->push_constant_size() > 0) {
+    push_range.stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
+
+  // Own the layout immediately so any early return below frees it.
   VkPipelineLayoutCreateInfo layout_info{};
   layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  layout_info.setLayoutCount = static_cast<uint32_t>(set_layout_handles.size());
+  layout_info.pSetLayouts = set_layout_handles.data();
+  if (push_constant_size > 0) {
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &push_range;
+  }
   VkPipelineLayout layout = VK_NULL_HANDLE;
   VG_VK_TRY(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout));
   UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> owned_layout(device,
@@ -84,11 +152,11 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   VkPipelineShaderStageCreateInfo stages[2]{};
   stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-  stages[0].module = desc.vertex_shader;
+  stages[0].module = desc.vertex_shader->handle();
   stages[0].pName = desc.entry_point;
   stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-  stages[1].module = desc.fragment_shader;
+  stages[1].module = desc.fragment_shader->handle();
   stages[1].pName = desc.entry_point;
 
   // Empty bindings/attributes (counts 0) drive the procedural path where the
@@ -196,6 +264,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
                                       &pipeline));
 
   GraphicsPipeline result;
+  result.set_layouts_ = std::move(set_layouts);
   result.layout_ = std::move(owned_layout);
   result.pipeline_ =
       UniqueHandle<VkPipeline, vkDestroyPipeline>(device, pipeline);

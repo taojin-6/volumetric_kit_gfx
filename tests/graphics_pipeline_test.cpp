@@ -19,6 +19,7 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -107,11 +108,11 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
   }
 
   vg::GraphicsPipeline build_pipeline(const vg::RenderTargetLayout& layout,
-                                      VkShaderModule vert,
-                                      VkShaderModule frag) {
+                                      const vg::ShaderModule& vert,
+                                      const vg::ShaderModule& frag) {
     vg::GraphicsPipelineDesc desc;
-    desc.vertex_shader = vert;
-    desc.fragment_shader = frag;
+    desc.vertex_shader = &vert;
+    desc.fragment_shader = &frag;
     desc.layout = layout;
     auto pipeline = vg::GraphicsPipeline::create(device(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
@@ -165,8 +166,7 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
   vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
-  vg::GraphicsPipeline pipeline =
-      build_pipeline(color_layout(), vert.handle(), frag.handle());
+  vg::GraphicsPipeline pipeline = build_pipeline(color_layout(), vert, frag);
   EXPECT_TRUE(pipeline.valid());
   EXPECT_NE(pipeline.handle(), VK_NULL_HANDLE);
   EXPECT_NE(pipeline.layout(), VK_NULL_HANDLE);
@@ -177,8 +177,8 @@ TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   // desc.layout left default: color_count == 0.
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
@@ -190,8 +190,8 @@ TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = color_layout();
   desc.entry_point = nullptr;  // rejected before Vulkan is touched
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
@@ -204,8 +204,8 @@ TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = color_layout();
   // Patch-list needs tessellation stages this pipeline does not provide.
   desc.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
@@ -221,8 +221,8 @@ TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = color_layout();
   auto pipeline = vg::GraphicsPipeline::create(VK_NULL_HANDLE, desc);
   ASSERT_FALSE(pipeline.ok());
@@ -232,8 +232,7 @@ TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
 TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
   vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
-  vg::GraphicsPipeline source =
-      build_pipeline(color_layout(), vert.handle(), frag.handle());
+  vg::GraphicsPipeline source = build_pipeline(color_layout(), vert, frag);
   ASSERT_TRUE(source.valid());
 
   vg::GraphicsPipeline moved(std::move(source));
@@ -246,10 +245,8 @@ TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
 TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
   vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
-  vg::GraphicsPipeline dst =
-      build_pipeline(color_layout(), vert.handle(), frag.handle());
-  vg::GraphicsPipeline src =
-      build_pipeline(color_layout(), vert.handle(), frag.handle());
+  vg::GraphicsPipeline dst = build_pipeline(color_layout(), vert, frag);
+  vg::GraphicsPipeline src = build_pipeline(color_layout(), vert, frag);
 
   dst = std::move(src);  // frees dst's pipeline + layout, then adopts src's
   EXPECT_TRUE(dst.valid());
@@ -259,8 +256,7 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
-  vg::GraphicsPipeline pipeline =
-      build_pipeline(color_layout(), vert.handle(), frag.handle());
+  vg::GraphicsPipeline pipeline = build_pipeline(color_layout(), vert, frag);
 
   // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
   // per-member this != &other guard must keep the pipeline intact.
@@ -284,7 +280,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
-      build_pipeline(target.value().layout(), vert.handle(), frag.handle());
+      build_pipeline(target.value().layout(), vert, frag);
   ASSERT_TRUE(pipeline.valid());
 
   auto pool = vg::CommandPool::create(device(), device_->graphics_family());
@@ -400,13 +396,14 @@ vg::Buffer make_host_buffer(vg::Allocator& allocator, const void* data,
 }
 
 vg::GraphicsPipeline build_mesh_pipeline(
-    VkDevice device, const vg::RenderTargetLayout& layout, VkShaderModule vert,
-    VkShaderModule frag, const VkVertexInputBindingDescription* bindings,
-    uint32_t binding_count, const VkVertexInputAttributeDescription* attrs,
-    uint32_t attr_count, bool depth_test) {
+    VkDevice device, const vg::RenderTargetLayout& layout,
+    const vg::ShaderModule& vert, const vg::ShaderModule& frag,
+    const VkVertexInputBindingDescription* bindings, uint32_t binding_count,
+    const VkVertexInputAttributeDescription* attrs, uint32_t attr_count,
+    bool depth_test) {
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert;
-  desc.fragment_shader = frag;
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = layout;
   desc.vertex_bindings = bindings;
   desc.vertex_binding_count = binding_count;
@@ -423,8 +420,8 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestWithoutDepthFormatRejected) {
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = color_layout();  // carries no depth format
   desc.depth_test = true;        // rejected before Vulkan is touched
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
@@ -436,8 +433,8 @@ TEST_F(GraphicsPipelineDeviceTest, VertexBindingCountWithoutPointerRejected) {
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = color_layout();
   desc.vertex_binding_count = 1;  // but vertex_bindings stays null
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
@@ -451,8 +448,8 @@ TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
   vg::RenderTargetLayout layout = color_layout();
   layout.depth_format = kDepthFormat;  // a depth format is present...
   vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = vert.handle();
-  desc.fragment_shader = frag.handle();
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
   desc.layout = layout;
   desc.depth_write = true;  // ...but depth_write without depth_test is a no-op
   desc.depth_test = false;  // in Vulkan, so create() rejects the combination.
@@ -486,8 +483,8 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), target.value().layout(), vert.handle(), frag.handle(), &binding,
-      1, attrs.data(), static_cast<uint32_t>(attrs.size()), false);
+      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
+      static_cast<uint32_t>(attrs.size()), false);
   ASSERT_TRUE(pipeline.valid());
 
   render_mesh(target.value(), pipeline, vbuf.handle(), VK_NULL_HANDLE, 3);
@@ -541,8 +538,8 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), target.value().layout(), vert.handle(), frag.handle(), &binding,
-      1, attrs.data(), static_cast<uint32_t>(attrs.size()), true);
+      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
+      static_cast<uint32_t>(attrs.size()), true);
   ASSERT_TRUE(pipeline.valid());
 
   render_mesh(target.value(), pipeline, vbuf.handle(), ibuf.handle(), 6);
@@ -555,6 +552,120 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   EXPECT_GT(px[center + 2], 128) << "near (blue) surface should win the test";
   EXPECT_LT(px[center + 0], 128) << "far (red) surface must be rejected";
   EXPECT_EQ(px[center + 3], 255);
+}
+
+// --- Descriptor sets: an MVP uniform reflected + bound through the pipeline
+// ---
+
+TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
+  constexpr uint32_t kSize = 32;
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  vg::OffscreenTargetDesc target_desc;
+  target_desc.extent = {kSize, kSize};
+  target_desc.color_format = kFormat;
+  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+
+  // A small green triangle around the origin -- it covers the image center when
+  // drawn untransformed.
+  const MeshVertex verts[3] = {
+      {{-0.25f, -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+      {{0.25f, -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+      {{0.0f, 0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+  };
+  vg::Buffer vbuf = make_host_buffer(allocator.value(), verts, sizeof(verts),
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+  // The MVP (column-major) translates by (-0.6, -0.6) in clip space, moving the
+  // triangle out of the center and into the top-left quadrant.
+  const float mvp[16] = {
+      1.0f,  0.0f,  0.0f, 0.0f,  // column 0
+      0.0f,  1.0f,  0.0f, 0.0f,  // column 1
+      0.0f,  0.0f,  1.0f, 0.0f,  // column 2
+      -0.6f, -0.6f, 0.0f, 1.0f,  // column 3 (translation)
+  };
+  vg::Buffer ubo = make_host_buffer(allocator.value(), mvp, sizeof(mvp),
+                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  const VkVertexInputBindingDescription binding = mesh_binding();
+  const auto attrs = mesh_attributes();
+  vg::GraphicsPipeline pipeline = build_mesh_pipeline(
+      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
+      static_cast<uint32_t>(attrs.size()), false);
+  ASSERT_TRUE(pipeline.valid());
+
+  // The vertex shader's MVP is one descriptor set (set 0, a uniform buffer) the
+  // pipeline reflected automatically.
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);
+  ASSERT_NE(pipeline.descriptor_set_layout(0), VK_NULL_HANDLE);
+
+  const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+  auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
+  ASSERT_TRUE(set.ok()) << set.status().message();
+  set.value().write_uniform_buffer(0, ubo.handle(), 0, sizeof(mvp));
+
+  auto cmd_pool = vg::CommandPool::create(device(), device_->graphics_family());
+  ASSERT_TRUE(cmd_pool.ok()) << cmd_pool.status().message();
+  auto cmd = cmd_pool.value().allocate_primary();
+  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+  ASSERT_TRUE(
+      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+  const VkCommandBuffer raw = cmd.value().handle();
+
+  barrier_to_color(raw, target.value().color_image());
+  vg::RenderTargetBeginInfo begin_info;
+  begin_info.clear_color.float32[3] = 1.0f;  // opaque-black clear
+  const vg::RenderTarget rt = target.value().target();
+  rt.begin(raw, begin_info);
+
+  vkCmdBindPipeline(raw, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+  set_full_viewport_scissor(raw, kSize);
+  const VkDeviceSize offset = 0;
+  const VkBuffer vb = vbuf.handle();
+  vkCmdBindVertexBuffers(raw, 0, 1, &vb, &offset);
+  const VkDescriptorSet ds = set.value().handle();
+  vkCmdBindDescriptorSets(raw, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline.layout(), 0, 1, &ds, 0, nullptr);
+  vkCmdDraw(raw, 3, 1, 0, 0);
+
+  rt.end(raw);
+  target.value().record_readback(raw);
+  ASSERT_TRUE(cmd.value().end().ok());
+  submit_and_wait(raw);
+
+  const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+  ASSERT_NE(px, nullptr);
+  const auto pixel = [px](uint32_t x, uint32_t y) {
+    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
+  };
+
+  // The center -- where the untransformed triangle would have rasterized -- is
+  // the untouched opaque-black clear: the MVP moved the triangle away.
+  const uint8_t* mid = pixel(kSize / 2, kSize / 2);
+  EXPECT_EQ(mid[0], 0);
+  EXPECT_EQ(mid[1], 0);
+  EXPECT_EQ(mid[2], 0);
+  EXPECT_EQ(mid[3], 255);
+
+  // ...and a green fragment landed in the top-left quadrant instead, proving
+  // the uniform was applied.
+  bool found_green = false;
+  for (uint32_t y = 0; y < kSize / 2 && !found_green; ++y) {
+    for (uint32_t x = 0; x < kSize / 2; ++x) {
+      const uint8_t* p = pixel(x, y);
+      if (p[1] > 128 && p[0] < 128 && p[2] < 128) {
+        found_green = true;
+        break;
+      }
+    }
+  }
+  EXPECT_TRUE(found_green) << "MVP-translated triangle should appear top-left";
 }
 
 }  // namespace

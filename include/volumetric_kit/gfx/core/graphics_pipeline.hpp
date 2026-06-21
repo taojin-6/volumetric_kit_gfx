@@ -7,9 +7,14 @@
 /// @brief A graphics `VkPipeline` and its `VkPipelineLayout`, built from a
 ///        vertex + fragment stage for a render-target layout.
 
+#include <cstdint>
+#include <vector>
+
+#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
+#include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -20,19 +25,24 @@ namespace volumetric_kit::gfx {
 /// Drives both procedural-vertex draws (leave the vertex-input fields empty and
 /// the vertex shader computes positions from `gl_VertexIndex`) and
 /// vertex-buffer draws (describe @ref vertex_bindings + @ref
-/// vertex_attributes). The pipeline layout is still empty (no descriptor sets,
-/// no push constants). The fixed-function state is fixed at sensible defaults:
-/// non-blended color attachments, no culling, and dynamic viewport + scissor
-/// (set at record time). Depth testing is off unless @ref depth_test is set,
-/// which requires @ref layout to carry a depth format. The color/depth formats
-/// and sample count come from @ref layout — the pipeline renders dynamically
-/// (`vkCmdBeginRendering`), so there is no `VkRenderPass`. Blending and
-/// reflection-driven descriptor layouts are added as the pipelines tier grows.
+/// vertex_attributes). The pipeline layout is derived by reflection: the
+/// descriptor-set layouts + push-constant range come from the shaders' declared
+/// resources (see @ref ShaderModule::resources), and the built sets are exposed
+/// via @ref GraphicsPipeline::descriptor_set_layout. The fixed-function state
+/// is fixed at sensible defaults: non-blended color attachments, no culling,
+/// and dynamic viewport + scissor (set at record time). Depth testing is
+/// enabled via @ref depth_test, which requires @ref layout to carry a depth
+/// format.
+/// The color/depth formats and sample count come from @ref layout — the
+/// pipeline renders dynamically (`vkCmdBeginRendering`), so there is no
+/// `VkRenderPass`. Blending is added as the pipelines tier grows.
 struct GraphicsPipelineDesc {
-  /// Vertex-stage module. Must be non-`VK_NULL_HANDLE`.
-  VkShaderModule vertex_shader = VK_NULL_HANDLE;
-  /// Fragment-stage module. Must be non-`VK_NULL_HANDLE`.
-  VkShaderModule fragment_shader = VK_NULL_HANDLE;
+  /// Vertex-stage module; the pipeline reflects its descriptor interface. Must
+  /// be non-null and outlive @ref GraphicsPipeline::create.
+  const ShaderModule* vertex_shader = nullptr;
+  /// Fragment-stage module; reflected like @ref vertex_shader. Must be non-null
+  /// and outlive @ref GraphicsPipeline::create.
+  const ShaderModule* fragment_shader = nullptr;
   /// The format + sample signature of the targets this pipeline draws into,
   /// baked in via `VkPipelineRenderingCreateInfo`. Must carry at least one
   /// color attachment; the pipeline is then compatible with any @ref
@@ -78,8 +88,8 @@ struct GraphicsPipelineDesc {
 ///
 /// @code
 /// GraphicsPipelineDesc desc;
-/// desc.vertex_shader = vert.handle();
-/// desc.fragment_shader = frag.handle();
+/// desc.vertex_shader = &vert;    // ShaderModule, reflected for the layout
+/// desc.fragment_shader = &frag;
 /// desc.layout = offscreen.layout();  // or any RenderTarget's layout
 /// Result<GraphicsPipeline> pipeline = GraphicsPipeline::create(device, desc);
 /// if (!pipeline) return pipeline.status();
@@ -96,8 +106,8 @@ class VG_CORE_API GraphicsPipeline {
   /// @param desc    The stages, target layout, and assembly state to build
   /// from.
   /// @pre @p device is non-`VK_NULL_HANDLE`; @p desc.vertex_shader and
-  ///      @p desc.fragment_shader are non-`VK_NULL_HANDLE`; @p desc.layout has
-  ///      between 1 and @ref RenderTargetLayout::kMaxColorAttachments color
+  ///      @p desc.fragment_shader are non-null and `valid()`; @p desc.layout
+  ///      has between 1 and @ref RenderTargetLayout::kMaxColorAttachments color
   ///      attachments, each with a defined format; @p desc.entry_point is
   ///      non-null; @p desc.topology is not `VK_PRIMITIVE_TOPOLOGY_PATCH_LIST`;
   ///      each non-zero vertex binding/attribute count has a non-null pointer;
@@ -126,9 +136,25 @@ class VG_CORE_API GraphicsPipeline {
   /// @return `true` if this owns a pipeline.
   bool valid() const noexcept { return pipeline_.valid(); }
 
+  /// @return The number of descriptor sets the pipeline's layout declares
+  ///         (reflected from the shaders; 0 when they bind nothing).
+  uint32_t descriptor_set_count() const noexcept {
+    return static_cast<uint32_t>(set_layouts_.size());
+  }
+
+  /// @return The `VkDescriptorSetLayout` for descriptor set @p set — pass it to
+  ///         @ref DescriptorPool::allocate to make a matching set — or
+  ///         `VK_NULL_HANDLE` when @p set is beyond what the shaders declare.
+  VkDescriptorSetLayout descriptor_set_layout(uint32_t set) const noexcept {
+    return set < set_layouts_.size() ? set_layouts_[set].handle()
+                                     : VK_NULL_HANDLE;
+  }
+
  private:
-  // Declared layout-before-pipeline so reverse-order member destruction frees
-  // the pipeline first, then the layout it was built with.
+  // Declared sets-before-layout-before-pipeline so reverse-order member
+  // destruction frees the pipeline first, then its layout, then the descriptor
+  // set layouts both were built from.
+  std::vector<DescriptorSetLayout> set_layouts_;
   UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> layout_;
   UniqueHandle<VkPipeline, vkDestroyPipeline> pipeline_;
 };
