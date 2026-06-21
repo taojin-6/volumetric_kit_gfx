@@ -668,4 +668,68 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   EXPECT_TRUE(found_green) << "MVP-translated triangle should appear top-left";
 }
 
+// --- Rasterizer state from the desc: face culling ---------------------------
+
+TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
+  // Build a back-face-culling pipeline and draw a center-covering triangle once
+  // per winding (the second is the first with two vertices swapped). Culling
+  // must drop exactly one -- proving cull_mode reaches the rasterizer --
+  // regardless of which winding the framebuffer treats as front. Without the
+  // desc wired through, both would draw and this would be equal.
+  constexpr uint32_t kSize = 32;
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  const VkVertexInputBindingDescription binding = mesh_binding();
+  const auto attrs = mesh_attributes();
+
+  const MeshVertex ccw[3] = {
+      {{-0.8f, -0.8f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+      {{0.8f, -0.8f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+      {{0.0f, 0.8f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+  };
+  const MeshVertex cw[3] = {ccw[0], ccw[2], ccw[1]};  // reversed winding
+
+  // Renders `tri` through a back-face-culling pipeline; returns whether green
+  // reached the image center (the triangle was front-facing, not culled).
+  auto center_drawn = [&](const MeshVertex* tri) {
+    vg::OffscreenTargetDesc td;
+    td.extent = {kSize, kSize};
+    td.color_format = kFormat;
+    auto target = vg::OffscreenTarget::create(allocator.value(), td);
+    EXPECT_TRUE(target.ok()) << target.status().message();
+
+    vg::GraphicsPipelineDesc desc;
+    desc.vertex_shader = &vert;
+    desc.fragment_shader = &frag;
+    desc.layout = target.value().layout();
+    desc.vertex_bindings = &binding;
+    desc.vertex_binding_count = 1;
+    desc.vertex_attributes = attrs.data();
+    desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
+    desc.cull_mode = VK_CULL_MODE_BACK_BIT;
+    auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+    EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+    vg::Buffer vbuf =
+        make_host_buffer(allocator.value(), tri, sizeof(MeshVertex) * 3,
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    render_mesh(target.value(), pipeline.value(), vbuf.handle(), VK_NULL_HANDLE,
+                3);
+    const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+    // EXPECT (not ASSERT) + early return: ASSERT's void return can't compile in
+    // this bool-returning lambda, so guard the deref explicitly.
+    EXPECT_NE(px, nullptr);
+    if (px == nullptr) {
+      return false;
+    }
+    const size_t c = (static_cast<size_t>(kSize / 2) * kSize + kSize / 2) * 4;
+    return px[c + 1] > 128;
+  };
+
+  EXPECT_NE(center_drawn(ccw), center_drawn(cw));
+}
+
 }  // namespace
