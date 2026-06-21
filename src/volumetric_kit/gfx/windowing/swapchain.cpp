@@ -261,7 +261,7 @@ VkImage Swapchain::image(uint32_t image_index) const {
 }
 
 VkImageView Swapchain::image_view(uint32_t image_index) const {
-  VG_CHECK(image_index < views_.size(),
+  VG_CHECK(image_index < image_count(),
            "Swapchain::image_view: image_index out of range");
   return views_[image_index];
 }

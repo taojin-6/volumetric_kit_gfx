@@ -97,6 +97,9 @@ struct DrawItem {
   glm::mat4 world{1.0f};
 };
 
+// TODO: load_spirv + framebuffer_extent are duplicated across examples
+// 01/02/03; hoist the shared pieces into an examples/common helper in a focused
+// cleanup.
 std::vector<uint32_t> load_spirv(const char* path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -177,7 +180,16 @@ assets::Model load_model_or_cube(const char* model_path, bool* ok) {
 // Walk the scene tree, composing each node's transform down to world space, and
 // emit one DrawItem per (instanced) mesh primitive.
 void collect_node(const assets::Model& model, uint32_t node_index,
-                  const glm::mat4& parent, std::vector<DrawItem>& out) {
+                  const glm::mat4& parent, std::vector<DrawItem>& out,
+                  std::vector<bool>& visited) {
+  // Guard a malformed node graph: glTF requires a strict forest, but an
+  // arbitrary --model file may not be conformant. An out-of-range or
+  // already-visited index (a cycle) would otherwise recurse until the stack
+  // overflows; skip it instead.
+  if (node_index >= model.scene.nodes.size() || visited[node_index]) {
+    return;
+  }
+  visited[node_index] = true;
   const assets::Node& node = model.scene.nodes[node_index];
   const glm::mat4 world = parent * node.transform;
   if (node.mesh != assets::Node::kNoMesh) {
@@ -186,14 +198,15 @@ void collect_node(const assets::Model& model, uint32_t node_index,
     }
   }
   for (uint32_t child : node.children) {
-    collect_node(model, child, world, out);
+    collect_node(model, child, world, out, visited);
   }
 }
 
 std::vector<DrawItem> collect_draws(const assets::Model& model) {
   std::vector<DrawItem> draws;
+  std::vector<bool> visited(model.scene.nodes.size(), false);
   for (uint32_t root : model.scene.roots) {
-    collect_node(model, root, glm::mat4(1.0f), draws);
+    collect_node(model, root, glm::mat4(1.0f), draws, visited);
   }
   // Some files carry meshes but no scene graph: draw every mesh at the origin.
   if (draws.empty()) {
@@ -285,7 +298,12 @@ std::vector<GpuMesh> upload_meshes(vg::Allocator& allocator,
     gpu[i].indices = upload_buffer(allocator, mesh.indices.data(),
                                    mesh.indices.size() * sizeof(uint32_t),
                                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ok);
-    gpu[i].index_count = static_cast<uint32_t>(mesh.indices.size());
+    // Only mark the mesh drawable once both buffers uploaded: a failed upload
+    // leaves index_count 0 (skipped), keeping "index_count > 0 => valid
+    // buffers".
+    if (*ok) {
+      gpu[i].index_count = static_cast<uint32_t>(mesh.indices.size());
+    }
   }
   return gpu;
 }
@@ -323,6 +341,36 @@ vg::Result<vg::GraphicsPipeline> build_pipeline(
   desc.depth_test = true;
   desc.depth_write = true;
   return vg::GraphicsPipeline::create(device, desc);
+}
+
+struct Shaders {
+  vg::ShaderModule vert;
+  vg::ShaderModule frag;
+};
+
+// Load + create both model shader modules from VG_EXAMPLE_SHADER_DIR; null *ok
+// on failure. Shared by both render paths.
+Shaders load_shaders(VkDevice device, bool* ok) {
+  const std::vector<uint32_t> vert_code =
+      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.vert.spv");
+  const std::vector<uint32_t> frag_code =
+      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.frag.spv");
+  if (vert_code.empty() || frag_code.empty()) {
+    std::fprintf(stderr, "missing compiled shaders in %s\n",
+                 VG_EXAMPLE_SHADER_DIR);
+    *ok = false;
+    return {};
+  }
+  auto vert = vg::ShaderModule::create(device, vert_code.data(),
+                                       vert_code.size() * sizeof(uint32_t));
+  auto frag = vg::ShaderModule::create(device, frag_code.data(),
+                                       frag_code.size() * sizeof(uint32_t));
+  if (!vert.ok() || !frag.ok()) {
+    std::fprintf(stderr, "shader module creation failed\n");
+    *ok = false;
+    return {};
+  }
+  return {std::move(vert).value(), std::move(frag).value()};
 }
 
 // Bind the pipeline, set a full-target viewport/scissor, and draw every item
@@ -495,23 +543,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
       frame_camera(orbit, compute_bounds(model, draws));
   orbit.set_azimuth(0.7f);  // a fixed three-quarter view for the still
 
-  const std::vector<uint32_t> vert_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.vert.spv");
-  const std::vector<uint32_t> frag_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.frag.spv");
-  if (vert_code.empty() || frag_code.empty()) {
-    std::fprintf(stderr, "missing compiled shaders in %s\n",
-                 VG_EXAMPLE_SHADER_DIR);
-    return 1;
-  }
-  auto vert =
-      vg::ShaderModule::create(device.value().handle(), vert_code.data(),
-                               vert_code.size() * sizeof(uint32_t));
-  auto frag =
-      vg::ShaderModule::create(device.value().handle(), frag_code.data(),
-                               frag_code.size() * sizeof(uint32_t));
-  if (!vert.ok() || !frag.ok()) {
-    std::fprintf(stderr, "shader module creation failed\n");
+  Shaders shaders = load_shaders(device.value().handle(), &ok);
+  if (!ok) {
     return 1;
   }
 
@@ -530,7 +563,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   VkVertexInputAttributeDescription attrs[2];
   mesh_attributes(attrs);
   auto pipeline =
-      build_pipeline(device.value().handle(), vert.value(), frag.value(),
+      build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
                      target.value().layout(), &binding, attrs);
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
@@ -644,23 +677,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   const std::pair<float, float> clip =
       frame_camera(orbit, compute_bounds(model, draws));
 
-  const std::vector<uint32_t> vert_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.vert.spv");
-  const std::vector<uint32_t> frag_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.frag.spv");
-  if (vert_code.empty() || frag_code.empty()) {
-    std::fprintf(stderr, "missing compiled shaders in %s\n",
-                 VG_EXAMPLE_SHADER_DIR);
-    return 1;
-  }
-  auto vert =
-      vg::ShaderModule::create(device.value().handle(), vert_code.data(),
-                               vert_code.size() * sizeof(uint32_t));
-  auto frag =
-      vg::ShaderModule::create(device.value().handle(), frag_code.data(),
-                               frag_code.size() * sizeof(uint32_t));
-  if (!vert.ok() || !frag.ok()) {
-    std::fprintf(stderr, "shader module creation failed\n");
+  Shaders shaders = load_shaders(device.value().handle(), &ok);
+  if (!ok) {
     return 1;
   }
 
@@ -690,7 +708,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   VkVertexInputAttributeDescription attrs[2];
   mesh_attributes(attrs);
   auto pipeline =
-      build_pipeline(device.value().handle(), vert.value(), frag.value(),
+      build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
                      pipeline_layout, &binding, attrs);
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
@@ -699,6 +717,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
   // One frame in flight: the single depth image is then never written by two
   // frames at once (see the file header).
+  // TODO: promote depth into the windowing tier (a per-slot depth ring on the
+  // swapchain's RenderTarget) so consumers get a depth-capable target and can
+  // run more frames in flight, instead of the example owning a single depth.
   auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 1);
   if (!loop.ok()) {
     std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
@@ -711,6 +732,18 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       break;
     }
     glfwPollEvents();
+
+    // Pause while minimized (zero framebuffer): a zero-extent swapchain/depth
+    // recreate would fail. Block until the window is restored or closed.
+    VkExtent2D fb = framebuffer_extent(window);
+    while ((fb.width == 0 || fb.height == 0) &&
+           !glfwWindowShouldClose(window)) {
+      glfwWaitEvents();
+      fb = framebuffer_extent(window);
+    }
+    if (glfwWindowShouldClose(window)) {
+      break;
+    }
 
     auto frame = loop.value().begin_frame();
     if (!frame.ok()) {
