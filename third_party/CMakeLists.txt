@@ -53,11 +53,11 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
-# --- glm: header-only vector/matrix math (camera tier) ------------------------
+# --- glm: header-only vector/matrix math (camera + assets tiers) --------------
 # Only vendored when the top level did not find a system glm. glm's CMake
-# defines the same glm::glm target FetchContent exposes, so the camera tier
-# links one name either way. Pinned to a tagged release; its tests are off. Its
-# install is tied to VG_INSTALL: gfx_camera links glm PUBLIC, so when we
+# defines the same glm::glm target FetchContent exposes, so the tiers link one
+# name either way. Pinned to a tagged release; its tests are off. Its install is
+# tied to VG_INSTALL: gfx_camera/gfx_assets link glm PUBLIC, so when we
 # install/export we need glm in an export set too -- letting glm run its own
 # install (which exports the glm target and ships a glmConfig into our prefix)
 # satisfies that and lets the package's find_dependency(glm) resolve the
@@ -75,6 +75,20 @@ if(NOT VG_HAVE_SYSTEM_GLM)
     GIT_TAG 1.0.3
     GIT_SHALLOW TRUE)
 endif()
+
+# --- tinygltf: glTF 2.0 loader for the assets tier (header-only) -------------
+# tinygltf bundles its deps (nlohmann/json + stb_image) in the repo root and is
+# implemented in one gfx_assets TU (tinygltf_impl.cpp), exactly like VMA above.
+# SOURCE_SUBDIR names a nonexistent dir so MakeAvailable populates the sources
+# without running tinygltf's own CMakeLists (which builds its loader_example and
+# installs targets we do not want). The assets tier compiles against this single
+# include dir and links no Vulkan -- it is pure CPU (glm + tinygltf only).
+FetchContent_Declare(
+  tinygltf
+  GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+  GIT_TAG v2.9.7
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR _headers_only_)
 
 # --- spirv-cross: SPIR-V reflection (reflection-driven descriptor layouts) ----
 set(SPIRV_CROSS_CLI
@@ -110,10 +124,10 @@ FetchContent_Declare(
   GIT_TAG vulkan-sdk-1.4.350.0
   GIT_SHALLOW TRUE)
 
-# VMA + the vendored Vulkan headers are always needed by the library; only the
-# SPIR-V sources wait for the test build.
+# VMA + the vendored Vulkan headers + tinygltf are always needed by the library;
+# only the SPIR-V sources wait for the test build.
 FetchContent_MakeAvailable(VulkanMemoryAllocator VulkanHeaders
-                           VulkanUtilityLibraries)
+                           VulkanUtilityLibraries tinygltf)
 
 # glm only when no system copy was found (see the declaration guard above).
 if(NOT VG_HAVE_SYSTEM_GLM)
@@ -131,6 +145,12 @@ set(VG_VULKAN_HEADERS_INCLUDE
     PARENT_SCOPE)
 set(VG_VULKAN_UTILITY_INCLUDE
     "${vulkanutilitylibraries_SOURCE_DIR}/include"
+    PARENT_SCOPE)
+
+# tinygltf + its bundled json/stb headers live in the repo root; the assets tier
+# compiles against this dir and implements the library in one TU.
+set(VG_TINYGLTF_INCLUDE_DIR
+    "${tinygltf_SOURCE_DIR}"
     PARENT_SCOPE)
 
 if(VG_BUILD_TESTS)

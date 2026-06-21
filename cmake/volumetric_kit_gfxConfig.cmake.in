@@ -3,15 +3,17 @@
 
 @PACKAGE_INIT@
 
-# Re-find the PUBLIC dependencies. VMA is a PRIVATE implementation detail (header-only,
-# implemented in one library TU), so it is deliberately absent here. find_dependency(Vulkan)
-# also re-supplies the loader (Vulkan::Vulkan) our static archive links privately.
+# Re-find the PUBLIC dependencies. VMA + tinygltf are PRIVATE implementation
+# details (header-only, each implemented in one library TU), so they are
+# deliberately absent here. find_dependency(Vulkan) also re-supplies the loader
+# (Vulkan::Vulkan) our static archive links privately.
 include(CMakeFindDependencyMacro)
 find_dependency(Vulkan)
 
-# glm is a PUBLIC dependency of gfx_camera (its public headers name glm types), so
-# the installed package re-finds it. The vendored build-from-source copy is not
-# re-exported, so consuming an installed package requires a discoverable glm.
+# glm is a PUBLIC dependency of the camera and assets tiers (their public headers
+# name glm types), so the installed package re-finds it. The vendored build-from-
+# source copy is not re-exported, so consuming an installed package requires a
+# discoverable glm.
 find_dependency(glm)
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_gfxTargets.cmake")

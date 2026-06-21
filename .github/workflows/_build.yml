@@ -41,7 +41,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
-            libglfw3-dev xvfb \
+            libglfw3-dev libglm-dev xvfb \
             mesa-vulkan-drivers vulkan-tools
           # mesa-vulkan-drivers provides lavapipe (software Vulkan) so GPU-dependent
           # tests can run on these GPU-less runners; vulkan-tools provides vulkaninfo.
@@ -61,7 +61,7 @@ jobs:
           # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
           ok=0
           for attempt in 1 2 3; do
-            if brew install cmake molten-vk glfw \
+            if brew install cmake molten-vk glfw glm \
                 vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross; then
               ok=1
               break

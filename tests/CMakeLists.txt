@@ -68,3 +68,43 @@ target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
                                              GTest::gtest_main)
 vg_target_warnings(vg_camera_test)
 gtest_discover_tests(vg_camera_test)
+
+# assets tier: format-neutral model + glTF loader (CPU-only; runs anywhere, no
+# device needed). The glTF test loads the Khronos Box.glb sample (CC0); fetch it
+# at configure time so CI does not need it committed. The download is best-
+# effort -- if the network is unavailable the file is simply absent and the
+# glTF-loading tests skip (the PointCloud tests need no fixture). VG_ASSETS_DIR
+# is defined only when the fixture is present.
+set(_vg_assets_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+set(_vg_box_glb "${_vg_assets_dir}/Box.glb")
+if(NOT EXISTS "${_vg_box_glb}")
+  file(MAKE_DIRECTORY "${_vg_assets_dir}")
+  message(STATUS "assets test: fetching Box.glb fixture")
+  file(
+    DOWNLOAD
+    "https://github.com/KhronosGroup/glTF-Sample-Assets/raw/main/Models/Box/glTF-Binary/Box.glb"
+    "${_vg_box_glb}"
+    STATUS _vg_box_status
+    TIMEOUT 30)
+  list(GET _vg_box_status 0 _vg_box_rc)
+  if(NOT _vg_box_rc EQUAL 0)
+    list(GET _vg_box_status 1 _vg_box_err)
+    message(
+      STATUS
+        "assets test: Box.glb download failed (${_vg_box_err}); glTF tests will skip"
+    )
+    file(REMOVE "${_vg_box_glb}")
+  endif()
+endif()
+
+add_executable(vg_assets_test assets_test.cpp)
+target_link_libraries(vg_assets_test PRIVATE volumetric_kit::gfx_assets
+                                             GTest::gtest_main)
+vg_target_warnings(vg_assets_test)
+if(EXISTS "${_vg_box_glb}")
+  target_compile_definitions(vg_assets_test
+                             PRIVATE VG_ASSETS_DIR="${_vg_assets_dir}")
+endif()
+# Prefix the ctest names ("assets.GltfLoader.*", "assets.PointCloud.*") so this
+# CPU-only tier is selectable as a group with `ctest -R assets`.
+gtest_discover_tests(vg_assets_test TEST_PREFIX "assets.")
