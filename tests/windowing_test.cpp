@@ -205,6 +205,12 @@ TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
   EXPECT_EQ(layout.color_count, 1u);
   EXPECT_EQ(layout.color_formats[0], sc.format());
   EXPECT_TRUE(sc.render_target(0).valid());
+  // Every image exposes a non-null VkImage + color VkImageView, so a caller can
+  // assemble its own render target over it (e.g. adding a depth attachment).
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    EXPECT_NE(sc.image(i), VK_NULL_HANDLE);
+    EXPECT_NE(sc.image_view(i), VK_NULL_HANDLE);
+  }
 }
 
 TEST_F(WindowingTest, FrameLoopRendersAndPresents) {

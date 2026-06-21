@@ -50,3 +50,21 @@ vg_target_warnings(example_02_imgui)
 set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp" PROPERTIES COMPILE_OPTIONS "-w")
+
+# 03_model: load a glTF model (io tier) and view it depth-tested through Surface
+# + Swapchain + FrameLoop, with an auto-framing OrbitCamera (camera tier) and a
+# reflected per-draw MVP push constant. Links the io + camera tiers on top of
+# windowing; the Vulkan loader directly because it records vkCmd* itself.
+add_executable(example_03_model 03_model/main.cpp)
+target_link_libraries(
+  example_03_model PRIVATE volumetric_kit::gfx_windowing volumetric_kit::gfx_io
+                           volumetric_kit::gfx_camera glfw Vulkan::Vulkan)
+vg_target_warnings(example_03_model)
+
+vg_compile_shaders(
+  example_03_model OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/model.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/model.frag")
+target_compile_definitions(
+  example_03_model
+  PRIVATE VG_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
