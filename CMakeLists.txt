@@ -60,9 +60,23 @@ include(vg_shaders)
 # Resolved at the top level so their imported targets are visible to every
 # subdirectory, not just the one find_package() ran in. Provides Vulkan::Headers
 # (the public-API types) and Vulkan::Vulkan (the loader our implementation links
-# privately). glm is not found here: no tier names a glm type yet — the
-# camera/assets tiers will add find_package(glm) when they land.
+# privately).
 find_package(Vulkan REQUIRED)
+
+# glm: the camera tier's only dependency (its public matrix/vector types).
+# Prefer a system glm (its config defines glm::glm); fall back to the pinned
+# vendored copy from third_party/ when none is installed -- so the build is
+# self-contained on CI runners that don't ship glm, matching how the other deps
+# are vendored. VG_HAVE_SYSTEM_GLM records which path won, so third_party/ only
+# vendors glm (and lets it run its own install/export) when no system copy
+# exists. glm is a PUBLIC dependency either way, so the installed package config
+# re-finds it unconditionally (find_dependency(glm)).
+find_package(glm CONFIG QUIET)
+if(glm_FOUND)
+  set(VG_HAVE_SYSTEM_GLM ON)
+else()
+  set(VG_HAVE_SYSTEM_GLM OFF)
+endif()
 
 # --- Dependencies + library --------------------------------------------------
 add_subdirectory(third_party)

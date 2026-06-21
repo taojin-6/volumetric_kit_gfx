@@ -3,8 +3,9 @@
 
 # Dependencies. System via find_package: the Vulkan loader (linked at runtime)
 # and glslc/glslangValidator (shader compilation) -- re-findable, keeping the
-# installed export clean (consumers find_dependency(Vulkan)). (glm is not a
-# dependency yet; see the top-level CMakeLists.txt.) Vendored via pinned
+# installed export clean (consumers find_dependency(Vulkan)). glm (camera tier)
+# is preferred from the system too (resolved at the top level), falling back to
+# a pinned vendored copy below when none is installed. Vendored via pinned
 # FetchContent: Vulkan-Headers + Vulkan-Utility-Libraries (the library compiles
 # against these for authoritative VkFormat metadata), VMA (header-only, built in
 # one gfx_core TU), spirv-cross (reflection; built by tests now to prove it
@@ -52,6 +53,29 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
+# --- glm: header-only vector/matrix math (camera tier) ------------------------
+# Only vendored when the top level did not find a system glm. glm's CMake
+# defines the same glm::glm target FetchContent exposes, so the camera tier
+# links one name either way. Pinned to a tagged release; its tests are off. Its
+# install is tied to VG_INSTALL: gfx_camera links glm PUBLIC, so when we
+# install/export we need glm in an export set too -- letting glm run its own
+# install (which exports the glm target and ships a glmConfig into our prefix)
+# satisfies that and lets the package's find_dependency(glm) resolve the
+# co-installed copy.
+if(NOT VG_HAVE_SYSTEM_GLM)
+  set(GLM_BUILD_TESTS
+      OFF
+      CACHE BOOL "" FORCE)
+  set(GLM_BUILD_INSTALL
+      ${VG_INSTALL}
+      CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.3
+    GIT_SHALLOW TRUE)
+endif()
+
 # --- spirv-cross: SPIR-V reflection (reflection-driven descriptor layouts) ----
 set(SPIRV_CROSS_CLI
     OFF
@@ -90,6 +114,11 @@ FetchContent_Declare(
 # SPIR-V sources wait for the test build.
 FetchContent_MakeAvailable(VulkanMemoryAllocator VulkanHeaders
                            VulkanUtilityLibraries)
+
+# glm only when no system copy was found (see the declaration guard above).
+if(NOT VG_HAVE_SYSTEM_GLM)
+  FetchContent_MakeAvailable(glm)
+endif()
 
 # Expose the vendored header locations to the library target. VMA is implemented
 # in one TU; the Vulkan-Headers + Utility-Libraries dirs are what gfx_core

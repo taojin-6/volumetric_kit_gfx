@@ -9,13 +9,14 @@ include(GNUInstallDirs)
 
 add_subdirectory(volumetric_kit/gfx/core)
 add_subdirectory(volumetric_kit/gfx/windowing)
+add_subdirectory(volumetric_kit/gfx/camera)
 # TODO: add_subdirectory() for passes / pipelines / app as those tiers land.
 
 # --- gfx: umbrella alias ----------------------------------------------------
 # Consumers link `volumetric_kit::gfx` and get whatever tiers are built.
 add_library(gfx INTERFACE)
 add_library(volumetric_kit::gfx ALIAS gfx)
-target_link_libraries(gfx INTERFACE gfx_core gfx_windowing)
+target_link_libraries(gfx INTERFACE gfx_core gfx_windowing gfx_camera)
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_gfxTargets (above); here
