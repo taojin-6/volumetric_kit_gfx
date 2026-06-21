@@ -46,3 +46,12 @@ target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 
 gtest_discover_tests(vg_core_test)
+
+# windowing tier: surface / swapchain / FrameLoop driven through a headless
+# surface (VK_EXT_headless_surface). Skips wholesale where that surface or a
+# present-capable device is unavailable (e.g. MoltenVK).
+add_executable(vg_windowing_test windowing_test.cpp)
+target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
+                                                GTest::gtest_main)
+vg_target_warnings(vg_windowing_test)
+gtest_discover_tests(vg_windowing_test)

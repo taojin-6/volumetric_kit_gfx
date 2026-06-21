@@ -7,6 +7,7 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
+#include "volumetric_kit/gfx/core/impl/command.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
@@ -82,23 +83,14 @@ void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
            "OffscreenTarget::record_readback without a readback buffer");
 
   const VkExtent2D ext = color_.extent();
-  const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
   // The render left the color image in COLOR_ATTACHMENT_OPTIMAL; move it to
   // TRANSFER_SRC for the copy-out.
-  VkImageMemoryBarrier to_src{};
-  to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  to_src.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-  to_src.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-  to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_src.image = color_.image();
-  to_src.subresourceRange = range;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                       nullptr, 1, &to_src);
+  cmd_image_barrier(
+      cmd, color_.image(), VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
   VkBufferImageCopy copy{};
   copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
