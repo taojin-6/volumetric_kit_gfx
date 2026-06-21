@@ -29,13 +29,15 @@ target_sources(
           allocator.cpp
           buffer.cpp
           texture.cpp
+          sampler.cpp
           shader.cpp
           descriptor.cpp
           graphics_pipeline.cpp
           render_target.cpp
           offscreen_target.cpp
           command_pool.cpp
-          command_buffer.cpp)
+          command_buffer.cpp
+          texture_upload.cpp)
 
 # Generated headers: the VG_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VG_CORE_API +

@@ -26,7 +26,9 @@ add_executable(
   graphics_pipeline_test.cpp
   render_target_test.cpp
   offscreen_target_test.cpp
-  command_buffer_test.cpp)
+  command_buffer_test.cpp
+  sampler_test.cpp
+  texture_upload_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core
                                            GTest::gtest_main)
 vg_target_warnings(vg_core_test)
