@@ -205,6 +205,20 @@ TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
   EXPECT_EQ(layout.color_count, 1u);
   EXPECT_EQ(layout.color_formats[0], sc.format());
   EXPECT_TRUE(sc.render_target(0).valid());
+  // Every image exposes a non-null VkImage + color VkImageView, so a caller can
+  // assemble its own render target over it (e.g. adding a depth attachment).
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    EXPECT_NE(sc.image(i), VK_NULL_HANDLE);
+    EXPECT_NE(sc.image_view(i), VK_NULL_HANDLE);
+  }
+  // Each index maps to a distinct image + view (no aliasing across slots), so a
+  // per-image render target addresses the right one.
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    for (uint32_t j = i + 1; j < sc.image_count(); ++j) {
+      EXPECT_NE(sc.image(i), sc.image(j));
+      EXPECT_NE(sc.image_view(i), sc.image_view(j));
+    }
+  }
 }
 
 TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
@@ -231,6 +245,11 @@ TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
   // requested extent), proving it was not a no-op.
   EXPECT_EQ(sc.extent().width, 320u);
   EXPECT_EQ(sc.extent().height, 240u);
+  // The recreated swapchain re-exposes a non-null color view per image, so a
+  // caller-owned render target can be rebuilt over the new images.
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    EXPECT_NE(sc.image_view(i), VK_NULL_HANDLE);
+  }
 
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
