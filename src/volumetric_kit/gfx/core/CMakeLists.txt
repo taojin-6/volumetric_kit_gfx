@@ -30,6 +30,7 @@ target_sources(
           buffer.cpp
           texture.cpp
           shader.cpp
+          descriptor.cpp
           graphics_pipeline.cpp
           render_target.cpp
           offscreen_target.cpp
