@@ -128,7 +128,7 @@ jobs:
       # windowed example through a virtual X server with validation layers on.
       # macOS runners are display-less, so the example is build-only there (it is
       # runtime-validated locally on MoltenVK).
-      - name: Run windowed example (Linux, Xvfb)
+      - name: Run windowed examples (Linux, Xvfb)
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
           set -o pipefail
@@ -136,13 +136,17 @@ jobs:
           # GPU-dependent ctest cases skip themselves — e.g. a runner where
           # lavapipe is unavailable.
           if ! vulkaninfo --summary >/dev/null 2>&1; then
-            echo "::notice::no Vulkan device — skipping windowed example"
+            echo "::notice::no Vulkan device — skipping windowed examples"
             exit 0
           fi
+          # 02_imgui drives the ui tier's ImGui overlay through the same
+          # surface → swapchain → present path; both run with validation on.
           xvfb-run -a build/examples/example_01_triangle --frames 30 2>&1 \
             | tee example.log
+          xvfb-run -a build/examples/example_02_imgui --frames 30 2>&1 \
+            | tee -a example.log
           if grep -qE 'VUID-' example.log; then
-            echo "::error::Vulkan validation errors from the windowed example"
+            echo "::error::Vulkan validation errors from the windowed examples"
             exit 1
           fi
 

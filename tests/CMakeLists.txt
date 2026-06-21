@@ -128,3 +128,19 @@ endif()
 # Prefix the ctest names ("io.GltfLoader.*") so this CPU-only tier is selectable
 # as a group with `ctest -R io`.
 gtest_discover_tests(vg_io_test TEST_PREFIX "io.")
+
+# ui tier: ImGuiOverlay driven headlessly -- create + new_frame + render into an
+# offscreen target (dynamic rendering), the move-only lifecycle, and argument
+# validation. The GPU cases skip where no Vulkan device is available; the test
+# links gfx_ui (which exposes imgui.h for the UI-building calls). It compiles
+# imgui_demo.cpp itself for ShowDemoWindow (the tier keeps the demo out of the
+# library), and links Vulkan::Vulkan directly because it records vkCmd*/
+# vkQueueSubmit (the loader does not propagate through a shared gfx_ui for the
+# test's own calls).
+add_executable(vg_ui_test ui_test.cpp "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
+target_link_libraries(vg_ui_test PRIVATE volumetric_kit::gfx_ui
+                                         GTest::gtest_main Vulkan::Vulkan)
+vg_target_warnings(vg_ui_test)
+set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
+                            PROPERTIES COMPILE_OPTIONS "-w")
+gtest_discover_tests(vg_ui_test TEST_PREFIX "ui.")

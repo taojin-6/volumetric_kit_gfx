@@ -14,15 +14,19 @@ GLSL → SPIR-V shader set.
 - Headers: `include/volumetric_kit/gfx/<tier>/…` → e.g. `#include "volumetric_kit/gfx/core/context.hpp"`
 - CMake: `find_package(volumetric_kit_gfx)`; component targets `volumetric_kit::gfx_core`,
   `…_passes`, `…_pipelines`, `…_app` (+ `…_windowing`, `…_interop`, `…_assets`, `…_io`,
-  `…_camera`); umbrella alias `volumetric_kit::gfx`.
+  `…_camera`, `…_ui`); umbrella alias `volumetric_kit::gfx`.
 
 ## Architecture (tiered)
 
-`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`).
-Simple consumers link `…_app`; advanced consumers compose their own passes on `…_core`.
+`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`,
+`ui`). Simple consumers link `…_app`; advanced consumers compose their own passes on `…_core`.
 The dependency rule is strict: a tier may only depend on tiers to its left. `assets` is
 the format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
-produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`.
+produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`. `ui` is a Dear
+ImGui debug overlay (depends only on `core`): it wraps ImGui's *renderer* backend
+(`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic rendering; like
+`windowing` it is GLFW-free, so the *platform* backend (`imgui_impl_glfw`) stays in the
+consumer/example.
 
 ## Locked decisions
 
