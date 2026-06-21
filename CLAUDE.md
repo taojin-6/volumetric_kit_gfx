@@ -13,14 +13,16 @@ GLSL → SPIR-V shader set.
   `volumetric_kit::gfx::`.
 - Headers: `include/volumetric_kit/gfx/<tier>/…` → e.g. `#include "volumetric_kit/gfx/core/context.hpp"`
 - CMake: `find_package(volumetric_kit_gfx)`; component targets `volumetric_kit::gfx_core`,
-  `…_passes`, `…_pipelines`, `…_app` (+ `…_windowing`, `…_interop`, `…_assets`, `…_camera`);
-  umbrella alias `volumetric_kit::gfx`.
+  `…_passes`, `…_pipelines`, `…_app` (+ `…_windowing`, `…_interop`, `…_assets`, `…_io`,
+  `…_camera`); umbrella alias `volumetric_kit::gfx`.
 
 ## Architecture (tiered)
 
-`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `camera`).
+`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`).
 Simple consumers link `…_app`; advanced consumers compose their own passes on `…_core`.
-The dependency rule is strict: a tier may only depend on tiers to its left.
+The dependency rule is strict: a tier may only depend on tiers to its left. `assets` is
+the format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
+produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`.
 
 ## Locked decisions
 

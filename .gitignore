@@ -16,6 +16,10 @@ vkgfx-env.sh
 *.ppm
 *.png.actual
 
+# Test asset fixtures fetched at configure time (e.g. Khronos Box.glb), not
+# committed — CMake re-downloads them into tests/assets/.
+/tests/assets/
+
 # CMake/user state
 CMakeUserPresets.json
 .cache/

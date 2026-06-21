@@ -63,7 +63,7 @@ include(vg_shaders)
 # privately).
 find_package(Vulkan REQUIRED)
 
-# glm: the camera tier's only dependency (its public matrix/vector types).
+# glm: the matrix/vector types in the camera and assets tiers' public headers.
 # Prefer a system glm (its config defines glm::glm); fall back to the pinned
 # vendored copy from third_party/ when none is installed -- so the build is
 # self-contained on CI runners that don't ship glm, matching how the other deps
