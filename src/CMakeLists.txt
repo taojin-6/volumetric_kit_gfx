@@ -28,7 +28,11 @@ if(VG_INSTALL)
     DIRECTORY "${PROJECT_SOURCE_DIR}/include/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
-    PATTERN "*.hpp")
+    PATTERN "*.hpp"
+    # impl/vk_format.hpp is internal (no public header includes it) and pulls
+    # the vendored <vulkan/utility/...> header that the package neither ships
+    # nor re-exports, so an installed copy would not compile -- keep it out.
+    PATTERN "vk_format.hpp" EXCLUDE)
 
   install(
     EXPORT volumetric_kit_gfxTargets
