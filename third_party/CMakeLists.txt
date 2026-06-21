@@ -8,8 +8,8 @@
 # a pinned vendored copy below when none is installed. Vendored via pinned
 # FetchContent: Vulkan-Headers + Vulkan-Utility-Libraries (the library compiles
 # against these for authoritative VkFormat metadata), VMA (header-only, built in
-# one gfx_core TU), spirv-cross (reflection; built by tests now to prove it
-# compiles), and googletest.
+# one gfx_core TU), spirv-cross (SPIR-V reflection; a static archive linked
+# privately into gfx_core), and googletest.
 #
 # The library compiles against the pinned Vulkan-Headers and links the system
 # loader -- this also pre-stages the header vendoring the iOS/Android work
@@ -92,6 +92,14 @@ FetchContent_Declare(
   SOURCE_SUBDIR _headers_only_)
 
 # --- spirv-cross: SPIR-V reflection (reflection-driven descriptor layouts) ----
+# Build spirv-cross-core as a static archive. SPIRV_CROSS_STATIC defaults ON
+# upstream, but spirv-cross *gates the install/export of the core lib* on it
+# (its CMakeLists guards the core-lib install block with
+# `if(SPIRV_CROSS_STATIC)`) -- so pin it ON to keep our packaging self-contained
+# under VG_INSTALL rather than reliant on that default holding.
+set(SPIRV_CROSS_STATIC
+    ON
+    CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_CLI
     OFF
     CACHE BOOL "" FORCE)

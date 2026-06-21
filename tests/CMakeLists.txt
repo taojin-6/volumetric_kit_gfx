@@ -4,14 +4,8 @@
 include(GoogleTest)
 
 add_executable(vg_version_test version_test.cpp)
-target_link_libraries(
-  vg_version_test
-  PRIVATE volumetric_kit::gfx_core
-          GTest::gtest_main
-          # spirv-cross is not used yet, but linking it forces CMake to build
-          # the reflection library on every CI platform now -- an early
-          # compile-check ahead of its first use.
-          spirv-cross-core)
+target_link_libraries(vg_version_test PRIVATE volumetric_kit::gfx_core
+                                              GTest::gtest_main)
 vg_target_warnings(vg_version_test)
 gtest_discover_tests(vg_version_test)
 
@@ -47,7 +41,8 @@ vg_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
   "${PROJECT_SOURCE_DIR}/shaders/mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/mesh.frag"
-  "${PROJECT_SOURCE_DIR}/shaders/reflect_probe.frag")
+  "${PROJECT_SOURCE_DIR}/shaders/reflect_probe.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/reflect_storage.comp")
 target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 

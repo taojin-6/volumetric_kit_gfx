@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#version 450
+
+// A second reflection probe (compute stage) covering the descriptor categories
+// reflect_probe.frag does not: a storage buffer, a storage image, a separate
+// (non-combined) sampled-image *array*, and a separate sampler -- spread across
+// two descriptor sets. Each is actually used so the compiler keeps it, and the
+// array binding exercises the multi-element descriptor count.
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Ssbo {
+  vec4 data[];
+}
+ssbo;
+
+layout(set = 0, binding = 1, rgba8) uniform image2D img;
+
+layout(set = 0, binding = 2) uniform texture2D textures[4];
+
+layout(set = 1, binding = 0) uniform sampler samp;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  vec4 acc = imageLoad(img, ivec2(i, 0));
+  // Constant-indexed (unrolled) so all four array elements are referenced and
+  // none is stripped -- the reflected count must be 4.
+  for (int k = 0; k < 4; ++k) {
+    acc += texture(sampler2D(textures[k], samp), vec2(0.0));
+  }
+  ssbo.data[i] = acc;
+}

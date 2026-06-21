@@ -70,13 +70,16 @@ class VG_CORE_API ShaderModule {
   /// @pre @p code is non-null and @p size_bytes is a non-zero multiple of 4;
   ///      these are validated before Vulkan is touched and otherwise yield a
   ///      non-OK @ref Status with domain @ref Status::Code::InvalidArgument.
-  /// @return The module on success, or a non-OK @ref Status.
+  /// @return The module on success, or a non-OK @ref Status. Reflection runs
+  ///         before the device handle is created, so SPIR-V that spirv-cross
+  ///         cannot parse also yields @ref Status::Code::InvalidArgument — even
+  ///         a blob the driver might otherwise have accepted.
   static Result<ShaderModule> create(VkDevice device, const uint32_t* code,
                                      size_t size_bytes);
 
   ~ShaderModule() = default;
-  ShaderModule(ShaderModule&&) noexcept = default;
-  ShaderModule& operator=(ShaderModule&&) noexcept = default;
+  ShaderModule(ShaderModule&& other) noexcept;
+  ShaderModule& operator=(ShaderModule&& other) noexcept;
   ShaderModule(const ShaderModule&) = delete;
   ShaderModule& operator=(const ShaderModule&) = delete;
 
