@@ -14,6 +14,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -106,7 +107,11 @@ int run(GLFWwindow* window, int max_frames) {
   }
 
   // The overlay's pipeline is built for the swapchain's layout; the swapchain
-  // holds its format stable across recreate, so the overlay survives resizes.
+  // holds its format AND image count stable across recreate, so the overlay
+  // survives resizes without rebuilding.
+  // TODO: a swapchain that changed its image count on recreate would need the
+  // overlay's backend updated (ImGui_ImplVulkan_SetMinImageCount, not yet
+  // exposed by the ui tier); the kit's swapchain keeps it stable today.
   vg::ui::ImGuiOverlayConfig overlay_config;
   overlay_config.layout = swapchain.value().layout();
   overlay_config.min_image_count = swapchain.value().image_count();
@@ -177,7 +182,9 @@ int run(GLFWwindow* window, int max_frames) {
     ++rendered;
   }
 
-  vkDeviceWaitIdle(device.value().handle());
+  if (vkDeviceWaitIdle(device.value().handle()) != VK_SUCCESS) {
+    std::fprintf(stderr, "vkDeviceWaitIdle failed at teardown\n");
+  }
   // Tear the platform backend down while the ImGui context is still alive; the
   // overlay's destructor shuts the renderer backend down and destroys it.
   ImGui::SetCurrentContext(overlay.value().context());
@@ -189,11 +196,22 @@ int run(GLFWwindow* window, int max_frames) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  int max_frames = -1;
-  for (int i = 1; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--frames") == 0) {
-      max_frames = std::atoi(argv[i + 1]);
+  int max_frames = -1;  // < 0 means run until the window is closed
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--frames") != 0) {
+      continue;
     }
+    if (i + 1 >= argc) {
+      std::fprintf(stderr, "--frames needs a non-negative integer value\n");
+      return 2;
+    }
+    char* end = nullptr;
+    const long value = std::strtol(argv[++i], &end, 10);
+    if (*end != '\0' || value < 0 || value > INT_MAX) {
+      std::fprintf(stderr, "--frames: invalid value '%s'\n", argv[i]);
+      return 2;
+    }
+    max_frames = static_cast<int>(value);
   }
 
   if (glfwInit() != GLFW_TRUE) {

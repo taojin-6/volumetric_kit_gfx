@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
 #include "imgui.h"
@@ -110,6 +112,15 @@ TEST_F(ImGuiOverlayDeviceTest, ImageCountBelowMinRejected) {
   EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
+  ui::ImGuiOverlayConfig config = make_config(color_layout());
+  config.layout.samples = static_cast<VkSampleCountFlagBits>(0);  // invalid
+  auto overlay =
+      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+  ASSERT_FALSE(overlay.ok());
+  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 // --- Move-only lifecycle ----------------------------------------------------
 
 TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
@@ -167,6 +178,11 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 
   overlay.new_frame();
   ImGui::ShowDemoWindow();  // a non-trivial draw list exercising the font atlas
+  // A deterministic opaque-white rect over the whole 64x64 viewport (on the
+  // background draw list, behind the demo window) so the readback below can
+  // assert ImGui actually rendered, not merely that recording was clean.
+  ImGui::GetBackgroundDrawList()->AddRectFilled(
+      ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
 
   auto pool = vg::CommandPool::create(device(), device_->graphics_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
@@ -198,9 +214,21 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   rt.begin(raw, begin_info);
   overlay.render(raw);  // records ImGui draws inside the rendering scope
   rt.end(raw);
+  target.record_readback(raw);  // copy the rendered image into the host buffer
 
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);  // validation-layer-clean completion is the assertion
+  submit_and_wait(raw);
+
+  // The white background rect fills the viewport, so the center texel must be
+  // opaque white -- proof ImGui drew (validation-clean recording alone would
+  // pass even if nothing was rasterized).
+  const auto* px = static_cast<const uint8_t*>(target.pixels());
+  ASSERT_NE(px, nullptr);
+  constexpr size_t kCenter = (32 * 64 + 32) * 4;  // RGBA8, tightly packed
+  EXPECT_EQ(px[kCenter + 0], 255);                // R
+  EXPECT_EQ(px[kCenter + 1], 255);                // G
+  EXPECT_EQ(px[kCenter + 2], 255);                // B
+  EXPECT_EQ(px[kCenter + 3], 255);                // A
 
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.

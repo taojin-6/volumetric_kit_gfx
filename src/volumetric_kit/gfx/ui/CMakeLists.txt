@@ -15,13 +15,17 @@ include(GNUInstallDirs)
 # does NOT get vg_target_warnings -- gfx_ui below builds only first-party code
 # under the strict flags. PIC so it links into a shared gfx_ui. This is an
 # internal build target (no volumetric_kit:: alias, not exported).
+#
+# imgui_demo.cpp (ShowDemoWindow) is deliberately excluded: the tier never calls
+# it, and a PRIVATE-linked demo symbol would not propagate out of a shared
+# gfx_ui. The example + test that actually call ShowDemoWindow compile that one
+# TU themselves (see examples/ and tests/ CMakeLists).
 add_library(
   vg_imgui STATIC
   "${VG_IMGUI_SOURCE_DIR}/imgui.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_draw.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_tables.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_widgets.cpp"
-  "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
 # imgui.h lives at the root, imgui_impl_vulkan.h under backends/. SYSTEM so the
 # strict -Werror first-party flags never apply to ImGui's headers where they are

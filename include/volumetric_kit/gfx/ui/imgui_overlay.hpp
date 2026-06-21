@@ -32,9 +32,9 @@ struct ImGuiOverlayConfig {
   /// @ref windowing::Swapchain's `layout()`. Must carry at least one color
   /// attachment.
   RenderTargetLayout layout;
-  /// CPU-ahead depth ImGui sizes its internal vertex/index buffer ring for;
-  /// must be >= 2. Use the swapchain's image count (or the @ref
-  /// windowing::FrameLoop's `frames_in_flight`).
+  /// Number of frames ImGui keeps buffered — the depth of its internal
+  /// vertex/index buffer ring; must be >= 2. Use the swapchain's image count
+  /// (or the @ref windowing::FrameLoop's `frames_in_flight`).
   uint32_t min_image_count = 2;
   /// Number of frames ImGui may have in flight; must be >= @ref
   /// min_image_count. Use the swapchain's image count.
@@ -56,9 +56,11 @@ struct ImGuiOverlayConfig {
 /// atlas plus user textures); the font atlas uploads itself on first @ref
 /// render.
 ///
-/// One overlay drives ImGui's per-context global state, so construct at most
-/// one at a time (see @ref context). A default-constructed `ImGuiOverlay` is
-/// empty (`valid()` is false) and safe to move-assign into.
+/// Each overlay owns a distinct `ImGuiContext`, but ImGui's *current* context
+/// is a global that @ref new_frame and @ref render rebind (see @ref context),
+/// so one overlay's frames must not be interleaved with another's. A
+/// default-constructed `ImGuiOverlay` is empty (`valid()` is false) and safe to
+/// move-assign into.
 ///
 /// @warning The @p instance and @p device passed to @ref create must outlive
 ///          the overlay (it borrows both). Idle the device
@@ -95,10 +97,10 @@ class VG_UI_API ImGuiOverlay {
   ///                  and the in-flight frame counts.
   /// @return The overlay on success, or a non-OK @ref Status: @ref
   ///         Status::Code::InvalidArgument for a null @p instance / moved-from
-  ///         @p device, a @ref RenderTargetLayout with no color attachment, a
-  ///         @ref ImGuiOverlayConfig::min_image_count below 2, or an @ref
-  ///         ImGuiOverlayConfig::image_count below it; a Vulkan-domain @ref
-  ///         Status if backend initialization fails.
+  ///         @p device, a @ref RenderTargetLayout with no color attachment or a
+  ///         zero sample count, a @ref ImGuiOverlayConfig::min_image_count
+  ///         below 2, or an @ref ImGuiOverlayConfig::image_count below it; a
+  ///         Vulkan-domain @ref Status if backend initialization fails.
   static Result<ImGuiOverlay> create(const Device& device, VkInstance instance,
                                      const ImGuiOverlayConfig& config);
 

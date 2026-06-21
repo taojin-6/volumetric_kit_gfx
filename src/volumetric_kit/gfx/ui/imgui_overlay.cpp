@@ -52,6 +52,10 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
     return Status::invalid_argument(
         "ImGuiOverlay::create needs a layout with a color attachment");
   }
+  if (static_cast<uint32_t>(config.layout.samples) == 0) {
+    return Status::invalid_argument(
+        "ImGuiOverlay::create needs a layout with a non-zero sample count");
+  }
   if (config.min_image_count < 2) {
     return Status::invalid_argument(
         "ImGuiOverlay::create needs min_image_count >= 2");
@@ -80,6 +84,10 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
   init.DescriptorPoolSize = kDescriptorPoolSize;  // backend creates+owns it
   init.MinImageCount = config.min_image_count;
   init.ImageCount = config.image_count;
+  // TODO: a swapchain recreate that changes the image count is not propagated
+  // to the backend (no ImGui_ImplVulkan_SetMinImageCount call); the overlay
+  // assumes a stable image count. Expose an update path when a target needs a
+  // varying one.
   init.UseDynamicRendering = true;
   init.PipelineInfoMain.MSAASamples = config.layout.samples;
   init.PipelineInfoMain.PipelineRenderingCreateInfo = rendering;
