@@ -37,6 +37,13 @@ jobs:
     # so fromJSON is never handed the empty string.
     container: ${{ inputs.container != '' && fromJSON(inputs.container) || null }}
     timeout-minutes: 30
+    defaults:
+      run:
+        # Inside a container GitHub runs `run:` steps under `sh` (dash), not the
+        # `bash` it defaults to on hosted runners. Dash only learned `set -o
+        # pipefail` in 0.5.12 (POSIX 2024) — Ubuntu 26.04 has it, 22.04/24.04 do
+        # not — so force bash everywhere for one consistent shell across legs.
+        shell: bash
     env:
       # 'true' when this leg runs in a container. In this repo containers are
       # used only on the self-hosted GPU box (the Ubuntu legs), where the image
