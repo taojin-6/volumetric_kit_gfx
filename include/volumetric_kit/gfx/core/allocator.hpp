@@ -18,6 +18,33 @@ namespace volumetric_kit::gfx {
 
 class Device;
 
+/// @brief Usage and budget, in bytes, for a single Vulkan memory heap.
+///
+/// Both figures are VMA's running accounting of the heap, not a live driver
+/// query: `usage_bytes` is what VMA has allocated out of it, `budget_bytes` is
+/// how much VMA estimates is safely usable. They are heuristics unless
+/// `VK_EXT_memory_budget` is enabled, which would let VMA read the driver's
+/// authoritative figures (a future seam — the extension is not requested yet).
+struct HeapStats {
+  uint64_t usage_bytes = 0;   ///< Bytes VMA has allocated from the heap.
+  uint64_t budget_bytes = 0;  ///< Bytes VMA estimates are usable in the heap.
+};
+
+/// @brief A snapshot of per-heap memory usage across the device's memory heaps.
+///
+/// Allocation-free: a fixed `VK_MAX_MEMORY_HEAPS` array with a live count, so
+/// it can be filled and returned by value without touching the heap. Only the
+/// leading @ref heap_count entries of @ref heaps carry valid figures.
+///
+/// On a unified-memory (UMA) GPU — Apple silicon via MoltenVK is the common
+/// case — system and device memory are one pool, so the device typically
+/// reports a single unified heap rather than the separate device-local /
+/// host-visible heaps a discrete GPU exposes.
+struct MemoryStats {
+  uint32_t heap_count = 0;  ///< Number of valid entries in @ref heaps.
+  HeapStats heaps[VK_MAX_MEMORY_HEAPS]{};  ///< Per-heap usage/budget.
+};
+
 /// @brief Where a resource's memory should live.
 enum class MemoryUsage {
   Auto,         ///< Let the allocator choose (device-preferred).
@@ -178,6 +205,16 @@ class VG_CORE_API Allocator {
   ///         stencil-only, otherwise COLOR. When `!desc.with_view`, @ref
   ///         Texture::view is `VK_NULL_HANDLE`.
   Result<Texture> create_image(const TextureDesc& desc);
+
+  /// @brief Sample per-heap memory usage and budget across the device's heaps.
+  /// @return A @ref MemoryStats whose @ref MemoryStats::heap_count names the
+  ///         device's memory heaps and whose first that-many @ref
+  ///         MemoryStats::heaps entries carry each heap's usage/budget in
+  ///         bytes. A moved-from allocator reports `heap_count == 0`.
+  /// @note The byte figures are VMA heuristics unless `VK_EXT_memory_budget` is
+  ///       enabled (not yet requested); see @ref HeapStats. On UMA (Apple) GPUs
+  ///       the heaps are unified, so expect a single heap.
+  MemoryStats memory_stats() const;
 
  private:
   Allocator() noexcept;

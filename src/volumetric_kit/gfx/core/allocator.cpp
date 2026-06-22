@@ -47,6 +47,8 @@ VmaMemoryUsage vma_memory_usage(MemoryUsage memory) {
 struct Allocator::Impl {
   VmaAllocator allocator = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;  // borrowed; for image-view create/destroy
+  VkPhysicalDevice physical_device =
+      VK_NULL_HANDLE;  // borrowed; for the heap count in memory_stats()
 
   // Own the handle here, not in ~Allocator: the defaulted move-assignment
   // destroys the overwritten Impl via unique_ptr, so freeing in ~Impl is what
@@ -102,6 +104,7 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   auto impl = std::make_unique<Impl>();
   VG_VK_TRY(vmaCreateAllocator(&info, &impl->allocator));
   impl->device = device.handle();
+  impl->physical_device = device.physical_device();
 
   Allocator allocator;
   allocator.impl_ = std::move(impl);
@@ -313,6 +316,28 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
                    }
                    vmaDestroyImage(allocator, image, allocation);
                  });
+}
+
+MemoryStats Allocator::memory_stats() const {
+  MemoryStats stats;
+  if (impl_ == nullptr) {
+    return stats;  // moved-from: no heaps to report
+  }
+
+  // vmaGetHeapBudgets fills VK_MAX_MEMORY_HEAPS entries but does not say how
+  // many heaps the device actually has, so take the real count from the
+  // device's memory properties and only translate that many.
+  VkPhysicalDeviceMemoryProperties mem_props{};
+  vkGetPhysicalDeviceMemoryProperties(impl_->physical_device, &mem_props);
+  stats.heap_count = mem_props.memoryHeapCount;
+
+  VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+  vmaGetHeapBudgets(impl_->allocator, budgets);
+  for (uint32_t i = 0; i < stats.heap_count; ++i) {
+    stats.heaps[i].usage_bytes = budgets[i].usage;
+    stats.heaps[i].budget_bytes = budgets[i].budget;
+  }
+  return stats;
 }
 
 Allocator::Allocator(Allocator&& other) noexcept = default;
