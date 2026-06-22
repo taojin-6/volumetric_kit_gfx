@@ -381,26 +381,26 @@ vg::ShaderModule load_shader(VkDevice device, const char* spv_name, bool* ok) {
 // Load + create both model shader modules from VG_EXAMPLE_SHADER_DIR; null *ok
 // on failure. Shared by both render paths.
 Shaders load_shaders(VkDevice device, bool* ok) {
-  const std::vector<uint32_t> vert_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.vert.spv");
-  const std::vector<uint32_t> frag_code =
-      load_spirv(VG_EXAMPLE_SHADER_DIR "/model.frag.spv");
-  if (vert_code.empty() || frag_code.empty()) {
-    std::fprintf(stderr, "missing compiled shaders in %s\n",
-                 VG_EXAMPLE_SHADER_DIR);
-    *ok = false;
+  vg::ShaderModule vert = load_shader(device, "model.vert.spv", ok);
+  vg::ShaderModule frag = load_shader(device, "model.frag.spv", ok);
+  if (!*ok) {
     return {};
   }
-  auto vert = vg::ShaderModule::create(device, vert_code.data(),
-                                       vert_code.size() * sizeof(uint32_t));
-  auto frag = vg::ShaderModule::create(device, frag_code.data(),
-                                       frag_code.size() * sizeof(uint32_t));
-  if (!vert.ok() || !frag.ok()) {
-    std::fprintf(stderr, "shader module creation failed\n");
-    *ok = false;
-    return {};
-  }
-  return {std::move(vert).value(), std::move(frag).value()};
+  return {std::move(vert), std::move(frag)};
+}
+
+// Set a viewport + scissor covering the whole target (both are dynamic state).
+// Shared by the skybox and model passes.
+void set_full_viewport(VkCommandBuffer cmd, VkExtent2D extent) {
+  VkViewport viewport{};
+  viewport.width = static_cast<float>(extent.width);
+  viewport.height = static_cast<float>(extent.height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(cmd, 0, 1, &viewport);
+  VkRect2D scissor{};
+  scissor.extent = extent;
+  vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
 // Bind the pipeline, set a full-target viewport/scissor, and draw every item
@@ -416,15 +416,7 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
   // Per-frame scene data (set 0: camera position) binds once for all draws.
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipeline.layout(), 0, 1, &scene_set, 0, nullptr);
-  VkViewport viewport{};
-  viewport.width = static_cast<float>(extent.width);
-  viewport.height = static_cast<float>(extent.height);
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(cmd, 0, 1, &viewport);
-  VkRect2D scissor{};
-  scissor.extent = extent;
-  vkCmdSetScissor(cmd, 0, 1, &scissor);
+  set_full_viewport(cmd, extent);
 
   for (const DrawItem& draw : draws) {
     const GpuMesh& gpu = meshes[draw.mesh];
@@ -894,6 +886,10 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
     return {};
   }
 
+  // Upload all six faces in one submit. Hand-rolled because the core
+  // upload_texture helper is single-layer only.
+  // TODO: extend upload_texture/ImageUploadDesc with array_layers (and a
+  // layer_count on cmd_image_barrier) so cube/array uploads reuse one path.
   const VkImage image = cube.value().image();
   const VkBuffer src = staging.value().handle();
   const vg::Status copied =
@@ -958,16 +954,16 @@ vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
   desc.layout = layout;
-  // Procedural full-screen triangle (no vertex input), drawn before the model
-  // with depth off so it only fills pixels the model does not cover.
-  desc.depth_test = false;
-  desc.depth_write = false;
+  // Procedural full-screen triangle (no vertex input). depth_test/depth_write
+  // default to false, which is exactly what the skybox wants: it is drawn first
+  // and fills the whole frame, then the model (depth-tested) overdraws it.
   return vg::GraphicsPipeline::create(device, desc);
 }
 
 // Bake the environment cube + build the skybox pipeline and its descriptor set.
 Skybox setup_skybox(const vg::Device& device, vg::Allocator& alloc,
                     const vg::RenderTargetLayout& layout, bool* ok) {
+  *ok = true;  // output flag; cleared on the first failure below
   Skybox s;
 
   vg::SamplerDesc sampler_desc;
@@ -1030,15 +1026,7 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
                    const glm::mat4& view_proj, const glm::vec3& camera_pos) {
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     skybox.pipeline.handle());
-  VkViewport viewport{};
-  viewport.width = static_cast<float>(extent.width);
-  viewport.height = static_cast<float>(extent.height);
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(cmd, 0, 1, &viewport);
-  VkRect2D scissor{};
-  scissor.extent = extent;
-  vkCmdSetScissor(cmd, 0, 1, &scissor);
+  set_full_viewport(cmd, extent);
 
   SkyboxPush push;
   push.inv_view_proj = glm::inverse(view_proj);

@@ -4,10 +4,11 @@
 #version 450
 
 // Full-screen triangle (no vertex buffer): three oversized clip-space corners
-// emitted from gl_VertexIndex, at the far plane (z == w, so depth is 1 and the
-// model -- drawn after -- overwrites it). The NDC position is handed to the
-// fragment stage, which turns it into a world-space view ray to sample the
-// environment cube.
+// emitted from gl_VertexIndex, placed at the far plane (z == w). The skybox
+// pipeline runs with depth test and write disabled, so this depth is never
+// tested or stored; the model occludes the sky purely by draw order (skybox
+// first, model second). The NDC position is handed to the fragment stage, which
+// turns it into a world-space view ray to sample the environment cube.
 
 layout(location = 0) out vec2 ndc;
 

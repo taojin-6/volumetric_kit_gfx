@@ -23,6 +23,9 @@ layout(set = 0, binding = 0) uniform samplerCube sky;
 layout(location = 0) out vec4 out_color;
 
 void main() {
+  // Unproject the far-plane NDC point to world space. A perspective
+  // view-projection yields world.w > 0 here, so the perspective divide is safe;
+  // this skybox assumes such a projection (not an orthographic/oblique one).
   const vec4 world = pc.inv_view_proj * vec4(ndc, 1.0, 1.0);
   const vec3 dir = normalize(world.xyz / world.w - pc.camera_pos.xyz);
   out_color = vec4(texture(sky, dir).rgb, 1.0);

@@ -80,10 +80,12 @@ struct TextureDesc {
   uint32_t mip_levels = 1;                ///< Number of mip levels.
   uint32_t array_layers = 1;  ///< Array layers; > 1 yields an array view and
                               ///< must be 1 for a 3D image.
-  /// Create a cubemap: a 2D image whose six faces get a
-  /// `VK_IMAGE_VIEW_TYPE_CUBE` view. Requires `type == VK_IMAGE_TYPE_2D`,
-  /// `array_layers == 6`, and a square `extent` (faces are Vulkan layers
-  /// ordered +X, -X, +Y, -Y, +Z, -Z).
+  /// Create a cubemap: a square, six-layer 2D image created
+  /// `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT`, whose default view (when @ref
+  /// with_view) is a `VK_IMAGE_VIEW_TYPE_CUBE` view. Requires `type ==
+  /// VK_IMAGE_TYPE_2D`, `array_layers == 6`, a square `extent`, and `samples ==
+  /// VK_SAMPLE_COUNT_1_BIT` (faces are Vulkan layers ordered +X, -X, +Y, -Y,
+  /// +Z, -Z).
   bool cube = false;
   VkSampleCountFlagBits samples =
       VK_SAMPLE_COUNT_1_BIT;  ///< MSAA sample count.

@@ -226,11 +226,16 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     return Status::invalid_argument("3D images cannot be arrayed");
   }
   if (desc.cube && (desc.type != VK_IMAGE_TYPE_2D || desc.array_layers != 6 ||
-                    desc.extent.width != desc.extent.height)) {
-    // A CUBE_COMPATIBLE image must be 2D, square, and have at least six layers
-    // (VUID-VkImageCreateInfo-flags-00949); require exactly six (one cubemap).
+                    desc.extent.width != desc.extent.height ||
+                    desc.samples != VK_SAMPLE_COUNT_1_BIT)) {
+    // A CUBE_COMPATIBLE image must be 2D (VUID-VkImageCreateInfo-flags-00949),
+    // square with at least six layers (VUID-VkImageCreateInfo-imageType-00954),
+    // and single-sampled (VUID-VkImageCreateInfo-samples-02257); require
+    // exactly six layers (one cubemap). Reject here so a malformed cube reads
+    // as a domain error instead of an opaque VkResult out of vmaCreateImage.
     return Status::invalid_argument(
-        "cube images must be 2D, square, and have array_layers == 6");
+        "cube images must be single-sampled, 2D, square, and have "
+        "array_layers == 6");
   }
   if (desc.external != ExternalHandleType::None) {
     // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
