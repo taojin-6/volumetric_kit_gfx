@@ -181,6 +181,18 @@ class VG_CORE_API DescriptorSet {
   void write_uniform_buffer(uint32_t binding, VkBuffer buffer,
                             VkDeviceSize offset, VkDeviceSize range) const;
 
+  /// @brief Point @p binding at a combined image + sampler (a `sampler2D` in
+  ///        GLSL): the texture a shader samples.
+  /// @param binding  The binding index within the set.
+  /// @param view     The sampled image's view.
+  /// @param sampler  The sampler that filters @p view.
+  /// @param layout   The layout @p view's image is in when sampled (typically
+  ///                 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`).
+  /// @pre `valid()`; @p view and @p sampler outlive the draws reading them.
+  void write_combined_image_sampler(uint32_t binding, VkImageView view,
+                                    VkSampler sampler,
+                                    VkImageLayout layout) const;
+
   /// @return The underlying `VkDescriptorSet` (`VK_NULL_HANDLE` when empty).
   VkDescriptorSet handle() const noexcept { return set_; }
 

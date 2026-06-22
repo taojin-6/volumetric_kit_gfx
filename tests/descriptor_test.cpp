@@ -7,9 +7,13 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/gfx/core/sampler.hpp"
+#include "volumetric_kit/gfx/core/texture.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -26,6 +30,32 @@ VkDescriptorSetLayoutBinding uniform_binding(uint32_t binding) {
   b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   return b;
 }
+
+VkDescriptorSetLayoutBinding sampler_binding(uint32_t binding) {
+  VkDescriptorSetLayoutBinding b{};
+  b.binding = binding;
+  b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  b.descriptorCount = 1;
+  b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  return b;
+}
+
+// Adds a VMA allocator (for a sampled image to bind) on top of the device
+// fixture; skips with the base when no Vulkan device is present.
+class DescriptorImageTest : public VulkanDeviceTest {
+ protected:
+  void SetUp() override {
+    VulkanDeviceTest::SetUp();
+    if (IsSkipped()) {
+      return;
+    }
+    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+    allocator_.emplace(std::move(allocator).value());
+  }
+
+  std::optional<vg::Allocator> allocator_;
+};
 
 }  // namespace
 
@@ -124,4 +154,35 @@ TEST_F(DescriptorDeviceTest, PoolCreateAllocateAndMove) {
   vg::DescriptorPool* alias = &dst;
   dst = std::move(*alias);  // self-move
   EXPECT_TRUE(dst.valid());
+}
+
+TEST_F(DescriptorImageTest, CombinedImageSamplerWriteSucceeds) {
+  // Bind a sampled image + sampler into a set: exercises the
+  // write_combined_image_sampler path end to end. A malformed write is caught
+  // by the validation layers under the sanitizer job; here we assert the set
+  // stays valid through the write.
+  vg::TextureDesc tex_desc;
+  tex_desc.extent = {4, 4};
+  tex_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  tex_desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  auto texture = allocator_->create_image(tex_desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+
+  auto sampler = vg::Sampler::create(device());
+  ASSERT_TRUE(sampler.ok()) << sampler.status().message();
+
+  const VkDescriptorSetLayoutBinding b = sampler_binding(0);
+  auto layout = vg::DescriptorSetLayout::create(device(), &b, 1);
+  ASSERT_TRUE(layout.ok()) << layout.status().message();
+
+  const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+  auto pool = vg::DescriptorPool::create(device(), &size, 1, 1);
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto set = pool.value().allocate(layout.value().handle());
+  ASSERT_TRUE(set.ok()) << set.status().message();
+
+  set.value().write_combined_image_sampler(
+      0, texture.value().view(), sampler.value().handle(),
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_TRUE(set.value().valid());
 }

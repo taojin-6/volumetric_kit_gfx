@@ -8,6 +8,8 @@
 // from this block automatically. Positions are transformed to clip space by the
 // MVP; the object-space normal is carried to world space for shading, using the
 // inverse-transpose of the model's 3x3 so non-uniform scale still lights right.
+// The primary UV is passed straight through for the fragment stage to sample
+// the base-color texture.
 
 layout(push_constant) uniform Push {
   mat4 mvp;    // projection * view * model (clip-space transform)
@@ -17,10 +19,13 @@ pc;
 
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
+layout(location = 2) in vec2 in_uv;
 
 layout(location = 0) out vec3 frag_normal;  // world-space, unnormalized
+layout(location = 1) out vec2 frag_uv;      // primary texture coordinates
 
 void main() {
   gl_Position = pc.mvp * vec4(in_position, 1.0);
   frag_normal = transpose(inverse(mat3(pc.model))) * in_normal;
+  frag_uv = in_uv;
 }
