@@ -49,6 +49,7 @@
 #include <glm/geometric.hpp>  // glm::length
 #include <glm/mat4x4.hpp>
 #include <glm/matrix.hpp>  // glm::inverse
+#include <glm/packing.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -1094,10 +1095,10 @@ glm::vec3 importance_sample_ggx(glm::vec2 xi, const glm::vec3& n,
   return glm::normalize(tangent * h.x + bitangent * h.y + n * h.z);
 }
 
-// Smith geometry with the IBL roughness remap (k = a^2 / 2).
+// Smith geometry with the IBL roughness remap (k = roughness^2 / 2 -- the
+// material roughness, per Karis; not the squared GGX alpha).
 float geometry_smith_ibl(float n_dot_v, float n_dot_l, float roughness) {
-  const float a = roughness * roughness;
-  const float k = a * a / 2.0f;
+  const float k = roughness * roughness / 2.0f;
   const float gv = n_dot_v / (n_dot_v * (1.0f - k) + k);
   const float gl = n_dot_l / (n_dot_l * (1.0f - k) + k);
   return gv * gl;
@@ -1113,6 +1114,7 @@ glm::vec4 irradiance_at(const glm::vec3& n) {
   up = glm::cross(n, right);
   glm::vec3 sum(0.0f);
   int samples = 0;
+  // ~0.1 rad hemisphere step (~63 x 16 taps); fine for the smooth analytic sky.
   for (float phi = 0.0f; phi < 2.0f * kPi; phi += 0.1f) {
     for (float theta = 0.0f; theta < 0.5f * kPi; theta += 0.1f) {
       const float st = std::sin(theta);
@@ -1186,18 +1188,25 @@ vg::Texture upload_cube(const vg::Device& device, vg::Allocator& alloc,
     uint32_t face;
     uint32_t size;
   };
+  // Pack gen()'s float pixels to RGBA16F (2 uint32 = 8 bytes/texel). 16-bit
+  // float cubes filter on the broad device set (incl. MoltenVK/Metal); RGBA32F
+  // linear filtering is an optional feature many GPUs lack. Each face starts on
+  // an 8-byte (texel-block) aligned offset since every texel is 2 uint32.
   std::vector<Region> regions;
-  std::vector<glm::vec4> data;
+  std::vector<uint32_t> data;
   for (uint32_t m = 0; m < mips; ++m) {
     const uint32_t size = (base_size >> m) > 0 ? (base_size >> m) : 1u;
     for (uint32_t f = 0; f < 6; ++f) {
       const std::vector<glm::vec4> face = gen(m, static_cast<int>(f), size);
       regions.push_back(
-          {VkDeviceSize{data.size()} * sizeof(glm::vec4), m, f, size});
-      data.insert(data.end(), face.begin(), face.end());
+          {VkDeviceSize{data.size()} * sizeof(uint32_t), m, f, size});
+      for (const glm::vec4& px : face) {
+        data.push_back(glm::packHalf2x16(glm::vec2(px.x, px.y)));
+        data.push_back(glm::packHalf2x16(glm::vec2(px.z, px.w)));
+      }
     }
   }
-  const VkDeviceSize total = VkDeviceSize{data.size()} * sizeof(glm::vec4);
+  const VkDeviceSize total = VkDeviceSize{data.size()} * sizeof(uint32_t);
 
   vg::BufferDesc sd;
   sd.size = total;
@@ -1293,9 +1302,10 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   }
   ibl.sampler = std::move(sampler).value();
 
-  // Diffuse irradiance: a small single-mip cube.
+  // Diffuse irradiance: 16x16 single-mip cube -- ample for the low-frequency,
+  // heavily-blurred cosine convolution.
   ibl.irradiance = upload_cube(
-      device, alloc, 16, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+      device, alloc, 16, 1, VK_FORMAT_R16G16B16A16_SFLOAT,
       [](uint32_t, int face, uint32_t size) {
         std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
         for (uint32_t y = 0; y < size; ++y) {
@@ -1312,10 +1322,11 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
     return ibl;
   }
 
-  // Prefiltered specular: roughness rises with the mip level.
+  // Prefiltered specular: a 64x64 base over kPrefilterMips mips maps mip ->
+  // roughness 0..1; 64 GGX samples/texel suffice for the smooth analytic sky.
   constexpr uint32_t kPrefilterMips = 5;
   ibl.prefilter = upload_cube(
-      device, alloc, 64, kPrefilterMips, VK_FORMAT_R32G32B32A32_SFLOAT,
+      device, alloc, 64, kPrefilterMips, VK_FORMAT_R16G16B16A16_SFLOAT,
       [](uint32_t mip, int face, uint32_t size) {
         const float roughness =
             static_cast<float>(mip) / static_cast<float>(kPrefilterMips - 1);
@@ -1336,20 +1347,23 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   }
   ibl.prefilter_max_lod = static_cast<float>(kPrefilterMips - 1);
 
-  // BRDF integration LUT (2D RG), environment-independent.
+  // BRDF integration LUT (2D RG16F), environment-independent. 128x128 with 256
+  // importance samples/texel is the standard split-sum table resolution.
+  // TODO: this table never changes -- bake it to an asset rather than
+  // recomputing it (~4M importance samples) on every launch.
   constexpr uint32_t kLutSize = 128;
-  std::vector<glm::vec2> lut(static_cast<size_t>(kLutSize) * kLutSize);
+  std::vector<uint32_t> lut(static_cast<size_t>(kLutSize) * kLutSize);
   for (uint32_t y = 0; y < kLutSize; ++y) {
     for (uint32_t x = 0; x < kLutSize; ++x) {
-      lut[y * kLutSize + x] =
-          brdf_integrate((x + 0.5f) / kLutSize, (y + 0.5f) / kLutSize, 256u);
+      lut[y * kLutSize + x] = glm::packHalf2x16(
+          brdf_integrate((x + 0.5f) / kLutSize, (y + 0.5f) / kLutSize, 256u));
     }
   }
   vg::ImageUploadDesc lut_desc;
   lut_desc.extent = {kLutSize, kLutSize};
-  lut_desc.format = VK_FORMAT_R32G32_SFLOAT;
+  lut_desc.format = VK_FORMAT_R16G16_SFLOAT;
   lut_desc.pixels = lut.data();
-  lut_desc.size = lut.size() * sizeof(glm::vec2);
+  lut_desc.size = lut.size() * sizeof(uint32_t);
   auto brdf = vg::upload_texture(device, alloc, lut_desc);
   if (!brdf.ok()) {
     std::fprintf(stderr, "brdf lut: %s\n", brdf.status().message().c_str());
