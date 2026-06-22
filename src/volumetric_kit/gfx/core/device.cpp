@@ -32,10 +32,11 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   if (physical == VK_NULL_HANDLE) {
     return Status::invalid_argument("Device::create: physical device is null");
   }
-  std::optional<uint32_t> graphics = find_graphics_family(physical);
+  std::optional<GraphicsFamily> graphics = find_graphics_family(physical);
   if (!graphics) {
     return Status::unsupported("no graphics queue family");
   }
+  const uint32_t graphics_family = graphics->index;
 
   // Capture the physical-device capabilities once, up front: the version and
   // extension checks below read from it instead of re-querying the driver, and
@@ -127,7 +128,7 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   }
 
   const float priority = 1.0f;
-  std::set<uint32_t> unique_families = {*graphics};
+  std::set<uint32_t> unique_families = {graphics_family};
   if (present) {
     unique_families.insert(*present);
   }
@@ -230,10 +231,11 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
 
   Device device;
   device.physical_ = physical;
-  device.graphics_family_ = *graphics;
+  device.graphics_family_ = graphics_family;
+  device.graphics_timestamp_valid_bits_ = graphics->timestamp_valid_bits;
   VG_VK_TRY(vkCreateDevice(physical, &create_info, nullptr, &device.device_));
 
-  vkGetDeviceQueue(device.device_, *graphics, 0, &device.graphics_queue_);
+  vkGetDeviceQueue(device.device_, graphics_family, 0, &device.graphics_queue_);
   if (present) {
     device.present_family_ = *present;
     vkGetDeviceQueue(device.device_, *present, 0, &device.present_queue_);
@@ -242,7 +244,7 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   VkCommandPoolCreateInfo pool_info{};
   pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = *graphics;
+  pool_info.queueFamilyIndex = graphics_family;
   VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
 
@@ -318,6 +320,7 @@ Device::Device(Device&& other) noexcept
       device_(other.device_),
       command_pool_(other.command_pool_),
       graphics_family_(other.graphics_family_),
+      graphics_timestamp_valid_bits_(other.graphics_timestamp_valid_bits_),
       present_family_(other.present_family_),
       graphics_queue_(other.graphics_queue_),
       present_queue_(other.present_queue_),
@@ -326,6 +329,7 @@ Device::Device(Device&& other) noexcept
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
   other.graphics_family_ = 0;
+  other.graphics_timestamp_valid_bits_ = 0;
   other.present_family_ = 0;
   other.graphics_queue_ = VK_NULL_HANDLE;
   other.present_queue_ = VK_NULL_HANDLE;
@@ -339,6 +343,7 @@ Device& Device::operator=(Device&& other) noexcept {
     device_ = other.device_;
     command_pool_ = other.command_pool_;
     graphics_family_ = other.graphics_family_;
+    graphics_timestamp_valid_bits_ = other.graphics_timestamp_valid_bits_;
     present_family_ = other.present_family_;
     graphics_queue_ = other.graphics_queue_;
     present_queue_ = other.present_queue_;
@@ -347,6 +352,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
     other.graphics_family_ = 0;
+    other.graphics_timestamp_valid_bits_ = 0;
     other.present_family_ = 0;
     other.graphics_queue_ = VK_NULL_HANDLE;
     other.present_queue_ = VK_NULL_HANDLE;
@@ -368,6 +374,7 @@ void Device::destroy() noexcept {
   }
   physical_ = VK_NULL_HANDLE;
   graphics_family_ = 0;
+  graphics_timestamp_valid_bits_ = 0;
   present_family_ = 0;
   graphics_queue_ = VK_NULL_HANDLE;
   present_queue_ = VK_NULL_HANDLE;
