@@ -20,16 +20,34 @@ jobs:
     name: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # One leg per supported OS. To move a platform onto a self-hosted runner
-      # (e.g. a 5090 Linux box, or an always-on Mac mini), replace its value
-      # with that runner's label — _build.yml keys its dependency-install steps
-      # off `runner.os`, not the label, so nothing else has to change. Real-GPU
-      # Linux additionally wants a container + `--gpus all`; see the PR notes.
+      # The three Ubuntu legs run on the self-hosted GPU box (label
+      # `vk-linux-gpu`), each in an OS-matched container with the RTX 5090 passed
+      # through (`--gpus all`), so one host covers 22.04 / 24.04 / 26.04 against
+      # the real driver. Run one runner instance per leg on that box so they
+      # execute in parallel, not serially — see .github/self-hosted-runners.md.
+      # macOS stays on a GitHub-hosted runner. _build.yml keys its install steps
+      # off `runner.os` (Linux for all three Ubuntu legs), so only the container
+      # image distinguishes them; NVIDIA_DRIVER_CAPABILITIES=all makes the
+      # toolkit mount the Vulkan ICD + graphics libs.
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, macos-26]
+        include:
+          - os: ubuntu-22.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: ubuntu-24.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: ubuntu-26.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: macos-26
+            runner: macos-26
+            container: ''
     uses: ./.github/workflows/_build.yml
     with:
       os: ${{ matrix.os }}
+      runner: ${{ matrix.runner }}
+      container: ${{ matrix.container }}
 
   lint:
     uses: ./.github/workflows/lint.yml
