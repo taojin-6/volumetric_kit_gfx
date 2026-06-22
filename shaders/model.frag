@@ -71,8 +71,17 @@ vec3 shading_normal(vec3 n_geo) {
   vec3 sampled = texture(normal_tex, frag_uv).xyz * 2.0 - 1.0;
   sampled.xy *= mat.normal_scale;
   const vec3 n = normalize(n_geo);
-  vec3 t = normalize(frag_tangent.xyz);
-  t = normalize(t - dot(t, n) * n);
+  // Gram-Schmidt the tangent against n. When the mesh has no tangents (the
+  // (1,0,0,1) default) or the tangent is parallel to n, the residual is ~0;
+  // fall back to an arbitrary perpendicular so normalize() never divides by
+  // zero -- a NaN there poisons the whole frame (0*NaN is still NaN, so even a
+  // flat normal map could not recover it).
+  vec3 t = frag_tangent.xyz - dot(frag_tangent.xyz, n) * n;
+  if (dot(t, t) < 1e-8) {
+    t = abs(n.x) < 0.9 ? cross(vec3(1.0, 0.0, 0.0), n)
+                       : cross(vec3(0.0, 1.0, 0.0), n);
+  }
+  t = normalize(t);
   const vec3 b = cross(n, t) * frag_tangent.w;
   return normalize(mat3(t, b, n) * sampled);
 }
@@ -118,8 +127,9 @@ void main() {
   // Constant ambient stands in for IBL so faces off the key light are not black.
   const vec3 ambient = vec3(0.12) * albedo * ao;
 
-  // Output is linear; the sRGB target encodes it on write. Opaque/mask output is
-  // fully opaque (no blend pipeline yet).
+  // Output is linear; the sRGB target encodes it on write.
+  // TODO: honor alpha mode -- mask `discard` (needs a device feature/SPIR-V
+  // capability) and blending; today every fragment is written fully opaque.
   const vec3 color = ambient + direct + emissive;
   out_color = vec4(color, 1.0);
 }

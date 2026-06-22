@@ -145,6 +145,7 @@ assets::Model make_cube() {
       assets::Vertex v;
       v.position = normals[f] * 0.5f + axis_u[f] * su + axis_v[f] * sv;
       v.normal = normals[f];
+      v.tangent = glm::vec4(axis_u[f], 1.0f);  // w=+1: bitangent = n x t
       mesh.vertices.push_back(v);
     }
     const uint32_t quad[6] = {base, base + 1, base + 2,
@@ -550,7 +551,7 @@ struct SceneUbo {
 // frame; set 1 (material) per draw. mesh_sets[i] is the set-1 for
 // model.meshes[i].
 struct PbrResources {
-  std::optional<vg::Sampler> sampler;     // no public default ctor (see #47)
+  std::optional<vg::Sampler> sampler;     // no public default ctor
   std::vector<vg::Texture> textures;      // owns every uploaded map + fallbacks
   std::vector<vg::Buffer> material_ubos;  // owns the per-material factor UBOs
   vg::Buffer scene_ubo;                   // per-frame; host-mapped
@@ -664,6 +665,7 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
 
   // Host-mapped uniform buffer of `size` bytes (empty on failure).
   auto make_ubo = [&](size_t size, bool* ubo_ok) {
+    *ubo_ok = true;  // sink: set here, cleared on failure below
     vg::BufferDesc bd;
     bd.size = size;
     bd.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
@@ -1092,6 +1094,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const glm::mat4 view_proj =
         orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
     // The camera orbits each frame, so refresh the scene UBO before drawing.
+    // Safe with one frame in flight: begin_frame waited the previous frame's
+    // fence above, so the GPU has finished reading this single shared UBO.
+    // Raising frames_in_flight > 1 would need a per-slot scene UBO.
     *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
         SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
     record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes,

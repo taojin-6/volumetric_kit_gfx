@@ -416,6 +416,10 @@ bool convert_primitive(const tinygltf::Model& gltf,
   std::vector<float> normals, tangents, uvs, colors3, colors4;
   const bool has_normals = channel("NORMAL", normals, 3);
   const bool has_tangents = channel("TANGENT", tangents, 4);
+  // TODO: synthesize tangents (MikkTSpace or a UV-derived frame) when
+  // has_tangents is false, so a normal-mapped primitive lacking a TANGENT
+  // attribute shades in a correct frame; today such a mesh keeps the Vertex
+  // (1,0,0,1) default (consumers must guard the resulting degenerate TBN).
   const bool has_uvs = channel("TEXCOORD_0", uvs, 2);
   // COLOR_0 is VEC3 or VEC4; glTF requires its integer forms normalized.
   const bool has_colors3 = channel("COLOR_0", colors3, 3, /*force_norm=*/true);
