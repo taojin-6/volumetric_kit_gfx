@@ -3,17 +3,15 @@
 
 #version 450
 
-// glTF 2.0 metallic-roughness PBR, lit by one directional key light plus a flat
-// ambient fill (IBL replaces the ambient term on the next spine step). Material
-// factors + the five maps come from a per-material set (set 1: a UBO at binding
-// 0, then base-color / metallic-roughness / normal / occlusion / emissive
-// samplers at 1..5), all reflected into the pipeline layout automatically; the
-// per-frame camera position comes from the scene set (set 0). The example binds
-// a 1x1 white (or flat-normal) fallback for any map a material omits, so the
-// factor alone applies. Two-sided: the normal is flipped for back faces because
-// the pipeline does not cull.
-// TODO: image-based lighting (env irradiance + prefiltered specular + BRDF LUT)
-// replaces the constant ambient on the IBL step.
+// glTF 2.0 metallic-roughness PBR, lit by one directional key light plus
+// image-based ambient. Material factors + the five maps come from a per-material
+// set (set 1: a UBO at binding 0, then base-color / metallic-roughness / normal
+// / occlusion / emissive samplers at 1..5); the scene set (set 0) carries the
+// camera and the IBL textures (irradiance + prefiltered-specular cubes + a BRDF
+// LUT). All are reflected into the pipeline layout automatically. The example
+// binds a 1x1 white (or flat-normal) fallback for any map a material omits, so
+// the factor alone applies. Two-sided: the normal is flipped for back faces
+// because the pipeline does not cull.
 
 layout(location = 0) in vec3 frag_normal;
 layout(location = 1) in vec2 frag_uv;
@@ -21,9 +19,12 @@ layout(location = 2) in vec3 frag_world_pos;
 layout(location = 3) in vec4 frag_tangent;
 
 layout(set = 0, binding = 0) uniform Scene {
-  vec4 camera_pos;  // .xyz world-space eye
+  vec4 camera_pos;  // .xyz world-space eye, .w = prefiltered-specular max LOD
 }
 scene;
+layout(set = 0, binding = 1) uniform samplerCube irradiance_cube;  // diffuse IBL
+layout(set = 0, binding = 2) uniform samplerCube prefilter_cube;  // specular IBL
+layout(set = 0, binding = 3) uniform sampler2D brdf_lut;  // BRDF integration
 
 layout(set = 1, binding = 0) uniform Material {
   vec4 base_color_factor;
@@ -63,6 +64,13 @@ float geometry_smith(float n_dot_v, float n_dot_l, float roughness) {
 
 vec3 fresnel_schlick(float cos_theta, vec3 f0) {
   return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+// Fresnel with a roughness-aware ceiling for the IBL ambient term (Karis): a
+// rough surface's grazing reflectance is pulled back toward F0.
+vec3 fresnel_schlick_roughness(float cos_theta, vec3 f0, float roughness) {
+  const vec3 ceiling = max(vec3(1.0 - roughness), f0);
+  return f0 + (ceiling - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 }
 
 // Perturb the world normal by the tangent-space normal map, building the TBN
@@ -124,8 +132,17 @@ void main() {
   const vec3 kd = (vec3(1.0) - f) * (1.0 - metallic);
   const vec3 direct = (kd * albedo / PI + specular) * light_color * n_dot_l;
 
-  // Constant ambient stands in for IBL so faces off the key light are not black.
-  const vec3 ambient = vec3(0.12) * albedo * ao;
+  // Image-based ambient (split-sum): diffuse from the irradiance cube, specular
+  // from the roughness-prefiltered cube weighted by the BRDF LUT.
+  const vec3 ibl_f = fresnel_schlick_roughness(n_dot_v, f0, roughness);
+  const vec3 kd_ibl = (vec3(1.0) - ibl_f) * (1.0 - metallic);
+  const vec3 diffuse_ibl = texture(irradiance_cube, n).rgb * albedo;
+  const vec3 reflected = reflect(-v, n);
+  const vec3 prefiltered =
+      textureLod(prefilter_cube, reflected, roughness * scene.camera_pos.w).rgb;
+  const vec2 brdf = texture(brdf_lut, vec2(n_dot_v, roughness)).rg;
+  const vec3 specular_ibl = prefiltered * (ibl_f * brdf.x + brdf.y);
+  const vec3 ambient = (kd_ibl * diffuse_ibl + specular_ibl) * ao;
 
   // Output is linear; the sRGB target encodes it on write.
   // TODO: honor alpha mode -- mask `discard` (needs a device feature/SPIR-V
