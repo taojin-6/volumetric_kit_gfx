@@ -1,20 +1,55 @@
 name: build (reusable)
 
-# Reusable build & test for a single OS. The per-OS workflows
-# (build-*.yml) call this so each platform gets its own status badge while the
-# build/test steps live in exactly one place.
+# Reusable build & test for one OS leg. ci.yml calls this once per entry in its
+# build matrix. A leg can run on a GitHub-hosted runner (pass just `os`) or on a
+# self-hosted runner in an OS-matched container with a GPU passed through (pass
+# `runner` + `container`) — the dependency-install steps key off `runner.os`
+# (Linux/macOS), so the same steps serve hosted and containerised legs alike.
 on:
   workflow_call:
     inputs:
       os:
-        description: GitHub-hosted runner label to build on (e.g. ubuntu-24.04).
+        description: Leg identity, used in the job name and cache key (e.g. ubuntu-24.04).
         required: true
         type: string
+      runner:
+        description: >-
+          runs-on label. Empty → use `os` as a GitHub-hosted image; set to a
+          self-hosted label (e.g. vk-linux-gpu) to move this leg onto your box.
+        required: false
+        type: string
+        default: ''
+      container:
+        description: >-
+          JSON for the job container, e.g.
+          '{"image":"ubuntu:24.04","options":"--gpus all"}', or '' for none.
+          Lets one self-hosted host build several Ubuntu userlands with the GPU
+          passed through.
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
-    runs-on: ${{ inputs.os }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || inputs.os }}
+    # Render the container JSON to a map only when one was requested; macOS and
+    # any hosted leg pass '' and run directly on the runner. `&&` short-circuits,
+    # so fromJSON is never handed the empty string.
+    container: ${{ inputs.container != '' && fromJSON(inputs.container) || null }}
     timeout-minutes: 30
+    defaults:
+      run:
+        # Inside a container GitHub runs `run:` steps under `sh` (dash), not the
+        # `bash` it defaults to on hosted runners. Dash only learned `set -o
+        # pipefail` in 0.5.12 (POSIX 2024) — Ubuntu 26.04 has it, 22.04/24.04 do
+        # not — so force bash everywhere for one consistent shell across legs.
+        shell: bash
+    env:
+      # 'true' when this leg runs in a container. In this repo containers are
+      # used only on the self-hosted GPU box (the Ubuntu legs), where the image
+      # is a bare ubuntu:* (no toolchain) and the real 5090 is passed through;
+      # this drives the toolchain install and the ICD choice below.
+      IN_CONTAINER: ${{ inputs.container != '' }}
     strategy:
       fail-fast: false
       # Build + test both an unoptimized Debug and an optimized Release/NDEBUG
@@ -22,6 +57,15 @@ jobs:
       matrix:
         build_type: [Debug, Release]
     steps:
+      # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
+      # install steps use it); we run as root in the container, so install them
+      # before anything else. Skipped on hosted runners.
+      - name: Bootstrap container
+        if: inputs.container != ''
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git sudo
+
       - uses: actions/checkout@v6
 
       - name: Detect build system
@@ -38,16 +82,29 @@ jobs:
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake \
-            libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
-            libglfw3-dev libglm-dev xvfb \
-            mesa-vulkan-drivers vulkan-tools
-          # mesa-vulkan-drivers provides lavapipe (software Vulkan) so GPU-dependent
-          # tests can run on these GPU-less runners; vulkan-tools provides vulkaninfo.
-          # make + a C/C++ toolchain ship preinstalled (build-essential).
-          # Point the loader at lavapipe for the rest of the job.
-          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          # vulkan-tools provides vulkaninfo; the rest is the build + validation
+          # toolchain. A C/C++ toolchain + make ship preinstalled on the hosted
+          # images but NOT in a bare ubuntu:* container, so add build-essential there.
+          pkgs="cmake libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools libglfw3-dev libglm-dev xvfb vulkan-tools"
+          if [ "$IN_CONTAINER" = "true" ]; then
+            pkgs="$pkgs build-essential"
+          else
+            # GPU-less hosted runner: lavapipe (software Vulkan) gives the
+            # GPU-dependent tests a device to run against.
+            pkgs="$pkgs mesa-vulkan-drivers"
+          fi
+          # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
+          sudo apt-get install -y --no-install-recommends $pkgs
+          # On a hosted runner, point the loader at lavapipe for the rest of the
+          # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
+          # the container toolkit (--gpus all + NVIDIA_DRIVER_CAPABILITIES=all) is
+          # then the only ICD, so the GPU-dependent tests run on the real 5090 —
+          # and if it is absent, vulkaninfo finds no device and the GPU steps skip
+          # themselves rather than fail.
+          # TODO: bake these deps into a prebuilt image to drop ~30-60s/run.
+          if [ "$IN_CONTAINER" != "true" ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          fi
 
       - name: Install dependencies (macOS)
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
@@ -75,23 +132,30 @@ jobs:
           }
           # make ships with the Xcode command-line tools.
 
-      # Report the Vulkan device the runner sees (lavapipe on Linux, MoltenVK on
-      # macOS). Non-fatal: GPU-dependent tests skip themselves when no device exists.
+      # Report the Vulkan device the runner sees (the real GPU in a self-hosted
+      # container, lavapipe on a hosted Linux runner, MoltenVK on macOS).
+      # Non-fatal: GPU-dependent tests skip themselves when no device exists.
       - name: GPU diagnostic
         if: steps.detect.outputs.present == 'true'
         run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
 
       # Cache the FetchContent dependency tree (VMA / spirv-cross / googletest
       # sources + builds) so they are not re-cloned and recompiled every run.
+      # FetchContent bakes the absolute build path into its sub-build CMakeCache,
+      # so a cache is only reusable where that path is stable: the containerised
+      # Linux legs all see /__w/… (so they share one key, `ctr`), but native
+      # macOS self-hosted runners each have their own /Users/<user>/actions-runner-N
+      # path and must key on `runner.name` — otherwise a runner restores another's
+      # (or an old hosted runner's) cache and Configure dies with "CMakeCache.txt
+      # directory is different".
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
           restore-keys: |
-            deps-${{ inputs.os }}-${{ matrix.build_type }}-
-            deps-${{ inputs.os }}-
+            deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-
 
       # Default ("Unix Makefiles") generator + a parallel make build, per
       # project preference — no Ninja.
@@ -127,7 +191,11 @@ jobs:
       # headless windowing test skips), but it supports the X11 WSI, so drive the
       # windowed example through a virtual X server with validation layers on.
       # macOS runners are display-less, so the example is build-only there (it is
-      # runtime-validated locally on MoltenVK).
+      # runtime-validated locally on MoltenVK). On the self-hosted GPU box this
+      # runs against the real 5090, still under Xvfb since the example opens a
+      # GLFW/X11 window.
+      # TODO: validate NVIDIA + Xvfb presentation on the box; if flaky, drive the
+      # example through VK_EXT_headless_surface (which the NVIDIA ICD supports).
       - name: Run windowed examples (Linux, Xvfb)
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
