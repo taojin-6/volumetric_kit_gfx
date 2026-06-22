@@ -2,12 +2,13 @@
 // Copyright (c) 2026 Tao Jin
 
 // examples/03_model: load a glTF model and look at it. Parses a `.gltf`/`.glb`
-// with the io tier into a CPU assets::Model, uploads each mesh to a vertex +
-// index buffer, and draws it depth-tested with a per-draw model/MVP push
-// constant (reflected automatically into the pipeline layout -- no descriptor
-// set). The camera auto-frames the model's bounds, so any model fills the view.
-// Untextured normal shading: the geometry's form, not its materials (PBR +
-// material textures arrive with the IBL spine); this is the first look.
+// with the io tier into a CPU assets::Model, uploads each mesh (vertex + index
+// buffer) and its material maps, and draws it depth-tested with glTF
+// metallic-roughness PBR: a per-draw model/MVP push constant, a per-frame scene
+// set (set 0: camera), and a per-material set (set 1: factor UBO + the five
+// maps) -- all reflected automatically into the pipeline layout. The camera
+// auto-frames the model's bounds, so any model fills the view. IBL (image-based
+// ambient) is the next spine step; today the ambient is a flat fill.
 //
 // Usage:
 //   example_03_model                       # built-in cube, in a window
@@ -39,6 +40,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -53,13 +55,16 @@
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
@@ -140,6 +145,7 @@ assets::Model make_cube() {
       assets::Vertex v;
       v.position = normals[f] * 0.5f + axis_u[f] * su + axis_v[f] * sv;
       v.normal = normals[f];
+      v.tangent = glm::vec4(axis_u[f], 1.0f);  // w=+1: bitangent = n x t
       mesh.vertices.push_back(v);
     }
     const uint32_t quad[6] = {base, base + 1, base + 2,
@@ -314,13 +320,17 @@ VkVertexInputBindingDescription mesh_binding() {
   return binding;
 }
 
-// model.vert reads position (location 0) + normal (location 1) out of the
-// interleaved assets::Vertex; the rest of the stride is ignored by this shader.
-void mesh_attributes(VkVertexInputAttributeDescription attrs[2]) {
+// model.vert reads position (location 0), normal (1), the primary UV (2), and
+// the tangent (3) out of the interleaved assets::Vertex; vertex color is
+// unused.
+void mesh_attributes(VkVertexInputAttributeDescription attrs[4]) {
   attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,
               offsetof(assets::Vertex, position)};
   attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT,
               offsetof(assets::Vertex, normal)};
+  attrs[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(assets::Vertex, uv0)};
+  attrs[3] = {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT,
+              offsetof(assets::Vertex, tangent)};
 }
 
 vg::Result<vg::GraphicsPipeline> build_pipeline(
@@ -335,7 +345,7 @@ vg::Result<vg::GraphicsPipeline> build_pipeline(
   desc.vertex_bindings = binding;
   desc.vertex_binding_count = 1;
   desc.vertex_attributes = attrs;
-  desc.vertex_attribute_count = 2;
+  desc.vertex_attribute_count = 4;
   desc.depth_test = true;
   desc.depth_write = true;
   return vg::GraphicsPipeline::create(device, desc);
@@ -378,8 +388,12 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
                   const vg::GraphicsPipeline& pipeline,
                   const glm::mat4& view_proj,
                   const std::vector<DrawItem>& draws,
-                  const std::vector<GpuMesh>& meshes) {
+                  const std::vector<GpuMesh>& meshes, VkDescriptorSet scene_set,
+                  const std::vector<VkDescriptorSet>& mesh_sets) {
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+  // Per-frame scene data (set 0: camera position) binds once for all draws.
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline.layout(), 0, 1, &scene_set, 0, nullptr);
   VkViewport viewport{};
   viewport.width = static_cast<float>(extent.width);
   viewport.height = static_cast<float>(extent.height);
@@ -400,6 +414,11 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
     pc.model = draw.world;
     vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                        sizeof(pc), &pc);
+    // Bind this mesh's material (set 1: factor UBO + the five maps). Empty
+    // meshes were skipped above, so every bound set is fully written.
+    const VkDescriptorSet material_set = mesh_sets[draw.mesh];
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline.layout(), 1, 1, &material_set, 0, nullptr);
     const VkDeviceSize offset = 0;
     const VkBuffer vbuf = gpu.vertices.handle();
     vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &offset);
@@ -492,6 +511,279 @@ void barrier_image(VkCommandBuffer cmd, VkImage image,
                        nullptr, 0, nullptr, 1, &b);
 }
 
+// Expand a decoded CPU image to tightly-packed RGBA8 (the layout upload_texture
+// takes): pass 4-channel through, replicate 1/2-channel luminance into RGB, and
+// pad 3-channel with opaque alpha -- most GPUs do not sample 3-channel 8-bit.
+std::vector<uint8_t> to_rgba8(const assets::Image& img) {
+  const size_t texels = static_cast<size_t>(img.width) * img.height;
+  std::vector<uint8_t> out(texels * 4);
+  const uint32_t c = img.channels;
+  for (size_t i = 0; i < texels; ++i) {
+    const uint8_t* src = img.pixels.data() + i * c;
+    out[i * 4 + 0] = src[0];
+    out[i * 4 + 1] = c >= 3 ? src[1] : src[0];
+    out[i * 4 + 2] = c >= 3 ? src[2] : src[0];
+    out[i * 4 + 3] = c == 4 ? src[3] : (c == 2 ? src[1] : 255);
+  }
+  return out;
+}
+
+// std140 per-material parameters; mirrors the Material UBO in model.frag.
+struct MaterialUbo {
+  glm::vec4 base_color_factor;
+  glm::vec4 emissive_factor;  // .rgb used
+  float metallic_factor;
+  float roughness_factor;
+  float normal_scale;
+  float occlusion_strength;
+};
+static_assert(sizeof(MaterialUbo) == 48,
+              "MaterialUbo must match the std140 Material block");
+
+// std140 per-frame parameters; mirrors the Scene UBO in model.frag.
+struct SceneUbo {
+  glm::vec4 camera_pos;  // .xyz world-space eye
+};
+
+// All PBR GPU state, outliving the draw loop: a shared sampler; every uploaded
+// map plus 1x1 white / flat-normal fallbacks; per-material factor UBOs and the
+// per-frame scene UBO; and the descriptor sets. set 0 (scene) binds once per
+// frame; set 1 (material) per draw. mesh_sets[i] is the set-1 for
+// model.meshes[i].
+struct PbrResources {
+  std::optional<vg::Sampler> sampler;     // no public default ctor
+  std::vector<vg::Texture> textures;      // owns every uploaded map + fallbacks
+  std::vector<vg::Buffer> material_ubos;  // owns the per-material factor UBOs
+  vg::Buffer scene_ubo;                   // per-frame; host-mapped
+  vg::DescriptorPool pool;
+  vg::DescriptorSet scene_set;                   // set 0
+  std::vector<vg::DescriptorSet> material_sets;  // set 1, parallel to materials
+  vg::DescriptorSet fallback_material_set;       // set 1, material-less meshes
+  std::vector<VkDescriptorSet> mesh_sets;        // set 1 resolved per mesh
+};
+
+// Upload every material map (each image once, in the color space its slot
+// needs), build a factor UBO + descriptor set per material (plus a default
+// fallback) and the per-frame scene set, and resolve the set each mesh binds.
+// The set 0 / set 1 layouts are reflected from the shaders.
+PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
+                       const vg::GraphicsPipeline& pipeline,
+                       const assets::Model& model, bool* ok) {
+  PbrResources r;
+  *ok = true;  // output flag; cleared on the first failure below
+
+  auto sampler = vg::Sampler::create(device.handle());
+  if (!sampler.ok()) {
+    std::fprintf(stderr, "sampler: %s\n", sampler.status().message().c_str());
+    *ok = false;
+    return r;
+  }
+  r.sampler = std::move(sampler).value();
+
+  // Upload a tightly-packed RGBA8 image; returns its index into r.textures, or
+  // -1 on failure.
+  auto upload = [&](VkExtent2D ext, VkFormat fmt, const uint8_t* px, size_t sz,
+                    bool mips) -> int {
+    vg::ImageUploadDesc d;
+    d.extent = ext;
+    d.format = fmt;
+    d.pixels = px;
+    d.size = sz;
+    d.generate_mips = mips;
+    auto tex = vg::upload_texture(device, alloc, d);
+    if (!tex.ok()) {
+      std::fprintf(stderr, "texture upload: %s\n",
+                   tex.status().message().c_str());
+      return -1;
+    }
+    r.textures.push_back(std::move(tex).value());
+    return static_cast<int>(r.textures.size()) - 1;
+  };
+
+  // Fallbacks: white (samples 1.0 for any non-normal slot, so the factor alone
+  // applies) and flat-normal (0.5,0.5,1 -> (0,0,1): no perturbation).
+  const uint8_t white_px[4] = {255, 255, 255, 255};
+  const uint8_t flat_px[4] = {128, 128, 255, 255};
+  const int white =
+      upload({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, white_px, 4, false);
+  const int flat = upload({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, flat_px, 4, false);
+  if (white < 0 || flat < 0) {
+    *ok = false;
+    return r;
+  }
+
+  // Color space per image follows its slot: base-color + emissive are sRGB, the
+  // rest linear. A glTF image fills one role in practice; if shared, sRGB wins.
+  std::vector<bool> srgb(model.images.size(), false);
+  for (const assets::Material& m : model.materials) {
+    if (m.base_color_texture < srgb.size()) {
+      srgb[m.base_color_texture] = true;
+    }
+    if (m.emissive_texture < srgb.size()) {
+      srgb[m.emissive_texture] = true;
+    }
+  }
+
+  // Upload each image once; image_tex maps a model.images index to r.textures.
+  std::vector<int> image_tex(model.images.size(), -1);
+  for (size_t i = 0; i < model.images.size(); ++i) {
+    const assets::Image& img = model.images[i];
+    if (!img.valid()) {
+      continue;
+    }
+    const std::vector<uint8_t> rgba = to_rgba8(img);
+    const VkFormat fmt =
+        srgb[i] ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    image_tex[i] =
+        upload({img.width, img.height}, fmt, rgba.data(), rgba.size(), true);
+    if (image_tex[i] < 0) {
+      *ok = false;
+      return r;
+    }
+  }
+
+  // Pool: a material set per material + a fallback, plus the scene set.
+  // Material sets each hold a UBO + 5 samplers; the scene set holds a UBO.
+  const uint32_t material_count =
+      static_cast<uint32_t>(model.materials.size()) + 1;
+  const VkDescriptorPoolSize sizes[2] = {
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, material_count + 1},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, material_count * 5}};
+  auto pool =
+      vg::DescriptorPool::create(device.handle(), sizes, 2, material_count + 1);
+  if (!pool.ok()) {
+    std::fprintf(stderr, "descriptor pool: %s\n",
+                 pool.status().message().c_str());
+    *ok = false;
+    return r;
+  }
+  r.pool = std::move(pool).value();
+
+  const VkDescriptorSetLayout scene_layout = pipeline.descriptor_set_layout(0);
+  const VkDescriptorSetLayout material_layout =
+      pipeline.descriptor_set_layout(1);
+
+  // Host-mapped uniform buffer of `size` bytes (empty on failure).
+  auto make_ubo = [&](size_t size, bool* ubo_ok) {
+    *ubo_ok = true;  // sink: set here, cleared on failure below
+    vg::BufferDesc bd;
+    bd.size = size;
+    bd.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bd.memory = vg::MemoryUsage::HostVisible;
+    bd.mapped = true;
+    auto buf = alloc.create_buffer(bd);
+    if (!buf.ok()) {
+      std::fprintf(stderr, "uniform buffer: %s\n",
+                   buf.status().message().c_str());
+      *ubo_ok = false;
+      return vg::Buffer{};
+    }
+    return std::move(buf).value();
+  };
+
+  // Scene set (set 0): the per-frame camera UBO, refreshed each frame by the
+  // caller through scene_ubo.mapped().
+  r.scene_ubo = make_ubo(sizeof(SceneUbo), ok);
+  if (!*ok) {
+    return r;
+  }
+  {
+    auto set = r.pool.allocate(scene_layout);
+    if (!set.ok()) {
+      std::fprintf(stderr, "scene set: %s\n", set.status().message().c_str());
+      *ok = false;
+      return r;
+    }
+    r.scene_set = std::move(set).value();
+    r.scene_set.write_uniform_buffer(0, r.scene_ubo.handle(), 0,
+                                     sizeof(SceneUbo));
+  }
+
+  r.material_ubos.reserve(material_count);
+
+  // Build one material set: its factor UBO at binding 0, then the five maps.
+  auto make_material_set = [&](const MaterialUbo& ubo, int base, int mr,
+                               int normal, int occ, int emissive,
+                               bool* set_ok) -> vg::DescriptorSet {
+    vg::Buffer buf = make_ubo(sizeof(MaterialUbo), set_ok);
+    if (!*set_ok) {
+      return {};
+    }
+    std::memcpy(buf.mapped(), &ubo, sizeof(ubo));
+    r.material_ubos.push_back(std::move(buf));
+    auto set = r.pool.allocate(material_layout);
+    if (!set.ok()) {
+      std::fprintf(stderr, "material set: %s\n",
+                   set.status().message().c_str());
+      *set_ok = false;
+      return {};
+    }
+    vg::DescriptorSet ds = std::move(set).value();
+    ds.write_uniform_buffer(0, r.material_ubos.back().handle(), 0,
+                            sizeof(MaterialUbo));
+    const int maps[5] = {base, mr, normal, occ, emissive};
+    for (uint32_t b = 0; b < 5; ++b) {
+      ds.write_combined_image_sampler(b + 1, r.textures[maps[b]].view(),
+                                      r.sampler->handle(),
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    return ds;
+  };
+
+  // Texture index for a slot, or the given fallback (kNoTexture is out of range
+  // of image_tex, so it resolves to the fallback).
+  auto tex_for = [&](uint32_t slot, int fallback) {
+    return (slot < image_tex.size() && image_tex[slot] >= 0) ? image_tex[slot]
+                                                             : fallback;
+  };
+
+  // Fallback material for meshes with no material: a matte white dielectric.
+  {
+    MaterialUbo def{};
+    def.base_color_factor = glm::vec4(1.0f);
+    def.emissive_factor = glm::vec4(0.0f);
+    def.metallic_factor = 0.0f;
+    def.roughness_factor = 1.0f;
+    def.normal_scale = 1.0f;
+    def.occlusion_strength = 1.0f;
+    r.fallback_material_set =
+        make_material_set(def, white, white, flat, white, white, ok);
+    if (!*ok) {
+      return r;
+    }
+  }
+
+  r.material_sets.reserve(model.materials.size());
+  for (const assets::Material& m : model.materials) {
+    MaterialUbo ubo{};
+    ubo.base_color_factor = m.base_color_factor;
+    ubo.emissive_factor = glm::vec4(m.emissive_factor, 0.0f);
+    ubo.metallic_factor = m.metallic_factor;
+    ubo.roughness_factor = m.roughness_factor;
+    ubo.normal_scale = m.normal_scale;
+    ubo.occlusion_strength = m.occlusion_strength;
+    r.material_sets.push_back(make_material_set(
+        ubo, tex_for(m.base_color_texture, white),
+        tex_for(m.metallic_roughness_texture, white),
+        tex_for(m.normal_texture, flat), tex_for(m.occlusion_texture, white),
+        tex_for(m.emissive_texture, white), ok));
+    if (!*ok) {
+      return r;
+    }
+  }
+
+  // Resolve the set each mesh binds: its material's set, or the fallback.
+  r.mesh_sets.resize(model.meshes.size());
+  for (size_t i = 0; i < model.meshes.size(); ++i) {
+    const uint32_t mat = model.meshes[i].material;
+    r.mesh_sets[i] =
+        (mat != assets::Mesh::kNoMaterial && mat < r.material_sets.size())
+            ? r.material_sets[mat].handle()
+            : r.fallback_material_set.handle();
+  }
+  return r;
+}
+
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
@@ -558,7 +850,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   }
 
   const VkVertexInputBindingDescription binding = mesh_binding();
-  VkVertexInputAttributeDescription attrs[2];
+  VkVertexInputAttributeDescription attrs[4];
   mesh_attributes(attrs);
   auto pipeline =
       build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
@@ -567,6 +859,16 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
     return 1;
   }
+
+  PbrResources pbr = setup_pbr(device.value(), allocator.value(),
+                               pipeline.value(), model, &ok);
+  if (!ok) {
+    return 1;
+  }
+
+  // Fixed camera for the still: write the eye into the scene UBO once.
+  *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
+      SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
 
   const float aspect = static_cast<float>(width) / static_cast<float>(height);
   const glm::mat4 view_proj =
@@ -590,7 +892,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
         const vg::RenderTarget rt = target.value().target();
         rt.begin(cmd, begin);
         record_scene(cmd, {width, height}, pipeline.value(), view_proj, draws,
-                     meshes);
+                     meshes, pbr.scene_set.handle(), pbr.mesh_sets);
         rt.end(cmd);
         target.value().record_readback(cmd);
       });
@@ -703,7 +1005,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   pipeline_layout.color_count = 1;
   pipeline_layout.depth_format = kDepthFormat;
   const VkVertexInputBindingDescription binding = mesh_binding();
-  VkVertexInputAttributeDescription attrs[2];
+  VkVertexInputAttributeDescription attrs[4];
   mesh_attributes(attrs);
   auto pipeline =
       build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
@@ -718,6 +1020,12 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // TODO: promote depth into the windowing tier (a per-slot depth ring on the
   // swapchain's RenderTarget) so consumers get a depth-capable target and can
   // run more frames in flight, instead of the example owning a single depth.
+  PbrResources pbr = setup_pbr(device.value(), allocator.value(),
+                               pipeline.value(), model, &ok);
+  if (!ok) {
+    return 1;
+  }
+
   auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 1);
   if (!loop.ok()) {
     std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
@@ -785,7 +1093,14 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
         static_cast<float>(extent.height == 0 ? 1 : extent.height);
     const glm::mat4 view_proj =
         orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
-    record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes);
+    // The camera orbits each frame, so refresh the scene UBO before drawing.
+    // Safe with one frame in flight: begin_frame waited the previous frame's
+    // fence above, so the GPU has finished reading this single shared UBO.
+    // Raising frames_in_flight > 1 would need a per-slot scene UBO.
+    *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
+        SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
+    record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes,
+                 pbr.scene_set.handle(), pbr.mesh_sets);
 
     rt.end(cmd);
 

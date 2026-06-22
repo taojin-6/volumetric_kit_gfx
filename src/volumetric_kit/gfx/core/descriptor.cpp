@@ -110,4 +110,28 @@ void DescriptorSet::write_uniform_buffer(uint32_t binding, VkBuffer buffer,
   vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
+void DescriptorSet::write_combined_image_sampler(uint32_t binding,
+                                                 VkImageView view,
+                                                 VkSampler sampler,
+                                                 VkImageLayout layout) const {
+  VG_CHECK(valid(),
+           "DescriptorSet::write_combined_image_sampler on an empty set");
+
+  VkDescriptorImageInfo image_info{};
+  image_info.sampler = sampler;
+  image_info.imageView = view;
+  image_info.imageLayout = layout;
+
+  VkWriteDescriptorSet write{};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.dstSet = set_;
+  write.dstBinding = binding;
+  write.dstArrayElement = 0;
+  write.descriptorCount = 1;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  write.pImageInfo = &image_info;
+
+  vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
 }  // namespace volumetric_kit::gfx
