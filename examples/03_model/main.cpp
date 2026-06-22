@@ -61,9 +61,7 @@
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
-#include "volumetric_kit/gfx/windowing/frame_loop.hpp"
-#include "volumetric_kit/gfx/windowing/surface.hpp"
-#include "volumetric_kit/gfx/windowing/swapchain.hpp"
+#include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace win = volumetric_kit::gfx::windowing;
