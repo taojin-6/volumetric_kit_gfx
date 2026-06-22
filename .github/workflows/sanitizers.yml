@@ -4,15 +4,10 @@ name: sanitizers
 # (LeakSanitizer isn't available on macOS). Builds against lavapipe (software
 # Vulkan) with validation layers on, so the GPU-touching tests run under the
 # sanitizers — this is what catches the leak / use-after-free / double-free
-# class the unit tests alone can't detect.
+# class the unit tests alone can't detect. Invoked by ci.yml, which owns the
+# push / pull_request triggers and the concurrency group.
 on:
-  push:
-    branches: [main]
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   asan-ubsan-lsan:
@@ -25,7 +20,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: |
@@ -34,13 +29,35 @@ jobs:
             cmake clang \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
             libglfw3-dev libglm-dev \
-            mesa-vulkan-drivers vulkan-tools
-          # lavapipe (software Vulkan) lets the GPU-dependent tests run on this
-          # GPU-less runner; point the loader at it.
-          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+            vulkan-tools
+          # lavapipe (software Vulkan) is what lets the GPU-touching tests run on
+          # this GPU-less runner. Install it WITHOUT --no-install-recommends: the
+          # driver's runtime deps (LLVM, etc.) otherwise get stripped and it loads
+          # as ERROR_INCOMPATIBLE_DRIVER, which silently skips the GPU tests —
+          # exactly the failure this job exists to prevent.
+          sudo apt-get install -y mesa-vulkan-drivers
+          # Discover the ICD instead of hardcoding a path that moves between mesa
+          # versions, and pin the loader to it.
+          icd=""; for f in /usr/share/vulkan/icd.d/lvp_icd*.json; do [ -e "$f" ] && { icd="$f"; break; }; done
+          [ -n "$icd" ] || { echo "::error::lavapipe ICD not found after install"; exit 1; }
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
 
-      - name: GPU diagnostic
-        run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
+      # lavapipe is REQUIRED here: the whole point of this job is to run the
+      # GPU-touching code under ASan/UBSan/LSan. If no device comes up we FAIL
+      # loudly — a green run that silently skipped those tests (per CLAUDE.md,
+      # the leak / use-after-free / double-free class) is worse than a red one.
+      - name: Require a Vulkan device (lavapipe)
+        run: |
+          echo "--- ICD ($VK_ICD_FILENAMES) ---"; cat "$VK_ICD_FILENAMES"
+          echo "--- lavapipe .so deps ---"
+          if ldd /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so* 2>&1 | grep -i 'not found'; then
+            echo "::error::lavapipe shared object has missing libraries (see above)"; exit 1
+          fi
+          echo "--- vulkaninfo (loader debug on) ---"
+          if ! VK_LOADER_DEBUG=error,warn vulkaninfo --summary; then
+            echo "::error::lavapipe produced no Vulkan device — the GPU-touching tests would skip under the sanitizers"
+            exit 1
+          fi
 
       # Debug + clang gives the most reliable sanitizer + mesa interop. (Vulkan
       # validation is a runtime opt-in via InstanceConfig; the test fixture can

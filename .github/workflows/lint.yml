@@ -2,28 +2,23 @@ name: lint
 
 # Styling + docs gate. Runs the same hooks as the local `pre-commit` install.
 # Linux-only: clang-format and cmake-format output is deterministic across
-# operating systems, so one runner is enough.
+# operating systems, so one runner is enough. Invoked by ci.yml, which owns the
+# push / pull_request triggers and the concurrency group.
 on:
-  push:
-    branches: [main]
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       # Cache pre-commit's installed hook environments (incl. the pinned
       # clang-format) keyed on the config so they're only rebuilt when it changes.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}

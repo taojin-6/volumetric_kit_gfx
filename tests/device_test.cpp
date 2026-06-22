@@ -141,6 +141,21 @@ TEST_F(DeviceTest, CapsExposesFeaturesPropertiesAndFormatProperties) {
             0u);
 }
 
+TEST_F(DeviceTest, GraphicsTimestampValidBitsAreConsistent) {
+  // timestampValidBits is reported per queue family in [0, 64]; 0 means the
+  // graphics queue cannot write timestamps (MoltenVK may report this), so don't
+  // assert a specific value — lavapipe reports 64, MoltenVK may report 0. Just
+  // check internal consistency, plus the ns-per-tick conversion factor the
+  // capability gate pairs with.
+  const uint32_t bits = device_->graphics_timestamp_valid_bits();
+  EXPECT_LE(bits, 64u);
+  if (bits > 0) {
+    // If the graphics queue supports timestamps, timestampPeriod (the
+    // tick->nanosecond factor a timing path divides by) must be positive.
+    EXPECT_GT(device_->caps().limits().timestampPeriod, 0.0f);
+  }
+}
+
 TEST_F(DeviceTest, InstanceCapsMatchesDeviceCaps) {
   // The same physical device, queried via the instance and via the created
   // device, agrees on extension support.
