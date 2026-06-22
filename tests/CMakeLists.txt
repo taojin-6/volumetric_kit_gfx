@@ -17,6 +17,7 @@ add_executable(
   device_test.cpp
   log_test.cpp
   sync_test.cpp
+  query_pool_test.cpp
   unique_handle_test.cpp
   retire_list_test.cpp
   retire_queue_test.cpp
