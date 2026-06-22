@@ -41,7 +41,8 @@ VkDescriptorSetLayoutBinding sampler_binding(uint32_t binding) {
 }
 
 // Adds a VMA allocator (for a sampled image to bind) on top of the device
-// fixture; skips with the base when no Vulkan device is present.
+// fixture; mirrors AllocatorTest / TextureUploadTest. Skips with the base when
+// no Vulkan device is present.
 class DescriptorImageTest : public VulkanDeviceTest {
  protected:
   void SetUp() override {

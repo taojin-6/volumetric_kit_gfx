@@ -547,6 +547,7 @@ MaterialTextures setup_textures(const vg::Device& device, vg::Allocator& alloc,
                                 const vg::GraphicsPipeline& pipeline,
                                 const assets::Model& model, bool* ok) {
   MaterialTextures t;
+  *ok = true;  // output flag; cleared on the first failure below
 
   auto sampler = vg::Sampler::create(device.handle());
   if (!sampler.ok()) {
@@ -556,8 +557,8 @@ MaterialTextures setup_textures(const vg::Device& device, vg::Allocator& alloc,
   }
   t.sampler = std::move(sampler).value();
 
-  // 1x1 opaque white: an untextured material samples white, so its albedo is
-  // just the lighting term -- the neutral look the example had pre-texture.
+  // 1x1 opaque white: glTF's default base color, so an untextured material's
+  // shaded color is just the lighting term over a neutral (white) albedo.
   const uint8_t white_px[4] = {255, 255, 255, 255};
   vg::ImageUploadDesc white_desc;
   white_desc.extent = {1, 1};
@@ -577,7 +578,7 @@ MaterialTextures setup_textures(const vg::Device& device, vg::Allocator& alloc,
   // format
   // -- the sampler then linearizes it -- with a mip chain to tame minification.
   t.images.resize(model.images.size());
-  for (size_t i = 0; i < model.images.size() && *ok; ++i) {
+  for (size_t i = 0; i < model.images.size(); ++i) {
     const assets::Image& img = model.images[i];
     if (!img.valid()) {
       continue;  // leaves images[i] empty -> a material using it falls back
