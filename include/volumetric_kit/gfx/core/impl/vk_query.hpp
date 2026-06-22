@@ -7,8 +7,9 @@
 /// Internal helpers shared by instance.cpp and device.cpp: the Vulkan
 /// "enumerate (count, then fill)" idiom and the physical-device queue-family /
 /// extension queries. Each enumerator checks the `VkResult` it would otherwise
-/// drop, and the queue-family lookups return one consistent
-/// `std::optional<uint32_t>` shape. Not a public header.
+/// drop, and the queue-family lookups each return their find as a
+/// `std::optional` (a `GraphicsFamily` for graphics, a bare index for present).
+/// Not a public header.
 
 #include <algorithm>
 #include <cstdint>
