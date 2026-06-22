@@ -60,7 +60,6 @@ class VG_CORE_API QueryPool {
   static Result<QueryPool> create(VkDevice device, uint32_t query_count,
                                   VkQueryType type = VK_QUERY_TYPE_TIMESTAMP);
 
-  QueryPool() = default;
   ~QueryPool() = default;
   QueryPool(QueryPool&& other) noexcept;
   QueryPool& operator=(QueryPool&& other) noexcept;
@@ -106,6 +105,8 @@ class VG_CORE_API QueryPool {
   Status read_results(uint32_t first, uint32_t count, uint64_t* out) const;
 
  private:
+  QueryPool() = default;
+
   UniqueHandle<VkQueryPool, vkDestroyQueryPool> handle_;
   uint32_t query_count_ = 0;
 };
