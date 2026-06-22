@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file instance.hpp
-/// @brief The Vulkan instance + (optional) validation messenger, plus portable
-///        physical-device selection.
+/// @brief The Vulkan instance + optional validation messenger / debug-utils
+///        extension, plus portable physical-device selection.
 
 #include <string>
 #include <vector>
@@ -48,10 +48,14 @@ struct InstanceConfig {
 class VG_CORE_API Instance {
  public:
   /// @brief Create the instance: turns on the validation layer + debug
-  ///        messenger when requested and available, and portability enumeration
+  ///        messenger when requested and available, enables
+  ///        `VK_EXT_debug_utils` on its own when @ref
+  ///        InstanceConfig::enable_debug_utils is set (so profiling captures
+  ///        get debug labels without validation), and portability enumeration
   ///        when the loader offers it (so MoltenVK devices are visible).
-  /// @param config  App name, validation toggle, and surface/platform
-  ///                extensions (`config.extra_instance_extensions`).
+  /// @param config  App name, validation / debug-utils toggles, and
+  ///                surface/platform extensions
+  ///                (`config.extra_instance_extensions`).
   /// @return The instance on success, or a non-OK @ref Status carrying the
   ///         `vkCreateInstance` `VkResult`.
   static Result<Instance> create(const InstanceConfig& config);
@@ -69,9 +73,10 @@ class VG_CORE_API Instance {
     return messenger_ != VK_NULL_HANDLE;
   }
   /// @brief Report whether `VK_EXT_debug_utils` was enabled on this instance.
-  /// @return `true` when the extension is enabled, so the object-naming and
+  /// @return `true` when the extension was enabled, so the object-naming and
   ///         debug-label entry points (`vkSetDebugUtilsObjectNameEXT`,
-  ///         `vkCmdBeginDebugUtilsLabelEXT`, …) are usable. Distinct from
+  ///         `vkCmdBeginDebugUtilsLabelEXT`, …) can be resolved through
+  ///         `vkGetInstanceProcAddr`. Distinct from
   ///         @ref validation_enabled: enabling debug-utils in a release build
   ///         (via `InstanceConfig::enable_debug_utils`) is what lets profiling
   ///         captures carry section labels without paying for validation.

@@ -263,7 +263,7 @@ TEST(InstanceTest, ValidationEnabledInstanceIsUsable) {
   EXPECT_NE(physical.value(), VK_NULL_HANDLE);
 }
 
-// --- PR5: Instance::debug_utils_enabled() + InstanceConfig::enable_debug_utils
+// --- Instance::debug_utils_enabled() + InstanceConfig::enable_debug_utils
 // Named with a DebugUtils prefix and kept at the file tail to localize the diff
 // (a sibling branch also appends to this file).
 
@@ -338,4 +338,42 @@ TEST(InstanceDebugUtilsTest, MoveTransfersDebugUtilsFlag) {
   EXPECT_EQ(moved.debug_utils_enabled(), had_debug_utils);
   EXPECT_FALSE(
       source.debug_utils_enabled());  // NOLINT(bugprone-use-after-move)
+}
+
+// Move-assignment must carry the flag too: assigning over a live instance runs
+// the destroy()-then-adopt path, so the destination takes the source's state
+// and the moved-from source is emptied.
+TEST(InstanceDebugUtilsTest, MoveAssignTransfersDebugUtilsFlag) {
+  vg::InstanceConfig config;
+  config.enable_debug_utils = true;
+  auto created_src = vg::Instance::create(config);
+  auto created_dst = vg::Instance::create(config);
+  if (!created_src.ok() || !created_dst.ok()) {
+    GTEST_SKIP() << "no Vulkan instance";
+  }
+  vg::Instance source = std::move(created_src).value();
+  vg::Instance dest = std::move(created_dst).value();
+  const bool had_debug_utils = source.debug_utils_enabled();
+
+  dest = std::move(source);
+  EXPECT_EQ(dest.debug_utils_enabled(), had_debug_utils);
+  EXPECT_FALSE(
+      source.debug_utils_enabled());  // NOLINT(bugprone-use-after-move)
+}
+
+// Self-move is a no-op for the flag (and the instance): launder through a
+// pointer so -Wself-move under -Werror doesn't reject the assignment.
+TEST(InstanceDebugUtilsTest, SelfMoveKeepsDebugUtilsFlag) {
+  vg::InstanceConfig config;
+  config.enable_debug_utils = true;
+  auto created = vg::Instance::create(config);
+  if (!created.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << created.status().message();
+  }
+  vg::Instance instance = std::move(created).value();
+  const bool had_debug_utils = instance.debug_utils_enabled();
+
+  vg::Instance* p = &instance;
+  instance = std::move(*p);
+  EXPECT_EQ(instance.debug_utils_enabled(), had_debug_utils);
 }

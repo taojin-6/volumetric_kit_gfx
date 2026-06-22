@@ -82,21 +82,31 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
                 "validation requested but VK_LAYER_KHRONOS_validation is "
                 "unavailable; disabling");
   }
-  // Single decision for VK_EXT_debug_utils: enable it when the extension is
-  // present AND it is wanted — either to route validation messages through our
-  // callback (the validation layer works without the extension, but the
-  // messenger in the instance pNext chain needs it) OR because the caller opted
-  // in via enable_debug_utils to carry object-naming / debug-label entry points
-  // into a release/profiling build. Everything downstream (the pushed
-  // extension, the messenger, and the persisted debug_utils_ member) reads this
-  // one flag.
+  // Enable VK_EXT_debug_utils when it is present and wanted — either because
+  // validation will route its messages through our messenger (the layer works
+  // without the extension, but the messenger in the instance pNext chain needs
+  // it) or because the caller opted in via enable_debug_utils to carry the
+  // object-naming / debug-label entry points into a release/profiling build.
+  // This drives the pushed extension and the persisted debug_utils_ member.
   const bool want_debug_utils = want_validation || config.enable_debug_utils;
   const bool debug_utils =
       want_debug_utils &&
       has_extension(available, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-  if (debug_utils) {
+  // Skip the push when a caller already supplied the name via
+  // extra_instance_extensions: the loader rejects a name listed twice in
+  // ppEnabledExtensionNames.
+  if (debug_utils &&
+      std::none_of(extensions.begin(), extensions.end(), [](const char* e) {
+        return std::strcmp(e, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+      })) {
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
   }
+  // The messenger only carries *messages*, and only the validation layer
+  // produces them; object naming / labels need just the extension. Gate the
+  // messenger on validation, not on debug_utils — opting into debug-utils alone
+  // (for GPU captures) must not stand up a messenger or flip
+  // validation_enabled().
+  const bool want_messenger = want_validation && debug_utils;
 
   // MoltenVK and other portability drivers are only enumerated when this flag
   // is set. The extension's name macro is absent from older Vulkan headers
@@ -147,7 +157,7 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
     create_info.enabledLayerCount = 1;
     create_info.ppEnabledLayerNames = &kValidationLayer;
   }
-  if (debug_utils) {
+  if (want_messenger) {
     // Valid only with VK_EXT_debug_utils enabled; also captures messages from
     // instance creation/destruction itself.
     create_info.pNext = &messenger_info;
@@ -160,7 +170,7 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
   // the object-naming / debug-label entry points regardless of validation.
   instance.debug_utils_ = debug_utils;
 
-  if (debug_utils) {
+  if (want_messenger) {
     auto create_messenger =
         reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(instance.instance_,
