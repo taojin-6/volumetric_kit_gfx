@@ -306,8 +306,8 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   // lives. A viewless image (view == VK_NULL_HANDLE) skips the view destroy.
   VmaAllocator allocator = impl_->allocator;
   VkDevice device = impl_->device;
-  return Texture(image, view, desc.extent, desc.depth, desc.format,
-                 [device, view, allocator, image, allocation]() {
+  return Texture(image, view, desc.extent, desc.depth, desc.mip_levels,
+                 desc.format, [device, view, allocator, image, allocation]() {
                    if (view != VK_NULL_HANDLE) {
                      vkDestroyImageView(device, view, nullptr);
                    }
