@@ -2,15 +2,10 @@ name: lint
 
 # Styling + docs gate. Runs the same hooks as the local `pre-commit` install.
 # Linux-only: clang-format and cmake-format output is deterministic across
-# operating systems, so one runner is enough.
+# operating systems, so one runner is enough. Invoked by ci.yml, which owns the
+# push / pull_request triggers and the concurrency group.
 on:
-  push:
-    branches: [main]
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   lint:

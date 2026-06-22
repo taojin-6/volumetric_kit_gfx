@@ -1,0 +1,63 @@
+name: ci
+
+# Umbrella CI. Every platform build/test plus lint and sanitizers fan out from
+# here, and the single `required` gate at the bottom succeeds only if all of
+# them did. Branch protection requires just that one check ("ci / required"), so
+# the protected `main` required-checks list stays stable as matrix legs (build
+# types, OSes) are added or renamed — adding an OS never silently leaves an old
+# required context unreported and blocking every PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # One leg per supported OS. To move a platform onto a self-hosted runner
+      # (e.g. a 5090 Linux box, or an always-on Mac mini), replace its value
+      # with that runner's label — _build.yml keys its dependency-install steps
+      # off `runner.os`, not the label, so nothing else has to change. Real-GPU
+      # Linux additionally wants a container + `--gpus all`; see the PR notes.
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, macos-26]
+    uses: ./.github/workflows/_build.yml
+    with:
+      os: ${{ matrix.os }}
+
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  sanitizers:
+    uses: ./.github/workflows/sanitizers.yml
+
+  required:
+    # The single status check branch protection requires. It passes only when
+    # every build leg, lint, and sanitizers succeeded, and FAILS (never skips)
+    # on any other outcome: a skipped required check never reports its result
+    # and would block every merge forever. Runs on a hosted runner so the gate
+    # can always report, even while a platform is mid-migration to self-hosted.
+    needs: [build, lint, sanitizers]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Assert every required job succeeded
+        run: |
+          echo "build=${{ needs.build.result }}" \
+               "lint=${{ needs.lint.result }}" \
+               "sanitizers=${{ needs.sanitizers.result }}"
+          if [ "${{ needs.build.result }}" = success ] \
+             && [ "${{ needs.lint.result }}" = success ] \
+             && [ "${{ needs.sanitizers.result }}" = success ]; then
+            echo "All required CI jobs passed."
+          else
+            echo "::error::one or more required CI jobs did not succeed (see results above)"
+            exit 1
+          fi
