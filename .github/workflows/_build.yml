@@ -141,15 +141,21 @@ jobs:
 
       # Cache the FetchContent dependency tree (VMA / spirv-cross / googletest
       # sources + builds) so they are not re-cloned and recompiled every run.
+      # FetchContent bakes the absolute build path into its sub-build CMakeCache,
+      # so a cache is only reusable where that path is stable: the containerised
+      # Linux legs all see /__w/… (so they share one key, `ctr`), but native
+      # macOS self-hosted runners each have their own /Users/<user>/actions-runner-N
+      # path and must key on `runner.name` — otherwise a runner restores another's
+      # (or an old hosted runner's) cache and Configure dies with "CMakeCache.txt
+      # directory is different".
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
           restore-keys: |
-            deps-${{ inputs.os }}-${{ matrix.build_type }}-
-            deps-${{ inputs.os }}-
+            deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-
 
       # Default ("Unix Makefiles") generator + a parallel make build, per
       # project preference — no Ninja.

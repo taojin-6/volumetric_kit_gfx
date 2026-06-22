@@ -25,10 +25,11 @@ jobs:
       # through (`--gpus all`), so one host covers 22.04 / 24.04 / 26.04 against
       # the real driver. Run one runner instance per leg on that box so they
       # execute in parallel, not serially — see .github/self-hosted-runners.md.
-      # macOS stays on a GitHub-hosted runner. _build.yml keys its install steps
-      # off `runner.os` (Linux for all three Ubuntu legs), so only the container
-      # image distinguishes them; NVIDIA_DRIVER_CAPABILITIES=all makes the
-      # toolkit mount the Vulkan ICD + graphics libs.
+      # macOS runs natively on a self-hosted Mac (label `mac`) — no container,
+      # since macOS can't be containerised. _build.yml keys its install steps off
+      # `runner.os`, so the macOS leg's Homebrew/MoltenVK path is unchanged and
+      # only the Ubuntu legs use a container image; NVIDIA_DRIVER_CAPABILITIES=all
+      # makes the toolkit mount the Vulkan ICD + graphics libs for those.
       matrix:
         include:
           - os: ubuntu-22.04
@@ -41,7 +42,7 @@ jobs:
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
           - os: macos-26
-            runner: macos-26
+            runner: mac
             container: ''
     uses: ./.github/workflows/_build.yml
     with:
