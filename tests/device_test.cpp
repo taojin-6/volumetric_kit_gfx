@@ -5,6 +5,10 @@
 
 #include <utility>
 
+// Internal helper header: the DebugUtils tests re-derive the expected
+// debug-utils enable decision from the loader's reported instance extensions
+// (has_extension / instance_extensions), matching how Instance::create decides.
+#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 #include "volumetric_kit/gfx/core/sync.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -257,4 +261,81 @@ TEST(InstanceTest, ValidationEnabledInstanceIsUsable) {
     GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
   }
   EXPECT_NE(physical.value(), VK_NULL_HANDLE);
+}
+
+// --- PR5: Instance::debug_utils_enabled() + InstanceConfig::enable_debug_utils
+// Named with a DebugUtils prefix and kept at the file tail to localize the diff
+// (a sibling branch also appends to this file).
+
+// Default config requests neither validation nor debug-utils, so the extension
+// stays off and the accessor is coherent with that: false, and distinct from
+// validation_enabled() (also false here).
+TEST(InstanceDebugUtilsTest, DefaultConfigLeavesDebugUtilsDisabled) {
+  auto instance = vg::Instance::create(vg::InstanceConfig{});
+  if (!instance.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+  }
+  EXPECT_FALSE(instance.value().debug_utils_enabled());
+  EXPECT_FALSE(instance.value().validation_enabled());
+}
+
+// Opt-in path: enable_debug_utils with validation OFF. When the extension is
+// available the accessor reports true; when it is absent it must report false
+// (and never crash). Validation stays off either way, proving the two facts are
+// independent. The extension is enabled iff debug_utils_enabled() is true, so
+// we re-derive the expectation from the loader's reported instance extensions
+// and require an exact match — the single-decision invariant.
+TEST(InstanceDebugUtilsTest, OptInEnablesDebugUtilsWithoutValidation) {
+  vg::InstanceConfig config;
+  config.enable_debug_utils = true;
+  auto instance = vg::Instance::create(config);
+  if (!instance.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+  }
+  const bool ext_present = vg::has_extension(vg::instance_extensions(),
+                                             VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+  EXPECT_EQ(instance.value().debug_utils_enabled(), ext_present);
+  // Opting into debug-utils must not turn validation on.
+  EXPECT_FALSE(instance.value().validation_enabled());
+}
+
+// With validation ON, debug_utils_enabled() stays coherent with today's
+// behavior via two implications that hold on every path (including the degraded
+// one where the extension is enabled but the messenger fails to create):
+//   * the messenger lives only alongside the extension, so validation_enabled()
+//     implies debug_utils_enabled();
+//   * the flag is never true without the extension actually being present.
+TEST(InstanceDebugUtilsTest, ValidationKeepsDebugUtilsCoherent) {
+  vg::InstanceConfig config;
+  config.enable_validation = true;
+  auto instance = vg::Instance::create(config);
+  if (!instance.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+  }
+  const bool debug_utils = instance.value().debug_utils_enabled();
+  if (instance.value().validation_enabled()) {
+    EXPECT_TRUE(debug_utils);
+  }
+  if (debug_utils) {
+    EXPECT_TRUE(vg::has_extension(vg::instance_extensions(),
+                                  VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
+  }
+}
+
+// The flag is metadata that must follow ownership: a moved-from instance
+// reports false, and the destination inherits the source's state.
+TEST(InstanceDebugUtilsTest, MoveTransfersDebugUtilsFlag) {
+  vg::InstanceConfig config;
+  config.enable_debug_utils = true;
+  auto created = vg::Instance::create(config);
+  if (!created.ok()) {
+    GTEST_SKIP() << "no Vulkan instance: " << created.status().message();
+  }
+  vg::Instance source = std::move(created).value();
+  const bool had_debug_utils = source.debug_utils_enabled();
+
+  vg::Instance moved(std::move(source));
+  EXPECT_EQ(moved.debug_utils_enabled(), had_debug_utils);
+  EXPECT_FALSE(
+      source.debug_utils_enabled());  // NOLINT(bugprone-use-after-move)
 }

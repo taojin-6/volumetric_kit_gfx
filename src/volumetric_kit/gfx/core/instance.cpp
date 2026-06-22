@@ -82,11 +82,17 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
                 "validation requested but VK_LAYER_KHRONOS_validation is "
                 "unavailable; disabling");
   }
-  // The validation layer works without VK_EXT_debug_utils; routing its messages
-  // through our callback (and placing a messenger in the instance pNext chain)
-  // requires the extension to actually be enabled.
+  // Single decision for VK_EXT_debug_utils: enable it when the extension is
+  // present AND it is wanted — either to route validation messages through our
+  // callback (the validation layer works without the extension, but the
+  // messenger in the instance pNext chain needs it) OR because the caller opted
+  // in via enable_debug_utils to carry object-naming / debug-label entry points
+  // into a release/profiling build. Everything downstream (the pushed
+  // extension, the messenger, and the persisted debug_utils_ member) reads this
+  // one flag.
+  const bool want_debug_utils = want_validation || config.enable_debug_utils;
   const bool debug_utils =
-      want_validation &&
+      want_debug_utils &&
       has_extension(available, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
   if (debug_utils) {
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -149,6 +155,10 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
 
   Instance instance;
   VG_VK_TRY(vkCreateInstance(&create_info, nullptr, &instance.instance_));
+  // Single source of truth: the extension is enabled exactly when `debug_utils`
+  // computed it should be, so debug_utils_enabled() reports the real state of
+  // the object-naming / debug-label entry points regardless of validation.
+  instance.debug_utils_ = debug_utils;
 
   if (debug_utils) {
     auto create_messenger =
@@ -224,9 +234,12 @@ PhysicalDeviceInfo Instance::query_physical_device(
 }
 
 Instance::Instance(Instance&& other) noexcept
-    : instance_(other.instance_), messenger_(other.messenger_) {
+    : instance_(other.instance_),
+      messenger_(other.messenger_),
+      debug_utils_(other.debug_utils_) {
   other.instance_ = VK_NULL_HANDLE;
   other.messenger_ = VK_NULL_HANDLE;
+  other.debug_utils_ = false;
 }
 
 Instance& Instance::operator=(Instance&& other) noexcept {
@@ -234,8 +247,10 @@ Instance& Instance::operator=(Instance&& other) noexcept {
     destroy();
     instance_ = other.instance_;
     messenger_ = other.messenger_;
+    debug_utils_ = other.debug_utils_;
     other.instance_ = VK_NULL_HANDLE;
     other.messenger_ = VK_NULL_HANDLE;
+    other.debug_utils_ = false;
   }
   return *this;
 }
@@ -257,6 +272,7 @@ void Instance::destroy() noexcept {
     vkDestroyInstance(instance_, nullptr);
     instance_ = VK_NULL_HANDLE;
   }
+  debug_utils_ = false;
 }
 
 }  // namespace volumetric_kit::gfx

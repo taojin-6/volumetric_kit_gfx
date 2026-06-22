@@ -24,6 +24,12 @@ struct InstanceConfig {
   /// Enable the Khronos validation layer + debug messenger when it is available
   /// (a no-op, with a logged warning, when the layer is not installed).
   bool enable_validation = false;
+  /// Enable `VK_EXT_debug_utils` even when validation is off, whenever the
+  /// extension is available. This carries the object-naming / debug-label entry
+  /// points into release and profiling builds, so GPU captures (RenderDoc,
+  /// Nsight, Xcode) show section labels. Validation already pulls the extension
+  /// in, so this only changes behavior when @ref enable_validation is false.
+  bool enable_debug_utils = false;
   /// Surface/platform instance extensions the windowing tier supplies (e.g.
   /// from `glfwGetRequiredInstanceExtensions`). Core stays windowing-agnostic.
   std::vector<const char*> extra_instance_extensions;
@@ -62,6 +68,14 @@ class VG_CORE_API Instance {
   bool validation_enabled() const noexcept {
     return messenger_ != VK_NULL_HANDLE;
   }
+  /// @brief Report whether `VK_EXT_debug_utils` was enabled on this instance.
+  /// @return `true` when the extension is enabled, so the object-naming and
+  ///         debug-label entry points (`vkSetDebugUtilsObjectNameEXT`,
+  ///         `vkCmdBeginDebugUtilsLabelEXT`, …) are usable. Distinct from
+  ///         @ref validation_enabled: enabling debug-utils in a release build
+  ///         (via `InstanceConfig::enable_debug_utils`) is what lets profiling
+  ///         captures carry section labels without paying for validation.
+  bool debug_utils_enabled() const noexcept { return debug_utils_; }
 
   /// @brief Pick the best physical device: prefers discrete > integrated >
   ///        virtual > CPU, requires a graphics-capable queue family, and — when
@@ -89,6 +103,7 @@ class VG_CORE_API Instance {
 
   VkInstance instance_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
+  bool debug_utils_ = false;
 };
 
 }  // namespace volumetric_kit::gfx
