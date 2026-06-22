@@ -109,6 +109,19 @@ class VG_CORE_API Device {
   /// @return The graphics queue.
   VkQueue graphics_queue() const noexcept { return graphics_queue_; }
 
+  /// @brief The number of meaningful low-order bits in a timestamp written on
+  ///        the graphics queue (the family's `timestampValidBits`), captured at
+  ///        create().
+  /// @return The valid-bit count, in `[0, 64]`. `0` means the graphics queue
+  ///         does not support timestamps (MoltenVK may report this) — callers
+  ///         must gate any GPU timing on a non-zero value rather than recording
+  ///         `vkCmdWriteTimestamp` unconditionally. Convert the raw tick delta
+  ///         to nanoseconds with `caps().limits().timestampPeriod` (the
+  ///         ns-per-tick factor).
+  uint32_t graphics_timestamp_valid_bits() const noexcept {
+    return graphics_timestamp_valid_bits_;
+  }
+
   /// @return Whether a present-capable queue was created
   /// (config.needs_present).
   bool has_present() const noexcept { return present_queue_ != VK_NULL_HANDLE; }
@@ -144,6 +157,7 @@ class VG_CORE_API Device {
   VkCommandPool command_pool_ = VK_NULL_HANDLE;
 
   uint32_t graphics_family_ = 0;
+  uint32_t graphics_timestamp_valid_bits_ = 0;
   uint32_t present_family_ = 0;
   VkQueue graphics_queue_ = VK_NULL_HANDLE;
   VkQueue present_queue_ = VK_NULL_HANDLE;

@@ -7,8 +7,9 @@
 /// Internal helpers shared by instance.cpp and device.cpp: the Vulkan
 /// "enumerate (count, then fill)" idiom and the physical-device queue-family /
 /// extension queries. Each enumerator checks the `VkResult` it would otherwise
-/// drop, and the queue-family lookups return one consistent
-/// `std::optional<uint32_t>` shape. Not a public header.
+/// drop, and the queue-family lookups each return their find as a
+/// `std::optional` (a `GraphicsFamily` for graphics, a bare index for present).
+/// Not a public header.
 
 #include <algorithm>
 #include <cstdint>
@@ -87,15 +88,28 @@ inline std::vector<VkPhysicalDevice> physical_devices(VkInstance instance) {
   return devices;
 }
 
-/// @return The first graphics-capable queue family index, or `std::nullopt`.
-inline std::optional<uint32_t> find_graphics_family(VkPhysicalDevice device) {
+/// The chosen graphics queue family: its index and the `timestampValidBits`
+/// the driver reports for it (0 == that queue cannot write timestamps, which
+/// MoltenVK may report).
+struct GraphicsFamily {
+  uint32_t index;
+  uint32_t timestamp_valid_bits;
+};
+
+/// @return The first graphics-capable queue family (its index and
+///         `timestampValidBits`), or `std::nullopt`. The single
+///         `vkGetPhysicalDeviceQueueFamilyProperties` fill already carries the
+///         family's timestamp support back, so no extra driver round-trip is
+///         needed.
+inline std::optional<GraphicsFamily> find_graphics_family(
+    VkPhysicalDevice device) {
   uint32_t count = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
   std::vector<VkQueueFamilyProperties> families(count);
   vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
   for (uint32_t i = 0; i < count; ++i) {
     if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-      return i;
+      return GraphicsFamily{i, families[i].timestampValidBits};
     }
   }
   return std::nullopt;
