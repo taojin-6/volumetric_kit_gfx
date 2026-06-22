@@ -49,6 +49,7 @@
 #include <glm/geometric.hpp>  // glm::length
 #include <glm/mat4x4.hpp>
 #include <glm/matrix.hpp>  // glm::inverse
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -78,6 +79,7 @@ namespace {
 
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
+constexpr float kPi = 3.14159265359f;
 
 // Per-draw transform fed to model.vert as a push constant (128 bytes -- the
 // guaranteed minimum maxPushConstantsSize). Layout matches the shader's block.
@@ -556,7 +558,19 @@ static_assert(sizeof(MaterialUbo) == 48,
 
 // std140 per-frame parameters; mirrors the Scene UBO in model.frag.
 struct SceneUbo {
-  glm::vec4 camera_pos;  // .xyz world-space eye
+  glm::vec4 camera_pos;  // .xyz world-space eye, .w = prefilter max LOD
+};
+
+// Precomputed image-based-lighting textures, convolved on the CPU from the
+// analytic sky (see make_ibl) and bound into the model's scene set (set 0): a
+// diffuse irradiance cube, a roughness-prefiltered specular cube (mipped), and
+// the BRDF integration LUT. Outlives the draw loop.
+struct Ibl {
+  std::optional<vg::Sampler> sampler;  // CLAMP_TO_EDGE, trilinear (mipped cube)
+  vg::Texture irradiance;              // diffuse, small single-mip cube
+  vg::Texture prefilter;               // specular, mipped cube
+  vg::Texture brdf_lut;                // 2D RG integration LUT
+  float prefilter_max_lod = 0.0f;      // prefilter mip count - 1
 };
 
 // All PBR GPU state, outliving the draw loop: a shared sampler; every uploaded
@@ -582,7 +596,7 @@ struct PbrResources {
 // The set 0 / set 1 layouts are reflected from the shaders.
 PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
                        const vg::GraphicsPipeline& pipeline,
-                       const assets::Model& model, bool* ok) {
+                       const assets::Model& model, const Ibl& ibl, bool* ok) {
   PbrResources r;
   *ok = true;  // output flag; cleared on the first failure below
 
@@ -657,12 +671,13 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
   }
 
   // Pool: a material set per material + a fallback, plus the scene set.
-  // Material sets each hold a UBO + 5 samplers; the scene set holds a UBO.
+  // Material sets each hold a UBO + 5 samplers; the scene set holds a UBO + the
+  // 3 IBL textures.
   const uint32_t material_count =
       static_cast<uint32_t>(model.materials.size()) + 1;
   const VkDescriptorPoolSize sizes[2] = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, material_count + 1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, material_count * 5}};
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, material_count * 5 + 3}};
   auto pool =
       vg::DescriptorPool::create(device.handle(), sizes, 2, material_count + 1);
   if (!pool.ok()) {
@@ -711,6 +726,17 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
     r.scene_set = std::move(set).value();
     r.scene_set.write_uniform_buffer(0, r.scene_ubo.handle(), 0,
                                      sizeof(SceneUbo));
+    // The IBL textures are per-frame-constant, so they live in the scene set
+    // alongside the camera (bindings 1-3).
+    r.scene_set.write_combined_image_sampler(
+        1, ibl.irradiance.view(), ibl.sampler->handle(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    r.scene_set.write_combined_image_sampler(
+        2, ibl.prefilter.view(), ibl.sampler->handle(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    r.scene_set.write_combined_image_sampler(
+        3, ibl.brdf_lut.view(), ibl.sampler->handle(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
   r.material_ubos.reserve(material_count);
@@ -1039,6 +1065,301 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
   vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
+// --- IBL: convolve the analytic sky into diffuse/specular/BRDF textures ------
+
+// Hammersley low-discrepancy 2D sample (van der Corput radical inverse).
+glm::vec2 hammersley(uint32_t i, uint32_t n) {
+  uint32_t bits = i;
+  bits = (bits << 16u) | (bits >> 16u);
+  bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+  bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+  bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+  bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+  const float radical = static_cast<float>(bits) * 2.3283064365386963e-10f;
+  return glm::vec2(static_cast<float>(i) / static_cast<float>(n), radical);
+}
+
+// GGX-importance-sampled half-vector around `n` for `roughness`.
+glm::vec3 importance_sample_ggx(glm::vec2 xi, const glm::vec3& n,
+                                float roughness) {
+  const float a = roughness * roughness;
+  const float phi = 2.0f * kPi * xi.x;
+  const float cos_t = std::sqrt((1.0f - xi.y) / (1.0f + (a * a - 1.0f) * xi.y));
+  const float sin_t = std::sqrt(1.0f - cos_t * cos_t);
+  const glm::vec3 h(std::cos(phi) * sin_t, std::sin(phi) * sin_t, cos_t);
+  const glm::vec3 up =
+      std::abs(n.z) < 0.999f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0);
+  const glm::vec3 tangent = glm::normalize(glm::cross(up, n));
+  const glm::vec3 bitangent = glm::cross(n, tangent);
+  return glm::normalize(tangent * h.x + bitangent * h.y + n * h.z);
+}
+
+// Smith geometry with the IBL roughness remap (k = a^2 / 2).
+float geometry_smith_ibl(float n_dot_v, float n_dot_l, float roughness) {
+  const float a = roughness * roughness;
+  const float k = a * a / 2.0f;
+  const float gv = n_dot_v / (n_dot_v * (1.0f - k) + k);
+  const float gl = n_dot_l / (n_dot_l * (1.0f - k) + k);
+  return gv * gl;
+}
+
+// Cosine-weighted hemisphere integral of the analytic sky around `n`: the
+// diffuse irradiance for that normal. PI is folded in (LearnOpenGL form), so
+// the shader's diffuse term is just irradiance * albedo.
+glm::vec4 irradiance_at(const glm::vec3& n) {
+  glm::vec3 up =
+      std::abs(n.y) < 0.999f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+  const glm::vec3 right = glm::normalize(glm::cross(up, n));
+  up = glm::cross(n, right);
+  glm::vec3 sum(0.0f);
+  int samples = 0;
+  for (float phi = 0.0f; phi < 2.0f * kPi; phi += 0.1f) {
+    for (float theta = 0.0f; theta < 0.5f * kPi; theta += 0.1f) {
+      const float st = std::sin(theta);
+      const glm::vec3 tan_sample(st * std::cos(phi), st * std::sin(phi),
+                                 std::cos(theta));
+      const glm::vec3 world =
+          right * tan_sample.x + up * tan_sample.y + n * tan_sample.z;
+      sum += sky_color(world) * std::cos(theta) * st;
+      ++samples;
+    }
+  }
+  return glm::vec4(kPi * sum / static_cast<float>(samples), 1.0f);
+}
+
+// GGX-prefiltered specular radiance from `r` at `roughness`: the environment
+// blurred for that gloss level (the split sum's L_i term).
+glm::vec4 prefilter_at(const glm::vec3& r, float roughness, uint32_t samples) {
+  const glm::vec3 n = r;
+  const glm::vec3 v = r;
+  glm::vec3 sum(0.0f);
+  float weight = 0.0f;
+  for (uint32_t i = 0; i < samples; ++i) {
+    const glm::vec3 h =
+        importance_sample_ggx(hammersley(i, samples), n, roughness);
+    const glm::vec3 l = glm::normalize(2.0f * glm::dot(v, h) * h - v);
+    const float n_dot_l = glm::dot(n, l);
+    if (n_dot_l > 0.0f) {
+      sum += sky_color(l) * n_dot_l;
+      weight += n_dot_l;
+    }
+  }
+  return glm::vec4(weight > 0.0f ? sum / weight : sky_color(r), 1.0f);
+}
+
+// Environment-BRDF integration (scale, bias) for the split sum, per (NdotV,
+// roughness). Independent of the environment -- the standard BRDF LUT.
+glm::vec2 brdf_integrate(float n_dot_v, float roughness, uint32_t samples) {
+  const glm::vec3 v(std::sqrt(1.0f - n_dot_v * n_dot_v), 0.0f, n_dot_v);
+  const glm::vec3 n(0.0f, 0.0f, 1.0f);
+  float a = 0.0f;
+  float b = 0.0f;
+  for (uint32_t i = 0; i < samples; ++i) {
+    const glm::vec3 h =
+        importance_sample_ggx(hammersley(i, samples), n, roughness);
+    const glm::vec3 l = glm::normalize(2.0f * glm::dot(v, h) * h - v);
+    const float n_dot_l = std::fmax(l.z, 0.0f);
+    const float n_dot_h = std::fmax(h.z, 0.0f);
+    const float v_dot_h = std::fmax(glm::dot(v, h), 0.0f);
+    if (n_dot_l > 0.0f) {
+      const float g = geometry_smith_ibl(n_dot_v, n_dot_l, roughness);
+      const float g_vis = (g * v_dot_h) / std::fmax(n_dot_h * n_dot_v, 1e-6f);
+      const float fc = std::pow(1.0f - v_dot_h, 5.0f);
+      a += (1.0f - fc) * g_vis;
+      b += fc * g_vis;
+    }
+  }
+  return glm::vec2(a / static_cast<float>(samples),
+                   b / static_cast<float>(samples));
+}
+
+// Create a (possibly mipped) float cube and fill every (mip, face) from `gen`,
+// which returns that subresource's RGBA pixels; upload all subresources in one
+// staged submit.
+template <class Gen>
+vg::Texture upload_cube(const vg::Device& device, vg::Allocator& alloc,
+                        uint32_t base_size, uint32_t mips, VkFormat format,
+                        Gen gen, bool* ok) {
+  struct Region {
+    VkDeviceSize offset;
+    uint32_t mip;
+    uint32_t face;
+    uint32_t size;
+  };
+  std::vector<Region> regions;
+  std::vector<glm::vec4> data;
+  for (uint32_t m = 0; m < mips; ++m) {
+    const uint32_t size = (base_size >> m) > 0 ? (base_size >> m) : 1u;
+    for (uint32_t f = 0; f < 6; ++f) {
+      const std::vector<glm::vec4> face = gen(m, static_cast<int>(f), size);
+      regions.push_back(
+          {VkDeviceSize{data.size()} * sizeof(glm::vec4), m, f, size});
+      data.insert(data.end(), face.begin(), face.end());
+    }
+  }
+  const VkDeviceSize total = VkDeviceSize{data.size()} * sizeof(glm::vec4);
+
+  vg::BufferDesc sd;
+  sd.size = total;
+  sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  sd.memory = vg::MemoryUsage::HostVisible;
+  sd.mapped = true;
+  sd.host_access = vg::HostAccess::SequentialWrite;
+  auto staging = alloc.create_buffer(sd);
+  if (!staging.ok()) {
+    std::fprintf(stderr, "ibl staging: %s\n",
+                 staging.status().message().c_str());
+    *ok = false;
+    return {};
+  }
+  std::memcpy(staging.value().mapped(), data.data(), total);
+
+  vg::TextureDesc td;
+  td.extent = {base_size, base_size};
+  td.format = format;
+  td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  td.array_layers = 6;
+  td.cube = true;
+  td.mip_levels = mips;
+  auto cube = alloc.create_image(td);
+  if (!cube.ok()) {
+    std::fprintf(stderr, "ibl cube: %s\n", cube.status().message().c_str());
+    *ok = false;
+    return {};
+  }
+
+  const VkImage image = cube.value().image();
+  const VkBuffer src = staging.value().handle();
+  const vg::Status copied = device.submit_single_time([&](VkCommandBuffer cmd) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 6};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    std::vector<VkBufferImageCopy> copies;
+    copies.reserve(regions.size());
+    for (const Region& region : regions) {
+      VkBufferImageCopy copy{};
+      copy.bufferOffset = region.offset;
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, region.mip,
+                               region.face, 1};
+      copy.imageExtent = {region.size, region.size, 1};
+      copies.push_back(copy);
+    }
+    vkCmdCopyBufferToImage(cmd, src, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(copies.size()), copies.data());
+
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &barrier);
+  });
+  if (!copied.ok()) {
+    std::fprintf(stderr, "ibl upload: %s\n", copied.message().c_str());
+    *ok = false;
+    return {};
+  }
+  return std::move(cube).value();
+}
+
+// Convolve the analytic sky into the IBL texture set. CPU-side because the
+// environment is analytic; a loaded HDR environment would convolve on the GPU.
+Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
+  Ibl ibl;
+  *ok = true;
+
+  vg::SamplerDesc sd;
+  sd.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sd.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sd.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  auto sampler = vg::Sampler::create(device.handle(), sd);
+  if (!sampler.ok()) {
+    std::fprintf(stderr, "ibl sampler: %s\n",
+                 sampler.status().message().c_str());
+    *ok = false;
+    return ibl;
+  }
+  ibl.sampler = std::move(sampler).value();
+
+  // Diffuse irradiance: a small single-mip cube.
+  ibl.irradiance = upload_cube(
+      device, alloc, 16, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+      [](uint32_t, int face, uint32_t size) {
+        std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
+        for (uint32_t y = 0; y < size; ++y) {
+          for (uint32_t x = 0; x < size; ++x) {
+            const float u = (x + 0.5f) / size * 2.0f - 1.0f;
+            const float v = (y + 0.5f) / size * 2.0f - 1.0f;
+            px[y * size + x] = irradiance_at(cube_dir(face, u, v));
+          }
+        }
+        return px;
+      },
+      ok);
+  if (!*ok) {
+    return ibl;
+  }
+
+  // Prefiltered specular: roughness rises with the mip level.
+  constexpr uint32_t kPrefilterMips = 5;
+  ibl.prefilter = upload_cube(
+      device, alloc, 64, kPrefilterMips, VK_FORMAT_R32G32B32A32_SFLOAT,
+      [](uint32_t mip, int face, uint32_t size) {
+        const float roughness =
+            static_cast<float>(mip) / static_cast<float>(kPrefilterMips - 1);
+        std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
+        for (uint32_t y = 0; y < size; ++y) {
+          for (uint32_t x = 0; x < size; ++x) {
+            const float u = (x + 0.5f) / size * 2.0f - 1.0f;
+            const float v = (y + 0.5f) / size * 2.0f - 1.0f;
+            px[y * size + x] =
+                prefilter_at(cube_dir(face, u, v), roughness, 64u);
+          }
+        }
+        return px;
+      },
+      ok);
+  if (!*ok) {
+    return ibl;
+  }
+  ibl.prefilter_max_lod = static_cast<float>(kPrefilterMips - 1);
+
+  // BRDF integration LUT (2D RG), environment-independent.
+  constexpr uint32_t kLutSize = 128;
+  std::vector<glm::vec2> lut(static_cast<size_t>(kLutSize) * kLutSize);
+  for (uint32_t y = 0; y < kLutSize; ++y) {
+    for (uint32_t x = 0; x < kLutSize; ++x) {
+      lut[y * kLutSize + x] =
+          brdf_integrate((x + 0.5f) / kLutSize, (y + 0.5f) / kLutSize, 256u);
+    }
+  }
+  vg::ImageUploadDesc lut_desc;
+  lut_desc.extent = {kLutSize, kLutSize};
+  lut_desc.format = VK_FORMAT_R32G32_SFLOAT;
+  lut_desc.pixels = lut.data();
+  lut_desc.size = lut.size() * sizeof(glm::vec2);
+  auto brdf = vg::upload_texture(device, alloc, lut_desc);
+  if (!brdf.ok()) {
+    std::fprintf(stderr, "brdf lut: %s\n", brdf.status().message().c_str());
+    *ok = false;
+    return ibl;
+  }
+  ibl.brdf_lut = std::move(brdf).value();
+  return ibl;
+}
+
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
@@ -1115,15 +1436,19 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
+  Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
+  if (!ok) {
+    return 1;
+  }
   PbrResources pbr = setup_pbr(device.value(), allocator.value(),
-                               pipeline.value(), model, &ok);
+                               pipeline.value(), model, ibl, &ok);
   if (!ok) {
     return 1;
   }
 
   // Fixed camera for the still: write the eye into the scene UBO once.
   *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
-      SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
+      SceneUbo{glm::vec4(orbit.eye(), ibl.prefilter_max_lod)};
 
   Skybox skybox = setup_skybox(device.value(), allocator.value(),
                                target.value().layout(), &ok);
@@ -1282,8 +1607,12 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // TODO: promote depth into the windowing tier (a per-slot depth ring on the
   // swapchain's RenderTarget) so consumers get a depth-capable target and can
   // run more frames in flight, instead of the example owning a single depth.
+  Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
+  if (!ok) {
+    return 1;
+  }
   PbrResources pbr = setup_pbr(device.value(), allocator.value(),
-                               pipeline.value(), model, &ok);
+                               pipeline.value(), model, ibl, &ok);
   if (!ok) {
     return 1;
   }
@@ -1366,7 +1695,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // fence above, so the GPU has finished reading this single shared UBO.
     // Raising frames_in_flight > 1 would need a per-slot scene UBO.
     *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
-        SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
+        SceneUbo{glm::vec4(orbit.eye(), ibl.prefilter_max_lod)};
     record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
     record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes,
                  pbr.scene_set.handle(), pbr.mesh_sets);
