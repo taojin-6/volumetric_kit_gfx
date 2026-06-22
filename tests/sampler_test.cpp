@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <utility>
 
 #include "volumetric_kit/gfx/core/sampler.hpp"
@@ -45,6 +46,15 @@ TEST_F(SamplerTest, CreateRejectsMaxLodBelowMinLod) {
   vg::SamplerDesc desc;
   desc.min_lod = 4.0f;
   desc.max_lod = 1.0f;  // empty LOD range — rejected up front
+  EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
+            vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(SamplerTest, CreateRejectsNanLod) {
+  vg::SamplerDesc desc;
+  // NaN compares false against everything, so it would slip past a bare
+  // max_lod < min_lod test; the explicit isnan check must catch it.
+  desc.min_lod = std::numeric_limits<float>::quiet_NaN();
   EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
             vg::Status::Code::InvalidArgument);
 }

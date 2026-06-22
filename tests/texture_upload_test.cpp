@@ -56,6 +56,7 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
   EXPECT_EQ(texture.value().extent().width, 2u);
   EXPECT_EQ(texture.value().extent().height, 2u);
+  EXPECT_EQ(texture.value().mip_levels(), 1u);  // no mips requested
 
   // Copy the uploaded image back into a host-visible buffer and confirm the
   // bytes survived the staging -> image -> readback round trip (proving the
@@ -122,6 +123,7 @@ TEST_F(TextureUploadTest, GeneratesMipChain) {
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+  EXPECT_EQ(texture.value().mip_levels(), 4u);  // 8 -> 4 -> 2 -> 1
 }
 
 TEST_F(TextureUploadTest, RejectsZeroExtent) {
@@ -133,6 +135,19 @@ TEST_F(TextureUploadTest, RejectsZeroExtent) {
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
             vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(TextureUploadTest, RejectsExtentAboveDeviceLimit) {
+  std::array<std::uint8_t, 4> src{};
+  vg::ImageUploadDesc desc;
+  // 1<<20 dwarfs any real maxImageDimension2D (spec minimum 4096; hardware tops
+  // out around 16384–32768), so this is rejected up front before allocation.
+  desc.extent = {1u << 20, 1u << 20};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.pixels = src.data();
+  desc.size = src.size();
+  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+            vg::Status::Code::Unsupported);
 }
 
 TEST_F(TextureUploadTest, RejectsUndefinedFormat) {

@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/gfx/core/sampler.hpp"
 
+#include <cmath>
+
 namespace volumetric_kit::gfx {
 
 // The move/destroy lifecycle lives in UniqueHandle (see unique_handle.hpp);
@@ -12,12 +14,15 @@ Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
   if (device == VK_NULL_HANDLE) {
     return Status::invalid_argument("Sampler::create: device is null");
   }
-  if (desc.max_lod < desc.min_lod) {
-    // VUID-VkSamplerCreateInfo-maxLod-01973: an empty LOD range is invalid use.
-    // Reject it as a domain error rather than passing the contradiction to
-    // vkCreateSampler.
+  // Reject an empty or NaN LOD range up front as a domain error rather than
+  // passing the contradiction to vkCreateSampler (VUID-VkSamplerCreateInfo-
+  // maxLod-01973). NaN compares false against everything, so a NaN bound would
+  // slip past a bare `max_lod < min_lod` test and must be checked explicitly.
+  if (std::isnan(desc.min_lod) || std::isnan(desc.max_lod) ||
+      desc.max_lod < desc.min_lod) {
     return Status::invalid_argument(
-        "Sampler::create: max_lod must be >= min_lod");
+        "Sampler::create: min_lod/max_lod must be numbers with "
+        "max_lod >= min_lod");
   }
 
   VkSamplerCreateInfo info{};

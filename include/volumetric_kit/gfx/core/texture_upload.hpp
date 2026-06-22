@@ -58,10 +58,12 @@ struct ImageUploadDesc {
 ///         Status::Code::InvalidArgument for a zero extent,
 ///         `VK_FORMAT_UNDEFINED`, null pixels, or a `desc.size` that is not
 ///         `width * height * texel_size(format)`; @ref
-///         Status::Code::Unsupported for a
-///         compressed/multi-planar/depth-stencil format, or `generate_mips` on
-///         a format that cannot be linear-blitted; otherwise a Vulkan-domain
-///         Status from the staging-buffer, image, or submit step.
+///         Status::Code::Unsupported for an extent beyond the device's
+///         `maxImageDimension2D`, a compressed/multi-planar/depth-stencil
+///         format, a format that cannot be sampled with optimal tiling, or
+///         `generate_mips` on a format that cannot be linear-blitted; otherwise
+///         a Vulkan-domain Status from the staging-buffer, image, or submit
+///         step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).
 VG_CORE_API Result<Texture> upload_texture(const Device& device,

@@ -385,6 +385,8 @@ TEST_F(AllocatorTest, MippedArrayImageIsValid) {
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_NE(texture.value().view(),
             VK_NULL_HANDLE);  // 2D-array view over 4 mips
+  EXPECT_EQ(texture.value().mip_levels(),
+            4u);  // threaded through from the desc
 }
 
 TEST_F(AllocatorTest, DepthWithout3DTypeIsRejected) {
@@ -503,6 +505,7 @@ TEST_F(AllocatorTest, TextureMoveLeavesSourceEmpty) {
   EXPECT_EQ(source.view(), VK_NULL_HANDLE);
   EXPECT_EQ(source.extent().width, 0u);
   EXPECT_EQ(source.depth(), 1u);
+  EXPECT_EQ(source.mip_levels(), 1u);
   EXPECT_EQ(source.format(), VK_FORMAT_UNDEFINED);
 }
 
@@ -550,6 +553,7 @@ TEST(TextureTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(texture.view(), VK_NULL_HANDLE);
   EXPECT_EQ(texture.extent().width, 0u);
   EXPECT_EQ(texture.depth(), 1u);
+  EXPECT_EQ(texture.mip_levels(), 1u);
   EXPECT_EQ(texture.format(), VK_FORMAT_UNDEFINED);
 }
 
@@ -560,10 +564,10 @@ TEST(TextureTest, MoveAssignRunsOverwrittenDeleterExactlyOnce) {
   int dst_runs = 0;
   int src_runs = 0;
   {
-    vg::Texture dst(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, VK_FORMAT_UNDEFINED,
-                    [&dst_runs]() { ++dst_runs; });
-    vg::Texture src(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, VK_FORMAT_UNDEFINED,
-                    [&src_runs]() { ++src_runs; });
+    vg::Texture dst(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, 1,
+                    VK_FORMAT_UNDEFINED, [&dst_runs]() { ++dst_runs; });
+    vg::Texture src(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, 1, 1,
+                    VK_FORMAT_UNDEFINED, [&src_runs]() { ++src_runs; });
     dst = std::move(src);
     EXPECT_EQ(dst_runs,
               1);  // dst's original deleter ran once, during the assign

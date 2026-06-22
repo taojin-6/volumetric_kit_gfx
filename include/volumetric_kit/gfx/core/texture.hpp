@@ -57,11 +57,13 @@ class VG_CORE_API Texture {
   /// @param depth    Its depth in texels (1 for 2D images; the slice count for
   /// a
   ///                 3D volume image).
+  /// @param mip_levels  Its number of mip levels (1 when not mipped).
   /// @param format   Its format.
   /// @param deleter  Frees the view, image, and memory; run exactly once on
   /// destruction.
   Texture(VkImage image, VkImageView view, VkExtent2D extent, uint32_t depth,
-          VkFormat format, std::function<void()> deleter) noexcept;
+          uint32_t mip_levels, VkFormat format,
+          std::function<void()> deleter) noexcept;
 
   ~Texture();
   Texture(Texture&& other) noexcept;
@@ -84,6 +86,10 @@ class VG_CORE_API Texture {
   ///         3D volume image).
   uint32_t depth() const noexcept { return depth_; }
 
+  /// @return The image's number of mip levels (1 when not mipped); the default
+  ///         view spans all of them.
+  uint32_t mip_levels() const noexcept { return mip_levels_; }
+
   /// @return The image format.
   VkFormat format() const noexcept { return format_; }
 
@@ -97,6 +103,7 @@ class VG_CORE_API Texture {
   VkImageView view_ = VK_NULL_HANDLE;
   VkExtent2D extent_{};
   uint32_t depth_ = 1;
+  uint32_t mip_levels_ = 1;
   VkFormat format_ = VK_FORMAT_UNDEFINED;
   std::function<void()> deleter_;
 };
