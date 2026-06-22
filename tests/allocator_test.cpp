@@ -428,6 +428,99 @@ TEST_F(AllocatorTest, MippedArrayImageIsValid) {
             4u);  // threaded through from the desc
 }
 
+TEST_F(AllocatorTest, CubeImageGetsCubeView) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  desc.array_layers = 6;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
+  // NOTE: this only proves a view exists, not that it is
+  // VK_IMAGE_VIEW_TYPE_CUBE (a 2D_ARRAY view over six layers is also non-null).
+  // Texture exposes no view type to assert on; the CUBE view is exercised
+  // end-to-end by the 03_model skybox (validation-clean). Pin it here if
+  // Texture ever surfaces its view type.
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+}
+
+TEST_F(AllocatorTest, CubeWithWrongLayerCountIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.cube = true;  // array_layers left at the default 1, not 6
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CubeWithExtraLayersIsRejected) {
+  // The cube path requires *exactly* six layers, not merely the spec floor of
+  // "at least six"; seven square 2D layers must still be rejected. Pins the
+  // count rule independently of the default-layer-count (1) case above.
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.array_layers = 7;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CubeNonSquareIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 16};  // cube faces must be square
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.array_layers = 6;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CubeWithNon2DTypeIsRejected) {
+  // cube + a non-2D image type must be rejected (a cubemap is 2D-only). Use 1D
+  // so the earlier "3D images cannot be arrayed" rule does not fire first --
+  // this isolates the cube `type` sub-condition.
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.type = VK_IMAGE_TYPE_1D;
+  desc.array_layers = 6;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CubeMultisampledIsRejected) {
+  // A CUBE_COMPATIBLE image must be single-sampled; a multisampled cube would
+  // otherwise slip past the cube checks into an opaque vmaCreateImage failure.
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.array_layers = 6;
+  desc.cube = true;
+  desc.samples = VK_SAMPLE_COUNT_4_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST_F(AllocatorTest, DepthWithout3DTypeIsRejected) {
   vg::TextureDesc desc;
   desc.extent = {16, 16};

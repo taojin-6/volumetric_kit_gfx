@@ -15,8 +15,13 @@ namespace volumetric_kit::gfx {
 namespace {
 
 // The default view type for an image of @p type with @p array_layers layers:
-// 1D/2D gain their _ARRAY variant when arrayed; 3D images are never arrayed.
-VkImageViewType view_type_for(VkImageType type, uint32_t array_layers) {
+// a @p cube image is sampled through a CUBE view; otherwise 1D/2D gain their
+// _ARRAY variant when arrayed, and 3D images are never arrayed.
+VkImageViewType view_type_for(VkImageType type, uint32_t array_layers,
+                              bool cube) {
+  if (cube) {
+    return VK_IMAGE_VIEW_TYPE_CUBE;
+  }
   const bool arrayed = array_layers > 1;
   switch (type) {
     case VK_IMAGE_TYPE_1D:
@@ -220,6 +225,18 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
   if (desc.type == VK_IMAGE_TYPE_3D && desc.array_layers != 1) {
     return Status::invalid_argument("3D images cannot be arrayed");
   }
+  if (desc.cube && (desc.type != VK_IMAGE_TYPE_2D || desc.array_layers != 6 ||
+                    desc.extent.width != desc.extent.height ||
+                    desc.samples != VK_SAMPLE_COUNT_1_BIT)) {
+    // A CUBE_COMPATIBLE image must be 2D (VUID-VkImageCreateInfo-flags-00949),
+    // square with at least six layers (VUID-VkImageCreateInfo-imageType-00954),
+    // and single-sampled (VUID-VkImageCreateInfo-samples-02257); require
+    // exactly six layers (one cubemap). Reject here so a malformed cube reads
+    // as a domain error instead of an opaque VkResult out of vmaCreateImage.
+    return Status::invalid_argument(
+        "cube images must be single-sampled, 2D, square, and have "
+        "array_layers == 6");
+  }
   if (desc.external != ExternalHandleType::None) {
     // TODO: wire VkExternalMemoryImageCreateInfo + a VMA export pool in the
     // interop tier (honoring the requested handle type).
@@ -261,6 +278,12 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  // CUBE_COMPATIBLE lets the six layers be sampled as a cubemap. Set via |= on
+  // the zero-initialized flags to avoid an enum/non-enum ternary, which GCC's
+  // -Wextra rejects (`enumerated and non-enumerated type in conditional`).
+  if (desc.cube) {
+    image_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+  }
   image_info.imageType = desc.type;
   image_info.format = desc.format;
   image_info.extent = {desc.extent.width, desc.extent.height, desc.depth};
@@ -285,7 +308,7 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     VkImageViewCreateInfo view_info{};
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view_info.image = image;
-    view_info.viewType = view_type_for(desc.type, desc.array_layers);
+    view_info.viewType = view_type_for(desc.type, desc.array_layers, desc.cube);
     view_info.format = desc.format;
     view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
     view_info.subresourceRange.baseMipLevel = 0;

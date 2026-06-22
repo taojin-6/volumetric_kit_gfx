@@ -62,9 +62,14 @@ target_link_libraries(
 vg_target_warnings(example_03_model)
 
 vg_compile_shaders(
-  example_03_model OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
+  example_03_model
+  OUTPUT_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/model.vert"
-  "${PROJECT_SOURCE_DIR}/shaders/model.frag")
+  "${PROJECT_SOURCE_DIR}/shaders/model.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/skybox.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/skybox.frag")
 target_compile_definitions(
   example_03_model
   PRIVATE VG_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
