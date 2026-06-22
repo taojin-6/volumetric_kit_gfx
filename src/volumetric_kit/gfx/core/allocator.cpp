@@ -338,6 +338,30 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
                  });
 }
 
+MemoryStats Allocator::memory_stats() const {
+  MemoryStats stats;
+  if (impl_ == nullptr) {
+    return stats;  // moved-from: no heaps to report
+  }
+
+  // vmaGetHeapBudgets writes one entry per memory heap but doesn't report the
+  // heap count; read it from VMA's cached memory properties (no driver query --
+  // VMA captured them at create time) and translate only that many.
+  // TODO: enable VK_EXT_memory_budget so the usage/budget figures are the
+  // driver's authoritative numbers rather than VMA's heuristic estimate.
+  const VkPhysicalDeviceMemoryProperties* mem_props = nullptr;
+  vmaGetMemoryProperties(impl_->allocator, &mem_props);
+  stats.heap_count = mem_props->memoryHeapCount;
+
+  VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+  vmaGetHeapBudgets(impl_->allocator, budgets);
+  for (uint32_t i = 0; i < stats.heap_count; ++i) {
+    stats.heaps[i].usage_bytes = budgets[i].usage;
+    stats.heaps[i].budget_bytes = budgets[i].budget;
+  }
+  return stats;
+}
+
 Allocator::Allocator(Allocator&& other) noexcept = default;
 
 Allocator& Allocator::operator=(Allocator&& other) noexcept = default;

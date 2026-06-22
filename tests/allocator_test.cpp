@@ -160,6 +160,45 @@ TEST_F(AllocatorTest, AutoMemoryBufferIsValid) {
   EXPECT_TRUE(buffer.value().valid());
 }
 
+TEST_F(AllocatorTest, MemoryStatsReportHeapsWithinBudget) {
+  // A live device-local allocation makes at least one heap's usage meaningful;
+  // keep it alive across the query so VMA accounts for it.
+  vg::BufferDesc desc;
+  desc.size = 1u << 20;  // 1 MiB
+  desc.usage =
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  desc.memory = vg::MemoryUsage::DeviceLocal;
+  auto buffer = allocator_->create_buffer(desc);
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+
+  vg::MemoryStats stats = allocator_->memory_stats();
+  EXPECT_GT(stats.heap_count, 0u);  // a device always has at least one heap
+  EXPECT_LE(stats.heap_count, static_cast<uint32_t>(VK_MAX_MEMORY_HEAPS));
+
+  uint64_t total_usage = 0;
+  for (uint32_t i = 0; i < stats.heap_count; ++i) {
+    total_usage += stats.heaps[i].usage_bytes;
+    // budget_bytes is what VMA estimates is usable; usage must fit within it.
+    // Without VK_EXT_memory_budget VMA derives budget from heap size, so it is
+    // normally nonzero — guard defensively in case a heap reports none.
+    if (stats.heaps[i].budget_bytes != 0) {
+      EXPECT_GE(stats.heaps[i].budget_bytes, stats.heaps[i].usage_bytes)
+          << "heap " << i << " usage exceeds budget";
+    }
+  }
+  // The 1 MiB allocation above must surface in some heap's usage; a stats call
+  // that returned the heap count but no usage would otherwise pass unnoticed.
+  EXPECT_GT(total_usage, 0u);
+}
+
+TEST_F(AllocatorTest, MovedFromAllocatorReportsNoHeaps) {
+  // A moved-from allocator holds a null impl; memory_stats() must stay safe and
+  // report an empty snapshot rather than dereferencing it.
+  vg::Allocator moved(std::move(*allocator_));
+  vg::MemoryStats stats = allocator_->memory_stats();  // NOLINT
+  EXPECT_EQ(stats.heap_count, 0u);
+}
+
 TEST_F(AllocatorTest, MoveAssignOverLiveAllocatorStaysUsable) {
   // Exercises Allocator::operator=(Allocator&&) onto an already-live allocator:
   // the overwritten allocator must be released (no double-free / crash) and the
