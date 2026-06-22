@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/physical_device_info.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -26,6 +27,13 @@ struct DeviceConfig {
   /// seam on Linux. Other POSIX-fd handle types are requested through
   /// @ref extra_device_extensions instead.
   bool needs_external_memory = false;
+  /// Resolve the `VK_EXT_debug_utils` device entry points so @ref
+  /// Device::debug_utils returns an active table. Set this from
+  /// @ref Instance::debug_utils_enabled: the device-level labels can only be
+  /// emitted when the instance enabled the extension. Leaving it false (or
+  /// passing it true on an instance that did not enable the extension) yields
+  /// an inactive table, and every label/object-name call becomes a no-op.
+  bool enable_debug_utils = false;
   /// Core (1.0) device features to enable (fed into
   /// `VkPhysicalDeviceFeatures2`).
   VkPhysicalDeviceFeatures features = {};
@@ -134,6 +142,14 @@ class VG_CORE_API Device {
   ///         `RESET_COMMAND_BUFFER_BIT`).
   VkCommandPool command_pool() const noexcept { return command_pool_; }
 
+  /// @brief The resolved `VK_EXT_debug_utils` entry points for this device.
+  /// @return The cached table. It is active (and labels/object names emit) only
+  ///         when `config.enable_debug_utils` was set and the extension is
+  ///         enabled on the instance; otherwise it is inactive and every
+  ///         @ref DebugLabelScope / @ref QueueLabelScope / @ref set_object_name
+  ///         built from it is a no-op.
+  const DebugUtilsTable& debug_utils() const noexcept { return debug_utils_; }
+
   /// @brief Record + submit a one-shot command buffer on the graphics queue,
   ///        blocking on a fence until it completes. For setup/uploads only —
   ///        never the per-frame path.
@@ -162,6 +178,10 @@ class VG_CORE_API Device {
   VkQueue graphics_queue_ = VK_NULL_HANDLE;
   VkQueue present_queue_ = VK_NULL_HANDLE;
   PhysicalDeviceInfo caps_;
+  // Plain resolved PFNs (trivially copyable): the move ctor / assignment /
+  // reset below copy and clear it alongside the handles, with no special
+  // handling.
+  DebugUtilsTable debug_utils_;
 };
 
 }  // namespace volumetric_kit::gfx

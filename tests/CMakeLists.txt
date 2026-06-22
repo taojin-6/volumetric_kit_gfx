@@ -16,6 +16,7 @@ add_executable(
   result_test.cpp
   frame_metrics_test.cpp
   device_test.cpp
+  debug_label_test.cpp
   log_test.cpp
   sync_test.cpp
   query_pool_test.cpp

@@ -24,6 +24,7 @@ target_sources(
           instance.cpp
           physical_device_info.cpp
           device.cpp
+          debug_label.cpp
           sync.cpp
           query_pool.cpp
           retire_queue.cpp

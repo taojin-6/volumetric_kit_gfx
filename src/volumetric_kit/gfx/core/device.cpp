@@ -248,6 +248,14 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
 
+  // Resolve the VK_EXT_debug_utils device entry points. The caller threads the
+  // instance's debug_utils_enabled() in through config.enable_debug_utils (the
+  // device only borrows a VkInstance handle, not the Instance object); the load
+  // returns an all-null/inactive table whenever that is false, so the labels
+  // are a branch-to-noop without the extension.
+  device.debug_utils_ =
+      DebugUtilsTable::load(device.device_, config.enable_debug_utils);
+
   // Adopt the capabilities captured up front (success path only).
   device.caps_ = std::move(caps);
 
@@ -324,7 +332,8 @@ Device::Device(Device&& other) noexcept
       present_family_(other.present_family_),
       graphics_queue_(other.graphics_queue_),
       present_queue_(other.present_queue_),
-      caps_(std::move(other.caps_)) {
+      caps_(std::move(other.caps_)),
+      debug_utils_(other.debug_utils_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
@@ -334,6 +343,7 @@ Device::Device(Device&& other) noexcept
   other.graphics_queue_ = VK_NULL_HANDLE;
   other.present_queue_ = VK_NULL_HANDLE;
   other.caps_ = PhysicalDeviceInfo{};
+  other.debug_utils_ = DebugUtilsTable{};
 }
 
 Device& Device::operator=(Device&& other) noexcept {
@@ -348,6 +358,7 @@ Device& Device::operator=(Device&& other) noexcept {
     graphics_queue_ = other.graphics_queue_;
     present_queue_ = other.present_queue_;
     caps_ = std::move(other.caps_);
+    debug_utils_ = other.debug_utils_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
@@ -357,6 +368,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.graphics_queue_ = VK_NULL_HANDLE;
     other.present_queue_ = VK_NULL_HANDLE;
     other.caps_ = PhysicalDeviceInfo{};
+    other.debug_utils_ = DebugUtilsTable{};
   }
   return *this;
 }
@@ -379,6 +391,7 @@ void Device::destroy() noexcept {
   graphics_queue_ = VK_NULL_HANDLE;
   present_queue_ = VK_NULL_HANDLE;
   caps_ = PhysicalDeviceInfo{};
+  debug_utils_ = DebugUtilsTable{};
 }
 
 }  // namespace volumetric_kit::gfx
