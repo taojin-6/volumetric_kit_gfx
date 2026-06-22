@@ -1,4 +1,7 @@
-# Self-hosted CI runners (Linux GPU box)
+# Self-hosted CI runners
+
+Scripts: `.github/setup-mac-runner.sh` (macOS), `.github/teardown-runners.sh`
+(decommission/migrate any host). The Linux loop below is inline.
 
 The three Ubuntu legs of `ci.yml` run on a self-hosted runner labelled
 `vk-linux-gpu`, each in an OS-matched container (`ubuntu:22.04` / `:24.04` /
@@ -65,3 +68,42 @@ up before merging.
 
 > Membership in the `docker` group is root-equivalent; fine for a personal box,
 > reconsider for a shared one.
+
+## macOS runners
+
+macOS can't be containerised (no macOS containers exist — Docker-on-Mac runs
+*Linux*), and the macOS leg's whole point is the native Apple toolchain +
+MoltenVK on the real GPU, so the Mac runs jobs **natively, no Docker**. On a
+**private** repo this also saves real money: hosted macOS minutes bill at 10×.
+
+Prereqs on the Mac: `xcode-select --install` + Homebrew. Then:
+
+```bash
+bash .github/setup-mac-runner.sh        # registers 2 runners labelled `mac`
+sudo pmset -a sleep 0 disablesleep 1    # keep it awake (also enable auto-login)
+```
+
+It must be an **always-on, auto-logged-in** Mac — the runner is a launchd
+LaunchAgent that only runs in the user session, so a laptop that sleeps makes the
+macOS leg flaky. Once a `mac` runner is online, point the macOS leg at it by
+changing the `ci.yml` matrix entry `runner: macos-26` → `runner: mac` (the only
+workflow change; `_build.yml` keys its Homebrew install off `runner.os`).
+
+## Disabling / migrating a runner host
+
+Runners on a host share one label (`vk-linux-gpu` or `mac`) and GitHub routes
+jobs to whichever host is online, so swapping machines needs **no `ci.yml`
+change**: bring the new host up, then tear the old one down.
+
+- **Pause** (go offline, stay registered) — drop `sudo` on macOS:
+  ```bash
+  for d in ~/actions-runner-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
+  ```
+  Resume with `./svc.sh start`.
+- **Fully remove** (decommission, or before handing the machine on):
+  ```bash
+  bash .github/teardown-runners.sh   # stop + uninstall service + deregister + delete dirs
+  ```
+  Run it on the *old* host. Deregistering matters — otherwise it lingers as an
+  offline runner, and a still-registered runner on a machine you give away is a
+  security exposure.
