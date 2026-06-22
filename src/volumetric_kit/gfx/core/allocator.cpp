@@ -278,7 +278,12 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  image_info.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
+  // CUBE_COMPATIBLE lets the six layers be sampled as a cubemap. Set via |= on
+  // the zero-initialized flags to avoid an enum/non-enum ternary, which GCC's
+  // -Wextra rejects (`enumerated and non-enumerated type in conditional`).
+  if (desc.cube) {
+    image_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+  }
   image_info.imageType = desc.type;
   image_info.format = desc.format;
   image_info.extent = {desc.extent.width, desc.extent.height, desc.depth};
