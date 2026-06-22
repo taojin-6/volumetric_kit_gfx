@@ -48,6 +48,7 @@
 #include <glm/common.hpp>     // glm::min / glm::max (component-wise)
 #include <glm/geometric.hpp>  // glm::length
 #include <glm/mat4x4.hpp>
+#include <glm/matrix.hpp>  // glm::inverse
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -355,6 +356,27 @@ struct Shaders {
   vg::ShaderModule vert;
   vg::ShaderModule frag;
 };
+
+// Load + create one shader module from VG_EXAMPLE_SHADER_DIR by .spv name; null
+// *ok on failure.
+vg::ShaderModule load_shader(VkDevice device, const char* spv_name, bool* ok) {
+  const std::vector<uint32_t> code =
+      load_spirv((std::string(VG_EXAMPLE_SHADER_DIR "/") + spv_name).c_str());
+  if (code.empty()) {
+    std::fprintf(stderr, "missing compiled shader %s\n", spv_name);
+    *ok = false;
+    return {};
+  }
+  auto module = vg::ShaderModule::create(device, code.data(),
+                                         code.size() * sizeof(uint32_t));
+  if (!module.ok()) {
+    std::fprintf(stderr, "shader module %s: %s\n", spv_name,
+                 module.status().message().c_str());
+    *ok = false;
+    return {};
+  }
+  return std::move(module).value();
+}
 
 // Load + create both model shader modules from VG_EXAMPLE_SHADER_DIR; null *ok
 // on failure. Shared by both render paths.
@@ -784,6 +806,251 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
   return r;
 }
 
+// --- Skybox: a procedural environment cubemap drawn behind the model --------
+
+// Analytic sky in linear RGB: a zenith->horizon->ground vertical gradient plus
+// a soft sun bloom toward the key-light direction -- the same environment the
+// IBL step will draw its ambient from.
+glm::vec3 sky_color(const glm::vec3& dir) {
+  const glm::vec3 sun_dir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.6f));
+  const glm::vec3 zenith(0.12f, 0.22f, 0.42f);
+  const glm::vec3 horizon(0.52f, 0.58f, 0.66f);
+  const glm::vec3 ground(0.10f, 0.09f, 0.08f);
+  const float t = glm::clamp(dir.y, -1.0f, 1.0f);
+  const glm::vec3 base = t >= 0.0f
+                             ? glm::mix(horizon, zenith, std::pow(t, 0.5f))
+                             : glm::mix(horizon, ground, std::pow(-t, 0.4f));
+  const float sun = std::pow(std::fmax(glm::dot(dir, sun_dir), 0.0f), 64.0f);
+  return base + glm::vec3(1.0f, 0.95f, 0.85f) * sun;
+}
+
+// World direction for cube face `f` (Vulkan layer order +X,-X,+Y,-Y,+Z,-Z) at
+// face coordinates u, v in [-1, 1].
+glm::vec3 cube_dir(int f, float u, float v) {
+  switch (f) {
+    case 0:
+      return glm::normalize(glm::vec3(1.0f, -v, -u));
+    case 1:
+      return glm::normalize(glm::vec3(-1.0f, -v, u));
+    case 2:
+      return glm::normalize(glm::vec3(u, 1.0f, v));
+    case 3:
+      return glm::normalize(glm::vec3(u, -1.0f, -v));
+    case 4:
+      return glm::normalize(glm::vec3(u, -v, 1.0f));
+    default:
+      return glm::normalize(glm::vec3(-u, -v, -1.0f));
+  }
+}
+
+// Bake the analytic sky into a sampled-ready cubemap: generate the six faces on
+// the CPU, stage them, and copy all six layers in one submit. Stores linear
+// color in a UNORM cube (what the IBL step will sample).
+vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
+                          uint32_t size, bool* ok) {
+  const VkDeviceSize face_bytes = VkDeviceSize{size} * size * 4;
+  std::vector<uint8_t> pixels(face_bytes * 6);
+  for (int f = 0; f < 6; ++f) {
+    for (uint32_t y = 0; y < size; ++y) {
+      for (uint32_t x = 0; x < size; ++x) {
+        const float u = (static_cast<float>(x) + 0.5f) / size * 2.0f - 1.0f;
+        const float v = (static_cast<float>(y) + 0.5f) / size * 2.0f - 1.0f;
+        const glm::vec3 c = glm::clamp(sky_color(cube_dir(f, u, v)),
+                                       glm::vec3(0.0f), glm::vec3(1.0f));
+        uint8_t* px = pixels.data() + f * face_bytes + (y * size + x) * 4;
+        px[0] = static_cast<uint8_t>(c.r * 255.0f + 0.5f);
+        px[1] = static_cast<uint8_t>(c.g * 255.0f + 0.5f);
+        px[2] = static_cast<uint8_t>(c.b * 255.0f + 0.5f);
+        px[3] = 255;
+      }
+    }
+  }
+
+  vg::BufferDesc sd;
+  sd.size = pixels.size();
+  sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  sd.memory = vg::MemoryUsage::HostVisible;
+  sd.mapped = true;
+  sd.host_access = vg::HostAccess::SequentialWrite;
+  auto staging = alloc.create_buffer(sd);
+  if (!staging.ok()) {
+    std::fprintf(stderr, "sky staging: %s\n",
+                 staging.status().message().c_str());
+    *ok = false;
+    return {};
+  }
+  std::memcpy(staging.value().mapped(), pixels.data(), pixels.size());
+
+  vg::TextureDesc td;
+  td.extent = {size, size};
+  td.format = VK_FORMAT_R8G8B8A8_UNORM;  // linear environment color
+  td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  td.array_layers = 6;
+  td.cube = true;
+  auto cube = alloc.create_image(td);
+  if (!cube.ok()) {
+    std::fprintf(stderr, "sky cube: %s\n", cube.status().message().c_str());
+    *ok = false;
+    return {};
+  }
+
+  const VkImage image = cube.value().image();
+  const VkBuffer src = staging.value().handle();
+  const vg::Status copied =
+      device.submit_single_time([image, src, size](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &barrier);
+
+        VkBufferImageCopy copies[6]{};
+        for (uint32_t f = 0; f < 6; ++f) {
+          copies[f].bufferOffset = VkDeviceSize{f} * size * size * 4;
+          copies[f].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, f, 1};
+          copies[f].imageExtent = {size, size, 1};
+        }
+        vkCmdCopyBufferToImage(cmd, src, image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, copies);
+
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &barrier);
+      });
+  if (!copied.ok()) {
+    std::fprintf(stderr, "sky upload: %s\n", copied.message().c_str());
+    *ok = false;
+    return {};
+  }
+  return std::move(cube).value();
+}
+
+// Per-frame skybox transform (fragment push constant); mirrors skybox.frag.
+struct SkyboxPush {
+  glm::mat4 inv_view_proj;
+  glm::vec4 camera_pos;
+};
+
+// The environment cubemap plus the pipeline/descriptor that draws it.
+struct Skybox {
+  std::optional<vg::Sampler> sampler;  // no public default ctor (see #47)
+  vg::Texture cube;
+  vg::GraphicsPipeline pipeline;
+  vg::DescriptorPool pool;
+  vg::DescriptorSet set;  // set 0: the samplerCube
+};
+
+vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
+    VkDevice device, const vg::ShaderModule& vert, const vg::ShaderModule& frag,
+    const vg::RenderTargetLayout& layout) {
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
+  desc.layout = layout;
+  // Procedural full-screen triangle (no vertex input), drawn before the model
+  // with depth off so it only fills pixels the model does not cover.
+  desc.depth_test = false;
+  desc.depth_write = false;
+  return vg::GraphicsPipeline::create(device, desc);
+}
+
+// Bake the environment cube + build the skybox pipeline and its descriptor set.
+Skybox setup_skybox(const vg::Device& device, vg::Allocator& alloc,
+                    const vg::RenderTargetLayout& layout, bool* ok) {
+  Skybox s;
+
+  vg::SamplerDesc sampler_desc;
+  sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  auto sampler = vg::Sampler::create(device.handle(), sampler_desc);
+  if (!sampler.ok()) {
+    std::fprintf(stderr, "sky sampler: %s\n",
+                 sampler.status().message().c_str());
+    *ok = false;
+    return s;
+  }
+  s.sampler = std::move(sampler).value();
+
+  s.cube = make_sky_cube(device, alloc, 128, ok);
+  if (!*ok) {
+    return s;
+  }
+
+  const vg::ShaderModule vert =
+      load_shader(device.handle(), "skybox.vert.spv", ok);
+  const vg::ShaderModule frag =
+      load_shader(device.handle(), "skybox.frag.spv", ok);
+  if (!*ok) {
+    return s;
+  }
+  auto pipeline = build_skybox_pipeline(device.handle(), vert, frag, layout);
+  if (!pipeline.ok()) {
+    std::fprintf(stderr, "skybox pipeline: %s\n",
+                 pipeline.status().message().c_str());
+    *ok = false;
+    return s;
+  }
+  s.pipeline = std::move(pipeline).value();
+
+  const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+  auto pool = vg::DescriptorPool::create(device.handle(), &size, 1, 1);
+  if (!pool.ok()) {
+    std::fprintf(stderr, "skybox pool: %s\n", pool.status().message().c_str());
+    *ok = false;
+    return s;
+  }
+  s.pool = std::move(pool).value();
+  auto set = s.pool.allocate(s.pipeline.descriptor_set_layout(0));
+  if (!set.ok()) {
+    std::fprintf(stderr, "skybox set: %s\n", set.status().message().c_str());
+    *ok = false;
+    return s;
+  }
+  s.set = std::move(set).value();
+  s.set.write_combined_image_sampler(0, s.cube.view(), s.sampler->handle(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  return s;
+}
+
+// Draw the skybox: a full-screen triangle sampling the environment along the
+// per-pixel view ray. Call inside the render scope, before the model.
+void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
+                   const glm::mat4& view_proj, const glm::vec3& camera_pos) {
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    skybox.pipeline.handle());
+  VkViewport viewport{};
+  viewport.width = static_cast<float>(extent.width);
+  viewport.height = static_cast<float>(extent.height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(cmd, 0, 1, &viewport);
+  VkRect2D scissor{};
+  scissor.extent = extent;
+  vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+  SkyboxPush push;
+  push.inv_view_proj = glm::inverse(view_proj);
+  push.camera_pos = glm::vec4(camera_pos, 1.0f);
+  vkCmdPushConstants(cmd, skybox.pipeline.layout(),
+                     VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+  const VkDescriptorSet set = skybox.set.handle();
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          skybox.pipeline.layout(), 0, 1, &set, 0, nullptr);
+  vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
@@ -870,6 +1137,12 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
       SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
 
+  Skybox skybox = setup_skybox(device.value(), allocator.value(),
+                               target.value().layout(), &ok);
+  if (!ok) {
+    return 1;
+  }
+
   const float aspect = static_cast<float>(width) / static_cast<float>(height);
   const glm::mat4 view_proj =
       orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
@@ -891,6 +1164,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
         begin.clear_color = background();
         const vg::RenderTarget rt = target.value().target();
         rt.begin(cmd, begin);
+        record_skybox(cmd, {width, height}, skybox, view_proj, orbit.eye());
         record_scene(cmd, {width, height}, pipeline.value(), view_proj, draws,
                      meshes, pbr.scene_set.handle(), pbr.mesh_sets);
         rt.end(cmd);
@@ -1026,6 +1300,12 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
 
+  Skybox skybox =
+      setup_skybox(device.value(), allocator.value(), pipeline_layout, &ok);
+  if (!ok) {
+    return 1;
+  }
+
   auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 1);
   if (!loop.ok()) {
     std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
@@ -1099,6 +1379,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // Raising frames_in_flight > 1 would need a per-slot scene UBO.
     *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
         SceneUbo{glm::vec4(orbit.eye(), 1.0f)};
+    record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
     record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes,
                  pbr.scene_set.handle(), pbr.mesh_sets);
 

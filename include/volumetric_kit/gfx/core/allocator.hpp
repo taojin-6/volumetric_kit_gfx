@@ -80,6 +80,11 @@ struct TextureDesc {
   uint32_t mip_levels = 1;                ///< Number of mip levels.
   uint32_t array_layers = 1;  ///< Array layers; > 1 yields an array view and
                               ///< must be 1 for a 3D image.
+  /// Create a cubemap: a 2D image whose six faces get a
+  /// `VK_IMAGE_VIEW_TYPE_CUBE` view. Requires `type == VK_IMAGE_TYPE_2D`,
+  /// `array_layers == 6`, and a square `extent` (faces are Vulkan layers
+  /// ordered +X, -X, +Y, -Y, +Z, -Z).
+  bool cube = false;
   VkSampleCountFlagBits samples =
       VK_SAMPLE_COUNT_1_BIT;  ///< MSAA sample count.
   VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -161,8 +166,9 @@ class VG_CORE_API Allocator {
   ///         - a zero `extent`/`depth`/`mip_levels`/`array_layers`, `usage ==
   ///         0`,
   ///           `VK_FORMAT_UNDEFINED`, `depth > 1` without `VK_IMAGE_TYPE_3D`, a
-  ///           3D image with `array_layers > 1`, a multisampled image that is
-  ///           not 2D/optimal/single-mip, `desc.with_view` with a `usage` that
+  ///           3D image with `array_layers > 1`, a `desc.cube` that is not a
+  ///           2D, square, six-layer image, a multisampled image that is not
+  ///           2D/optimal/single-mip, `desc.with_view` with a `usage` that
   ///           names no view-compatible bit, or `MemoryUsage::HostVisible`
   ///           (images have no host accessor; copy to a HostVisible buffer for
   ///           readback) return domain @ref Status::Code::InvalidArgument;
@@ -172,8 +178,9 @@ class VG_CORE_API Allocator {
   ///         The full `extent` × `depth` is recoverable from the returned
   ///         @ref Texture (`extent()` + `depth()`). When `desc.with_view`, the
   ///         default view spans all mips/layers; its type follows `desc.type`
-  ///         and `array_layers` (1D/2D/3D, with the `_ARRAY` variant when
-  ///         `array_layers > 1`), and its aspect follows the format: DEPTH for
+  ///         and `array_layers` (1D/2D/3D, the `_ARRAY` variant when
+  ///         `array_layers > 1`, or `CUBE` when `desc.cube`), and its aspect
+  ///         follows the format: DEPTH for
   ///         depth and combined depth/stencil formats, STENCIL for
   ///         stencil-only, otherwise COLOR. When `!desc.with_view`, @ref
   ///         Texture::view is `VK_NULL_HANDLE`.

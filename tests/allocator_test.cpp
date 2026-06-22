@@ -389,6 +389,45 @@ TEST_F(AllocatorTest, MippedArrayImageIsValid) {
             4u);  // threaded through from the desc
 }
 
+TEST_F(AllocatorTest, CubeImageGetsCubeView) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  desc.array_layers = 6;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_NE(texture.value().image(), VK_NULL_HANDLE);
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);  // VK_IMAGE_VIEW_TYPE_CUBE
+}
+
+TEST_F(AllocatorTest, CubeWithWrongLayerCountIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 32};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.cube = true;  // array_layers left at the default 1, not 6
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(AllocatorTest, CubeNonSquareIsRejected) {
+  vg::TextureDesc desc;
+  desc.extent = {32, 16};  // cube faces must be square
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+  desc.array_layers = 6;
+  desc.cube = true;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST_F(AllocatorTest, DepthWithout3DTypeIsRejected) {
   vg::TextureDesc desc;
   desc.extent = {16, 16};
