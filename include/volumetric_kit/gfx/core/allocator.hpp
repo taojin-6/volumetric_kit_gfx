@@ -6,6 +6,7 @@
 /// @file allocator.hpp
 /// @brief GPU memory allocator: the factory for device-backed resources.
 
+#include <cstdint>
 #include <memory>
 
 #include "volumetric_kit/gfx/core/buffer.hpp"
@@ -23,8 +24,8 @@ class Device;
 /// Both figures are VMA's running accounting of the heap, not a live driver
 /// query: `usage_bytes` is what VMA has allocated out of it, `budget_bytes` is
 /// how much VMA estimates is safely usable. They are heuristics unless
-/// `VK_EXT_memory_budget` is enabled, which would let VMA read the driver's
-/// authoritative figures (a future seam — the extension is not requested yet).
+/// `VK_EXT_memory_budget` is enabled, which lets VMA read the driver's
+/// authoritative figures.
 struct HeapStats {
   uint64_t usage_bytes = 0;   ///< Bytes VMA has allocated from the heap.
   uint64_t budget_bytes = 0;  ///< Bytes VMA estimates are usable in the heap.
@@ -212,8 +213,8 @@ class VG_CORE_API Allocator {
   ///         MemoryStats::heaps entries carry each heap's usage/budget in
   ///         bytes. A moved-from allocator reports `heap_count == 0`.
   /// @note The byte figures are VMA heuristics unless `VK_EXT_memory_budget` is
-  ///       enabled (not yet requested); see @ref HeapStats. On UMA (Apple) GPUs
-  ///       the heaps are unified, so expect a single heap.
+  ///       enabled; see @ref HeapStats. On UMA (Apple) GPUs the heaps are
+  ///       unified, so expect a single heap.
   MemoryStats memory_stats() const;
 
  private:

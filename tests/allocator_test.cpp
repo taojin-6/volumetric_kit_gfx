@@ -175,15 +175,20 @@ TEST_F(AllocatorTest, MemoryStatsReportHeapsWithinBudget) {
   EXPECT_GT(stats.heap_count, 0u);  // a device always has at least one heap
   EXPECT_LE(stats.heap_count, static_cast<uint32_t>(VK_MAX_MEMORY_HEAPS));
 
+  uint64_t total_usage = 0;
   for (uint32_t i = 0; i < stats.heap_count; ++i) {
+    total_usage += stats.heaps[i].usage_bytes;
     // budget_bytes is what VMA estimates is usable; usage must fit within it.
-    // Some drivers (lavapipe) report a zero budget for a heap — skip those
-    // rather than assert a relationship VMA didn't populate.
+    // Without VK_EXT_memory_budget VMA derives budget from heap size, so it is
+    // normally nonzero — guard defensively in case a heap reports none.
     if (stats.heaps[i].budget_bytes != 0) {
       EXPECT_GE(stats.heaps[i].budget_bytes, stats.heaps[i].usage_bytes)
           << "heap " << i << " usage exceeds budget";
     }
   }
+  // The 1 MiB allocation above must surface in some heap's usage; a stats call
+  // that returned the heap count but no usage would otherwise pass unnoticed.
+  EXPECT_GT(total_usage, 0u);
 }
 
 TEST_F(AllocatorTest, MovedFromAllocatorReportsNoHeaps) {

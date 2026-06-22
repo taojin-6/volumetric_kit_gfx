@@ -47,8 +47,6 @@ VmaMemoryUsage vma_memory_usage(MemoryUsage memory) {
 struct Allocator::Impl {
   VmaAllocator allocator = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;  // borrowed; for image-view create/destroy
-  VkPhysicalDevice physical_device =
-      VK_NULL_HANDLE;  // borrowed; for the heap count in memory_stats()
 
   // Own the handle here, not in ~Allocator: the defaulted move-assignment
   // destroys the overwritten Impl via unique_ptr, so freeing in ~Impl is what
@@ -104,7 +102,6 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   auto impl = std::make_unique<Impl>();
   VG_VK_TRY(vmaCreateAllocator(&info, &impl->allocator));
   impl->device = device.handle();
-  impl->physical_device = device.physical_device();
 
   Allocator allocator;
   allocator.impl_ = std::move(impl);
@@ -324,12 +321,14 @@ MemoryStats Allocator::memory_stats() const {
     return stats;  // moved-from: no heaps to report
   }
 
-  // vmaGetHeapBudgets fills VK_MAX_MEMORY_HEAPS entries but does not say how
-  // many heaps the device actually has, so take the real count from the
-  // device's memory properties and only translate that many.
-  VkPhysicalDeviceMemoryProperties mem_props{};
-  vkGetPhysicalDeviceMemoryProperties(impl_->physical_device, &mem_props);
-  stats.heap_count = mem_props.memoryHeapCount;
+  // vmaGetHeapBudgets writes one entry per memory heap but doesn't report the
+  // heap count; read it from VMA's cached memory properties (no driver query --
+  // VMA captured them at create time) and translate only that many.
+  // TODO: enable VK_EXT_memory_budget so the usage/budget figures are the
+  // driver's authoritative numbers rather than VMA's heuristic estimate.
+  const VkPhysicalDeviceMemoryProperties* mem_props = nullptr;
+  vmaGetMemoryProperties(impl_->allocator, &mem_props);
+  stats.heap_count = mem_props->memoryHeapCount;
 
   VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
   vmaGetHeapBudgets(impl_->allocator, budgets);
