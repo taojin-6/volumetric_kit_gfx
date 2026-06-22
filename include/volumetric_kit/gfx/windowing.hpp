@@ -15,7 +15,7 @@
 /// headers remain public for code that wants finer-grained dependencies.
 ///
 /// @note Like the headers it aggregates, this transitively includes
-///       @ref volumetric_kit/gfx/core/vulkan.hpp. If you rely on GLFW's Vulkan
+///       `core/vulkan.hpp`. If you rely on GLFW's Vulkan
 ///       WSI helpers (e.g. `glfwCreateWindowSurface`), include a Vulkan header
 ///       before `<GLFW/glfw3.h>` so `glfw3.h` sees Vulkan and declares them —
 ///       the examples do this by including `core/vulkan.hpp` first.
