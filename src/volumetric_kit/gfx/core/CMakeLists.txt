@@ -25,6 +25,7 @@ target_sources(
           physical_device_info.cpp
           device.cpp
           sync.cpp
+          query_pool.cpp
           retire_queue.cpp
           allocator.cpp
           buffer.cpp
