@@ -4,15 +4,10 @@ name: sanitizers
 # (LeakSanitizer isn't available on macOS). Builds against lavapipe (software
 # Vulkan) with validation layers on, so the GPU-touching tests run under the
 # sanitizers — this is what catches the leak / use-after-free / double-free
-# class the unit tests alone can't detect.
+# class the unit tests alone can't detect. Invoked by ci.yml, which owns the
+# push / pull_request triggers and the concurrency group.
 on:
-  push:
-    branches: [main]
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   asan-ubsan-lsan:
