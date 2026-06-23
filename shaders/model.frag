@@ -45,6 +45,16 @@ layout(location = 0) out vec4 out_color;
 
 const float PI = 3.14159265359;
 
+// Narkowicz ACES filmic tone-mapping approximation (operates on linear HDR).
+vec3 tonemap_aces(vec3 x) {
+  const float a = 2.51;
+  const float b = 0.03;
+  const float c = 2.43;
+  const float d = 0.59;
+  const float e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 // Trowbridge-Reitz GGX normal distribution.
 float distribution_ggx(float n_dot_h, float roughness) {
   const float a = roughness * roughness;
@@ -144,9 +154,10 @@ void main() {
   const vec3 specular_ibl = prefiltered * (ibl_f * brdf.x + brdf.y);
   const vec3 ambient = (kd_ibl * diffuse_ibl + specular_ibl) * ao;
 
-  // Output is linear; the sRGB target encodes it on write.
+  // Tone-map the linear HDR result to displayable range (the sRGB target then
+  // encodes on write).
   // TODO: honor alpha mode -- mask `discard` (needs a device feature/SPIR-V
   // capability) and blending; today every fragment is written fully opaque.
   const vec3 color = ambient + direct + emissive;
-  out_color = vec4(color, 1.0);
+  out_color = vec4(tonemap_aces(color), 1.0);
 }

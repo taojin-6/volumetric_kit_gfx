@@ -827,9 +827,9 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
 
 // --- Skybox: a procedural environment cubemap drawn behind the model --------
 
-// Analytic sky in linear RGB: a zenith->horizon->ground vertical gradient plus
-// a soft sun bloom toward the key-light direction -- the same environment the
-// IBL step will draw its ambient from.
+// Analytic sky in linear HDR RGB: a zenith->horizon->ground vertical gradient
+// plus a tight, bright (> 1) sun toward the key-light direction -- the same
+// environment the IBL bake convolves its ambient from. Tone-mapped on output.
 glm::vec3 sky_color(const glm::vec3& dir) {
   const glm::vec3 sun_dir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.6f));
   const glm::vec3 zenith(0.12f, 0.22f, 0.42f);
@@ -839,8 +839,10 @@ glm::vec3 sky_color(const glm::vec3& dir) {
   const glm::vec3 base = t >= 0.0f
                              ? glm::mix(horizon, zenith, std::pow(t, 0.5f))
                              : glm::mix(horizon, ground, std::pow(-t, 0.4f));
-  const float sun = std::pow(std::fmax(glm::dot(dir, sun_dir), 0.0f), 64.0f);
-  return base + glm::vec3(1.0f, 0.95f, 0.85f) * sun;
+  // A tight, bright HDR sun reads as a highlight and drives crisp specular
+  // reflections through the IBL prefilter; tone mapping pulls it back in range.
+  const float sun = std::pow(std::fmax(glm::dot(dir, sun_dir), 0.0f), 200.0f);
+  return base + glm::vec3(1.0f, 0.95f, 0.85f) * (sun * 20.0f);
 }
 
 // World direction for cube face `f` (Vulkan layer order +X,-X,+Y,-Y,+Z,-Z) at
@@ -863,30 +865,25 @@ glm::vec3 cube_dir(int f, float u, float v) {
 }
 
 // Bake the analytic sky into a sampled-ready cubemap: generate the six faces on
-// the CPU, stage them, and copy all six layers in one submit. Stores linear
-// color in a UNORM cube (what the IBL step will sample).
+// the CPU, stage them, and copy all six layers in one submit. Stores linear HDR
+// color in a float cube (the skybox shader tone-maps it on output).
 vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
                           uint32_t size, bool* ok) {
-  const VkDeviceSize face_bytes = VkDeviceSize{size} * size * 4;
-  std::vector<uint8_t> pixels(face_bytes * 6);
+  std::vector<glm::vec4> pixels(static_cast<size_t>(size) * size * 6);
   for (int f = 0; f < 6; ++f) {
     for (uint32_t y = 0; y < size; ++y) {
       for (uint32_t x = 0; x < size; ++x) {
         const float u = (static_cast<float>(x) + 0.5f) / size * 2.0f - 1.0f;
         const float v = (static_cast<float>(y) + 0.5f) / size * 2.0f - 1.0f;
-        const glm::vec3 c = glm::clamp(sky_color(cube_dir(f, u, v)),
-                                       glm::vec3(0.0f), glm::vec3(1.0f));
-        uint8_t* px = pixels.data() + f * face_bytes + (y * size + x) * 4;
-        px[0] = static_cast<uint8_t>(c.r * 255.0f + 0.5f);
-        px[1] = static_cast<uint8_t>(c.g * 255.0f + 0.5f);
-        px[2] = static_cast<uint8_t>(c.b * 255.0f + 0.5f);
-        px[3] = 255;
+        // Unclamped HDR; the skybox shader tone-maps on output.
+        pixels[(static_cast<size_t>(f) * size + y) * size + x] =
+            glm::vec4(sky_color(cube_dir(f, u, v)), 1.0f);
       }
     }
   }
 
   vg::BufferDesc sd;
-  sd.size = pixels.size();
+  sd.size = pixels.size() * sizeof(glm::vec4);
   sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
   sd.memory = vg::MemoryUsage::HostVisible;
   sd.mapped = true;
@@ -898,11 +895,12 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
     *ok = false;
     return {};
   }
-  std::memcpy(staging.value().mapped(), pixels.data(), pixels.size());
+  std::memcpy(staging.value().mapped(), pixels.data(),
+              pixels.size() * sizeof(glm::vec4));
 
   vg::TextureDesc td;
   td.extent = {size, size};
-  td.format = VK_FORMAT_R8G8B8A8_UNORM;  // linear environment color
+  td.format = VK_FORMAT_R32G32B32A32_SFLOAT;  // linear HDR environment color
   td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   td.array_layers = 6;
   td.cube = true;
@@ -936,7 +934,8 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
 
         VkBufferImageCopy copies[6]{};
         for (uint32_t f = 0; f < 6; ++f) {
-          copies[f].bufferOffset = VkDeviceSize{f} * size * size * 4;
+          copies[f].bufferOffset =
+              VkDeviceSize{f} * size * size * sizeof(glm::vec4);
           copies[f].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, f, 1};
           copies[f].imageExtent = {size, size, 1};
         }
