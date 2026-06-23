@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+#include <glm/mat4x4.hpp>
+
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -16,16 +18,23 @@
 
 namespace volumetric_kit::gfx::pipelines {
 
+class GpuMesh;
+class PbrMaterial;
+class PbrScene;
+struct PbrFrame;
+
 /// @brief The metallic-roughness PBR graphics pipeline: an interleaved
 ///        @ref assets::Vertex mesh, depth-tested, shaded by the library's own
 ///        embedded GLSL (no shader files for the consumer to manage).
 ///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
-/// layout exposes two descriptor sets the consumer fills: **set 0** (scene --
-/// camera + the IBL textures) and **set 1** (material -- a factor UBO + the
-/// five glTF maps). A default-constructed `PbrPipeline` is empty (`valid()` is
-/// false) and safe to move-assign into.
+/// layout exposes two descriptor sets, built by the matching helper types:
+/// **set 0** (the per-frame @ref PbrScene -- camera + IBL) and **set 1** (one
+/// @ref PbrMaterial per material -- a factor UBO + the five glTF maps). Record
+/// a frame's draws with @ref submit. A default-constructed `PbrPipeline` is
+/// empty
+/// (`valid()` is false) and safe to move-assign into.
 ///
 /// @warning The @p device passed to @ref create must outlive the pipeline.
 ///
@@ -33,8 +42,10 @@ namespace volumetric_kit::gfx::pipelines {
 /// Result<pipelines::PbrPipeline> pbr =
 ///     pipelines::PbrPipeline::create(device, target.layout());
 /// if (!pbr) return pbr.status();
-/// // ... allocate set 0/1 from pbr.value().descriptor_set_layout(0/1),
-/// //     bind pbr.value().handle(), then draw each GpuMesh ...
+/// // Build set 0 (PbrScene) + set 1 (PbrMaterial) against its reflected
+/// // layouts, then each frame:
+/// scene.set_camera(eye, prefilter_max_lod);
+/// pbr.value().submit(cmd, frame);  // frame names the scene + the draws
 /// @endcode
 class VG_PIPELINES_API PbrPipeline {
  public:
@@ -87,8 +98,47 @@ class VG_PIPELINES_API PbrPipeline {
     return pipeline_.descriptor_set_layout(set);
   }
 
+  /// @brief Record one frame's draws into @p cmd: bind the pipeline + a
+  ///        full-target viewport, bind the scene set once (set 0), then for
+  ///        each draw push its transform, bind its material set (set 1), and
+  ///        draw the mesh.
+  /// @param cmd    A recording-state command buffer, inside a dynamic-rendering
+  ///               scope whose target matches the layout @ref create was given.
+  /// @param frame  The scene, the draw list, and the view-projection (see
+  ///               @ref PbrFrame).
+  /// @pre `valid()`; `frame.scene` and each `frame.draws[i].mesh` / `.material`
+  ///      are non-null and built against this pipeline's reflected layouts.
+  ///      Draws whose mesh is null or empty are skipped.
+  void submit(VkCommandBuffer cmd, const PbrFrame& frame) const;
+
  private:
   GraphicsPipeline pipeline_;
+};
+
+/// @brief One thing to draw: a @ref GpuMesh under a world transform, shaded by
+/// a
+///        @ref PbrMaterial.
+///
+/// A glTF mesh may be instanced by several nodes, so the transform lives on the
+/// draw, not the mesh. The mesh and material are borrowed (they outlive the
+/// @ref PbrFrame that names them).
+struct PbrDraw {
+  const GpuMesh* mesh = nullptr;  ///< The geometry to draw.
+  glm::mat4 world{1.0f};          ///< World transform for this instance.
+  const PbrMaterial* material = nullptr;  ///< Its set-1 material.
+};
+
+/// @brief Everything @ref PbrPipeline::submit records for one frame: the target
+///        extent, the camera's view-projection, the scene set, and the draws.
+///
+/// The arrays/pointers are borrowed for the duration of the @ref
+/// PbrPipeline::submit call.
+struct PbrFrame {
+  VkExtent2D extent{};        ///< Target size (sets the dynamic viewport).
+  glm::mat4 view_proj{1.0f};  ///< projection * view; per draw `* world`.
+  const PbrScene* scene = nullptr;  ///< Set 0, bound once for the frame.
+  const PbrDraw* draws = nullptr;   ///< The draw list.
+  uint32_t draw_count = 0;          ///< Number of @ref draws.
 };
 
 }  // namespace volumetric_kit::gfx::pipelines
