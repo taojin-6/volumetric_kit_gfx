@@ -70,7 +70,9 @@
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -84,13 +86,6 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 constexpr float kPi = 3.14159265359f;
-
-// Per-draw transform fed to model.vert as a push constant (128 bytes -- the
-// guaranteed minimum maxPushConstantsSize). Layout matches the shader's block.
-struct PushConstants {
-  glm::mat4 mvp;    // projection * view * world
-  glm::mat4 model;  // world (for the world-space normal)
-};
 
 // One thing to draw: a GPU mesh under a world transform (a glTF mesh may be
 // instanced by several nodes, so the transform lives on the draw, not the
@@ -324,41 +319,6 @@ void set_full_viewport(VkCommandBuffer cmd, VkExtent2D extent) {
   vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
-// Bind the pipeline, set a full-target viewport/scissor, and draw every item
-// with its per-draw MVP push constant. Shared by both render paths; the caller
-// owns the surrounding dynamic-rendering scope.
-void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
-                  const pipelines::PbrPipeline& pipeline,
-                  const glm::mat4& view_proj,
-                  const std::vector<DrawItem>& draws,
-                  const std::vector<pipelines::GpuMesh>& meshes,
-                  VkDescriptorSet scene_set,
-                  const std::vector<VkDescriptorSet>& mesh_sets) {
-  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-  // Per-frame scene data (set 0: camera position) binds once for all draws.
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipeline.layout(), 0, 1, &scene_set, 0, nullptr);
-  set_full_viewport(cmd, extent);
-
-  for (const DrawItem& draw : draws) {
-    const pipelines::GpuMesh& gpu = meshes[draw.mesh];
-    if (gpu.index_count() == 0) {
-      continue;  // empty/skipped mesh
-    }
-    PushConstants pc;
-    pc.mvp = view_proj * draw.world;
-    pc.model = draw.world;
-    vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                       sizeof(pc), &pc);
-    // Bind this mesh's material (set 1: factor UBO + the five maps). Empty
-    // meshes were skipped above, so every bound set is fully written.
-    const VkDescriptorSet material_set = mesh_sets[draw.mesh];
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline.layout(), 1, 1, &material_set, 0, nullptr);
-    gpu.record_draw(cmd);
-  }
-}
-
 VkClearColorValue background() {
   VkClearColorValue c{};
   c.float32[0] = 0.02f;
@@ -460,23 +420,6 @@ std::vector<uint8_t> to_rgba8(const assets::Image& img) {
   return out;
 }
 
-// std140 per-material parameters; mirrors the Material UBO in model.frag.
-struct MaterialUbo {
-  glm::vec4 base_color_factor;
-  glm::vec4 emissive_factor;  // .rgb used
-  float metallic_factor;
-  float roughness_factor;
-  float normal_scale;
-  float occlusion_strength;
-};
-static_assert(sizeof(MaterialUbo) == 48,
-              "MaterialUbo must match the std140 Material block");
-
-// std140 per-frame parameters; mirrors the Scene UBO in model.frag.
-struct SceneUbo {
-  glm::vec4 camera_pos;  // .xyz world-space eye, .w = prefilter max LOD
-};
-
 // Precomputed image-based-lighting textures, convolved on the CPU from the
 // analytic sky (see make_ibl) and bound into the model's scene set (set 0): a
 // diffuse irradiance cube, a roughness-prefiltered specular cube (mipped), and
@@ -489,27 +432,24 @@ struct Ibl {
   float prefilter_max_lod = 0.0f;      // prefilter mip count - 1
 };
 
-// All PBR GPU state, outliving the draw loop: a shared sampler; every uploaded
-// map plus 1x1 white / flat-normal fallbacks; per-material factor UBOs and the
-// per-frame scene UBO; and the descriptor sets. set 0 (scene) binds once per
-// frame; set 1 (material) per draw. mesh_sets[i] is the set-1 for
-// model.meshes[i].
+// All PBR GPU state built on the pipelines tier, outliving the draw loop: a
+// shared sampler; every uploaded map plus 1x1 white / flat-normal fallbacks;
+// the per-frame scene (set 0: camera + IBL) and one material (set 1) per glTF
+// material, plus a fallback for material-less meshes. The textures back the
+// materials' descriptors, so they are declared first (destroyed last).
 struct PbrResources {
-  std::optional<vg::Sampler> sampler;     // no public default ctor
-  std::vector<vg::Texture> textures;      // owns every uploaded map + fallbacks
-  std::vector<vg::Buffer> material_ubos;  // owns the per-material factor UBOs
-  vg::Buffer scene_ubo;                   // per-frame; host-mapped
-  vg::DescriptorPool pool;
-  vg::DescriptorSet scene_set;                   // set 0
-  std::vector<vg::DescriptorSet> material_sets;  // set 1, parallel to materials
-  vg::DescriptorSet fallback_material_set;       // set 1, material-less meshes
-  std::vector<VkDescriptorSet> mesh_sets;        // set 1 resolved per mesh
+  std::vector<vg::Texture> textures;   // owns every uploaded map + fallbacks
+  std::optional<vg::Sampler> sampler;  // filters the material maps
+  pipelines::PbrScene scene;           // set 0 (camera + IBL), per frame
+  std::vector<pipelines::PbrMaterial>
+      materials;                             // set 1, parallel to materials
+  pipelines::PbrMaterial fallback_material;  // set 1, material-less meshes
 };
 
 // Upload every material map (each image once, in the color space its slot
-// needs), build a factor UBO + descriptor set per material (plus a default
-// fallback) and the per-frame scene set, and resolve the set each mesh binds.
-// The set 0 / set 1 layouts are reflected from the shaders.
+// needs), then build the pipelines-tier PbrScene (set 0) from the IBL and one
+// PbrMaterial (set 1) per glTF material (plus a fallback for material-less
+// meshes). The set 0 / set 1 layouts are reflected from the pipeline's shaders.
 PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
                        const pipelines::PbrPipeline& pipeline,
                        const assets::Model& model, const Ibl& ibl, bool* ok) {
@@ -586,105 +526,21 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
     }
   }
 
-  // Pool: a material set per material + a fallback, plus the scene set.
-  // Material sets each hold a UBO + 5 samplers; the scene set holds a UBO + the
-  // 3 IBL textures.
-  const uint32_t material_count =
-      static_cast<uint32_t>(model.materials.size()) + 1;
-  const VkDescriptorPoolSize sizes[2] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, material_count + 1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, material_count * 5 + 3}};
-  auto pool =
-      vg::DescriptorPool::create(device.handle(), sizes, 2, material_count + 1);
-  if (!pool.ok()) {
-    std::fprintf(stderr, "descriptor pool: %s\n",
-                 pool.status().message().c_str());
+  // Scene (set 0): the per-frame camera + the IBL maps. The caller refreshes
+  // the camera each frame through r.scene.set_camera().
+  pipelines::PbrSceneDesc scene_desc;
+  scene_desc.irradiance = ibl.irradiance.view();
+  scene_desc.prefilter = ibl.prefilter.view();
+  scene_desc.brdf_lut = ibl.brdf_lut.view();
+  scene_desc.sampler = ibl.sampler->handle();
+  auto scene = pipelines::PbrScene::create(
+      device.handle(), alloc, pipeline.descriptor_set_layout(0), scene_desc);
+  if (!scene.ok()) {
+    std::fprintf(stderr, "scene set: %s\n", scene.status().message().c_str());
     *ok = false;
     return r;
   }
-  r.pool = std::move(pool).value();
-
-  const VkDescriptorSetLayout scene_layout = pipeline.descriptor_set_layout(0);
-  const VkDescriptorSetLayout material_layout =
-      pipeline.descriptor_set_layout(1);
-
-  // Host-mapped uniform buffer of `size` bytes (empty on failure).
-  auto make_ubo = [&](size_t size, bool* ubo_ok) {
-    *ubo_ok = true;  // sink: set here, cleared on failure below
-    vg::BufferDesc bd;
-    bd.size = size;
-    bd.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bd.memory = vg::MemoryUsage::HostVisible;
-    bd.mapped = true;
-    auto buf = alloc.create_buffer(bd);
-    if (!buf.ok()) {
-      std::fprintf(stderr, "uniform buffer: %s\n",
-                   buf.status().message().c_str());
-      *ubo_ok = false;
-      return vg::Buffer{};
-    }
-    return std::move(buf).value();
-  };
-
-  // Scene set (set 0): the per-frame camera UBO, refreshed each frame by the
-  // caller through scene_ubo.mapped().
-  r.scene_ubo = make_ubo(sizeof(SceneUbo), ok);
-  if (!*ok) {
-    return r;
-  }
-  {
-    auto set = r.pool.allocate(scene_layout);
-    if (!set.ok()) {
-      std::fprintf(stderr, "scene set: %s\n", set.status().message().c_str());
-      *ok = false;
-      return r;
-    }
-    r.scene_set = std::move(set).value();
-    r.scene_set.write_uniform_buffer(0, r.scene_ubo.handle(), 0,
-                                     sizeof(SceneUbo));
-    // The IBL textures are per-frame-constant, so they live in the scene set
-    // alongside the camera (bindings 1-3).
-    r.scene_set.write_combined_image_sampler(
-        1, ibl.irradiance.view(), ibl.sampler->handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    r.scene_set.write_combined_image_sampler(
-        2, ibl.prefilter.view(), ibl.sampler->handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    r.scene_set.write_combined_image_sampler(
-        3, ibl.brdf_lut.view(), ibl.sampler->handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  }
-
-  r.material_ubos.reserve(material_count);
-
-  // Build one material set: its factor UBO at binding 0, then the five maps.
-  auto make_material_set = [&](const MaterialUbo& ubo, int base, int mr,
-                               int normal, int occ, int emissive,
-                               bool* set_ok) -> vg::DescriptorSet {
-    vg::Buffer buf = make_ubo(sizeof(MaterialUbo), set_ok);
-    if (!*set_ok) {
-      return {};
-    }
-    std::memcpy(buf.mapped(), &ubo, sizeof(ubo));
-    r.material_ubos.push_back(std::move(buf));
-    auto set = r.pool.allocate(material_layout);
-    if (!set.ok()) {
-      std::fprintf(stderr, "material set: %s\n",
-                   set.status().message().c_str());
-      *set_ok = false;
-      return {};
-    }
-    vg::DescriptorSet ds = std::move(set).value();
-    ds.write_uniform_buffer(0, r.material_ubos.back().handle(), 0,
-                            sizeof(MaterialUbo));
-    const int maps[5] = {base, mr, normal, occ, emissive};
-    for (uint32_t b = 0; b < 5; ++b) {
-      ds.write_combined_image_sampler(b + 1, r.textures[maps[b]].view(),
-                                      r.sampler->handle(),
-                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
-    return ds;
-  };
+  r.scene = std::move(scene).value();
 
   // Texture index for a slot, or the given fallback (kNoTexture is out of range
   // of image_tex, so it resolves to the fallback).
@@ -693,51 +549,83 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
                                                              : fallback;
   };
 
+  const VkDescriptorSetLayout material_layout =
+      pipeline.descriptor_set_layout(1);
+
+  // Build one PbrMaterial (set 1) from a fully-populated desc.
+  auto make_material = [&](const pipelines::PbrMaterialDesc& desc,
+                           bool* mat_ok) -> pipelines::PbrMaterial {
+    auto mat = pipelines::PbrMaterial::create(device.handle(), alloc,
+                                              material_layout, desc);
+    if (!mat.ok()) {
+      std::fprintf(stderr, "material: %s\n", mat.status().message().c_str());
+      *mat_ok = false;
+      return {};
+    }
+    return std::move(mat).value();
+  };
+
   // Fallback material for meshes with no material: a matte white dielectric.
   {
-    MaterialUbo def{};
-    def.base_color_factor = glm::vec4(1.0f);
-    def.emissive_factor = glm::vec4(0.0f);
-    def.metallic_factor = 0.0f;
-    def.roughness_factor = 1.0f;
-    def.normal_scale = 1.0f;
-    def.occlusion_strength = 1.0f;
-    r.fallback_material_set =
-        make_material_set(def, white, white, flat, white, white, ok);
+    pipelines::PbrMaterialDesc d;
+    d.base_color_factor = glm::vec4(1.0f);
+    d.emissive_factor = glm::vec3(0.0f);
+    d.metallic_factor = 0.0f;
+    d.roughness_factor = 1.0f;
+    d.base_color = r.textures[white].view();
+    d.metallic_roughness = r.textures[white].view();
+    d.normal = r.textures[flat].view();
+    d.occlusion = r.textures[white].view();
+    d.emissive = r.textures[white].view();
+    d.sampler = r.sampler->handle();
+    r.fallback_material = make_material(d, ok);
     if (!*ok) {
       return r;
     }
   }
 
-  r.material_sets.reserve(model.materials.size());
+  r.materials.reserve(model.materials.size());
   for (const assets::Material& m : model.materials) {
-    MaterialUbo ubo{};
-    ubo.base_color_factor = m.base_color_factor;
-    ubo.emissive_factor = glm::vec4(m.emissive_factor, 0.0f);
-    ubo.metallic_factor = m.metallic_factor;
-    ubo.roughness_factor = m.roughness_factor;
-    ubo.normal_scale = m.normal_scale;
-    ubo.occlusion_strength = m.occlusion_strength;
-    r.material_sets.push_back(make_material_set(
-        ubo, tex_for(m.base_color_texture, white),
-        tex_for(m.metallic_roughness_texture, white),
-        tex_for(m.normal_texture, flat), tex_for(m.occlusion_texture, white),
-        tex_for(m.emissive_texture, white), ok));
+    pipelines::PbrMaterialDesc d;
+    d.base_color_factor = m.base_color_factor;
+    d.emissive_factor = m.emissive_factor;
+    d.metallic_factor = m.metallic_factor;
+    d.roughness_factor = m.roughness_factor;
+    d.normal_scale = m.normal_scale;
+    d.occlusion_strength = m.occlusion_strength;
+    d.base_color = r.textures[tex_for(m.base_color_texture, white)].view();
+    d.metallic_roughness =
+        r.textures[tex_for(m.metallic_roughness_texture, white)].view();
+    d.normal = r.textures[tex_for(m.normal_texture, flat)].view();
+    d.occlusion = r.textures[tex_for(m.occlusion_texture, white)].view();
+    d.emissive = r.textures[tex_for(m.emissive_texture, white)].view();
+    d.sampler = r.sampler->handle();
+    r.materials.push_back(make_material(d, ok));
     if (!*ok) {
       return r;
     }
   }
 
-  // Resolve the set each mesh binds: its material's set, or the fallback.
-  r.mesh_sets.resize(model.meshes.size());
-  for (size_t i = 0; i < model.meshes.size(); ++i) {
-    const uint32_t mat = model.meshes[i].material;
-    r.mesh_sets[i] =
-        (mat != assets::Mesh::kNoMaterial && mat < r.material_sets.size())
-            ? r.material_sets[mat].handle()
-            : r.fallback_material_set.handle();
-  }
   return r;
+}
+
+// Resolve each collected DrawItem into a PbrDraw: its GPU mesh, world
+// transform, and the material its mesh uses (or the fallback). The returned
+// draws borrow `meshes` and `pbr`, which must outlive them.
+std::vector<pipelines::PbrDraw> build_pbr_draws(
+    const assets::Model& model, const std::vector<pipelines::GpuMesh>& meshes,
+    const PbrResources& pbr, const std::vector<DrawItem>& draws) {
+  std::vector<pipelines::PbrDraw> out;
+  out.reserve(draws.size());
+  for (const DrawItem& d : draws) {
+    const uint32_t mat = model.meshes[d.mesh].material;
+    const pipelines::PbrMaterial* material =
+        (mat != assets::Mesh::kNoMaterial && mat < pbr.materials.size())
+            ? &pbr.materials[mat]
+            : &pbr.fallback_material;
+    out.push_back({&meshes[d.mesh], d.world, material});
+  }
+  return out;
 }
 
 // --- Skybox: a procedural environment cubemap drawn behind the model --------
@@ -1371,9 +1259,10 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
-  // Fixed camera for the still: write the eye into the scene UBO once.
-  *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
-      SceneUbo{glm::vec4(orbit.eye(), ibl.prefilter_max_lod)};
+  // Fixed camera for the still: write the eye into the scene set once.
+  pbr.scene.set_camera(orbit.eye(), ibl.prefilter_max_lod);
+  const std::vector<pipelines::PbrDraw> pbr_draws =
+      build_pbr_draws(model, meshes, pbr, draws);
 
   Skybox skybox = setup_skybox(device.value(), allocator.value(),
                                target.value().layout(), &ok);
@@ -1403,8 +1292,13 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
         const vg::RenderTarget rt = target.value().target();
         rt.begin(cmd, begin);
         record_skybox(cmd, {width, height}, skybox, view_proj, orbit.eye());
-        record_scene(cmd, {width, height}, pipeline.value(), view_proj, draws,
-                     meshes, pbr.scene_set.handle(), pbr.mesh_sets);
+        pipelines::PbrFrame frame;
+        frame.extent = {width, height};
+        frame.view_proj = view_proj;
+        frame.scene = &pbr.scene;
+        frame.draws = pbr_draws.data();
+        frame.draw_count = static_cast<uint32_t>(pbr_draws.size());
+        pipeline.value().submit(cmd, frame);
         rt.end(cmd);
         target.value().record_readback(cmd);
       });
@@ -1532,6 +1426,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   if (!ok) {
     return 1;
   }
+  const std::vector<pipelines::PbrDraw> pbr_draws =
+      build_pbr_draws(model, meshes, pbr, draws);
 
   Skybox skybox =
       setup_skybox(device.value(), allocator.value(), pipeline_layout, &ok);
@@ -1606,15 +1502,19 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
         static_cast<float>(extent.height == 0 ? 1 : extent.height);
     const glm::mat4 view_proj =
         orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
-    // The camera orbits each frame, so refresh the scene UBO before drawing.
+    // The camera orbits each frame, so refresh the scene camera before drawing.
     // Safe with one frame in flight: begin_frame waited the previous frame's
     // fence above, so the GPU has finished reading this single shared UBO.
     // Raising frames_in_flight > 1 would need a per-slot scene UBO.
-    *static_cast<SceneUbo*>(pbr.scene_ubo.mapped()) =
-        SceneUbo{glm::vec4(orbit.eye(), ibl.prefilter_max_lod)};
+    pbr.scene.set_camera(orbit.eye(), ibl.prefilter_max_lod);
     record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
-    record_scene(cmd, extent, pipeline.value(), view_proj, draws, meshes,
-                 pbr.scene_set.handle(), pbr.mesh_sets);
+    pipelines::PbrFrame frame_info;
+    frame_info.extent = extent;
+    frame_info.view_proj = view_proj;
+    frame_info.scene = &pbr.scene;
+    frame_info.draws = pbr_draws.data();
+    frame_info.draw_count = static_cast<uint32_t>(pbr_draws.size());
+    pipeline.value().submit(cmd, frame_info);
 
     rt.end(cmd);
 
