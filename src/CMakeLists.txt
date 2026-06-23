@@ -13,7 +13,8 @@ add_subdirectory(volumetric_kit/gfx/camera)
 add_subdirectory(volumetric_kit/gfx/assets)
 add_subdirectory(volumetric_kit/gfx/io)
 add_subdirectory(volumetric_kit/gfx/ui)
-# TODO: add_subdirectory() for passes / pipelines / app as those tiers land.
+add_subdirectory(volumetric_kit/gfx/pipelines)
+# TODO: add_subdirectory() for passes / app as those tiers land.
 
 # --- gfx: umbrella alias ----------------------------------------------------
 # Consumers link `volumetric_kit::gfx` and get whatever tiers are built. gfx_ui
@@ -22,8 +23,15 @@ add_subdirectory(volumetric_kit/gfx/ui)
 # installed export set (see ui/CMakeLists.txt).
 add_library(gfx INTERFACE)
 add_library(volumetric_kit::gfx ALIAS gfx)
-target_link_libraries(gfx INTERFACE gfx_core gfx_windowing gfx_camera
-                                    gfx_assets gfx_io $<BUILD_INTERFACE:gfx_ui>)
+target_link_libraries(
+  gfx
+  INTERFACE gfx_core
+            gfx_windowing
+            gfx_camera
+            gfx_assets
+            gfx_io
+            gfx_pipelines
+            $<BUILD_INTERFACE:gfx_ui>)
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_gfxTargets (above); here
