@@ -15,8 +15,9 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_pipelines)
 add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
-target_sources(gfx_pipelines PRIVATE gpu_mesh.cpp pbr_material.cpp
-                                     pbr_pipeline.cpp pbr_scene.cpp)
+target_sources(
+  gfx_pipelines PRIVATE gpu_mesh.cpp owned_descriptor_set.cpp pbr_material.cpp
+                        pbr_pipeline.cpp pbr_scene.cpp)
 
 generate_export_header(
   gfx_pipelines

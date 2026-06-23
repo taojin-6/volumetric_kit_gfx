@@ -8,8 +8,6 @@
 
 #include <glm/vec4.hpp>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-
 namespace volumetric_kit::gfx::pipelines {
 
 namespace {
@@ -45,15 +43,12 @@ Result<PbrMaterial> PbrMaterial::create(VkDevice device, Allocator& allocator,
         "non-null");
   }
 
-  // Factor UBO: host-mapped, written once (the factors do not change per
-  // frame).
-  BufferDesc bd;
-  bd.size = sizeof(MaterialUbo);
-  bd.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-  bd.memory = MemoryUsage::HostVisible;
-  bd.mapped = true;
-  VG_ASSIGN(Buffer ubo, allocator.create_buffer(bd));
+  VG_ASSIGN(OwnedDescriptorSet resources,
+            OwnedDescriptorSet::create(device, allocator, material_layout,
+                                       sizeof(MaterialUbo), 5));
 
+  // Factor UBO (binding 0): written once -- the factors do not change per
+  // frame.
   MaterialUbo block{};
   block.base_color_factor = desc.base_color_factor;
   block.emissive_factor = glm::vec4(desc.emissive_factor, 0.0f);
@@ -61,49 +56,19 @@ Result<PbrMaterial> PbrMaterial::create(VkDevice device, Allocator& allocator,
   block.roughness_factor = desc.roughness_factor;
   block.normal_scale = desc.normal_scale;
   block.occlusion_strength = desc.occlusion_strength;
-  std::memcpy(ubo.mapped(), &block, sizeof(block));
+  std::memcpy(resources.mapped(), &block, sizeof(block));
 
-  // One-set pool: this material's factor UBO + its five sampled maps.
-  const VkDescriptorPoolSize sizes[2] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5}};
-  VG_ASSIGN(DescriptorPool pool, DescriptorPool::create(device, sizes, 2, 1));
-  VG_ASSIGN(DescriptorSet set, pool.allocate(material_layout));
-
-  set.write_uniform_buffer(0, ubo.handle(), 0, sizeof(MaterialUbo));
   // The five maps follow the factor UBO at bindings 1-5, matching model.frag.
   const VkImageView maps[5] = {desc.base_color, desc.metallic_roughness,
                                desc.normal, desc.occlusion, desc.emissive};
   for (uint32_t b = 0; b < 5; ++b) {
-    set.write_combined_image_sampler(b + 1, maps[b], desc.sampler,
-                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    resources.set().write_combined_image_sampler(
+        b + 1, maps[b], desc.sampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
   PbrMaterial material;
-  material.pool_ = std::move(pool);
-  material.set_ = set;
-  material.ubo_ = std::move(ubo);
+  material.resources_ = std::move(resources);
   return material;
-}
-
-// The pool + UBO move themselves; null the set value too (it is a borrowed
-// handle, freed with the pool) so a moved-from material is fully empty and its
-// accessors stay consistent with valid().
-PbrMaterial::PbrMaterial(PbrMaterial&& other) noexcept
-    : pool_(std::move(other.pool_)),
-      set_(other.set_),
-      ubo_(std::move(other.ubo_)) {
-  other.set_ = DescriptorSet{};
-}
-
-PbrMaterial& PbrMaterial::operator=(PbrMaterial&& other) noexcept {
-  if (this != &other) {
-    pool_ = std::move(other.pool_);
-    set_ = other.set_;
-    ubo_ = std::move(other.ubo_);
-    other.set_ = DescriptorSet{};
-  }
-  return *this;
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

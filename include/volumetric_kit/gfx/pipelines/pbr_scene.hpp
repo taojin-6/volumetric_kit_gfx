@@ -9,11 +9,10 @@
 
 #include <glm/vec3.hpp>
 
-#include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
 namespace volumetric_kit::gfx {
 class Allocator;
@@ -81,8 +80,8 @@ class VG_PIPELINES_API PbrScene {
                                  const PbrSceneDesc& desc);
 
   ~PbrScene() = default;
-  PbrScene(PbrScene&& other) noexcept;
-  PbrScene& operator=(PbrScene&& other) noexcept;
+  PbrScene(PbrScene&&) noexcept = default;
+  PbrScene& operator=(PbrScene&&) noexcept = default;
   PbrScene(const PbrScene&) = delete;
   PbrScene& operator=(const PbrScene&) = delete;
 
@@ -95,15 +94,15 @@ class VG_PIPELINES_API PbrScene {
   void set_camera(const glm::vec3& eye, float prefilter_max_lod) noexcept;
 
   /// @return The set-0 `VkDescriptorSet` to bind (`VK_NULL_HANDLE` when empty).
-  VkDescriptorSet descriptor_set() const noexcept { return set_.handle(); }
+  VkDescriptorSet descriptor_set() const noexcept {
+    return resources_.descriptor_set();
+  }
 
   /// @return `true` if this owns a built scene set.
-  bool valid() const noexcept { return pool_.valid(); }
+  bool valid() const noexcept { return resources_.valid(); }
 
  private:
-  DescriptorPool pool_;  // one-set pool that owns set_'s lifetime
-  DescriptorSet set_;    // set 0: camera UBO + the three IBL maps
-  Buffer ubo_;           // host-mapped camera UBO the set points at
+  OwnedDescriptorSet resources_;  // set 0: pool + set + camera UBO
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

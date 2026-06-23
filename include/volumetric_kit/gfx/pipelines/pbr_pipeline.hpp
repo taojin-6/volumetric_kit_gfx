@@ -108,7 +108,7 @@ class VG_PIPELINES_API PbrPipeline {
   ///               @ref PbrFrame).
   /// @pre `valid()`; `frame.scene` and each `frame.draws[i].mesh` / `.material`
   ///      are non-null and built against this pipeline's reflected layouts.
-  ///      Draws whose mesh is null or empty are skipped.
+  ///      Draws whose mesh is null/empty or whose material is null are skipped.
   void submit(VkCommandBuffer cmd, const PbrFrame& frame) const;
 
  private:

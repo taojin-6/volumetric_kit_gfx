@@ -91,10 +91,17 @@ void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
                             pipeline_.layout(), 0, 1, &scene, 0, nullptr);
   }
 
+  // Set 1 is rebound only when the material changes from the previous draw, so
+  // a run of same-material meshes binds it once.
+  VkDescriptorSet bound_material = VK_NULL_HANDLE;
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
     const PbrDraw& draw = frame.draws[i];
-    if (draw.mesh == nullptr || !draw.mesh->valid()) {
-      continue;  // null / empty mesh
+    // Skip draws with no geometry or no material: set 1 must be bound for the
+    // mesh to shade, so a material-less draw is dropped rather than drawn
+    // against a stale binding.
+    if (draw.mesh == nullptr || !draw.mesh->valid() ||
+        draw.material == nullptr) {
+      continue;
     }
     PushConstants pc;
     pc.mvp = frame.view_proj * draw.world;
@@ -102,10 +109,11 @@ void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
     vkCmdPushConstants(cmd, pipeline_.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                        sizeof(pc), &pc);
     // Set 1 (this draw's material: factor UBO + the five maps).
-    if (draw.material != nullptr) {
-      const VkDescriptorSet material = draw.material->descriptor_set();
+    const VkDescriptorSet material = draw.material->descriptor_set();
+    if (material != bound_material) {
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline_.layout(), 1, 1, &material, 0, nullptr);
+      bound_material = material;
     }
     draw.mesh->record_draw(cmd);
   }

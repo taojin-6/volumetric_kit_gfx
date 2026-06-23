@@ -10,11 +10,10 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
 namespace volumetric_kit::gfx {
 class Allocator;
@@ -93,21 +92,21 @@ class VG_PIPELINES_API PbrMaterial {
                                     const PbrMaterialDesc& desc);
 
   ~PbrMaterial() = default;
-  PbrMaterial(PbrMaterial&& other) noexcept;
-  PbrMaterial& operator=(PbrMaterial&& other) noexcept;
+  PbrMaterial(PbrMaterial&&) noexcept = default;
+  PbrMaterial& operator=(PbrMaterial&&) noexcept = default;
   PbrMaterial(const PbrMaterial&) = delete;
   PbrMaterial& operator=(const PbrMaterial&) = delete;
 
   /// @return The set-1 `VkDescriptorSet` to bind (`VK_NULL_HANDLE` when empty).
-  VkDescriptorSet descriptor_set() const noexcept { return set_.handle(); }
+  VkDescriptorSet descriptor_set() const noexcept {
+    return resources_.descriptor_set();
+  }
 
   /// @return `true` if this owns a built material set.
-  bool valid() const noexcept { return pool_.valid(); }
+  bool valid() const noexcept { return resources_.valid(); }
 
  private:
-  DescriptorPool pool_;  // one-set pool that owns set_'s lifetime
-  DescriptorSet set_;    // set 1: factor UBO + the five maps
-  Buffer ubo_;           // host-mapped factor UBO the set points at
+  OwnedDescriptorSet resources_;  // set 1: pool + set + factor UBO
 };
 
 }  // namespace volumetric_kit::gfx::pipelines
