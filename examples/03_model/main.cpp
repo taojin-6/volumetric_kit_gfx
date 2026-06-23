@@ -69,12 +69,14 @@
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
+#include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace win = volumetric_kit::gfx::windowing;
 namespace assets = volumetric_kit::gfx::assets;
 namespace camera = volumetric_kit::gfx::camera;
+namespace pipelines = volumetric_kit::gfx::pipelines;
 
 namespace {
 
@@ -87,13 +89,6 @@ constexpr float kPi = 3.14159265359f;
 struct PushConstants {
   glm::mat4 mvp;    // projection * view * world
   glm::mat4 model;  // world (for the world-space normal)
-};
-
-// One mesh uploaded to the GPU. index_count == 0 marks a skipped (empty) mesh.
-struct GpuMesh {
-  vg::Buffer vertices;
-  vg::Buffer indices;
-  uint32_t index_count = 0;
 };
 
 // One thing to draw: a GPU mesh under a world transform (a glTF mesh may be
@@ -270,48 +265,25 @@ std::pair<float, float> frame_camera(camera::OrbitCamera& orbit,
   return {z_near, z_far};
 }
 
-vg::Buffer upload_buffer(vg::Allocator& allocator, const void* data,
-                         size_t size, VkBufferUsageFlags usage, bool* ok) {
-  vg::BufferDesc desc;
-  desc.size = size;
-  desc.usage = usage;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
-  desc.host_access = vg::HostAccess::SequentialWrite;
-  auto buffer = allocator.create_buffer(desc);
-  if (!buffer.ok()) {
-    std::fprintf(stderr, "upload: %s\n", buffer.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-  std::memcpy(buffer.value().mapped(), data, size);
-  return std::move(buffer).value();
-}
-
-// Upload every non-empty mesh; the returned vector is parallel to model.meshes
-// so a DrawItem's mesh index addresses it directly (empty meshes stay
-// index_count == 0 and are skipped at draw time).
-std::vector<GpuMesh> upload_meshes(vg::Allocator& allocator,
-                                   const assets::Model& model, bool* ok) {
-  std::vector<GpuMesh> gpu(model.meshes.size());
+// Upload every non-empty mesh through the pipelines tier; the returned vector
+// is parallel to model.meshes so a DrawItem's mesh index addresses it directly
+// (empty primitives stay a default, skipped GpuMesh).
+std::vector<pipelines::GpuMesh> upload_meshes(vg::Allocator& allocator,
+                                              const assets::Model& model,
+                                              bool* ok) {
+  std::vector<pipelines::GpuMesh> gpu(model.meshes.size());
   for (size_t i = 0; i < model.meshes.size() && *ok; ++i) {
     const assets::Mesh& mesh = model.meshes[i];
     if (mesh.vertices.empty() || mesh.indices.empty()) {
       continue;
     }
-    gpu[i].vertices =
-        upload_buffer(allocator, mesh.vertices.data(),
-                      mesh.vertices.size() * sizeof(assets::Vertex),
-                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, ok);
-    gpu[i].indices = upload_buffer(allocator, mesh.indices.data(),
-                                   mesh.indices.size() * sizeof(uint32_t),
-                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ok);
-    // Only mark the mesh drawable once both buffers uploaded: a failed upload
-    // leaves index_count 0 (skipped), keeping "index_count > 0 => valid
-    // buffers".
-    if (*ok) {
-      gpu[i].index_count = static_cast<uint32_t>(mesh.indices.size());
+    auto uploaded = pipelines::upload_mesh(allocator, mesh);
+    if (!uploaded.ok()) {
+      std::fprintf(stderr, "upload: %s\n", uploaded.status().message().c_str());
+      *ok = false;
+      return gpu;
     }
+    gpu[i] = std::move(uploaded).value();
   }
   return gpu;
 }
@@ -413,7 +385,8 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
                   const vg::GraphicsPipeline& pipeline,
                   const glm::mat4& view_proj,
                   const std::vector<DrawItem>& draws,
-                  const std::vector<GpuMesh>& meshes, VkDescriptorSet scene_set,
+                  const std::vector<pipelines::GpuMesh>& meshes,
+                  VkDescriptorSet scene_set,
                   const std::vector<VkDescriptorSet>& mesh_sets) {
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
   // Per-frame scene data (set 0: camera position) binds once for all draws.
@@ -422,8 +395,8 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
   set_full_viewport(cmd, extent);
 
   for (const DrawItem& draw : draws) {
-    const GpuMesh& gpu = meshes[draw.mesh];
-    if (gpu.index_count == 0) {
+    const pipelines::GpuMesh& gpu = meshes[draw.mesh];
+    if (gpu.index_count() == 0) {
       continue;  // empty/skipped mesh
     }
     PushConstants pc;
@@ -436,11 +409,7 @@ void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
     const VkDescriptorSet material_set = mesh_sets[draw.mesh];
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipeline.layout(), 1, 1, &material_set, 0, nullptr);
-    const VkDeviceSize offset = 0;
-    const VkBuffer vbuf = gpu.vertices.handle();
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &offset);
-    vkCmdBindIndexBuffer(cmd, gpu.indices.handle(), 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, gpu.index_count, 1, 0, 0, 0);
+    gpu.record_draw(cmd);
   }
 }
 
@@ -1417,7 +1386,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
   const std::vector<DrawItem> draws = collect_draws(model);
-  const std::vector<GpuMesh> meshes =
+  const std::vector<pipelines::GpuMesh> meshes =
       upload_meshes(allocator.value(), model, &ok);
   if (!ok) {
     return 1;
@@ -1573,7 +1542,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
   const std::vector<DrawItem> draws = collect_draws(model);
-  const std::vector<GpuMesh> meshes =
+  const std::vector<pipelines::GpuMesh> meshes =
       upload_meshes(allocator.value(), model, &ok);
   if (!ok) {
     return 1;

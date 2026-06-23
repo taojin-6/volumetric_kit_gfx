@@ -57,8 +57,10 @@ set_source_files_properties(
 # windowing; the Vulkan loader directly because it records vkCmd* itself.
 add_executable(example_03_model 03_model/main.cpp)
 target_link_libraries(
-  example_03_model PRIVATE volumetric_kit::gfx_windowing volumetric_kit::gfx_io
-                           volumetric_kit::gfx_camera glfw Vulkan::Vulkan)
+  example_03_model
+  PRIVATE volumetric_kit::gfx_windowing volumetric_kit::gfx_io
+          volumetric_kit::gfx_camera volumetric_kit::gfx_pipelines glfw
+          Vulkan::Vulkan)
 vg_target_warnings(example_03_model)
 
 vg_compile_shaders(

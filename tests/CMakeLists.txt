@@ -70,6 +70,14 @@ target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
 vg_target_warnings(vg_camera_test)
 gtest_discover_tests(vg_camera_test)
 
+# pipelines tier: GPU mesh upload, driven through the shared device fixture
+# (skips when no device). Links gfx_pipelines, which brings core + assets.
+add_executable(vg_pipelines_test gpu_mesh_test.cpp)
+target_link_libraries(vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
+                                                GTest::gtest_main)
+vg_target_warnings(vg_pipelines_test)
+gtest_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
+
 # assets tier: the format-neutral model is header-only, so its test (PointCloud)
 # links gfx_assets alone -- no loader, no parser, no fixture -- which proves the
 # model stands on its own.
