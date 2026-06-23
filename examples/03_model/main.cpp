@@ -70,6 +70,7 @@
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -288,50 +289,6 @@ std::vector<pipelines::GpuMesh> upload_meshes(vg::Allocator& allocator,
   return gpu;
 }
 
-VkVertexInputBindingDescription mesh_binding() {
-  VkVertexInputBindingDescription binding{};
-  binding.binding = 0;
-  binding.stride = sizeof(assets::Vertex);
-  binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-  return binding;
-}
-
-// model.vert reads position (location 0), normal (1), the primary UV (2), and
-// the tangent (3) out of the interleaved assets::Vertex; vertex color is
-// unused.
-void mesh_attributes(VkVertexInputAttributeDescription attrs[4]) {
-  attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,
-              offsetof(assets::Vertex, position)};
-  attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT,
-              offsetof(assets::Vertex, normal)};
-  attrs[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(assets::Vertex, uv0)};
-  attrs[3] = {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT,
-              offsetof(assets::Vertex, tangent)};
-}
-
-vg::Result<vg::GraphicsPipeline> build_pipeline(
-    VkDevice device, const vg::ShaderModule& vert, const vg::ShaderModule& frag,
-    const vg::RenderTargetLayout& layout,
-    const VkVertexInputBindingDescription* binding,
-    const VkVertexInputAttributeDescription* attrs) {
-  vg::GraphicsPipelineDesc desc;
-  desc.vertex_shader = &vert;
-  desc.fragment_shader = &frag;
-  desc.layout = layout;
-  desc.vertex_bindings = binding;
-  desc.vertex_binding_count = 1;
-  desc.vertex_attributes = attrs;
-  desc.vertex_attribute_count = 4;
-  desc.depth_test = true;
-  desc.depth_write = true;
-  return vg::GraphicsPipeline::create(device, desc);
-}
-
-struct Shaders {
-  vg::ShaderModule vert;
-  vg::ShaderModule frag;
-};
-
 // Load + create one shader module from VG_EXAMPLE_SHADER_DIR by .spv name; null
 // *ok on failure.
 vg::ShaderModule load_shader(VkDevice device, const char* spv_name, bool* ok) {
@@ -353,17 +310,6 @@ vg::ShaderModule load_shader(VkDevice device, const char* spv_name, bool* ok) {
   return std::move(module).value();
 }
 
-// Load + create both model shader modules from VG_EXAMPLE_SHADER_DIR; null *ok
-// on failure. Shared by both render paths.
-Shaders load_shaders(VkDevice device, bool* ok) {
-  vg::ShaderModule vert = load_shader(device, "model.vert.spv", ok);
-  vg::ShaderModule frag = load_shader(device, "model.frag.spv", ok);
-  if (!*ok) {
-    return {};
-  }
-  return {std::move(vert), std::move(frag)};
-}
-
 // Set a viewport + scissor covering the whole target (both are dynamic state).
 // Shared by the skybox and model passes.
 void set_full_viewport(VkCommandBuffer cmd, VkExtent2D extent) {
@@ -382,7 +328,7 @@ void set_full_viewport(VkCommandBuffer cmd, VkExtent2D extent) {
 // with its per-draw MVP push constant. Shared by both render paths; the caller
 // owns the surrounding dynamic-rendering scope.
 void record_scene(VkCommandBuffer cmd, VkExtent2D extent,
-                  const vg::GraphicsPipeline& pipeline,
+                  const pipelines::PbrPipeline& pipeline,
                   const glm::mat4& view_proj,
                   const std::vector<DrawItem>& draws,
                   const std::vector<pipelines::GpuMesh>& meshes,
@@ -565,7 +511,7 @@ struct PbrResources {
 // fallback) and the per-frame scene set, and resolve the set each mesh binds.
 // The set 0 / set 1 layouts are reflected from the shaders.
 PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
-                       const vg::GraphicsPipeline& pipeline,
+                       const pipelines::PbrPipeline& pipeline,
                        const assets::Model& model, const Ibl& ibl, bool* ok) {
   PbrResources r;
   *ok = true;  // output flag; cleared on the first failure below
@@ -1397,11 +1343,6 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
       frame_camera(orbit, compute_bounds(model, draws));
   orbit.set_azimuth(0.7f);  // a fixed three-quarter view for the still
 
-  Shaders shaders = load_shaders(device.value().handle(), &ok);
-  if (!ok) {
-    return 1;
-  }
-
   // sRGB color so the encoded readback matches the windowed (sRGB) look.
   vg::OffscreenTargetDesc target_desc;
   target_desc.extent = {width, height};
@@ -1413,12 +1354,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
-  const VkVertexInputBindingDescription binding = mesh_binding();
-  VkVertexInputAttributeDescription attrs[4];
-  mesh_attributes(attrs);
-  auto pipeline =
-      build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
-                     target.value().layout(), &binding, attrs);
+  auto pipeline = pipelines::PbrPipeline::create(device.value().handle(),
+                                                 target.value().layout());
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
     return 1;
@@ -1552,11 +1489,6 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   const std::pair<float, float> clip =
       frame_camera(orbit, compute_bounds(model, draws));
 
-  Shaders shaders = load_shaders(device.value().handle(), &ok);
-  if (!ok) {
-    return 1;
-  }
-
   win::SwapchainConfig swapchain_config;
   swapchain_config.extent = framebuffer_extent(window);
   auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
@@ -1579,12 +1511,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   pipeline_layout.color_formats[0] = swapchain.value().format();
   pipeline_layout.color_count = 1;
   pipeline_layout.depth_format = kDepthFormat;
-  const VkVertexInputBindingDescription binding = mesh_binding();
-  VkVertexInputAttributeDescription attrs[4];
-  mesh_attributes(attrs);
   auto pipeline =
-      build_pipeline(device.value().handle(), shaders.vert, shaders.frag,
-                     pipeline_layout, &binding, attrs);
+      pipelines::PbrPipeline::create(device.value().handle(), pipeline_layout);
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
     return 1;

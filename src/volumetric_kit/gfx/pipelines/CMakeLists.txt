@@ -15,7 +15,7 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_pipelines)
 add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
-target_sources(gfx_pipelines PRIVATE gpu_mesh.cpp)
+target_sources(gfx_pipelines PRIVATE gpu_mesh.cpp pbr_pipeline.cpp)
 
 generate_export_header(
   gfx_pipelines
@@ -52,6 +52,37 @@ target_link_libraries(
   gfx_pipelines
   PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_assets
   PRIVATE Vulkan::Vulkan)
+
+# --- Embedded PBR shaders ---------------------------------------------------
+# PbrPipeline ships its own technique: compile the GLSL to SPIR-V, then embed it
+# as constexpr byte arrays compiled into the library, so a consumer needs no
+# shader files. The generated headers sit on a PRIVATE include path -- internal,
+# not installed.
+set(_vg_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/spv")
+set(_vg_embed_inc "${CMAKE_CURRENT_BINARY_DIR}/embedded")
+vg_compile_shaders(
+  gfx_pipelines OUTPUT_DIR "${_vg_spv_dir}" SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/model.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/model.frag")
+foreach(_stage IN ITEMS vert frag)
+  add_custom_command(
+    OUTPUT "${_vg_embed_inc}/model_${_stage}.spv.hpp"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_vg_embed_inc}"
+    COMMAND
+      ${CMAKE_COMMAND} "-DSPV=${_vg_spv_dir}/model.${_stage}.spv"
+      "-DSYMBOL=vg_model_${_stage}_spv"
+      "-DOUT=${_vg_embed_inc}/model_${_stage}.spv.hpp" -P
+      "${PROJECT_SOURCE_DIR}/cmake/embed_spirv.cmake"
+    DEPENDS "${_vg_spv_dir}/model.${_stage}.spv"
+            "${PROJECT_SOURCE_DIR}/cmake/embed_spirv.cmake"
+    COMMENT "Embedding model.${_stage}.spv"
+    VERBATIM)
+endforeach()
+add_custom_target(
+  gfx_pipelines_embedded_shaders DEPENDS "${_vg_embed_inc}/model_vert.spv.hpp"
+                                         "${_vg_embed_inc}/model_frag.spv.hpp")
+add_dependencies(gfx_pipelines gfx_pipelines_embedded_shaders)
+target_include_directories(gfx_pipelines PRIVATE "${_vg_embed_inc}")
 
 vg_target_warnings(gfx_pipelines)
 
