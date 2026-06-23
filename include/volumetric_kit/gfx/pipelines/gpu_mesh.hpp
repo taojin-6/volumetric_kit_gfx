@@ -64,8 +64,7 @@ class VG_PIPELINES_API GpuMesh {
 
   /// @brief Bind the vertex buffer (binding 0) + index buffer and record an
   ///        indexed draw.
-  /// @param cmd  A command buffer in the recording state, inside a render
-  /// scope.
+  /// @param cmd  A recording-state command buffer, inside a render scope.
   /// @pre `valid()`; the caller has already bound a compatible pipeline (its
   ///      vertex input must match the mesh's @ref assets::Vertex layout) plus
   ///      any descriptor sets / push constants the draw needs.

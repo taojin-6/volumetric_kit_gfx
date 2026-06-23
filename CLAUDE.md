@@ -20,8 +20,10 @@ GLSL → SPIR-V shader set.
 
 `core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`,
 `ui`). Simple consumers link `…_app`; advanced consumers compose their own passes on `…_core`.
-The dependency rule is strict: a tier may only depend on tiers to its left. `assets` is
-the format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
+The dependency rule is strict: a tier may only depend on tiers to its left — with `core`
+and `assets` as foundational roots (no tier dependencies of their own) that any tier may
+build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets`). `assets` is the
+format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
 produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`. `ui` is a Dear
 ImGui debug overlay (depends only on `core`): it wraps ImGui's *renderer* backend
 (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic rendering; like
