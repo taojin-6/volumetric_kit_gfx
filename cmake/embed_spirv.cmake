@@ -20,6 +20,13 @@ endif()
 file(READ "${SPV}" _hex HEX)
 string(LENGTH "${_hex}" _hexlen)
 math(EXPR _bytes "${_hexlen} / 2")
+# An empty input would emit `unsigned char <SYMBOL>[] = {}` -- a zero-size array
+# that is ill-formed under -Wpedantic -Werror. Fail loudly at codegen, naming
+# the offending file, instead of cryptically at compile.
+if(_bytes EQUAL 0)
+  message(
+    FATAL_ERROR "embed_spirv.cmake: '${SPV}' is empty -- nothing to embed")
+endif()
 # "07230203…" -> "0x07,0x23,0x02,0x03,…" (trailing comma is a valid
 # initializer).
 string(REGEX REPLACE "(..)" "0x\\1," _arr "${_hex}")

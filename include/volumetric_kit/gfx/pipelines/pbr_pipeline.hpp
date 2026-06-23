@@ -45,6 +45,10 @@ class VG_PIPELINES_API PbrPipeline {
   /// @param device  The logical device that owns the pipeline.
   /// @param layout  The target's format/sample signature; must carry a depth
   ///                format (the pipeline is depth-tested).
+  /// @pre @p device is non-`VK_NULL_HANDLE`; @p layout carries a depth format
+  ///      and at least one color attachment with a defined format. These are
+  ///      validated before Vulkan is touched and otherwise yield a non-OK
+  ///      @ref Status with domain @ref Status::Code::InvalidArgument.
   /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
   ///         Status::Code::InvalidArgument when @p layout has no depth format,
   ///         or a Vulkan-domain Status from shader-module / pipeline creation).
@@ -65,6 +69,12 @@ class VG_PIPELINES_API PbrPipeline {
 
   /// @return `true` if this owns a pipeline.
   bool valid() const noexcept { return pipeline_.valid(); }
+
+  /// @return The number of descriptor sets the embedded shaders declare
+  ///         (reflected -- set 0 scene + set 1 material, so 2).
+  uint32_t descriptor_set_count() const noexcept {
+    return pipeline_.descriptor_set_count();
+  }
 
   /// @brief The reflected layout for descriptor @p set (0 = scene, 1 =
   /// material)

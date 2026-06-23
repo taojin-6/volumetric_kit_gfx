@@ -55,3 +55,35 @@ TEST_F(PbrPipelineTest, MoveLeavesSourceEmpty) {
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
 }
+
+TEST_F(PbrPipelineTest, MoveAssignOverLiveObjectAdoptsSource) {
+  auto first = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  auto second = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(second.ok()) << second.status().message();
+
+  pipelines::PbrPipeline dst = std::move(first).value();
+  pipelines::PbrPipeline src = std::move(second).value();
+  const VkPipeline adopted = src.handle();
+
+  // Move-assign over a live dst: frees dst's pipeline, then adopts src's
+  // (the destroy()-then-adopt path where double-free / leak bugs live).
+  dst = std::move(src);
+  EXPECT_TRUE(dst.valid());
+  EXPECT_EQ(dst.handle(), adopted);
+  EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(PbrPipelineTest, SelfMoveAssignStaysValid) {
+  auto created = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  pipelines::PbrPipeline pbr = std::move(created).value();
+  const VkPipeline before = pbr.handle();
+
+  // Launder through a pointer so -Wself-move doesn't fire under -Werror; the
+  // guarded move-assign must leave the owned pipeline intact, not free it.
+  pipelines::PbrPipeline* p = &pbr;
+  pbr = std::move(*p);
+  EXPECT_TRUE(pbr.valid());
+  EXPECT_EQ(pbr.handle(), before);
+}

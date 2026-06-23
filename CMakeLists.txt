@@ -55,6 +55,7 @@ set(VG_SANITIZE
 include(vg_warnings)
 include(vg_sanitizers)
 include(vg_shaders)
+include(vg_embed)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets are visible to every
