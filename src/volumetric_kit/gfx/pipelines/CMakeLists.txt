@@ -15,7 +15,7 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_pipelines)
 add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
-target_sources(gfx_pipelines PRIVATE gpu_mesh.cpp)
+target_sources(gfx_pipelines PRIVATE gpu_mesh.cpp pbr_pipeline.cpp)
 
 generate_export_header(
   gfx_pipelines
@@ -52,6 +52,16 @@ target_link_libraries(
   gfx_pipelines
   PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_assets
   PRIVATE Vulkan::Vulkan)
+
+# --- Embedded PBR shaders ---------------------------------------------------
+# PbrPipeline ships its own technique: compile shaders/model.{vert,frag} to
+# SPIR-V and embed each as a constexpr byte array compiled into the library
+# (pbr_pipeline.cpp #includes model_{vert,frag}.spv.hpp), so a consumer needs no
+# shader files. vg_embed_shaders puts the generated headers on a PRIVATE include
+# path -- internal, not installed.
+vg_embed_shaders(
+  gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/model.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/model.frag")
 
 vg_target_warnings(gfx_pipelines)
 

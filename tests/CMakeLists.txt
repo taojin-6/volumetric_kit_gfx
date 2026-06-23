@@ -72,7 +72,7 @@ gtest_discover_tests(vg_camera_test)
 
 # pipelines tier: GPU mesh upload, driven through the shared device fixture
 # (skips when no device). Links gfx_pipelines, which brings core + assets.
-add_executable(vg_pipelines_test gpu_mesh_test.cpp)
+add_executable(vg_pipelines_test gpu_mesh_test.cpp pbr_pipeline_test.cpp)
 target_link_libraries(vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                                                 GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)

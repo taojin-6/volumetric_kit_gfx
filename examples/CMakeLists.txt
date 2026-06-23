@@ -63,13 +63,10 @@ target_link_libraries(
           Vulkan::Vulkan)
 vg_target_warnings(example_03_model)
 
+# The model technique now ships embedded in gfx_pipelines (PbrPipeline); the
+# example only compiles the skybox shaders it still loads from disk.
 vg_compile_shaders(
-  example_03_model
-  OUTPUT_DIR
-  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
-  SHADERS
-  "${PROJECT_SOURCE_DIR}/shaders/model.vert"
-  "${PROJECT_SOURCE_DIR}/shaders/model.frag"
+  example_03_model OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/skybox.vert"
   "${PROJECT_SOURCE_DIR}/shaders/skybox.frag")
 target_compile_definitions(
