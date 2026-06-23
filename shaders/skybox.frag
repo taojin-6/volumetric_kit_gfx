@@ -23,6 +23,7 @@ layout(set = 0, binding = 0) uniform samplerCube sky;
 layout(location = 0) out vec4 out_color;
 
 // Narkowicz ACES filmic tone-mapping approximation (operates on linear HDR).
+// Duplicated in model.frag (no shader #include path) -- keep in sync.
 vec3 tonemap_aces(vec3 x) {
   const float a = 2.51;
   const float b = 0.03;

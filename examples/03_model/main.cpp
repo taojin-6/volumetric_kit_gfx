@@ -869,21 +869,25 @@ glm::vec3 cube_dir(int f, float u, float v) {
 // color in a float cube (the skybox shader tone-maps it on output).
 vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
                           uint32_t size, bool* ok) {
-  std::vector<glm::vec4> pixels(static_cast<size_t>(size) * size * 6);
+  // RGBA16F (half) staging: 16-bit float filters on the broad device set (incl.
+  // MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
+  // lack. Unclamped HDR (the skybox tone-maps on output); 2 uint32/texel.
+  std::vector<uint32_t> pixels;
+  pixels.reserve(static_cast<size_t>(size) * size * 6 * 2);
   for (int f = 0; f < 6; ++f) {
     for (uint32_t y = 0; y < size; ++y) {
       for (uint32_t x = 0; x < size; ++x) {
         const float u = (static_cast<float>(x) + 0.5f) / size * 2.0f - 1.0f;
         const float v = (static_cast<float>(y) + 0.5f) / size * 2.0f - 1.0f;
-        // Unclamped HDR; the skybox shader tone-maps on output.
-        pixels[(static_cast<size_t>(f) * size + y) * size + x] =
-            glm::vec4(sky_color(cube_dir(f, u, v)), 1.0f);
+        const glm::vec3 c = sky_color(cube_dir(f, u, v));
+        pixels.push_back(glm::packHalf2x16(glm::vec2(c.x, c.y)));
+        pixels.push_back(glm::packHalf2x16(glm::vec2(c.z, 1.0f)));
       }
     }
   }
 
   vg::BufferDesc sd;
-  sd.size = pixels.size() * sizeof(glm::vec4);
+  sd.size = pixels.size() * sizeof(uint32_t);
   sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
   sd.memory = vg::MemoryUsage::HostVisible;
   sd.mapped = true;
@@ -896,11 +900,11 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
     return {};
   }
   std::memcpy(staging.value().mapped(), pixels.data(),
-              pixels.size() * sizeof(glm::vec4));
+              pixels.size() * sizeof(uint32_t));
 
   vg::TextureDesc td;
   td.extent = {size, size};
-  td.format = VK_FORMAT_R32G32B32A32_SFLOAT;  // linear HDR environment color
+  td.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // linear HDR, broadly filterable
   td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   td.array_layers = 6;
   td.cube = true;
@@ -935,7 +939,7 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
         VkBufferImageCopy copies[6]{};
         for (uint32_t f = 0; f < 6; ++f) {
           copies[f].bufferOffset =
-              VkDeviceSize{f} * size * size * sizeof(glm::vec4);
+              VkDeviceSize{f} * size * size * 2 * sizeof(uint32_t);
           copies[f].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, f, 1};
           copies[f].imageExtent = {size, size, 1};
         }
@@ -1113,7 +1117,8 @@ glm::vec4 irradiance_at(const glm::vec3& n) {
   up = glm::cross(n, right);
   glm::vec3 sum(0.0f);
   int samples = 0;
-  // ~0.1 rad hemisphere step (~63 x 16 taps); fine for the smooth analytic sky.
+  // ~0.1 rad hemisphere step (~63 x 16 taps); coarse vs the tight HDR sun (mild
+  // diffuse banding), but adequate for the low-frequency diffuse fill.
   for (float phi = 0.0f; phi < 2.0f * kPi; phi += 0.1f) {
     for (float theta = 0.0f; theta < 0.5f * kPi; theta += 0.1f) {
       const float st = std::sin(theta);
@@ -1322,7 +1327,8 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   }
 
   // Prefiltered specular: a 64x64 base over kPrefilterMips mips maps mip ->
-  // roughness 0..1; 64 GGX samples/texel suffice for the smooth analytic sky.
+  // roughness 0..1; 64 GGX samples/texel (the tight HDR sun can alias on low
+  // mips -- accepted for the example).
   constexpr uint32_t kPrefilterMips = 5;
   ibl.prefilter = upload_cube(
       device, alloc, 64, kPrefilterMips, VK_FORMAT_R16G16B16A16_SFLOAT,
