@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stop, deregister, and delete ALL self-hosted runners on THIS machine.
+# Stop, deregister, and delete this machine's self-hosted runners for THIS repo
+# (REPO below), leaving any runners it hosts for OTHER repos untouched.
 # Use when decommissioning or migrating a runner host (e.g. switching Macs, or
 # rebuilding the Linux box). Works on macOS and Linux. Run as the user that owns
 # ~/actions-runner-*.  Best-effort: keeps going if a single step fails.
@@ -18,6 +19,14 @@ fi
 
 for dir in "${dirs[@]}"; do
   [ -f "${dir}config.sh" ] || continue
+  # Only touch runners registered to THIS repo. One machine can host runners for
+  # several repos — each dir's .runner records its gitHubUrl — so without this
+  # guard the actions-runner-* glob would stop and delete the others' runners too.
+  # The trailing quote pins the match to the full repo name (no prefix collision).
+  if ! grep -qsF "github.com/${REPO}\"" "${dir}.runner"; then
+    echo "==> Skipping ${dir} — not registered to ${REPO}"
+    continue
+  fi
   echo "==> Removing runner in ${dir}"
   (
     cd "$dir" || exit 1
