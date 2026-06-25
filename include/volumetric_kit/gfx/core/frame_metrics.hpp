@@ -29,9 +29,9 @@ namespace volumetric_kit::gfx {
 ///
 /// @code
 /// FrameMetrics metrics;
-/// metrics.sections.push_back(
-///     {.name = "shadow", .cpu_ms = 0.8, .gpu_ms = 1.2, .has_gpu = true});
-/// metrics.sections.push_back({.name = "upload", .cpu_ms = 0.3});  // CPU-only
+/// // Section fields are positional (C++17): name, cpu_ms, gpu_ms, has_gpu.
+/// metrics.sections.push_back({"shadow", 0.8, 1.2, true});
+/// metrics.sections.push_back({"upload", 0.3});  // CPU-only (no GPU timing)
 /// metrics.cpu_frame_ms = 11.0;
 /// metrics.fps = 90.0;
 /// for (const FrameMetrics::Section& s : metrics.sections) {
