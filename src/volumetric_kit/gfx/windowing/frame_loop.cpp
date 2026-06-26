@@ -7,6 +7,7 @@
 
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace volumetric_kit::gfx::windowing {
@@ -116,6 +117,14 @@ Result<Frame> FrameLoop::begin_frame() {
                     VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
+  // Drive the profiler's frame lifecycle (no-op when none is attached). The
+  // slot's fence was waited above, so its prior submission's timestamps are now
+  // readable; the command buffer is recording and outside any render pass,
+  // where the slot's query-range reset is legal.
+  if (profiler_ != nullptr) {
+    profiler_->begin_frame(slot, cmd);
+  }
+
   Frame frame;
   frame.cmd = cmd;
   frame.target = &swapchain_->render_target(image_index);
@@ -126,6 +135,13 @@ Result<Frame> FrameLoop::begin_frame() {
 
 Status FrameLoop::end_frame(const Frame& frame) {
   const uint32_t slot = frame.slot;
+
+  // Close the profiler's frame (no-op when none is attached): the caller's
+  // scopes have finalized into this command buffer, so the per-frame CPU/memory
+  // figures can be stamped before the submit below.
+  if (profiler_ != nullptr) {
+    profiler_->end_frame();
+  }
 
   // Transition the rendered image to PRESENT_SRC.
   cmd_image_barrier(frame.cmd, swapchain_->image(frame.image_index),
@@ -167,6 +183,10 @@ Status FrameLoop::end_frame(const Frame& frame) {
   return present;
 }
 
+void FrameLoop::set_profiler(Profiler* profiler) noexcept {
+  profiler_ = profiler;
+}
+
 // Hand-written (not defaulted) because the command buffers free back to the
 // pool: destruction order matters, and the move pair must null the borrowed
 // pointers on the source so a moved-from loop is fully empty.
@@ -179,10 +199,12 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
       in_flight_(std::move(other.in_flight_)),
       render_finished_(std::move(other.render_finished_)),
       images_in_flight_(std::move(other.images_in_flight_)),
-      current_slot_(other.current_slot_) {
+      current_slot_(other.current_slot_),
+      profiler_(other.profiler_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
   other.current_slot_ = 0;
+  other.profiler_ = nullptr;
 }
 
 FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
@@ -203,10 +225,12 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     render_finished_ = std::move(other.render_finished_);
     images_in_flight_ = std::move(other.images_in_flight_);
     current_slot_ = other.current_slot_;
+    profiler_ = other.profiler_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
     other.current_slot_ = 0;
+    other.profiler_ = nullptr;
   }
   return *this;
 }
