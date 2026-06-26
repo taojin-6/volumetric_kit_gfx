@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <utility>
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
@@ -24,6 +25,38 @@ vg::ProfilerConfig make_config(uint32_t frames, uint32_t max_gpu_sections) {
 
 class ProfilerTest : public VulkanDeviceTest {
  protected:
+  // Build the instance/device with debug-utils enabled (and validation as the
+  // label-balance backstop), so gpu_scope's label emit/close path is exercised;
+  // fall back to debug-utils-only, then plain, where a layer or the extension
+  // is unavailable. Overrides VulkanDeviceTest::SetUp, whose default configs
+  // leave debug-utils off.
+  void SetUp() override {
+    vg::InstanceConfig icfg;
+    icfg.enable_validation = true;
+    icfg.enable_debug_utils = true;
+    auto instance = vg::Instance::create(icfg);
+    if (!instance.ok()) {
+      icfg.enable_validation = false;
+      instance = vg::Instance::create(icfg);
+    }
+    if (!instance.ok()) {
+      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+    }
+    instance_.emplace(std::move(instance).value());
+
+    auto physical = instance_->select_physical_device();
+    if (!physical.ok()) {
+      GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
+    }
+    physical_ = physical.value();
+
+    vg::DeviceConfig dcfg;
+    dcfg.enable_debug_utils = instance_->debug_utils_enabled();
+    auto device = vg::Device::create(instance_->handle(), physical_, dcfg);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    device_.emplace(std::move(device).value());
+  }
+
   vg::Profiler make_profiler(uint32_t frames = 1, uint32_t max_gpu = 8) {
     auto result = vg::Profiler::create(*device_, make_config(frames, max_gpu));
     EXPECT_TRUE(result.ok()) << result.status().message();
@@ -132,6 +165,93 @@ TEST_F(ProfilerTest, MemorySourcePopulatesAggregateMemory) {
   run_frame(profiler, 0, [&](VkCommandBuffer) {});
 
   EXPECT_GT(profiler.metrics().memory_budget_bytes, 0u);
+}
+
+// --- GPU resolve: multi-slot + multi-section indexing ----------------------
+
+// Exercises the per-slot query base (slot*max*2) and the intra-frame stride (a
+// second section's queries at local offset 2) — both always 0 in the other
+// tests (frames=1, one section). A wrong per-slot or per-section offset reads
+// an unwritten / other-slot query, so read_results returns NOT_READY and
+// has_gpu flips off; the names also let a swapped pairing show.
+TEST_F(ProfilerTest, MultiSlotMultiSectionResolves) {
+  vg::Profiler profiler = make_profiler(/*frames=*/2, /*max_gpu=*/8);
+
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    auto a = profiler.gpu_scope(cmd, "a");
+    auto b = profiler.gpu_scope(cmd, "b");
+  });
+  run_frame(profiler, 1, [&](VkCommandBuffer cmd) {
+    auto c = profiler.gpu_scope(cmd, "c");
+  });
+  run_frame(profiler, 0, [&](VkCommandBuffer) {
+  });  // slot 0 recurs: publishes the first frame
+
+  const vg::FrameMetrics& m = profiler.metrics();
+  ASSERT_EQ(m.sections.size(), 2u);
+  EXPECT_STREQ(m.sections[0].name, "a");
+  EXPECT_STREQ(m.sections[1].name, "b");
+  EXPECT_EQ(m.sections[0].has_gpu, profiler.gpu_timing());
+  EXPECT_EQ(m.sections[1].has_gpu, profiler.gpu_timing());
+  if (profiler.gpu_timing()) {
+    EXPECT_TRUE(std::isfinite(m.sections[0].gpu_ms));
+    EXPECT_TRUE(std::isfinite(m.sections[1].gpu_ms));
+  }
+}
+
+// A gpu_scope whose cmd does not match begin_frame's cmd must not write a
+// timestamp into the unreset query range — it degrades to CPU-only. The frame
+// is begun CPU-only (VK_NULL_HANDLE, no reset) but the scope is handed the real
+// recording buffer; the stage must resolve has_gpu == false.
+TEST_F(ProfilerTest, GpuScopeWithMismatchedCmdIsCpuOnly) {
+  vg::Profiler profiler = make_profiler();
+  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    profiler.begin_frame(0, VK_NULL_HANDLE);  // CPU-only frame: no reset
+    {
+      auto s = profiler.gpu_scope(cmd, "stage");
+    }
+    profiler.end_frame();
+  });
+  ASSERT_TRUE(status.ok()) << status.message();
+  run_frame(profiler, 0, [&](VkCommandBuffer) {});
+
+  const vg::FrameMetrics& m = profiler.metrics();
+  ASSERT_EQ(m.sections.size(), 1u);
+  EXPECT_FALSE(m.sections[0].has_gpu);
+}
+
+// A Scope still open at end_frame is finalized by end_frame (label closed, end
+// timestamp written), so the submitted buffer carries no unbalanced debug-utils
+// region and the stage still resolves; the Scope's later destruction is a safe
+// no-op. (The @warning still asks callers to close scopes within the frame.)
+TEST_F(ProfilerTest, ScopeOpenAtEndFrameStillResolves) {
+  vg::Profiler profiler = make_profiler();
+  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    profiler.begin_frame(0, cmd);
+    vg::Profiler::Scope open = profiler.gpu_scope(cmd, "open");
+    profiler.end_frame();  // finalizes `open` before the buffer is submitted
+    // `open` is destroyed here, after end_frame — finalize must no-op safely.
+  });
+  ASSERT_TRUE(status.ok()) << status.message();
+  run_frame(profiler, 0, [&](VkCommandBuffer) {});
+
+  const vg::FrameMetrics& m = profiler.metrics();
+  ASSERT_EQ(m.sections.size(), 1u);
+  EXPECT_STREQ(m.sections[0].name, "open");
+  EXPECT_EQ(m.sections[0].has_gpu, profiler.gpu_timing());
+}
+
+// A null stage name must not reach vkCmdBeginDebugUtilsLabelEXT (pLabelName
+// must be non-null); the label is skipped and the submit still succeeds even
+// with debug-utils active.
+TEST_F(ProfilerTest, GpuScopeNullNameEmitsNoLabel) {
+  vg::Profiler profiler = make_profiler();
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    auto s = profiler.gpu_scope(cmd, nullptr);
+  });
+  run_frame(profiler, 0, [&](VkCommandBuffer) {});
+
+  ASSERT_EQ(profiler.metrics().sections.size(), 1u);
 }
 
 // --- move-only contract: Profiler ------------------------------------------

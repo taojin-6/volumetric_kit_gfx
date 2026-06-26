@@ -58,9 +58,12 @@ struct ProfilerConfig {
 /// resolved snapshot from @ref metrics.
 ///
 /// @warning The @p device passed to @ref create must outlive the profiler (it
-///          owns a timestamp pool freed through that device). A @ref Scope must
-///          not outlive the frame it was opened in, nor the profiler. A memory
-///          source set via @ref set_memory_source must outlive the profiler.
+///          owns a timestamp pool freed through that device). A @ref Scope
+///          borrows the profiler's state: it must not outlive the frame it was
+///          opened in, and the profiler must not be moved-assigned-over or
+///          destroyed while any Scope from it is still open (that frees the
+///          state the Scope finalizes through). A memory source set via
+///          @ref set_memory_source must outlive the profiler.
 ///
 /// @code
 /// ProfilerConfig cfg;
@@ -164,8 +167,12 @@ class VG_CORE_API Profiler {
   ///        the per-frame bound is not exhausted — GPU, and emits a debug-utils
   ///        region label.
   /// @param cmd   The recording command buffer the timestamps and label record
-  ///              into (the same buffer passed to @ref begin_frame).
-  /// @param name  Stage label and label text; string-literal lifetime.
+  ///              into; must be the same buffer passed to @ref begin_frame
+  ///              (which reset the query range). A differing cmd — including
+  ///              when begin_frame got `VK_NULL_HANDLE` for a CPU-only frame —
+  ///              leaves the stage CPU-timed only, with no timestamps or label.
+  /// @param name  Stage label and label text; string-literal lifetime. A null
+  ///              name records the stage but emits no debug-utils label.
   /// @return A @ref Scope timing until it is destroyed; inert if called outside
   ///         a frame or with a null @p cmd.
   Scope gpu_scope(VkCommandBuffer cmd, const char* name);

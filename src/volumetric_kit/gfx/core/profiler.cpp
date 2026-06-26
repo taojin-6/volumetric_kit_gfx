@@ -61,7 +61,6 @@ struct Profiler::Impl {
   uint32_t max_gpu_sections = 0;
   uint32_t valid_bits = 0;
   bool gpu_timing = false;
-  bool gpu_labels = false;
   float ts_period_ns = 0.0f;
   DebugUtilsTable table;
   // QueryPool is create-only (no public default ctor), so hold it optionally;
@@ -86,6 +85,12 @@ struct Profiler::Impl {
   double fps = 0.0;
 
   FrameMetrics published;  // latest resolved snapshot
+
+  // Base query index for a slot's range: two queries (begin + end) per section,
+  // max_gpu_sections sections per slot. The single source of the pool layout.
+  uint32_t slot_query_base(uint32_t slot) const {
+    return slot * max_gpu_sections * 2;
+  }
 
   // Stop a stage's CPU clock and, for a GPU stage, record its end timestamp and
   // close its label. Idempotent so a finalize-then-destroy Scope is safe.
@@ -167,7 +172,6 @@ Result<Profiler> Profiler::create(const Device& device,
   impl->gpu_timing = impl->valid_bits != 0;
   impl->ts_period_ns = device.caps().limits().timestampPeriod;
   impl->table = device.debug_utils();
-  impl->gpu_labels = impl->table.active();
   impl->slots.resize(config.frames_in_flight);
 
   // The timestamp pool exists only where timing is supported; without it every
@@ -265,7 +269,7 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
   // Reset the slot's whole timestamp range up front (outside any render pass)
   // so each gpu_scope can write into it.
   if (d.gpu_timing && cmd != VK_NULL_HANDLE && d.query_pool) {
-    const uint32_t base = slot * d.max_gpu_sections * 2;
+    const uint32_t base = d.slot_query_base(slot);
     d.query_pool->cmd_reset(cmd, base, d.max_gpu_sections * 2);
   }
 }
@@ -286,13 +290,21 @@ void Profiler::end_frame() noexcept {
     }
   }
 
+  // Finalize any stage whose Scope is still open (close its label, write its
+  // end timestamp) so the submitted command buffer never carries an unbalanced
+  // debug-utils region and no GPU end timestamp is left unwritten. Idempotent:
+  // a stage its Scope already closed is skipped via Section::finished.
+  for (uint32_t i = 0; i < static_cast<uint32_t>(d.current.size()); ++i) {
+    d.finalize(i);
+  }
+
   Impl::SlotFrame& f = d.slots[d.current_slot];
   f.sections = std::move(d.current);
   f.cpu_frame_ms = ms_since(d.frame_start);
   f.fps = d.fps;
   f.mem_used = used;
   f.mem_budget = budget;
-  f.query_base = d.current_slot * d.max_gpu_sections * 2;
+  f.query_base = d.slot_query_base(d.current_slot);
   f.gpu_count = d.gpu_count;
   f.pending = true;
 
@@ -323,9 +335,17 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   s.cpu_start = Clock::now();
   s.cmd = cmd;
 
+  // GPU work (label + timestamps) records into the frame's command buffer — the
+  // one begin_frame reset the query range on. A cmd that does not match it (a
+  // CPU-only frame begun with VK_NULL_HANDLE, or simply a different buffer)
+  // leaves the stage CPU-timed only, so a timestamp is never written into an
+  // unreset query.
+  const bool records_gpu = (cmd == d.current_cmd);
+
   // A label is independent of timestamp timing: open it whenever debug-utils is
-  // active, even if no GPU timing is available.
-  if (d.gpu_labels) {
+  // active, even if no GPU timing is available. A null name is skipped —
+  // VkDebugUtilsLabelEXT::pLabelName must be non-null.
+  if (records_gpu && d.table.active() && name != nullptr) {
     VkDebugUtilsLabelEXT label{};
     label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
     label.pLabelName = name;
@@ -335,9 +355,9 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
 
   // Write the begin timestamp when timing is available and the per-frame GPU
   // budget is not yet exhausted; otherwise this stage is CPU-only.
-  if (d.gpu_timing && d.query_pool) {
+  if (records_gpu && d.gpu_timing && d.query_pool) {
     if (d.gpu_count < d.max_gpu_sections) {
-      s.begin_query = d.current_slot * d.max_gpu_sections * 2 + d.gpu_count * 2;
+      s.begin_query = d.slot_query_base(d.current_slot) + d.gpu_count * 2;
       s.has_gpu = true;
       d.query_pool->cmd_write_timestamp(
           cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query);
