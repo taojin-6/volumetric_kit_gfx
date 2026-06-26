@@ -23,12 +23,10 @@ namespace volumetric_kit::gfx {
 struct DebugUtilsTable {
   PFN_vkCmdBeginDebugUtilsLabelEXT cmd_begin = nullptr;
   PFN_vkCmdEndDebugUtilsLabelEXT cmd_end = nullptr;
-  PFN_vkCmdInsertDebugUtilsLabelEXT cmd_insert = nullptr;
   // Queue-timeline labels surface on Nsight Systems' submit timeline, where
   // command-buffer labels do not appear.
   PFN_vkQueueBeginDebugUtilsLabelEXT queue_begin = nullptr;
   PFN_vkQueueEndDebugUtilsLabelEXT queue_end = nullptr;
-  PFN_vkQueueInsertDebugUtilsLabelEXT queue_insert = nullptr;
   PFN_vkSetDebugUtilsObjectNameEXT set_name = nullptr;
 
   /// @return Whether the entry points resolved — the all-or-nothing gate every
@@ -61,22 +59,17 @@ struct DebugUtilsTable {
         load_pfn("vkCmdBeginDebugUtilsLabelEXT"));
     table.cmd_end = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
         load_pfn("vkCmdEndDebugUtilsLabelEXT"));
-    table.cmd_insert = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(
-        load_pfn("vkCmdInsertDebugUtilsLabelEXT"));
     table.queue_begin = reinterpret_cast<PFN_vkQueueBeginDebugUtilsLabelEXT>(
         load_pfn("vkQueueBeginDebugUtilsLabelEXT"));
     table.queue_end = reinterpret_cast<PFN_vkQueueEndDebugUtilsLabelEXT>(
         load_pfn("vkQueueEndDebugUtilsLabelEXT"));
-    table.queue_insert = reinterpret_cast<PFN_vkQueueInsertDebugUtilsLabelEXT>(
-        load_pfn("vkQueueInsertDebugUtilsLabelEXT"));
     table.set_name = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
         load_pfn("vkSetDebugUtilsObjectNameEXT"));
 
     // All-or-nothing: a partial resolution (any single null) collapses to the
     // inactive table so callers never dereference a mixed set of pointers.
     if (table.cmd_begin == nullptr || table.cmd_end == nullptr ||
-        table.cmd_insert == nullptr || table.queue_begin == nullptr ||
-        table.queue_end == nullptr || table.queue_insert == nullptr ||
+        table.queue_begin == nullptr || table.queue_end == nullptr ||
         table.set_name == nullptr) {
       return DebugUtilsTable{};
     }

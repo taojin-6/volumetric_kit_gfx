@@ -56,7 +56,8 @@ class VG_CORE_API DebugLabelScope {
   /// @param table  The resolved entry points; an inactive table makes this a
   ///               no-op.
   /// @param name   The region label shown in the capture (must outlive only
-  ///               this call — the driver copies it).
+  ///               this call — the driver copies it). A null name makes the
+  ///               scope inert — Vulkan requires a non-null label name.
   /// @param color  Optional RGBA tint in `[0, 1]` as a 4-float array; a null
   ///               pointer leaves the color unset.
   DebugLabelScope(VkCommandBuffer cmd, const DebugUtilsTable& table,
@@ -69,12 +70,11 @@ class VG_CORE_API DebugLabelScope {
   DebugLabelScope& operator=(const DebugLabelScope&) = delete;
 
   /// @return Whether this scope has an open region it will end on destruction.
-  bool active() const noexcept { return active_; }
+  bool active() const noexcept { return end_ != nullptr; }
 
  private:
   VkCommandBuffer cmd_ = VK_NULL_HANDLE;
   PFN_vkCmdEndDebugUtilsLabelEXT end_ = nullptr;
-  bool active_ = false;
 };
 
 /// @brief A nested debug-label region on a queue's submit timeline, opened on
@@ -107,7 +107,8 @@ class VG_CORE_API QueueLabelScope {
   /// @param table  The resolved entry points; an inactive table makes this a
   ///               no-op.
   /// @param name   The region label shown in the capture (the driver copies
-  ///               it).
+  ///               it). A null name makes the scope inert — Vulkan requires a
+  ///               non-null label name.
   /// @param color  Optional RGBA tint in `[0, 1]` as a 4-float array; a null
   ///               pointer leaves the color unset.
   QueueLabelScope(VkQueue queue, const DebugUtilsTable& table, const char* name,
@@ -120,12 +121,11 @@ class VG_CORE_API QueueLabelScope {
   QueueLabelScope& operator=(const QueueLabelScope&) = delete;
 
   /// @return Whether this scope has an open region it will end on destruction.
-  bool active() const noexcept { return active_; }
+  bool active() const noexcept { return end_ != nullptr; }
 
  private:
   VkQueue queue_ = VK_NULL_HANDLE;
   PFN_vkQueueEndDebugUtilsLabelEXT end_ = nullptr;
-  bool active_ = false;
 };
 
 /// @brief Give a Vulkan object a human-readable name in GPU captures.

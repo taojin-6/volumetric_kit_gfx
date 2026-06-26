@@ -9,7 +9,6 @@
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 
 namespace {
 
@@ -25,8 +24,19 @@ class DebugLabelTest : public ::testing::Test {
  protected:
   void SetUp() override {
     vg::InstanceConfig instance_config;
-    instance_config.enable_debug_utils = true;  // merged opt-in
+    instance_config.enable_debug_utils = true;  // active emit path everywhere
+    // Prefer validation: on the Linux sanitizers job it is the detector that
+    // catches an unbalanced / double-end label (ASan/UBSan cannot — it is a
+    // Vulkan API misuse, not a memory error). Where the layer is missing or
+    // present-but-unloadable (common on macOS) vkCreateInstance fails, so fall
+    // back to debug-utils only: the active emit path still runs, just without
+    // the validation backstop.
+    instance_config.enable_validation = true;
     auto instance = vg::Instance::create(instance_config);
+    if (!instance.ok()) {
+      instance_config.enable_validation = false;
+      instance = vg::Instance::create(instance_config);
+    }
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -62,10 +72,30 @@ TEST_F(DebugLabelTest, TableActiveMatchesInstanceFlag) {
   EXPECT_EQ(device_->debug_utils().active(), instance_->debug_utils_enabled());
 }
 
+// A null label name leaves the scope inert even on the active path:
+// VkDebugUtilsLabelEXT::pLabelName must be non-null, so the ctor refuses it
+// rather than emit an invalid label (set_object_name's name, by contrast, is
+// optional). Without the guard this would emit a label the validation layer
+// rejects; here active() must report false whether or not the table is live.
+TEST_F(DebugLabelTest, NullNameLeavesScopeInert) {
+  const vg::DebugUtilsTable& table = device_->debug_utils();
+  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    vg::DebugLabelScope scope(cmd, table, nullptr);
+    EXPECT_FALSE(scope.active());
+  });
+  EXPECT_TRUE(status.ok()) << status.message();
+
+  vg::QueueLabelScope queue_scope(device_->graphics_queue(), table, nullptr);
+  EXPECT_FALSE(queue_scope.active());
+}
+
 // End-to-end emit: record a command-buffer label scope and a set_object_name on
 // a real handle inside a one-time submit, then open a queue label around the
 // submit itself. Whether or not the entry points are live, the submit must
-// succeed — labels never turn a working submit into an error.
+// succeed — labels never turn a working submit into an error. Emit correctness
+// (a well-formed, balanced label) is checked by the validation layer enabled in
+// SetUp, not by these flag assertions — there is no in-process API to capture
+// an emitted label and assert on it directly.
 TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
   const vg::DebugUtilsTable& table = device_->debug_utils();
 

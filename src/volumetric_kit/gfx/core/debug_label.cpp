@@ -29,40 +29,38 @@ VkDebugUtilsLabelEXT make_label(const char* name, const float color[4]) {
 DebugLabelScope::DebugLabelScope(VkCommandBuffer cmd,
                                  const DebugUtilsTable& table, const char* name,
                                  const float color[4]) noexcept {
-  if (!table.active() || cmd == VK_NULL_HANDLE) {
+  // A null name is refused (left inert): VkDebugUtilsLabelEXT::pLabelName must
+  // be non-null, unlike the optional object name in set_object_name.
+  if (!table.active() || cmd == VK_NULL_HANDLE || name == nullptr) {
     return;
   }
   VkDebugUtilsLabelEXT label = make_label(name, color);
   table.cmd_begin(cmd, &label);
   cmd_ = cmd;
   end_ = table.cmd_end;
-  active_ = true;
 }
 
 DebugLabelScope::~DebugLabelScope() {
-  if (active_) {
+  if (end_ != nullptr) {
     end_(cmd_);
   }
 }
 
 DebugLabelScope::DebugLabelScope(DebugLabelScope&& other) noexcept
-    : cmd_(other.cmd_), end_(other.end_), active_(other.active_) {
+    : cmd_(other.cmd_), end_(other.end_) {
   other.cmd_ = VK_NULL_HANDLE;
   other.end_ = nullptr;
-  other.active_ = false;
 }
 
 DebugLabelScope& DebugLabelScope::operator=(DebugLabelScope&& other) noexcept {
   if (this != &other) {
-    if (active_) {
+    if (end_ != nullptr) {
       end_(cmd_);  // close our own region before adopting the source's
     }
     cmd_ = other.cmd_;
     end_ = other.end_;
-    active_ = other.active_;
     other.cmd_ = VK_NULL_HANDLE;
     other.end_ = nullptr;
-    other.active_ = false;
   }
   return *this;
 }
@@ -70,40 +68,38 @@ DebugLabelScope& DebugLabelScope::operator=(DebugLabelScope&& other) noexcept {
 QueueLabelScope::QueueLabelScope(VkQueue queue, const DebugUtilsTable& table,
                                  const char* name,
                                  const float color[4]) noexcept {
-  if (!table.active() || queue == VK_NULL_HANDLE) {
+  // A null name is refused (left inert): VkDebugUtilsLabelEXT::pLabelName must
+  // be non-null, unlike the optional object name in set_object_name.
+  if (!table.active() || queue == VK_NULL_HANDLE || name == nullptr) {
     return;
   }
   VkDebugUtilsLabelEXT label = make_label(name, color);
   table.queue_begin(queue, &label);
   queue_ = queue;
   end_ = table.queue_end;
-  active_ = true;
 }
 
 QueueLabelScope::~QueueLabelScope() {
-  if (active_) {
+  if (end_ != nullptr) {
     end_(queue_);
   }
 }
 
 QueueLabelScope::QueueLabelScope(QueueLabelScope&& other) noexcept
-    : queue_(other.queue_), end_(other.end_), active_(other.active_) {
+    : queue_(other.queue_), end_(other.end_) {
   other.queue_ = VK_NULL_HANDLE;
   other.end_ = nullptr;
-  other.active_ = false;
 }
 
 QueueLabelScope& QueueLabelScope::operator=(QueueLabelScope&& other) noexcept {
   if (this != &other) {
-    if (active_) {
+    if (end_ != nullptr) {
       end_(queue_);  // close our own region before adopting the source's
     }
     queue_ = other.queue_;
     end_ = other.end_;
-    active_ = other.active_;
     other.queue_ = VK_NULL_HANDLE;
     other.end_ = nullptr;
-    other.active_ = false;
   }
   return *this;
 }

@@ -28,11 +28,12 @@ struct DeviceConfig {
   /// @ref extra_device_extensions instead.
   bool needs_external_memory = false;
   /// Resolve the `VK_EXT_debug_utils` device entry points so @ref
-  /// Device::debug_utils returns an active table. Set this from
+  /// Device::debug_utils returns an active table. Set this only from
   /// @ref Instance::debug_utils_enabled: the device-level labels can only be
-  /// emitted when the instance enabled the extension. Leaving it false (or
-  /// passing it true on an instance that did not enable the extension) yields
-  /// an inactive table, and every label/object-name call becomes a no-op.
+  /// emitted when the instance enabled the extension, and forcing this true
+  /// otherwise is unsupported (the entry points may resolve to non-null but
+  /// invalid trampolines). Left false, the table is inactive and every
+  /// label/object-name call becomes a no-op.
   bool enable_debug_utils = false;
   /// Core (1.0) device features to enable (fed into
   /// `VkPhysicalDeviceFeatures2`).
