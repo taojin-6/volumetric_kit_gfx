@@ -17,8 +17,10 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace ui = volumetric_kit::gfx::ui;
@@ -233,6 +235,74 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device());
+}
+
+// --- Metrics panel: CPU-only widget building (no device) --------------------
+
+// Builds a headless ImGui frame (no renderer backend) around `build`, returning
+// the total vertex count of the resulting draw data — a proxy for "the panel
+// produced geometry". The font atlas is built on the CPU so NewFrame's
+// atlas-built assert holds without a backend.
+template <class Build>
+int panel_draw_vertices(Build&& build) {
+  ImGuiContext* ctx = ImGui::CreateContext();
+  ImGui::SetCurrentContext(ctx);
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(320.0f, 240.0f);
+  io.DeltaTime = 1.0f / 60.0f;
+  unsigned char* pixels = nullptr;
+  int width = 0;
+  int height = 0;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);  // forces atlas build
+
+  // Two frames: a brand-new auto-sizing window is rendered hidden on its first
+  // frame while ImGui measures its content, emitting geometry only once
+  // settled.
+  int vertices = 0;
+  for (int frame = 0; frame < 2; ++frame) {
+    ImGui::NewFrame();
+    build();
+    ImGui::Render();
+    vertices = ImGui::GetDrawData()->TotalVtxCount;
+  }
+  ImGui::DestroyContext(ctx);
+  return vertices;
+}
+
+vg::FrameMetrics sample_metrics() {
+  vg::FrameMetrics metrics;
+  metrics.fps = 90.0;
+  metrics.cpu_frame_ms = 11.0;
+  metrics.memory_used_bytes = 256u * 1024u * 1024u;
+  metrics.memory_budget_bytes = 1024u * 1024u * 1024u;
+  vg::FrameMetrics::Section gpu_stage;
+  gpu_stage.name = "render";
+  gpu_stage.cpu_ms = 0.8;
+  gpu_stage.gpu_ms = 1.2;
+  gpu_stage.has_gpu = true;
+  metrics.sections.push_back(gpu_stage);
+  vg::FrameMetrics::Section cpu_stage;
+  cpu_stage.name = "cull";
+  cpu_stage.cpu_ms = 0.3;
+  metrics.sections.push_back(cpu_stage);
+  return metrics;
+}
+
+// The panel draws a non-empty window (fps/memory lines + a per-stage table that
+// mixes a GPU stage and a CPU-only one) into the active ImGui frame.
+TEST(MetricsPanelTest, ProducesGeometryForPopulatedMetrics) {
+  const int vertices =
+      panel_draw_vertices([] { ui::draw_metrics_panel(sample_metrics()); });
+  EXPECT_GT(vertices, 0);
+}
+
+// Empty metrics (no stages, no memory budget) still draw a valid window with
+// the
+// "(no timed stages)" placeholder — the empty-sections and no-budget branches.
+TEST(MetricsPanelTest, HandlesEmptyMetrics) {
+  const int vertices =
+      panel_draw_vertices([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
+  EXPECT_GT(vertices, 0);
 }
 
 }  // namespace
