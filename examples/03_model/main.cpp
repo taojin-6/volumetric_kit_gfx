@@ -63,6 +63,7 @@
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
@@ -1435,11 +1436,27 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
 
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 1);
+  // CPU-ahead depth shared by the loop and the profiler driving it. One here:
+  // the single shared depth image forbids more (see the note above). Declared
+  // before the loop that borrows it, so it outlives the loop.
+  constexpr uint32_t kFramesInFlight = 1;
+  vg::ProfilerConfig profiler_config;
+  profiler_config.frames_in_flight = kFramesInFlight;
+  auto profiler = vg::Profiler::create(device.value(), profiler_config);
+  if (!profiler.ok()) {
+    std::fprintf(stderr, "profiler: %s\n", profiler.status().message().c_str());
+    return 1;
+  }
+
+  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
+                                     kFramesInFlight);
   if (!loop.ok()) {
     std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
     return 1;
   }
+  // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
+  // render loop only opens a scope around each pass.
+  loop.value().set_profiler(&profiler.value());
 
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -1475,6 +1492,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       }
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
+      // Drain a possibly-still-in-flight submission before teardown frees the
+      // command buffers / profiler query pool it references.
+      vkDeviceWaitIdle(device.value().handle());
       return 1;
     }
 
@@ -1507,14 +1527,23 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // fence above, so the GPU has finished reading this single shared UBO.
     // Raising frames_in_flight > 1 would need a per-slot scene UBO.
     pbr.scene.set_camera(orbit.eye(), ibl.prefilter_max_lod);
-    record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
+    {
+      // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
+      // around each, resolved into the metrics printed below.
+      vg::Profiler::Scope skybox_scope =
+          profiler.value().gpu_scope(cmd, "skybox");
+      record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
+    }
     pipelines::PbrFrame frame_info;
     frame_info.extent = extent;
     frame_info.view_proj = view_proj;
     frame_info.scene = &pbr.scene;
     frame_info.draws = pbr_draws.data();
     frame_info.draw_count = static_cast<uint32_t>(pbr_draws.size());
-    pipeline.value().submit(cmd, frame_info);
+    {
+      vg::Profiler::Scope pbr_scope = profiler.value().gpu_scope(cmd, "pbr");
+      pipeline.value().submit(cmd, frame_info);
+    }
 
     rt.end(cmd);
 
@@ -1532,7 +1561,28 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
         }
       } else {
         std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+        // end_frame already submitted this frame before present failed; drain
+        // it before teardown frees the cmd buffer + query pool it references.
+        vkDeviceWaitIdle(device.value().handle());
         return 1;
+      }
+    }
+
+    // Periodically dump the resolved per-pass timings. At one frame in flight
+    // the profiler resolves the previous frame on each begin_frame, so the
+    // snapshot is frame (rendered - 1). On a device without timestamp support
+    // (MoltenVK) the GPU column reads n/a; CPU times remain.
+    if (rendered % 30 == 29) {
+      const vg::FrameMetrics& metrics = profiler.value().metrics();
+      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n", rendered - 1,
+                  metrics.fps, metrics.cpu_frame_ms);
+      for (const vg::FrameMetrics::Section& s : metrics.sections) {
+        if (s.has_gpu) {
+          std::printf("  %-7s cpu %6.3f ms  gpu %6.3f ms\n", s.name, s.cpu_ms,
+                      s.gpu_ms);
+        } else {
+          std::printf("  %-7s cpu %6.3f ms  gpu     n/a\n", s.name, s.cpu_ms);
+        }
       }
     }
     ++rendered;
