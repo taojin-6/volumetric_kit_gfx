@@ -27,6 +27,7 @@ target_sources(
           debug_label.cpp
           sync.cpp
           query_pool.cpp
+          profiler.cpp
           retire_queue.cpp
           allocator.cpp
           buffer.cpp
