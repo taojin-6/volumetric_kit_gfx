@@ -58,7 +58,9 @@ struct Frame {
 ///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
 ///          the loop (it borrows both). Idle the device (or drain the loop)
-///          before destroying it while frames are in flight.
+///          before destroying it while frames are in flight. A profiler
+///          attached via @ref set_profiler is likewise borrowed and must
+///          outlive the loop, or be detached with `nullptr` first.
 ///
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);

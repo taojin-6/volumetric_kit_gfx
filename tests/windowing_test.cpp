@@ -241,13 +241,16 @@ TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
 // failure.
 TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
   win::Swapchain sc = make_swapchain();
-  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
-  ASSERT_TRUE(loop.ok()) << loop.status().message();
 
+  // Declare the profiler before the loop so it outlives the loop that borrows
+  // it: at scope exit the loop is destroyed first, then the profiler.
   vg::ProfilerConfig pcfg;
   pcfg.frames_in_flight = 2;  // match the loop's in-flight depth
   auto profiler = vg::Profiler::create(*device_, pcfg);
   ASSERT_TRUE(profiler.ok()) << profiler.status().message();
+
+  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
   loop.value().set_profiler(&profiler.value());
 
   for (int i = 0; i < 6; ++i) {
@@ -270,10 +273,52 @@ TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
   const vg::FrameMetrics& m = profiler.value().metrics();
   ASSERT_FALSE(m.sections.empty());
   EXPECT_STREQ(m.sections[0].name, "frame");
+  EXPECT_GT(m.cpu_frame_ms, 0.0);  // end_frame stamped a real CPU frame time
+  // has_gpu is the load-bearing wiring check: it goes true only when the loop
+  // passed the frame's own cmd to the profiler's begin_frame, and the fixture's
+  // validation capture fails the test on any mis-wired reset / timestamp.
   EXPECT_EQ(m.sections[0].has_gpu, profiler.value().gpu_timing());
-  if (profiler.value().gpu_timing()) {
-    EXPECT_GE(m.sections[0].gpu_ms, 0.0);
+}
+
+// A moved FrameLoop carries its attached profiler: the moved-to loop drives
+// begin/end_frame, so a stage opened on its frames still resolves. Guards the
+// move pair against dropping the borrowed profiler_ (which would silently stop
+// profiling after any move). `profiler` is declared before the loops so it
+// outlives both.
+TEST_F(WindowingTest, MovedFrameLoopKeepsDrivingProfiler) {
+  win::Swapchain sc = make_swapchain();
+
+  vg::ProfilerConfig pcfg;
+  pcfg.frames_in_flight = 2;
+  auto profiler = vg::Profiler::create(*device_, pcfg);
+  ASSERT_TRUE(profiler.ok()) << profiler.status().message();
+
+  auto created = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  created.value().set_profiler(&profiler.value());
+
+  // Move-construct: the borrowed profiler_ must travel to `loop`.
+  win::FrameLoop loop = std::move(created).value();
+
+  for (int i = 0; i < 4; ++i) {
+    auto frame = loop.begin_frame();
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    {
+      vg::Profiler::Scope pass =
+          profiler.value().gpu_scope(frame.value().cmd, "moved");
+      vg::RenderTargetBeginInfo begin;
+      begin.clear_color.float32[3] = 1.0f;
+      frame.value().target->begin(frame.value().cmd, begin);
+      frame.value().target->end(frame.value().cmd);
+    }
+    ASSERT_TRUE(loop.end_frame(frame.value()).ok());
   }
+  vkDeviceWaitIdle(device_->handle());
+
+  // The moved-to loop drove the profiler, so a "moved" stage was published.
+  const vg::FrameMetrics& m = profiler.value().metrics();
+  ASSERT_FALSE(m.sections.empty());
+  EXPECT_STREQ(m.sections[0].name, "moved");
 }
 
 TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
