@@ -176,6 +176,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // No platform backend here, so set DisplaySize ourselves (ImGui::NewFrame
   // requires it). create() left the overlay's context current.
   ImGui::SetCurrentContext(overlay.context());
+  ImGui::GetIO().IniFilename = nullptr;  // no imgui.ini side-effect
   ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
 
   overlay.new_frame();
@@ -248,6 +249,7 @@ int panel_draw_vertices(Build&& build) {
   ImGuiContext* ctx = ImGui::CreateContext();
   ImGui::SetCurrentContext(ctx);
   ImGuiIO& io = ImGui::GetIO();
+  io.IniFilename = nullptr;  // hermetic: no imgui.ini in the CWD
   io.DisplaySize = ImVec2(320.0f, 240.0f);
   io.DeltaTime = 1.0f / 60.0f;
   unsigned char* pixels = nullptr;
@@ -288,21 +290,37 @@ vg::FrameMetrics sample_metrics() {
   return metrics;
 }
 
-// The panel draws a non-empty window (fps/memory lines + a per-stage table that
-// mixes a GPU stage and a CPU-only one) into the active ImGui frame.
-TEST(MetricsPanelTest, ProducesGeometryForPopulatedMetrics) {
-  const int vertices =
-      panel_draw_vertices([] { ui::draw_metrics_panel(sample_metrics()); });
-  EXPECT_GT(vertices, 0);
+// Geometry for a bare titled window with no body -- the title bar, border, and
+// background ImGui emits for any window. The panel must exceed this to prove it
+// drew its body and not merely a window frame; the default title matches the
+// panel's so the decoration cancels out of the comparisons below.
+int bare_window_vertices() {
+  return panel_draw_vertices([] {
+    ImGui::Begin("Performance");
+    ImGui::End();
+  });
 }
 
-// Empty metrics (no stages, no memory budget) still draw a valid window with
-// the
-// "(no timed stages)" placeholder — the empty-sections and no-budget branches.
-TEST(MetricsPanelTest, HandlesEmptyMetrics) {
-  const int vertices =
+// The populated panel (fps + memory lines + a per-stage table mixing a GPU and
+// a CPU-only stage) emits strictly more geometry than the empty-metrics panel,
+// which has neither the memory line nor the table. Both windows share identical
+// decoration, so the surplus is body content -- a plain `> 0` would pass on the
+// title bar alone.
+TEST(MetricsPanelTest, ProducesGeometryForPopulatedMetrics) {
+  const int empty =
       panel_draw_vertices([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
-  EXPECT_GT(vertices, 0);
+  const int populated =
+      panel_draw_vertices([] { ui::draw_metrics_panel(sample_metrics()); });
+  EXPECT_GT(populated, empty);
+}
+
+// Empty metrics (no stages, no budget) still draw a real body: the fps line and
+// the "(no timed stages)" placeholder push the window past bare decoration --
+// the empty-sections and no-budget branches.
+TEST(MetricsPanelTest, HandlesEmptyMetrics) {
+  const int empty =
+      panel_draw_vertices([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
+  EXPECT_GT(empty, bare_window_vertices());
 }
 
 }  // namespace

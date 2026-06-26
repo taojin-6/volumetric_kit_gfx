@@ -9,6 +9,9 @@ namespace volumetric_kit::gfx::ui {
 
 void draw_metrics_panel(const FrameMetrics& metrics, const char* title,
                         bool* open) {
+  // ImGui::Begin asserts on a null window name; fall back to the default title
+  // so an explicit nullptr can't crash the panel.
+  if (title == nullptr) title = "Performance";
   // Begin returns false when the window is collapsed/clipped, but End must be
   // called unconditionally; guard only the widget building.
   if (ImGui::Begin(title, open)) {
