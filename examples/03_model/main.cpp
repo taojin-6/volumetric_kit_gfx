@@ -1492,6 +1492,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       }
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
+      // Drain a possibly-still-in-flight submission before teardown frees the
+      // command buffers / profiler query pool it references.
+      vkDeviceWaitIdle(device.value().handle());
       return 1;
     }
 
@@ -1558,16 +1561,20 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
         }
       } else {
         std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+        // end_frame already submitted this frame before present failed; drain
+        // it before teardown frees the cmd buffer + query pool it references.
+        vkDeviceWaitIdle(device.value().handle());
         return 1;
       }
     }
 
-    // Periodically dump the resolved per-pass timings (at one frame in flight
-    // the profiler resolves each frame, lagging by one). On a device without
-    // timestamp support (MoltenVK) the GPU column reads n/a; CPU times remain.
+    // Periodically dump the resolved per-pass timings. At one frame in flight
+    // the profiler resolves the previous frame on each begin_frame, so the
+    // snapshot is frame (rendered - 1). On a device without timestamp support
+    // (MoltenVK) the GPU column reads n/a; CPU times remain.
     if (rendered % 30 == 29) {
       const vg::FrameMetrics& metrics = profiler.value().metrics();
-      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n", rendered,
+      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n", rendered - 1,
                   metrics.fps, metrics.cpu_frame_ms);
       for (const vg::FrameMetrics::Section& s : metrics.sections) {
         if (s.has_gpu) {
