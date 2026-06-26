@@ -20,6 +20,7 @@ add_executable(
   log_test.cpp
   sync_test.cpp
   query_pool_test.cpp
+  profiler_test.cpp
   unique_handle_test.cpp
   retire_list_test.cpp
   retire_queue_test.cpp
