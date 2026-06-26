@@ -23,7 +23,9 @@
 #include "imgui_impl_glfw.h"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -88,6 +90,20 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
+  // CPU-ahead depth shared by the frame loop and the profiler that drives it.
+  constexpr uint32_t kFramesInFlight = 2;
+
+  // Created before the FrameLoop that borrows it (set_profiler below), so it
+  // outlives the loop. On MoltenVK (zero timestamp valid bits) GPU scopes fall
+  // back to CPU-only timing; the panel shows whatever resolved.
+  vg::ProfilerConfig profiler_config;
+  profiler_config.frames_in_flight = kFramesInFlight;
+  auto profiler = vg::Profiler::create(device.value(), profiler_config);
+  if (!profiler.ok()) {
+    std::fprintf(stderr, "profiler: %s\n", profiler.status().message().c_str());
+    return 1;
+  }
+
   win::SwapchainConfig swapchain_config;
   swapchain_config.extent = framebuffer_extent(window);
   auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
@@ -98,11 +114,15 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 2);
+  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
+                                     kFramesInFlight);
   if (!loop.ok()) {
     std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
     return 1;
   }
+  // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
+  // render loop below only opens a scope around its work.
+  loop.value().set_profiler(&profiler.value());
 
   // The overlay's pipeline is built for the swapchain's layout; the swapchain
   // holds its format AND image count stable across recreate, so the overlay
@@ -139,6 +159,9 @@ int run(GLFWwindow* window, int max_frames) {
     ImGui_ImplGlfw_NewFrame();    // platform: sets io.DisplaySize + input
     overlay.value().new_frame();  // renderer: begins the ImGui frame
     build_ui(rendered);
+    // The live profiler view; the resolved metrics lag the in-flight depth, so
+    // it is empty for the first couple of frames, then fills in.
+    vg::ui::draw_metrics_panel(profiler.value().metrics());
 
     auto frame = loop.value().begin_frame();
     if (!frame.ok()) {
@@ -159,11 +182,17 @@ int run(GLFWwindow* window, int max_frames) {
     begin.clear_color.float32[1] = 0.02f;
     begin.clear_color.float32[2] = 0.05f;
     begin.clear_color.float32[3] = 1.0f;
-    frame.value().target->begin(frame.value().cmd, begin);
-    // A consumer would record its scene here first; the overlay composes on top
-    // within the same dynamic-rendering scope.
-    overlay.value().render(frame.value().cmd);
-    frame.value().target->end(frame.value().cmd);
+    {
+      // A GPU-timed, debug-labelled stage around the frame's rendering; the
+      // profiler resolves it into the metrics the panel above displays.
+      vg::Profiler::Scope scope =
+          profiler.value().gpu_scope(frame.value().cmd, "overlay");
+      frame.value().target->begin(frame.value().cmd, begin);
+      // A consumer would record its scene here first; the overlay composes on
+      // top within the same dynamic-rendering scope.
+      overlay.value().render(frame.value().cmd);
+      frame.value().target->end(frame.value().cmd);
+    }
 
     const vg::Status present = loop.value().end_frame(frame.value());
     if (!present.ok()) {
