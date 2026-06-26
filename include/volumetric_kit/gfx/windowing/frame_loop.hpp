@@ -22,6 +22,7 @@
 namespace volumetric_kit::gfx {
 
 class Device;
+class Profiler;
 
 namespace windowing {
 
@@ -114,6 +115,17 @@ class VG_WINDOWING_API FrameLoop {
   ///         swapchain) or another failed `VkResult`.
   Status end_frame(const Frame& frame);
 
+  /// @brief Attach a profiler the loop drives automatically, or detach with
+  ///        `nullptr`.
+  /// @param profiler  Borrowed and nullable. When set, the loop calls the
+  ///                  profiler's `begin_frame` (for the slot, after waiting its
+  ///                  fence, with the frame's command buffer) and `end_frame`
+  ///                  around each frame, so the caller only opens scopes on the
+  ///                  frame's `cmd`. Its `frames_in_flight` should match this
+  ///                  loop's. Must outlive the loop, or be detached first;
+  ///                  `nullptr` restores the unprofiled path.
+  void set_profiler(Profiler* profiler) noexcept;
+
   /// @return The CPU-ahead depth (number of in-flight slots).
   uint32_t frames_in_flight() const noexcept {
     return static_cast<uint32_t>(in_flight_.size());
@@ -142,6 +154,7 @@ class VG_WINDOWING_API FrameLoop {
   // a re-acquired image still in use is waited on before reuse. Non-owning.
   std::vector<VkFence> images_in_flight_;
   uint32_t current_slot_ = 0;
+  Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
 };
 
 }  // namespace windowing
