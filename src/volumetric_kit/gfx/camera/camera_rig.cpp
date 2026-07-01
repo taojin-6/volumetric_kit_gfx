@@ -4,12 +4,13 @@
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
 
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // kWorldUp, level_basis
 //
 #include <algorithm>  // std::clamp, std::max
 #include <cmath>      // std::asin, std::atan2, std::cos, std::sin
 
 #include <glm/ext/matrix_transform.hpp>  // translate
-#include <glm/geometric.hpp>             // cross, length, normalize
+#include <glm/geometric.hpp>             // length, normalize
 #include <glm/gtc/quaternion.hpp>        // angleAxis, quat_cast, mat4_cast
 #include <glm/matrix.hpp>                // inverse
 
@@ -17,50 +18,53 @@ namespace volumetric_kit::gfx::camera {
 
 namespace {
 
-// World up. Shared by the level-horizon basis and the elevation poles, so the
-// clamp and the horizon agree on which axis "up" is.
-constexpr glm::vec3 kWorldUp(0.0f, 1.0f, 0.0f);
-
-// A roll-free orientation looking along `forward` with world +Y up. The caller
-// guarantees `forward` is not parallel to world up (level-horizon pitch is
-// clamped shy of the poles), so the cross product never degenerates.
+// A roll-free orientation looking along `forward` with world +Y up. Pole-safe
+// via level_basis, so an exactly-vertical `forward` (e.g. from set_focus) is
+// handled; the level-horizon verbs clamp shy of the pole and never reach it.
 glm::quat level_orientation(const glm::vec3& forward) {
   const glm::vec3 f = glm::normalize(forward);
-  const glm::vec3 right = glm::normalize(glm::cross(f, kWorldUp));
-  const glm::vec3 up = glm::cross(right, f);
+  const LevelBasis basis = level_basis(f);
   // Camera basis columns: X = right, Y = up, Z = backward (-forward).
-  return glm::normalize(glm::quat_cast(glm::mat3(right, up, -f)));
+  return glm::normalize(glm::quat_cast(glm::mat3(basis.right, basis.up, -f)));
 }
 
-// The roll-free orientation for a look direction given as yaw (about world up)
-// and pitch (elevation). At yaw 0 / pitch 0 the look direction is world -Z, so
-// a positive yaw turns left and a positive pitch tilts up -- matching
-// OrbitCamera.
-glm::quat level_look(float yaw, float pitch) {
-  const float cos_pitch = std::cos(pitch);
-  const glm::vec3 forward(-cos_pitch * std::sin(yaw), std::sin(pitch),
-                          -cos_pitch * std::cos(yaw));
+// The roll-free orientation whose forward points at `yaw` (about world up) and
+// `elevation` (angle above the horizontal): forward is world -Z at (0, 0), a
+// positive yaw turns left, a positive elevation lifts forward toward world up.
+// rotate() maps the public pitch sign onto `elevation`.
+glm::quat level_look(float yaw, float elevation) {
+  const float cos_e = std::cos(elevation);
+  const glm::vec3 forward(-cos_e * std::sin(yaw), std::sin(elevation),
+                          -cos_e * std::cos(yaw));
   return level_orientation(forward);
 }
 
 }  // namespace
 
 void CameraRig::rotate(float delta_yaw, float delta_pitch) {
+  // Positive delta_pitch tilts the view down -- raising the eye when orbiting
+  // -- to match OrbitCamera's elevation sign. `elevation` below measures
+  // forward's lift toward world +Y, the opposite sense, so negate the incoming
+  // pitch.
+  const float delta_elevation = -delta_pitch;
   if (level_horizon_) {
     // Decompose the current look into yaw + elevation, advance them, clamp the
-    // pitch shy of the poles, and rebuild a roll-free orientation.
+    // elevation shy of the poles, and rebuild a roll-free orientation.
     const glm::vec3 f = forward();
-    const float pitch = std::asin(std::clamp(f.y, -1.0f, 1.0f));
+    const float elevation = std::asin(std::clamp(f.y, -1.0f, 1.0f));
+    // TODO: yaw is undefined when forward is vertical (reachable only by
+    // entering level mode from a near-vertical free / set_focus pose), so the
+    // heading snaps to 0; a stored heading would preserve it.
     const float yaw = std::atan2(-f.x, -f.z);
-    orientation_ =
-        level_look(yaw + delta_yaw,
-                   std::clamp(pitch + delta_pitch, -kMaxPitch, kMaxPitch));
+    orientation_ = level_look(
+        yaw + delta_yaw,
+        std::clamp(elevation + delta_elevation, -kMaxPitch, kMaxPitch));
   } else {
     // Free 6-DoF: compose in the local frame, so repeated yaw + pitch
     // accumulate roll and the pitch is unclamped (the look ray may pass the
     // poles).
-    const glm::quat rot =
-        glm::angleAxis(delta_yaw, up()) * glm::angleAxis(delta_pitch, right());
+    const glm::quat rot = glm::angleAxis(delta_yaw, up()) *
+                          glm::angleAxis(delta_elevation, right());
     orientation_ = glm::normalize(rot * orientation_);
   }
 }
@@ -77,16 +81,21 @@ void CameraRig::look(float delta_yaw, float delta_pitch) {
 }
 
 void CameraRig::move_local(const glm::vec3& delta) {
-  position_ += right() * delta.x + up() * delta.y + forward() * delta.z;
+  // right()*x + up()*y + forward()*z, collapsed into one rotation: forward() is
+  // local -Z, so negate the local delta's z before rotating it into the world.
+  position_ += orientation_ * glm::vec3(delta.x, delta.y, -delta.z);
 }
 
 void CameraRig::pan(float delta_right, float delta_up) {
-  position_ += right() * delta_right + up() * delta_up;
+  move_local(glm::vec3(delta_right, delta_up, 0.0f));
 }
 
 void CameraRig::zoom(float factor) {
   const glm::vec3 pivot = focus_point();
-  focus_distance_ = std::max(focus_distance_ * factor, kMinFocusDistance);
+  // Floor first so a NaN / non-positive factor clamps to kMinFocusDistance
+  // instead of poisoning focus_distance_ (std::max returns its first argument
+  // when neither compares greater, i.e. against a NaN).
+  focus_distance_ = std::max(kMinFocusDistance, focus_distance_ * factor);
   position_ = pivot - forward() * focus_distance_;
 }
 
@@ -103,15 +112,13 @@ void CameraRig::set_focus(const glm::vec3& target) {
     return;  // no well-defined look direction toward a coincident point
   }
   focus_distance_ = distance;
-  const glm::vec3 dir = to_target / distance;
-  // Aim level, clamping elevation shy of the pole so the basis stays defined.
-  const float pitch = std::clamp(std::asin(std::clamp(dir.y, -1.0f, 1.0f)),
-                                 -kMaxPitch, kMaxPitch);
-  orientation_ = level_look(std::atan2(-dir.x, -dir.z), pitch);
+  // Aim exactly along the target ray (roll-free, pole-safe) so focus_point()
+  // lands on the target.
+  orientation_ = level_orientation(to_target / distance);
 }
 
 void CameraRig::set_focus_distance(float distance) noexcept {
-  focus_distance_ = std::max(distance, kMinFocusDistance);
+  focus_distance_ = std::max(kMinFocusDistance, distance);
 }
 
 glm::vec3 CameraRig::forward() const {

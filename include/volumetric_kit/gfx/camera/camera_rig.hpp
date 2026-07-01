@@ -31,6 +31,7 @@
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/camera/export.hpp"
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"
 //
 #include <glm/gtc/quaternion.hpp>  // glm::quat
 #include <glm/mat4x4.hpp>
@@ -66,13 +67,14 @@ class VG_CAMERA_API CameraRig {
   /// The look direction's elevation is held in `[-kMaxPitch, +kMaxPitch]` so it
   /// never reaches a pole, where `forward` would align with world up and the
   /// level-horizon basis would degenerate. Ignored when @ref level_horizon is
-  /// cleared.
-  static constexpr float kMaxPitch = 1.5620697f;  // (pi/2) - ~0.0087 rad
+  /// cleared. Shares the camera tier's @ref kPoleClampRadians with
+  /// @ref OrbitCamera::kMaxElevation.
+  static constexpr float kMaxPitch = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref focus_distance, so the pivot never reaches
   /// the
   ///        eye (which would collapse the view ray).
-  static constexpr float kMinFocusDistance = 0.001f;
+  static constexpr float kMinFocusDistance = kMinPivotDistance;
 
   /// Construct the default rig: at the origin, looking down world `-Z` with
   /// world `+Y` up, unit focus distance, level horizon.
@@ -83,8 +85,10 @@ class VG_CAMERA_API CameraRig {
   /// @brief Swing the eye around the focus pivot (the drag-to-rotate verb).
   /// @param delta_yaw    Yaw change, in radians; `+` turns left (counter-
   ///                     clockwise about world up), matching @ref OrbitCamera.
-  /// @param delta_pitch  Pitch change, in radians; `+` tilts the view up. In
-  ///                     @ref level_horizon mode the elevation is clamped to
+  /// @param delta_pitch  Pitch change, in radians; `+` raises the eye over the
+  ///                     pivot (tilting the view down), matching
+  ///                     @ref OrbitCamera's elevation sign. In
+  ///                     @ref level_horizon mode it is clamped to
   ///                     `[-kMaxPitch, +kMaxPitch]`.
   ///
   /// @ref focus_point and @ref focus_distance are preserved: the eye moves
@@ -96,8 +100,10 @@ class VG_CAMERA_API CameraRig {
   /// (the
   ///        mouse-look / turn verb). The pivot rides with the new look ray.
   /// @param delta_yaw    Yaw change, in radians (see @ref orbit for the sign).
-  /// @param delta_pitch  Pitch change, in radians (clamped in
-  ///                     @ref level_horizon mode).
+  /// @param delta_pitch  Pitch change, in radians; shares @ref orbit's sign, so
+  ///                     `+` tilts the view down (clamped in
+  ///                     @ref level_horizon mode). A mouse-look mapping that
+  ///                     wants drag-up to look up negates the pointer delta.
   void look(float delta_yaw, float delta_pitch);
 
   /// @brief Translate the eye along its own axes (the WASDQE verb).
@@ -137,10 +143,15 @@ class VG_CAMERA_API CameraRig {
     position_ = position;
   }
 
-  /// @brief Aim the eye at a world point, level, and set @ref focus_distance to
-  ///        the gap.
+  /// @brief Aim the eye exactly at a world point, level, and set
+  ///        @ref focus_distance to the gap so @ref focus_point lands on it.
   /// @param target  World-space point to look at. Ignored if it coincides with
   ///                @ref position (which has no well-defined direction).
+  ///
+  /// The resulting orientation is roll-free (horizon level) whatever
+  /// @ref level_horizon is; a target directly overhead/underfoot is aimed at
+  /// exactly, but the next @ref level_horizon turn then re-clamps shy of the
+  /// pole.
   void set_focus(const glm::vec3& target);
 
   /// @brief Set the pivot distance ahead of the eye along the view ray.
@@ -151,6 +162,10 @@ class VG_CAMERA_API CameraRig {
   /// @brief Choose the horizon behavior of the rotation verbs.
   /// @param level  `true` keeps the horizon level (yaw/pitch, pole-clamped);
   ///               `false` allows free 6-DoF rotation with roll.
+  /// @note Re-enabling level mode from a near-vertical free-mode orientation
+  ///       re-levels on the next @ref orbit / @ref look: any accumulated roll
+  ///       is dropped and, within a pole margin, the heading snaps (the
+  ///       horizontal yaw is undefined when @ref forward is vertical).
   void set_level_horizon(bool level) noexcept { level_horizon_ = level; }
 
   // --- reads ---------------------------------------------------------------
