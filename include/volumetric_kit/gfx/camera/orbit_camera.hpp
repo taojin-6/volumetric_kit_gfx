@@ -16,6 +16,7 @@
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/camera/export.hpp"
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"
 //
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -49,11 +50,12 @@ class VG_CAMERA_API OrbitCamera {
   ///
   /// @ref elevation is held in `[-kMaxElevation, +kMaxElevation]` so the eye
   /// never reaches a pole, where `forward` would align with world up and the
-  /// look-at basis would degenerate.
-  static constexpr float kMaxElevation = 1.5620697f;  // (pi/2) - ~0.0087 rad
+  /// look-at basis would degenerate. Shares the camera tier's
+  /// @ref kPoleClampRadians with @ref CameraRig::kMaxPitch.
+  static constexpr float kMaxElevation = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref distance, so the eye cannot reach the target.
-  static constexpr float kMinDistance = 0.001f;
+  static constexpr float kMinDistance = kMinPivotDistance;
 
   /// Construct a default controller: target at the origin, unit distance,
   /// azimuth and elevation zero (eye in front on +Z).

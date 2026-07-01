@@ -2,11 +2,12 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- gfx_camera: camera tier -------------------------------------------------
-# Pure-CPU view + projection math: Camera (Vulkan-clip-space view/projection)
-# and OrbitCamera (turntable controls). Its only dependency is glm; it links
-# neither gfx_core nor Vulkan, so it is the one tier that builds and tests with
-# no Vulkan device or loader present. The strict tier rule (depend only on tiers
-# to the left) is satisfied trivially: it depends on no other tier.
+# Pure-CPU view + projection math: Camera (Vulkan-clip-space view/projection),
+# OrbitCamera (turntable controls), and CameraRig (6-DoF verb-driven pose). Its
+# only dependency is glm; it links neither gfx_core nor Vulkan, so it is the one
+# tier that builds and tests with no Vulkan device or loader present. The strict
+# tier rule (depend only on tiers to the left) is satisfied trivially: it
+# depends on no other tier.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -15,7 +16,7 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_camera)
 add_library(volumetric_kit::gfx_camera ALIAS gfx_camera)
 
-target_sources(gfx_camera PRIVATE camera.cpp orbit_camera.cpp)
+target_sources(gfx_camera PRIVATE camera.cpp orbit_camera.cpp camera_rig.cpp)
 
 generate_export_header(
   gfx_camera

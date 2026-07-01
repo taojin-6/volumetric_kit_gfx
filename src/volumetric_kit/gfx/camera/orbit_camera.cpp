@@ -4,22 +4,14 @@
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // kWorldUp, level_basis
 //
 #include <algorithm>  // std::clamp, std::max
 #include <cmath>      // std::cos, std::sin
 
 #include <glm/ext/matrix_transform.hpp>  // lookAt
-#include <glm/geometric.hpp>             // cross, normalize
 
 namespace volumetric_kit::gfx::camera {
-
-namespace {
-
-// World up. Shared by the spherical->cartesian eye offset and the look-at
-// basis, so both agree on which axis "up" and the elevation poles live on.
-constexpr glm::vec3 kWorldUp(0.0f, 1.0f, 0.0f);
-
-}  // namespace
 
 void OrbitCamera::orbit(float delta_azimuth, float delta_elevation) {
   azimuth_ += delta_azimuth;
@@ -27,12 +19,10 @@ void OrbitCamera::orbit(float delta_azimuth, float delta_elevation) {
 }
 
 void OrbitCamera::pan(float delta_right, float delta_up) {
-  // Derive the view-plane axes from the current orientation, then slide the
-  // target within that plane. forward points from the eye toward the target.
-  const glm::vec3 forward = glm::normalize(target_ - eye());
-  const glm::vec3 right = glm::normalize(glm::cross(forward, kWorldUp));
-  const glm::vec3 up = glm::cross(right, forward);
-  target_ += right * delta_right + up * delta_up;
+  // Slide the target within the current view plane; forward points from the eye
+  // toward the target.
+  const LevelBasis basis = level_basis(target_ - eye());
+  target_ += basis.right * delta_right + basis.up * delta_up;
 }
 
 void OrbitCamera::dolly(float delta) { set_distance(distance_ + delta); }
