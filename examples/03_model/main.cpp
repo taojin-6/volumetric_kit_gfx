@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// examples/03_model: load a glTF model and look at it. Parses a `.gltf`/`.glb`
-// with the io tier into a CPU assets::Model, uploads each mesh (vertex + index
-// buffer) and its material maps, and draws it depth-tested with glTF
-// metallic-roughness PBR: a per-draw model/MVP push constant, a per-frame scene
-// set (set 0: camera), and a per-material set (set 1: factor UBO + the five
-// maps) -- all reflected automatically into the pipeline layout. The camera
-// auto-frames the model's bounds, so any model fills the view. IBL (image-based
-// ambient) is the next spine step; today the ambient is a flat fill.
+// examples/03_model: load a glTF model and fly around it. Parses a
+// `.gltf`/`.glb` with the io tier into a CPU assets::Model, uploads each mesh
+// (vertex + index buffer) and its material maps, and draws it depth-tested with
+// glTF metallic-roughness PBR: a per-draw model/MVP push constant, a per-frame
+// scene set (set 0: camera), and a per-material set (set 1: factor UBO + the
+// five maps) -- all reflected automatically into the pipeline layout. The
+// camera auto-frames the model's bounds, so any model fills the view. IBL
+// (image-based ambient) is the next spine step; today the ambient is a flat
+// fill.
 //
 // Usage:
 //   example_03_model                       # built-in cube, in a window
@@ -16,8 +17,12 @@
 //   example_03_model --frames 3            # render N frames, then exit
 //   example_03_model --model m.glb --screenshot out.ppm   # headless still
 //
+// Controls (windowed, interactive by default): left-drag orbits, right/middle-
+// drag pans, wheel zooms, WASDQE flies (Q/E down/up), Shift moves faster.
+//
 // Two render paths share the model load + upload + draw recording:
-//  * Windowed (default): Surface + Swapchain + FrameLoop, slowly orbiting. The
+//  * Windowed (default): Surface + Swapchain + FrameLoop, driven by mouse +
+//    keyboard (a deterministic turntable instead under --frames). The
 //    swapchain is color-only, so this example owns the depth image and pairs it
 //    with the swapchain's color view (Swapchain::image_view) into its own
 //    RenderTarget. One frame in flight keeps that single depth image free of
@@ -55,7 +60,7 @@
 #include <glm/vec4.hpp>
 
 #include "volumetric_kit/gfx/assets/model.hpp"
-#include "volumetric_kit/gfx/camera/orbit_camera.hpp"
+#include "volumetric_kit/gfx/camera/camera_rig.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
@@ -250,15 +255,34 @@ Bounds compute_bounds(const assets::Model& model,
   return b;
 }
 
-// Point the orbit camera at the model's bounds and return a fitting near/far.
-std::pair<float, float> frame_camera(camera::OrbitCamera& orbit,
-                                     const Bounds& bounds) {
+// Frame the model's bounds with a three-quarter starting view: the rig looks
+// slightly down at the bounds center from a distance that fits the bounding
+// sphere. Near/far are fit separately by fit_clip (refit per frame while
+// navigating); interactive input (or the --frames turntable) takes over from
+// this pose.
+void frame_camera(camera::CameraRig& rig, const Bounds& bounds) {
   const float radius = std::fmax(bounds.radius(), 1e-3f);
-  orbit.set_target(bounds.center());
-  orbit.set_distance(radius / std::sin(kFovY * 0.5f) * 1.3f);  // fit the sphere
-  orbit.set_elevation(0.35f);  // look slightly down on it
-  const float z_far = orbit.distance() + radius * 4.0f;
-  const float z_near = std::fmax(orbit.distance() - radius, radius * 0.02f);
+  const float distance = radius / std::sin(kFovY * 0.5f) * 1.3f;  // fit sphere
+  // Eye offset from the center: a slight yaw for a three-quarter view, tilted
+  // up so the camera looks down on the model.
+  constexpr float kAzimuth = 0.7f;
+  constexpr float kElevation = 0.35f;
+  const float cos_e = std::cos(kElevation);
+  const glm::vec3 offset(cos_e * std::sin(kAzimuth), std::sin(kElevation),
+                         cos_e * std::cos(kAzimuth));
+  rig.set_position(bounds.center() + offset * distance);
+  rig.set_focus(bounds.center());  // aim at center; sets focus distance to it
+}
+
+// Near/far planes fitting the bounds sphere as seen from `eye`, recomputed as
+// the camera moves so zoom/fly keep the model in view. Conservative: the
+// Euclidean eye->center distance +/- the bounding radius (extra far slack),
+// clamped so z_near stays positive when the eye is at or inside the sphere.
+std::pair<float, float> fit_clip(const Bounds& bounds, const glm::vec3& eye) {
+  const float radius = std::fmax(bounds.radius(), 1e-3f);
+  const float distance = glm::length(eye - bounds.center());
+  const float z_far = distance + radius * 4.0f;
+  const float z_near = std::fmax(distance - radius, radius * 0.02f);
   return {z_near, z_far};
 }
 
@@ -1227,10 +1251,10 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
-  camera::OrbitCamera orbit;
-  const std::pair<float, float> clip =
-      frame_camera(orbit, compute_bounds(model, draws));
-  orbit.set_azimuth(0.7f);  // a fixed three-quarter view for the still
+  const Bounds bounds = compute_bounds(model, draws);
+  camera::CameraRig rig;
+  frame_camera(rig, bounds);
+  const std::pair<float, float> clip = fit_clip(bounds, rig.position());
 
   // sRGB color so the encoded readback matches the windowed (sRGB) look.
   vg::OffscreenTargetDesc target_desc;
@@ -1261,7 +1285,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   }
 
   // Fixed camera for the still: write the eye into the scene set once.
-  pbr.scene.set_camera(orbit.eye(), ibl.prefilter_max_lod);
+  pbr.scene.set_camera(rig.position(), ibl.prefilter_max_lod);
   const std::vector<pipelines::PbrDraw> pbr_draws =
       build_pbr_draws(model, meshes, pbr, draws);
 
@@ -1273,7 +1297,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
 
   const float aspect = static_cast<float>(width) / static_cast<float>(height);
   const glm::mat4 view_proj =
-      orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
+      rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
 
   const vg::Status recorded =
       device.value().submit_single_time([&](VkCommandBuffer cmd) {
@@ -1292,7 +1316,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
         begin.clear_color = background();
         const vg::RenderTarget rt = target.value().target();
         rt.begin(cmd, begin);
-        record_skybox(cmd, {width, height}, skybox, view_proj, orbit.eye());
+        record_skybox(cmd, {width, height}, skybox, view_proj, rig.position());
         pipelines::PbrFrame frame;
         frame.extent = {width, height};
         frame.view_proj = view_proj;
@@ -1317,11 +1341,92 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   return 0;
 }
 
-// --- Windowed path: Surface + Swapchain + FrameLoop, slowly orbiting
-// ----------
+// --- Interactive camera input: map mouse + keyboard onto CameraRig verbs -----
+
+// Per-window input state, registered as the GLFW user pointer so the scroll
+// callback (the one event GLFW has no per-frame poll for) can accumulate into
+// it. Everything else is polled each frame in apply_input.
+struct InputState {
+  double last_x = 0.0;
+  double last_y = 0.0;
+  bool has_cursor = false;  // seed the delta on the first frame, so no jump
+  double scroll = 0.0;      // wheel notches accumulated since the last apply
+  double last_time = 0.0;   // for a per-frame dt
+};
+
+void scroll_callback(GLFWwindow* window, double /*x_offset*/, double y_offset) {
+  auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
+  if (input != nullptr) {
+    input->scroll += y_offset;
+  }
+}
+
+// Drive the rig from this frame's input: left-drag orbits, right/middle-drag
+// pans (scaled by focus distance so it tracks the cursor at any zoom), the
+// wheel zooms, and WASDQE flies (Q/E = down/up, Shift = faster). move_speed
+// scales the fly speed to the model size so it feels right for any model.
+void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
+                 float move_speed) {
+  const double now = glfwGetTime();
+  float dt =
+      input.last_time > 0.0 ? static_cast<float>(now - input.last_time) : 0.0f;
+  input.last_time = now;
+  dt = std::fmin(dt, 0.1f);  // clamp a long stall (e.g. dragging the title bar)
+
+  double x = 0.0;
+  double y = 0.0;
+  glfwGetCursorPos(window, &x, &y);
+  if (!input.has_cursor) {  // first frame: no delta, just latch the position
+    input.last_x = x;
+    input.last_y = y;
+    input.has_cursor = true;
+  }
+  const float dx = static_cast<float>(x - input.last_x);
+  const float dy = static_cast<float>(y - input.last_y);
+  input.last_x = x;
+  input.last_y = y;
+
+  constexpr float kOrbitSpeed = 0.005f;  // radians / pixel
+  constexpr float kPanSpeed = 0.0015f;   // world units / pixel, per focus unit
+  constexpr float kZoomStep = 0.9f;      // multiplier / wheel notch
+
+  const bool left =
+      glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+  const bool panning =
+      glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
+      glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+  if (left) {
+    rig.orbit(-dx * kOrbitSpeed, -dy * kOrbitSpeed);
+  } else if (panning) {
+    const float scale = kPanSpeed * rig.focus_distance();
+    rig.pan(-dx * scale, dy * scale);
+  }
+
+  if (input.scroll != 0.0) {
+    rig.zoom(std::pow(kZoomStep, static_cast<float>(input.scroll)));
+    input.scroll = 0.0;
+  }
+
+  glm::vec3 move(0.0f);
+  move.x += glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ? 1.0f : 0.0f;
+  move.x -= glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ? 1.0f : 0.0f;
+  move.y += glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS ? 1.0f : 0.0f;
+  move.y -= glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS ? 1.0f : 0.0f;
+  move.z += glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ? 1.0f : 0.0f;
+  move.z -= glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ? 1.0f : 0.0f;
+  if (glm::dot(move, move) > 0.0f) {  // a movement key is held
+    const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                      glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    rig.move_local(glm::normalize(move) * move_speed * (fast ? 4.0f : 1.0f) *
+                   dt);
+  }
+}
+
+// --- Windowed path: Surface + Swapchain + FrameLoop --------------------------
 
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
-// this returns, before main() tears GLFW down.
+// this returns, before main() tears GLFW down. Interactive by default; with
+// max_frames >= 0 it runs a deterministic turntable and exits (for CI).
 int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
@@ -1380,9 +1485,18 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
 
-  camera::OrbitCamera orbit;
-  const std::pair<float, float> clip =
-      frame_camera(orbit, compute_bounds(model, draws));
+  const Bounds bounds = compute_bounds(model, draws);
+  camera::CameraRig rig;
+  frame_camera(rig, bounds);
+  // Interactive by default; a deterministic turntable when --frames is given,
+  // so CI renders a reproducible sequence. Fly speed scales to the model size.
+  const bool interactive = max_frames < 0;
+  const float move_speed = std::fmax(bounds.radius(), 1e-3f) * 1.5f;
+  InputState input;
+  if (interactive) {
+    glfwSetWindowUserPointer(window, &input);
+    glfwSetScrollCallback(window, scroll_callback);
+  }
 
   win::SwapchainConfig swapchain_config;
   swapchain_config.extent = framebuffer_extent(window);
@@ -1515,24 +1629,33 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     begin.clear_color = background();
     rt.begin(cmd, begin);
 
-    // Slow turntable, advanced per rendered frame (deterministic for --frames).
-    orbit.set_azimuth(static_cast<float>(rendered) * 0.0075f);
+    // Advance the camera: interactive input, or a deterministic per-frame
+    // turntable step under --frames (reproducible for CI).
+    if (interactive) {
+      apply_input(window, input, rig, move_speed);
+    } else {
+      rig.orbit(0.0075f, 0.0f);
+    }
+    // Refit near/far to the model from the camera's new position, so zoom/fly
+    // keep it within the frustum (orbit holds its distance, so this stays
+    // constant under --frames).
+    const std::pair<float, float> clip = fit_clip(bounds, rig.position());
     const float aspect =
         static_cast<float>(extent.width) /
         static_cast<float>(extent.height == 0 ? 1 : extent.height);
     const glm::mat4 view_proj =
-        orbit.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
-    // The camera orbits each frame, so refresh the scene camera before drawing.
+        rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
+    // The camera moves each frame, so refresh the scene camera before drawing.
     // Safe with one frame in flight: begin_frame waited the previous frame's
     // fence above, so the GPU has finished reading this single shared UBO.
     // Raising frames_in_flight > 1 would need a per-slot scene UBO.
-    pbr.scene.set_camera(orbit.eye(), ibl.prefilter_max_lod);
+    pbr.scene.set_camera(rig.position(), ibl.prefilter_max_lod);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
       // around each, resolved into the metrics printed below.
       vg::Profiler::Scope skybox_scope =
           profiler.value().gpu_scope(cmd, "skybox");
-      record_skybox(cmd, extent, skybox, view_proj, orbit.eye());
+      record_skybox(cmd, extent, skybox, view_proj, rig.position());
     }
     pipelines::PbrFrame frame_info;
     frame_info.extent = extent;

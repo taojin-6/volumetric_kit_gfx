@@ -52,7 +52,7 @@ set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp" PROPERTIES COMPILE_OPTIONS "-w")
 
 # 03_model: load a glTF model (io tier) and view it depth-tested through Surface
-# + Swapchain + FrameLoop, with an auto-framing OrbitCamera (camera tier) and a
+# + Swapchain + FrameLoop, with an interactive CameraRig (camera tier) and a
 # reflected per-draw MVP push constant. Links the io + camera tiers on top of
 # windowing; the Vulkan loader directly because it records vkCmd* itself.
 add_executable(example_03_model 03_model/main.cpp)
