@@ -14,8 +14,8 @@
 // Usage:
 //   example_03_model                       # built-in cube, in a window
 //   example_03_model --model Helmet.glb    # any glTF-Sample-Assets model
-//   example_03_model --frames 3            # render N deterministic frames,
-//   exit example_03_model --model m.glb --screenshot out.ppm   # headless still
+//   example_03_model --frames 3            # render N frames, then exit
+//   example_03_model --model m.glb --screenshot out.ppm   # headless still
 //
 // Controls (windowed, interactive by default): left-drag orbits, right/middle-
 // drag pans, wheel zooms, WASDQE flies (Q/E down/up), Shift moves faster.
@@ -255,12 +255,12 @@ Bounds compute_bounds(const assets::Model& model,
   return b;
 }
 
-// Frame the model's bounds with a three-quarter view and return a fitting
-// near/far. The rig looks slightly down at the bounds center from a distance
-// that fits the bounding sphere; interactive input (or the --frames turntable)
-// takes over from this starting pose.
-std::pair<float, float> frame_camera(camera::CameraRig& rig,
-                                     const Bounds& bounds) {
+// Frame the model's bounds with a three-quarter starting view: the rig looks
+// slightly down at the bounds center from a distance that fits the bounding
+// sphere. Near/far are fit separately by fit_clip (refit per frame while
+// navigating); interactive input (or the --frames turntable) takes over from
+// this pose.
+void frame_camera(camera::CameraRig& rig, const Bounds& bounds) {
   const float radius = std::fmax(bounds.radius(), 1e-3f);
   const float distance = radius / std::sin(kFovY * 0.5f) * 1.3f;  // fit sphere
   // Eye offset from the center: a slight yaw for a three-quarter view, tilted
@@ -272,6 +272,15 @@ std::pair<float, float> frame_camera(camera::CameraRig& rig,
                          cos_e * std::cos(kAzimuth));
   rig.set_position(bounds.center() + offset * distance);
   rig.set_focus(bounds.center());  // aim at center; sets focus distance to it
+}
+
+// Near/far planes fitting the bounds sphere as seen from `eye`, recomputed as
+// the camera moves so zoom/fly keep the model in view. Conservative: the
+// Euclidean eye->center distance +/- the bounding radius (extra far slack),
+// clamped so z_near stays positive when the eye is at or inside the sphere.
+std::pair<float, float> fit_clip(const Bounds& bounds, const glm::vec3& eye) {
+  const float radius = std::fmax(bounds.radius(), 1e-3f);
+  const float distance = glm::length(eye - bounds.center());
   const float z_far = distance + radius * 4.0f;
   const float z_near = std::fmax(distance - radius, radius * 0.02f);
   return {z_near, z_far};
@@ -1242,9 +1251,10 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
+  const Bounds bounds = compute_bounds(model, draws);
   camera::CameraRig rig;
-  const std::pair<float, float> clip =
-      frame_camera(rig, compute_bounds(model, draws));
+  frame_camera(rig, bounds);
+  const std::pair<float, float> clip = fit_clip(bounds, rig.position());
 
   // sRGB color so the encoded readback matches the windowed (sRGB) look.
   vg::OffscreenTargetDesc target_desc;
@@ -1477,7 +1487,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
   const Bounds bounds = compute_bounds(model, draws);
   camera::CameraRig rig;
-  const std::pair<float, float> clip = frame_camera(rig, bounds);
+  frame_camera(rig, bounds);
   // Interactive by default; a deterministic turntable when --frames is given,
   // so CI renders a reproducible sequence. Fly speed scales to the model size.
   const bool interactive = max_frames < 0;
@@ -1626,6 +1636,10 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     } else {
       rig.orbit(0.0075f, 0.0f);
     }
+    // Refit near/far to the model from the camera's new position, so zoom/fly
+    // keep it within the frustum (orbit holds its distance, so this stays
+    // constant under --frames).
+    const std::pair<float, float> clip = fit_clip(bounds, rig.position());
     const float aspect =
         static_cast<float>(extent.width) /
         static_cast<float>(extent.height == 0 ? 1 : extent.height);
