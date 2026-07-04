@@ -14,7 +14,8 @@ add_subdirectory(volumetric_kit/gfx/assets)
 add_subdirectory(volumetric_kit/gfx/io)
 add_subdirectory(volumetric_kit/gfx/ui)
 add_subdirectory(volumetric_kit/gfx/pipelines)
-# TODO: add_subdirectory() for passes / app as those tiers land.
+add_subdirectory(volumetric_kit/gfx/app)
+# TODO: add_subdirectory() for passes as that tier lands.
 
 # --- gfx: umbrella alias ----------------------------------------------------
 # Consumers link `volumetric_kit::gfx` and get whatever tiers are built. gfx_ui
@@ -31,6 +32,7 @@ target_link_libraries(
             gfx_assets
             gfx_io
             gfx_pipelines
+            gfx_app
             $<BUILD_INTERFACE:gfx_ui>)
 
 # --- Install / export -------------------------------------------------------

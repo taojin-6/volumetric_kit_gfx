@@ -21,16 +21,18 @@
 // Controls (windowed, interactive by default): left-drag orbits, right/middle-
 // drag pans, wheel zooms, WASDQE flies (Q/E down/up), Shift moves faster.
 //
-// Two render paths share the model load + upload + draw recording:
-//  * Windowed (default): Surface + Swapchain + FrameLoop, driven by mouse +
-//    keyboard (a deterministic turntable instead under --frames). The
-//    swapchain owns a depth attachment per image
-//    (SwapchainConfig::depth_format) and rebuilds it on resize, so each frame
-//    renders straight into the loop's depth-capable target at two frames in
-//    flight.
-//  * --screenshot: no window -- renders one frame into an OffscreenTarget
-//    (color + depth + readback) and writes a binary PPM. Headless, so it works
-//    where no display / screen-capture is available.
+// Two render paths share the model load + upload + draw recording, each with
+// its bring-up collapsed into one app-tier call:
+//  * Windowed (default): app::WindowedApp (instance -> surface -> device ->
+//    swapchain -> frame loop), driven by mouse + keyboard (a deterministic
+//    turntable instead under --frames). The swapchain owns a depth attachment
+//    per image (SwapchainConfig::depth_format) and rebuilds it on resize, so
+//    each frame renders straight into the loop's depth-capable target at two
+//    frames in flight.
+//  * --screenshot: app::HeadlessApp (no window, no surface) -- renders one
+//    frame into an OffscreenTarget (color + depth + readback) and writes a
+//    binary PPM. Headless, so it works where no display / screen-capture is
+//    available.
 
 #include "volumetric_kit/gfx/core/vulkan.hpp"  // before GLFW, so glfw3.h sees
 // Vulkan and declares its helpers
@@ -59,13 +61,15 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "common/glfw_surface.hpp"
+#include "volumetric_kit/gfx/app/headless_app.hpp"
+#include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -91,9 +95,9 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 
-// TODO: load_spirv + framebuffer_extent are duplicated across examples
-// 01/02/03; hoist the shared pieces into an examples/common helper in a focused
-// cleanup.
+// TODO: load_spirv + framebuffer_extent are still duplicated across examples
+// 01/02/03; hoist them into examples/common/ too (the GLFW surface factory
+// already lives there) in a focused cleanup.
 std::vector<uint32_t> load_spirv(const char* path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -505,32 +509,17 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
 
 int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
                    uint32_t height) {
-  vg::InstanceConfig instance_config;
-  instance_config.app_name = "03_model";
-  instance_config.enable_validation = true;  // a no-op when the layer is absent
-  auto instance = vg::Instance::create(instance_config);
-  if (!instance.ok()) {
-    std::fprintf(stderr, "instance: %s\n", instance.status().message().c_str());
+  // The whole headless bring-up (instance -> device -> allocator, no surface,
+  // no present queue) in one call.
+  vg::app::HeadlessAppConfig app_config;
+  app_config.app_name = "03_model";
+  app_config.enable_validation = true;  // a no-op when the layer is absent
+  auto created = vg::app::HeadlessApp::create(app_config);
+  if (!created.ok()) {
+    std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
   }
-  auto physical = instance.value().select_physical_device();  // no surface
-  if (!physical.ok()) {
-    std::fprintf(stderr, "device: %s\n", physical.status().message().c_str());
-    return 1;
-  }
-  auto device = vg::Device::create(instance.value().handle(), physical.value(),
-                                   vg::DeviceConfig{});  // headless, no present
-  if (!device.ok()) {
-    std::fprintf(stderr, "device: %s\n", device.status().message().c_str());
-    return 1;
-  }
-  auto allocator =
-      vg::Allocator::create(instance.value().handle(), device.value());
-  if (!allocator.ok()) {
-    std::fprintf(stderr, "allocator: %s\n",
-                 allocator.status().message().c_str());
-    return 1;
-  }
+  vg::app::HeadlessApp app = std::move(created).value();
 
   bool ok = true;
   const assets::Model model = load_model_or_cube(model_path, &ok);
@@ -548,13 +537,13 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   target_desc.extent = {width, height};
   target_desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;
   target_desc.depth_format = kDepthFormat;
-  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  auto target = vg::OffscreenTarget::create(app.allocator(), target_desc);
   if (!target.ok()) {
     std::fprintf(stderr, "offscreen: %s\n", target.status().message().c_str());
     return 1;
   }
 
-  auto pipeline = pipelines::PbrPipeline::create(device.value().handle(),
+  auto pipeline = pipelines::PbrPipeline::create(app.device().handle(),
                                                  target.value().layout());
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
@@ -564,8 +553,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   // The whole assets::Model -> GPU bridge in one call: meshes + material maps
   // uploaded (a single submit), materials built, the scene flattened into a
   // draw list ready for PbrFrame.
-  auto gpu_model = pipelines::PbrModel::create(
-      device.value(), allocator.value(), pipeline.value(), model);
+  auto gpu_model = pipelines::PbrModel::create(app.device(), app.allocator(),
+                                               pipeline.value(), model);
   if (!gpu_model.ok()) {
     std::fprintf(stderr, "model: %s\n", gpu_model.status().message().c_str());
     return 1;
@@ -573,13 +562,13 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
 
   // Convolve the analytic sky into the IBL maps (irradiance + prefiltered
   // specular + BRDF LUT); sky_color is pure, as the concurrent bake requires.
-  auto ibl = pipelines::bake_ibl(device.value(), allocator.value(), sky_color);
+  auto ibl = pipelines::bake_ibl(app.device(), app.allocator(), sky_color);
   if (!ibl.ok()) {
     std::fprintf(stderr, "ibl: %s\n", ibl.status().message().c_str());
     return 1;
   }
   pipelines::PbrScene scene =
-      make_pbr_scene(device.value(), allocator.value(), pipeline.value(),
+      make_pbr_scene(app.device(), app.allocator(), pipeline.value(),
                      ibl.value(), /*frames_in_flight=*/1, &ok);
   if (!ok) {
     return 1;
@@ -588,8 +577,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   // Fixed camera for the still: write the eye into the scene set once.
   scene.set_camera(0, rig.position(), ibl.value().prefilter_max_lod);
 
-  Skybox skybox = setup_skybox(device.value(), allocator.value(),
-                               target.value().layout(), &ok);
+  Skybox skybox =
+      setup_skybox(app.device(), app.allocator(), target.value().layout(), &ok);
   if (!ok) {
     return 1;
   }
@@ -599,7 +588,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
       rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
 
   const vg::Status recorded =
-      device.value().submit_single_time([&](VkCommandBuffer cmd) {
+      app.device().submit_single_time([&](VkCommandBuffer cmd) {
         target.value().prepare(cmd);  // color + depth -> attachment layouts
 
         vg::RenderTargetBeginInfo begin;
@@ -713,7 +702,7 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
   }
 }
 
-// --- Windowed path: Surface + Swapchain + FrameLoop --------------------------
+// --- Windowed path: app::WindowedApp -----------------------------------------
 
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
 // this returns, before main() tears GLFW down. Interactive by default; with
@@ -722,47 +711,28 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
-  vg::InstanceConfig instance_config;
-  instance_config.app_name = "03_model";
-  instance_config.enable_validation = true;  // a no-op when the layer is absent
-  instance_config.extra_instance_extensions.assign(glfw_exts,
-                                                   glfw_exts + glfw_ext_count);
-  auto instance = vg::Instance::create(instance_config);
-  if (!instance.ok()) {
-    std::fprintf(stderr, "instance: %s\n", instance.status().message().c_str());
-    return 1;
-  }
+  // Two frames in flight: the swapchain keeps depth per image and the scene
+  // UBO rings per slot, so nothing is shared across in-flight frames.
+  constexpr uint32_t kFramesInFlight = 2;
 
-  VkSurfaceKHR raw_surface = VK_NULL_HANDLE;
-  if (glfwCreateWindowSurface(instance.value().handle(), window, nullptr,
-                              &raw_surface) != VK_SUCCESS) {
-    std::fprintf(stderr, "glfwCreateWindowSurface failed\n");
+  // The whole bring-up chain in one call; the lambda supplies the GLFW
+  // surface. SwapchainConfig::depth_format makes the swapchain own a depth
+  // attachment per image (rebuilt with the chain on resize), so its render
+  // targets are depth-capable.
+  vg::app::WindowedAppConfig app_config;
+  app_config.app_name = "03_model";
+  app_config.enable_validation = true;  // a no-op when the layer is absent
+  app_config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
+  app_config.swapchain.extent = framebuffer_extent(window);
+  app_config.swapchain.depth_format = kDepthFormat;
+  app_config.frames_in_flight = kFramesInFlight;
+  auto created = vg::app::WindowedApp::create(
+      app_config, example::glfw_surface_factory(window));
+  if (!created.ok()) {
+    std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
   }
-  win::Surface surface(instance.value().handle(), raw_surface);
-
-  auto physical = instance.value().select_physical_device(surface.handle());
-  if (!physical.ok()) {
-    std::fprintf(stderr, "device: %s\n", physical.status().message().c_str());
-    return 1;
-  }
-
-  vg::DeviceConfig device_config;
-  device_config.needs_present = true;
-  auto device = vg::Device::create(instance.value().handle(), physical.value(),
-                                   device_config, surface.handle());
-  if (!device.ok()) {
-    std::fprintf(stderr, "device: %s\n", device.status().message().c_str());
-    return 1;
-  }
-
-  auto allocator =
-      vg::Allocator::create(instance.value().handle(), device.value());
-  if (!allocator.ok()) {
-    std::fprintf(stderr, "allocator: %s\n",
-                 allocator.status().message().c_str());
-    return 1;
-  }
+  vg::app::WindowedApp app = std::move(created).value();
 
   bool ok = true;
   const assets::Model model = load_model_or_cube(model_path, &ok);
@@ -783,26 +753,11 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     glfwSetScrollCallback(window, scroll_callback);
   }
 
-  // The swapchain owns a depth attachment per image (rebuilt with the chain on
-  // resize), so its render targets are depth-capable and frames in flight never
-  // share a depth image. The allocator (created above) is borrowed and must
-  // outlive the swapchain.
-  win::SwapchainConfig swapchain_config;
-  swapchain_config.extent = framebuffer_extent(window);
-  swapchain_config.depth_format = kDepthFormat;
-  auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
-                                          swapchain_config, &allocator.value());
-  if (!swapchain.ok()) {
-    std::fprintf(stderr, "swapchain: %s\n",
-                 swapchain.status().message().c_str());
-    return 1;
-  }
-
   // The pipeline is built for the swapchain's layout (color + depth formats).
   // Size-independent (dynamic viewport), so it survives resizes without a
   // rebuild.
-  auto pipeline = pipelines::PbrPipeline::create(device.value().handle(),
-                                                 swapchain.value().layout());
+  auto pipeline = pipelines::PbrPipeline::create(app.device().handle(),
+                                                 app.swapchain().layout());
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
     return 1;
@@ -811,57 +766,54 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // The whole assets::Model -> GPU bridge in one call: meshes + material maps
   // uploaded (a single submit), materials built, the scene flattened into a
   // draw list ready for PbrFrame.
-  auto gpu_model = pipelines::PbrModel::create(
-      device.value(), allocator.value(), pipeline.value(), model);
+  auto gpu_model = pipelines::PbrModel::create(app.device(), app.allocator(),
+                                               pipeline.value(), model);
   if (!gpu_model.ok()) {
     std::fprintf(stderr, "model: %s\n", gpu_model.status().message().c_str());
     return 1;
   }
 
-  // Two frames in flight: the swapchain keeps depth per image and the scene
-  // UBO rings per slot, so nothing is shared across in-flight frames.
-  constexpr uint32_t kFramesInFlight = 2;
   // Convolve the analytic sky into the IBL maps (irradiance + prefiltered
   // specular + BRDF LUT); sky_color is pure, as the concurrent bake requires.
-  auto ibl = pipelines::bake_ibl(device.value(), allocator.value(), sky_color);
+  auto ibl = pipelines::bake_ibl(app.device(), app.allocator(), sky_color);
   if (!ibl.ok()) {
     std::fprintf(stderr, "ibl: %s\n", ibl.status().message().c_str());
     return 1;
   }
   pipelines::PbrScene scene =
-      make_pbr_scene(device.value(), allocator.value(), pipeline.value(),
+      make_pbr_scene(app.device(), app.allocator(), pipeline.value(),
                      ibl.value(), kFramesInFlight, &ok);
   if (!ok) {
     return 1;
   }
 
-  Skybox skybox = setup_skybox(device.value(), allocator.value(),
-                               swapchain.value().layout(), &ok);
+  Skybox skybox = setup_skybox(app.device(), app.allocator(),
+                               app.swapchain().layout(), &ok);
   if (!ok) {
     return 1;
   }
 
-  // CPU-ahead depth shared by the loop and the profiler driving it (declared
-  // above, before make_pbr_scene, so the scene UBO ring matches).
+  // CPU-ahead depth shared by the app's loop and the profiler driving it.
+  // Borrowed by the loop (set_profiler below) and detached again before
+  // teardown.
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = kFramesInFlight;
-  auto profiler = vg::Profiler::create(device.value(), profiler_config);
+  auto profiler = vg::Profiler::create(app.device(), profiler_config);
   if (!profiler.ok()) {
     std::fprintf(stderr, "profiler: %s\n", profiler.status().message().c_str());
     return 1;
   }
 
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
-                                     kFramesInFlight);
-  if (!loop.ok()) {
-    std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
-    return 1;
-  }
-  // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
-  // render loop only opens a scope around each pass. Resizes need no hook —
-  // the swapchain rebuilds its own depth attachments with the chain.
-  loop.value().set_profiler(&profiler.value());
+  // Turnkey: the app's loop now calls profiler.begin_frame/end_frame for us,
+  // so the render loop only opens a scope around each pass. Resizes need no
+  // hook — the swapchain rebuilds its own depth attachments with the chain.
+  app.set_profiler(&profiler.value());
 
+  // A hard error inside the loop breaks out to the shared wait_idle() teardown
+  // below rather than returning straight away, so any in-flight frame is
+  // drained before the after-app resources (pipeline, model, scene, skybox,
+  // profiler) destruct.
+  int exit_code = 0;
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
     if (max_frames >= 0 && rendered >= max_frames) {
@@ -869,14 +821,15 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     }
     glfwPollEvents();
 
-    // The loop owns the staleness protocol: it rebuilds the swapchain (which
-    // rebuilds its per-image depth attachments) after a resize, and skips
-    // ticks while the window is minimized.
-    auto frame = loop.value().begin_frame(framebuffer_extent(window));
+    // The app's loop owns the staleness protocol: it rebuilds the swapchain
+    // (which rebuilds its per-image depth attachments) after a resize, and
+    // skips ticks while the window is minimized.
+    auto frame = app.begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
-      return 1;  // ~FrameLoop drains any in-flight submission before teardown
+      exit_code = 1;
+      break;
     }
     if (!frame.value().has_value()) {
       // Paused: minimized, or the surface is still settling after a rebuild.
@@ -887,7 +840,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     }
     const win::Frame& f = *frame.value();
 
-    const VkExtent2D extent = swapchain.value().extent();
+    const VkExtent2D extent = app.swapchain().extent();
     const VkCommandBuffer cmd = f.cmd;
 
     // The acquired image's target already pairs its color view with its own
@@ -938,10 +891,11 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
     f.target->end(cmd);
 
-    const vg::Status present = loop.value().end_frame(f);
+    const vg::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-      return 1;  // ~FrameLoop drains the submitted frame before teardown
+      exit_code = 1;
+      break;
     }
 
     // Periodically dump the resolved per-pass timings. A slot's GPU times
@@ -965,8 +919,15 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     ++rendered;
   }
 
+  // Everything above (pipeline, model, scene, skybox, profiler) was created
+  // after the app, so it destructs before it — while the app's frame loop may
+  // still have frames in flight referencing it (including after an error break
+  // above). Idle the device first so that teardown is safe, and detach the
+  // borrowed profiler from the loop before it goes out of scope.
+  app.wait_idle();
+  app.set_profiler(nullptr);
   std::printf("03_model: rendered %d frame(s)\n", rendered);
-  return 0;
+  return exit_code;
 }
 
 bool parse_uint(const char* arg, uint32_t* out) {
