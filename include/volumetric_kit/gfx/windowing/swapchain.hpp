@@ -112,8 +112,14 @@ class VG_WINDOWING_API Swapchain {
   /// create).
   /// @return OK on success. A zero @p extent (minimized window) fails with
   ///         @ref Status::Code::InvalidArgument *without touching the current
-  ///         swapchain* — it stays valid for a later retry; only a failed
-  ///         `vkCreateSwapchainKHR` leaves the object empty (`valid()` false).
+  ///         swapchain*, which stays valid for a later retry. A failed rebuild
+  ///         (`vkCreateSwapchainKHR`, or the image-view creation that follows)
+  ///         empties the object (`valid()` false) but keeps its device /
+  ///         surface / format, so a later @ref recreate can retry it once the
+  ///         transient failure clears. Called on a moved-from or
+  ///         default-constructed swapchain (no device to rebuild on), fails
+  ///         with
+  ///         @ref Status::Code::InvalidArgument.
   Status recreate(VkExtent2D extent);
 
   /// @return The render target for swapchain image @p image_index.
@@ -156,8 +162,8 @@ class VG_WINDOWING_API Swapchain {
   Status select_surface_properties(const SwapchainConfig& config);
   Status build(VkExtent2D extent);
   Status create_image_resources(VkExtent2D extent);  // views + render targets
-  void destroy_resources() noexcept;                 // image views + swapchain
-  void reset_state() noexcept;  // null handles + zero metadata to empty
+  void destroy_resources() noexcept;  // image views + swapchain; zeroes extent_
+  void reset_state() noexcept;        // null handles + zero metadata to empty
   void destroy() noexcept;
 
   const Device* device_ = nullptr;         // borrowed; outlives this

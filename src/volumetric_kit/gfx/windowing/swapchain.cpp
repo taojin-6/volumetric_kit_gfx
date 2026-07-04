@@ -10,6 +10,7 @@
 
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
 namespace volumetric_kit::gfx::windowing {
 
@@ -36,22 +37,10 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
 Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
   VkPhysicalDevice phys = device_->physical_device();
 
-  uint32_t format_count = 0;
-  VG_VK_TRY(vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface_, &format_count,
-                                                 nullptr));
-  if (format_count == 0) {
-    return Status::unsupported("Swapchain: surface reports no formats");
-  }
-  std::vector<VkSurfaceFormatKHR> formats(format_count);
-  // The list can change size between the count and fill calls (a display
-  // reconfiguration): VK_INCOMPLETE is a success code reporting how many
-  // entries were written, so choose from those instead of failing the build.
-  const VkResult formats_filled = vkGetPhysicalDeviceSurfaceFormatsKHR(
-      phys, surface_, &format_count, formats.data());
-  if (formats_filled != VK_SUCCESS && formats_filled != VK_INCOMPLETE) {
-    return vk_error(formats_filled, "vkGetPhysicalDeviceSurfaceFormatsKHR");
-  }
-  formats.resize(format_count);
+  // Enumerate via the shared vk_query idiom (count, then fill; VK_INCOMPLETE
+  // tolerated) so this stays in lockstep with the instance/device enumerators.
+  VG_ASSIGN(std::vector<VkSurfaceFormatKHR> formats,
+            surface_formats(phys, surface_));
   if (formats.empty()) {
     return Status::unsupported("Swapchain: surface reports no formats");
   }
@@ -67,19 +56,11 @@ Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
   format_ = chosen.format;
   color_space_ = chosen.colorSpace;
 
-  uint32_t mode_count = 0;
-  VG_VK_TRY(vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surface_,
-                                                      &mode_count, nullptr));
-  if (mode_count == 0) {
+  VG_ASSIGN(std::vector<VkPresentModeKHR> modes,
+            surface_present_modes(phys, surface_));
+  if (modes.empty()) {
     return Status::unsupported("Swapchain: surface reports no present modes");
   }
-  std::vector<VkPresentModeKHR> modes(mode_count);
-  const VkResult modes_filled = vkGetPhysicalDeviceSurfacePresentModesKHR(
-      phys, surface_, &mode_count, modes.data());
-  if (modes_filled != VK_SUCCESS && modes_filled != VK_INCOMPLETE) {
-    return vk_error(modes_filled, "vkGetPhysicalDeviceSurfacePresentModesKHR");
-  }
-  modes.resize(mode_count);
   // FIFO is guaranteed; upgrade to the preferred mode only if offered.
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
   for (VkPresentModeKHR m : modes) {
@@ -191,9 +172,10 @@ Status Swapchain::build(VkExtent2D desired) {
   if (created != VK_SUCCESS) {
     // Passing oldSwapchain retires it even when creation fails, and a retired
     // chain can neither acquire nor seed a later rebuild — drop everything so
-    // this object reports empty instead of dangling a retired chain.
+    // this object reports empty instead of dangling a retired chain
+    // (destroy_resources also zeroes extent_, keeping it consistent with
+    // valid()). The surface/format config survives for a later recreate retry.
     destroy_resources();
-    extent_ = VkExtent2D{};
     return vk_error(created, "vkCreateSwapchainKHR");
   }
   // The old chain (now retired) and its views are dead; replace them.
@@ -206,8 +188,7 @@ Status Swapchain::build(VkExtent2D desired) {
   // once everything succeeds.
   const Status images = create_image_resources(extent);
   if (!images.ok()) {
-    destroy_resources();
-    extent_ = VkExtent2D{};
+    destroy_resources();  // also zeroes extent_ (see destroy_resources)
     return images;
   }
   extent_ = extent;
@@ -280,9 +261,13 @@ Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
 }
 
 Status Swapchain::recreate(VkExtent2D extent) {
-  if (!valid()) {
+  if (device_ == nullptr) {
+    // Moved-from or default-constructed: no device/surface to rebuild on.
+    // A swapchain that a failed build() emptied keeps its device + surface +
+    // format, so it does NOT trip this guard — recreate can rebuild it once
+    // the transient failure clears (that is the whole point of this path).
     return Status::invalid_argument(
-        "Swapchain::recreate on an empty swapchain");
+        "Swapchain::recreate on a moved-from or default-constructed swapchain");
   }
   if (extent.width == 0 || extent.height == 0) {
     // A minimized window: skip the device drain and leave the current
@@ -335,6 +320,9 @@ void Swapchain::destroy_resources() noexcept {
     vkDestroySwapchainKHR(dev, swapchain_, nullptr);
     swapchain_ = VK_NULL_HANDLE;
   }
+  // A torn-down swapchain has no meaningful size; zero the extent so it stays
+  // consistent with valid() == false (the recurring "forgot a scalar" miss).
+  extent_ = VkExtent2D{};
 }
 
 void Swapchain::reset_state() noexcept {

@@ -376,7 +376,11 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
 
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
 // as after a failed rebuild) fails cleanly instead of acquiring on a null
-// handle.
+// handle. NOTE: this covers begin_frame's empty-swapchain guard only, NOT the
+// post-acquire recover_slot path — reaching that needs a Vulkan call (fence
+// wait / command begin/end / queue submit) to fail, which does not happen on a
+// healthy device; see the TODO in FrameLoop::recover_slot on the missing
+// fault-injection coverage for those branches.
 TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, 2);

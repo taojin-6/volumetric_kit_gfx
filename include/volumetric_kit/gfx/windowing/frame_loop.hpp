@@ -127,9 +127,14 @@ class VG_WINDOWING_API FrameLoop {
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (recreate the
   ///         swapchain) or another failed `VkResult`.
   /// @note On a failure *before* the submit reaches the queue, the slot's sync
-  ///       state is restored (a brief blocking submit) so the loop stays
-  ///       usable. A failed present already submitted the frame: the slot
-  ///       advances normally and only the presentation is reported.
+  ///       state is restored (a brief blocking submit) so the *slot* stays
+  ///       reusable — but the image this frame acquired was never presented,
+  ///       and an acquired image is only released by a present or a swapchain
+  ///       rebuild. So the caller must @ref Swapchain::recreate before
+  ///       continuing (the loop below does), not merely retry, or repeated
+  ///       failures will exhaust the acquirable images. A failed present
+  ///       already submitted the frame: the slot advances normally and only the
+  ///       presentation is reported.
   Status end_frame(const Frame& frame);
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
@@ -159,7 +164,9 @@ class VG_WINDOWING_API FrameLoop {
 
   // Restore a slot whose acquire signal was never consumed (a failure between
   // acquire and submit): drain image_available_[slot] with an empty submit and
-  // re-signal the slot fence. Blocking; error-path only.
+  // re-signal the slot fence. If the drain cannot even be issued (the queue is
+  // failing), the fence is instead replaced with a fresh signaled one so the
+  // next begin_frame never blocks on it. Blocking; error-path only.
   Status recover_slot(uint32_t slot);
 
   const Device* device_ = nullptr;  // borrowed; outlives this
@@ -175,6 +182,11 @@ class VG_WINDOWING_API FrameLoop {
   // Per image (M): the in-flight fence of the slot that last rendered to it, so
   // a re-acquired image still in use is waited on before reuse. Non-owning.
   std::vector<VkFence> images_in_flight_;
+  // The swapchain handle the per-image sync above was built for. A mismatch in
+  // ensure_image_sync means a Swapchain::recreate produced a fresh chain, so
+  // render_finished_ / images_in_flight_ must be rebuilt (a same-count rebuild
+  // still retires the old images and can leave a semaphore signaled).
+  VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
   uint32_t current_slot_ = 0;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
 };
