@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
@@ -189,12 +189,14 @@ Result<Frame> FrameLoop::begin_frame() {
   // TOP_OF_PIPE) so the transition is ordered *after* the image-available
   // semaphore — end_frame's submit waits it at that same stage — instead of
   // racing the presentation engine's last read of the image.
-  cmd_image_barrier(cmd, swapchain_->image(image_index),
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+  ImageBarrierDesc to_color;
+  to_color.image = swapchain_->image(image_index);
+  to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  cmd_image_barrier(cmd, to_color);
 
   // Drive the profiler's frame lifecycle (no-op when none is attached). The
   // slot's fence was waited above, so its prior submission's timestamps are now
@@ -223,12 +225,14 @@ Status FrameLoop::end_frame(const Frame& frame) {
   }
 
   // Transition the rendered image to PRESENT_SRC.
-  cmd_image_barrier(frame.cmd, swapchain_->image(frame.image_index),
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+  ImageBarrierDesc to_present;
+  to_present.image = swapchain_->image(frame.image_index);
+  to_present.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_present.dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+  to_present.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  to_present.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  cmd_image_barrier(frame.cmd, to_present);
 
   const Status ended = command_buffers_[slot].end();
   if (!ended.ok()) {

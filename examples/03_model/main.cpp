@@ -61,7 +61,6 @@
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
@@ -372,22 +371,6 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
   return wrote == rgb.size();
 }
 
-void barrier_image(VkCommandBuffer cmd, VkImage image,
-                   VkImageAspectFlags aspect, VkImageLayout new_layout,
-                   VkAccessFlags dst_access, VkPipelineStageFlags dst_stage) {
-  VkImageMemoryBarrier b{};
-  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  b.dstAccessMask = dst_access;
-  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  b.newLayout = new_layout;
-  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  b.image = image;
-  b.subresourceRange = {aspect, 0, 1, 0, 1};
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dst_stage, 0, 0,
-                       nullptr, 0, nullptr, 1, &b);
-}
-
 // Expand a decoded CPU image to tightly-packed RGBA8 (the layout upload_texture
 // takes): pass 4-channel through, replicate 1/2-channel luminance into RGB, and
 // pad 3-channel with opaque alpha -- most GPUs do not sample 3-channel 8-bit.
@@ -450,8 +433,18 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
   }
   r.sampler = std::move(sampler).value();
 
-  // Upload a tightly-packed RGBA8 image; returns its index into r.textures, or
-  // -1 on failure.
+  // One batch for the fallbacks + every material map: the uploads below record
+  // into a single submit, finished before the descriptor sets are built.
+  auto batch = vg::TextureUploadBatch::begin(device, alloc);
+  if (!batch.ok()) {
+    std::fprintf(stderr, "upload batch: %s\n",
+                 batch.status().message().c_str());
+    *ok = false;
+    return r;
+  }
+
+  // Queue a tightly-packed RGBA8 image upload; returns its index into
+  // r.textures (sampled-ready once the batch finishes), or -1 on failure.
   auto upload = [&](VkExtent2D ext, VkFormat fmt, const uint8_t* px, size_t sz,
                     bool mips) -> int {
     vg::ImageUploadDesc d;
@@ -460,7 +453,7 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
     d.pixels = px;
     d.size = sz;
     d.generate_mips = mips;
-    auto tex = vg::upload_texture(device, alloc, d);
+    auto tex = batch.value().add(d);
     if (!tex.ok()) {
       std::fprintf(stderr, "texture upload: %s\n",
                    tex.status().message().c_str());
@@ -510,6 +503,15 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
       *ok = false;
       return r;
     }
+  }
+
+  // Submit every queued upload at once; the textures the materials below bind
+  // are sampled-ready when this returns.
+  const vg::Status uploaded = batch.value().finish();
+  if (!uploaded.ok()) {
+    std::fprintf(stderr, "texture upload: %s\n", uploaded.message().c_str());
+    *ok = false;
+    return r;
   }
 
   // Scene (set 0): the per-frame camera + the IBL maps, one UBO ring slot per
@@ -656,13 +658,15 @@ glm::vec3 cube_dir(int f, float u, float v) {
 }
 
 // Bake the analytic sky into a sampled-ready cubemap: generate the six faces on
-// the CPU, stage them, and copy all six layers in one submit. Stores linear HDR
-// color in a float cube (the skybox shader tone-maps it on output).
+// the CPU and upload them through the core cube-upload path in one submit.
+// Stores linear HDR color in a float cube (the skybox shader tone-maps it on
+// output).
 vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
                           uint32_t size, bool* ok) {
-  // RGBA16F (half) staging: 16-bit float filters on the broad device set (incl.
+  // RGBA16F (half) pixels: 16-bit float filters on the broad device set (incl.
   // MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
-  // lack. Unclamped HDR (the skybox tone-maps on output); 2 uint32/texel.
+  // lack. Unclamped HDR (the skybox tone-maps on output); 2 uint32/texel,
+  // packed face-major -- the single-mip case of ImageUploadDesc's layout.
   std::vector<uint32_t> pixels;
   pixels.reserve(static_cast<size_t>(size) * size * 6 * 2);
   for (int f = 0; f < 6; ++f) {
@@ -677,76 +681,16 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
     }
   }
 
-  vg::BufferDesc sd;
-  sd.size = pixels.size() * sizeof(uint32_t);
-  sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  sd.memory = vg::MemoryUsage::HostVisible;
-  sd.mapped = true;
-  sd.host_access = vg::HostAccess::SequentialWrite;
-  auto staging = alloc.create_buffer(sd);
-  if (!staging.ok()) {
-    std::fprintf(stderr, "sky staging: %s\n",
-                 staging.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-  std::memcpy(staging.value().mapped(), pixels.data(),
-              pixels.size() * sizeof(uint32_t));
-
-  vg::TextureDesc td;
-  td.extent = {size, size};
-  td.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // linear HDR, broadly filterable
-  td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-  td.array_layers = 6;
-  td.cube = true;
-  auto cube = alloc.create_image(td);
+  vg::ImageUploadDesc desc;
+  desc.extent = {size, size};
+  desc.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // linear HDR, filterable
+  desc.pixels = pixels.data();
+  desc.size = pixels.size() * sizeof(uint32_t);
+  desc.array_layers = 6;
+  desc.cube = true;
+  auto cube = vg::upload_texture(device, alloc, desc);
   if (!cube.ok()) {
     std::fprintf(stderr, "sky cube: %s\n", cube.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-
-  // Upload all six faces in one submit. Hand-rolled because the core
-  // upload_texture helper is single-layer only.
-  // TODO: extend upload_texture/ImageUploadDesc with array_layers (and a
-  // layer_count on cmd_image_barrier) so cube/array uploads reuse one path.
-  const VkImage image = cube.value().image();
-  const VkBuffer src = staging.value().handle();
-  const vg::Status copied =
-      device.submit_single_time([image, src, size](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &barrier);
-
-        VkBufferImageCopy copies[6]{};
-        for (uint32_t f = 0; f < 6; ++f) {
-          copies[f].bufferOffset =
-              VkDeviceSize{f} * size * size * 2 * sizeof(uint32_t);
-          copies[f].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, f, 1};
-          copies[f].imageExtent = {size, size, 1};
-        }
-        vkCmdCopyBufferToImage(cmd, src, image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, copies);
-
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &barrier);
-      });
-  if (!copied.ok()) {
-    std::fprintf(stderr, "sky upload: %s\n", copied.message().c_str());
     *ok = false;
     return {};
   }
@@ -970,116 +914,32 @@ glm::vec2 brdf_integrate(float n_dot_v, float roughness, uint32_t samples) {
                    b / static_cast<float>(samples));
 }
 
-// Create a (possibly mipped) float cube and fill every (mip, face) from `gen`,
-// which returns that subresource's RGBA pixels; upload all subresources in one
-// staged submit.
+// Pack per-(mip, face) RGBA float pixels from `gen` into tightly packed
+// RGBA16F (2 uint32 = 8 bytes/texel), mip-major then face -- ImageUploadDesc's
+// layout. 16-bit float cubes filter on the broad device set (incl.
+// MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
+// lack.
 template <class Gen>
-vg::Texture upload_cube(const vg::Device& device, vg::Allocator& alloc,
-                        uint32_t base_size, uint32_t mips, VkFormat format,
-                        Gen gen, bool* ok) {
-  struct Region {
-    VkDeviceSize offset;
-    uint32_t mip;
-    uint32_t face;
-    uint32_t size;
-  };
-  // Pack gen()'s float pixels to RGBA16F (2 uint32 = 8 bytes/texel). 16-bit
-  // float cubes filter on the broad device set (incl. MoltenVK/Metal); RGBA32F
-  // linear filtering is an optional feature many GPUs lack. Each face starts on
-  // an 8-byte (texel-block) aligned offset since every texel is 2 uint32.
-  std::vector<Region> regions;
+std::vector<uint32_t> pack_cube_rgba16f(uint32_t base_size, uint32_t mips,
+                                        Gen gen) {
   std::vector<uint32_t> data;
   for (uint32_t m = 0; m < mips; ++m) {
     const uint32_t size = (base_size >> m) > 0 ? (base_size >> m) : 1u;
     for (uint32_t f = 0; f < 6; ++f) {
       const std::vector<glm::vec4> face = gen(m, static_cast<int>(f), size);
-      regions.push_back(
-          {VkDeviceSize{data.size()} * sizeof(uint32_t), m, f, size});
       for (const glm::vec4& px : face) {
         data.push_back(glm::packHalf2x16(glm::vec2(px.x, px.y)));
         data.push_back(glm::packHalf2x16(glm::vec2(px.z, px.w)));
       }
     }
   }
-  const VkDeviceSize total = VkDeviceSize{data.size()} * sizeof(uint32_t);
-
-  vg::BufferDesc sd;
-  sd.size = total;
-  sd.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  sd.memory = vg::MemoryUsage::HostVisible;
-  sd.mapped = true;
-  sd.host_access = vg::HostAccess::SequentialWrite;
-  auto staging = alloc.create_buffer(sd);
-  if (!staging.ok()) {
-    std::fprintf(stderr, "ibl staging: %s\n",
-                 staging.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-  std::memcpy(staging.value().mapped(), data.data(), total);
-
-  vg::TextureDesc td;
-  td.extent = {base_size, base_size};
-  td.format = format;
-  td.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-  td.array_layers = 6;
-  td.cube = true;
-  td.mip_levels = mips;
-  auto cube = alloc.create_image(td);
-  if (!cube.ok()) {
-    std::fprintf(stderr, "ibl cube: %s\n", cube.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-
-  const VkImage image = cube.value().image();
-  const VkBuffer src = staging.value().handle();
-  const vg::Status copied = device.submit_single_time([&](VkCommandBuffer cmd) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 6};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &barrier);
-
-    std::vector<VkBufferImageCopy> copies;
-    copies.reserve(regions.size());
-    for (const Region& region : regions) {
-      VkBufferImageCopy copy{};
-      copy.bufferOffset = region.offset;
-      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, region.mip,
-                               region.face, 1};
-      copy.imageExtent = {region.size, region.size, 1};
-      copies.push_back(copy);
-    }
-    vkCmdCopyBufferToImage(cmd, src, image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           static_cast<uint32_t>(copies.size()), copies.data());
-
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &barrier);
-  });
-  if (!copied.ok()) {
-    std::fprintf(stderr, "ibl upload: %s\n", copied.message().c_str());
-    *ok = false;
-    return {};
-  }
-  return std::move(cube).value();
+  return data;
 }
 
 // Convolve the analytic sky into the IBL texture set. CPU-side because the
 // environment is analytic; a loaded HDR environment would convolve on the GPU.
+// All three textures upload through one TextureUploadBatch: one submit instead
+// of a blocking round trip each.
 Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   Ibl ibl;
   *ok = true;
@@ -1097,11 +957,38 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   }
   ibl.sampler = std::move(sampler).value();
 
+  auto batch = vg::TextureUploadBatch::begin(device, alloc);
+  if (!batch.ok()) {
+    std::fprintf(stderr, "ibl batch: %s\n", batch.status().message().c_str());
+    *ok = false;
+    return ibl;
+  }
+
+  // Queue an RGBA16F cube upload (sampled-ready once the batch finishes);
+  // returns an empty texture and clears *ok on failure.
+  auto add_cube = [&](uint32_t base_size, uint32_t mips,
+                      const std::vector<uint32_t>& data) -> vg::Texture {
+    vg::ImageUploadDesc d;
+    d.extent = {base_size, base_size};
+    d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    d.pixels = data.data();
+    d.size = data.size() * sizeof(uint32_t);
+    d.array_layers = 6;
+    d.cube = true;
+    d.mip_levels = mips;
+    auto tex = batch.value().add(d);
+    if (!tex.ok()) {
+      std::fprintf(stderr, "ibl cube: %s\n", tex.status().message().c_str());
+      *ok = false;
+      return {};
+    }
+    return std::move(tex).value();
+  };
+
   // Diffuse irradiance: 16x16 single-mip cube -- ample for the low-frequency,
   // heavily-blurred cosine convolution.
-  ibl.irradiance = upload_cube(
-      device, alloc, 16, 1, VK_FORMAT_R16G16B16A16_SFLOAT,
-      [](uint32_t, int face, uint32_t size) {
+  const std::vector<uint32_t> irradiance =
+      pack_cube_rgba16f(16, 1, [](uint32_t, int face, uint32_t size) {
         std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
         for (uint32_t y = 0; y < size; ++y) {
           for (uint32_t x = 0; x < size; ++x) {
@@ -1111,8 +998,8 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
           }
         }
         return px;
-      },
-      ok);
+      });
+  ibl.irradiance = add_cube(16, 1, irradiance);
   if (!*ok) {
     return ibl;
   }
@@ -1121,9 +1008,8 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   // roughness 0..1; 64 GGX samples/texel (the tight HDR sun can alias on low
   // mips -- accepted for the example).
   constexpr uint32_t kPrefilterMips = 5;
-  ibl.prefilter = upload_cube(
-      device, alloc, 64, kPrefilterMips, VK_FORMAT_R16G16B16A16_SFLOAT,
-      [](uint32_t mip, int face, uint32_t size) {
+  const std::vector<uint32_t> prefilter = pack_cube_rgba16f(
+      64, kPrefilterMips, [](uint32_t mip, int face, uint32_t size) {
         const float roughness =
             static_cast<float>(mip) / static_cast<float>(kPrefilterMips - 1);
         std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
@@ -1136,8 +1022,8 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
           }
         }
         return px;
-      },
-      ok);
+      });
+  ibl.prefilter = add_cube(64, kPrefilterMips, prefilter);
   if (!*ok) {
     return ibl;
   }
@@ -1160,13 +1046,21 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   lut_desc.format = VK_FORMAT_R16G16_SFLOAT;
   lut_desc.pixels = lut.data();
   lut_desc.size = lut.size() * sizeof(uint32_t);
-  auto brdf = vg::upload_texture(device, alloc, lut_desc);
+  auto brdf = batch.value().add(lut_desc);
   if (!brdf.ok()) {
     std::fprintf(stderr, "brdf lut: %s\n", brdf.status().message().c_str());
     *ok = false;
     return ibl;
   }
   ibl.brdf_lut = std::move(brdf).value();
+
+  // One submit + fence wait for all three IBL textures.
+  const vg::Status finished = batch.value().finish();
+  if (!finished.ok()) {
+    std::fprintf(stderr, "ibl upload: %s\n", finished.message().c_str());
+    *ok = false;
+    return ibl;
+  }
   return ibl;
 }
 
@@ -1265,16 +1159,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
 
   const vg::Status recorded =
       device.value().submit_single_time([&](VkCommandBuffer cmd) {
-        barrier_image(cmd, target.value().color_image(),
-                      VK_IMAGE_ASPECT_COLOR_BIT,
-                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        barrier_image(cmd, target.value().depth_image(),
-                      VK_IMAGE_ASPECT_DEPTH_BIT,
-                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+        target.value().prepare(cmd);  // color + depth -> attachment layouts
 
         vg::RenderTargetBeginInfo begin;
         begin.clear_color = background();

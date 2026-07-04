@@ -96,7 +96,9 @@ struct RenderTargetBeginInfo {
 /// not perform them): transition each attachment image into its attachment
 /// layout before @ref begin, and out of it (to present / transfer / sampled)
 /// after @ref end. @ref RenderTargetAttachment::image is exposed for exactly
-/// those barriers.
+/// those barriers — record them with @ref cmd_image_barrier
+/// (core/image_barrier.hpp), or let the producing target do it (e.g.
+/// @ref OffscreenTarget::prepare).
 ///
 /// @warning The images/views this references are owned by the producing target,
 ///          which must outlive every `RenderTarget` it hands out; the views

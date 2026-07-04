@@ -7,7 +7,7 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
-#include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
@@ -97,6 +97,49 @@ RenderTargetLayout OffscreenTarget::layout() const {
   return layout;
 }
 
+void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
+  VG_CHECK(valid(), "OffscreenTarget::prepare on an empty target");
+
+  // UNDEFINED discards the previous contents (a load-op clear rewrites them),
+  // so this is valid whatever layout a prior render/readback left them in. The
+  // src scope covers those priors so a *same-submit* re-prepare is safe: a
+  // prior render's color write (COLOR_ATTACHMENT_OUTPUT) and a prior
+  // @ref record_readback's copy-out (a TRANSFER read of the color image) must
+  // both complete before the next render's clear reuses the image -- a
+  // TOP_OF_PIPE src would not order the readback copy, letting the clear race
+  // it into a torn readback. On the first prepare (no prior access) the wider
+  // src simply waits on nothing.
+  ImageBarrierDesc to_color;
+  to_color.image = color_.image();
+  to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_TRANSFER_BIT;
+  to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_color.src_access =
+      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+  to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  cmd_image_barrier(cmd, to_color);
+
+  if (depth_.valid()) {
+    // Depth is never read back; its only prior use is an earlier render's
+    // depth write, which the src scope orders before the next clear.
+    ImageBarrierDesc to_depth;
+    to_depth.image = depth_.image();
+    to_depth.src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    to_depth.dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    to_depth.src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    to_depth.dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    to_depth.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_depth.new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    to_depth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    cmd_image_barrier(cmd, to_depth);
+  }
+}
+
 void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
   VG_CHECK(valid(), "OffscreenTarget::record_readback on an empty target");
   VG_CHECK(readback_.valid(),
@@ -106,11 +149,15 @@ void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
 
   // The render left the color image in COLOR_ATTACHMENT_OPTIMAL; move it to
   // TRANSFER_SRC for the copy-out.
-  cmd_image_barrier(
-      cmd, color_.image(), VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-      VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  ImageBarrierDesc to_src;
+  to_src.image = color_.image();
+  to_src.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  to_src.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  to_src.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
+  to_src.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  to_src.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  cmd_image_barrier(cmd, to_src);
 
   VkBufferImageCopy copy{};
   copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};

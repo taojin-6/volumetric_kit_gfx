@@ -32,7 +32,17 @@ TEST(OffscreenTargetTest, DefaultConstructedIsEmpty) {
 
 class OffscreenTargetDeviceTest : public VulkanDeviceTest {
  protected:
+  // Records attachment/readback barriers, so run under the validation layer
+  // with teeth: a wrong color/depth transition fails the test (on CI, where the
+  // layer is present).
+  bool wants_validation() const override { return true; }
+
   vg::Allocator make_allocator() {
+    // Allocator has no public empty state, so this one keeps the value()
+    // (a VG_CHECK abort on the near-impossible failure of allocator creation
+    // against the already-asserted device); the fallible image allocations that
+    // can realistically OOM live in make_target / make_depth_target, which
+    // return empty on failure instead of aborting.
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     EXPECT_TRUE(allocator.ok()) << allocator.status().message();
     return std::move(allocator).value();
@@ -45,7 +55,8 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
     desc.color_format = kFormat;
     auto target = vg::OffscreenTarget::create(allocator, desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    return std::move(target).value();
+    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 
   // A target that also owns a depth attachment, for exercising the depth member
@@ -58,7 +69,8 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
     desc.depth_format = VK_FORMAT_D32_SFLOAT;
     auto target = vg::OffscreenTarget::create(allocator, desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    return std::move(target).value();
+    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 };
 
@@ -197,6 +209,47 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   EXPECT_EQ(px[3], 255);  // A
   const size_t last = (static_cast<size_t>(kSize) * kSize - 1) * 4;
   EXPECT_EQ(px[last + 0], 255);
+  EXPECT_EQ(px[last + 3], 255);
+}
+
+// prepare() records the same transitions itself -- including the depth image
+// when the target has one -- so the render needs no hand-written barriers.
+TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
+  constexpr uint32_t kSize = 4;
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTarget target = make_depth_target(allocator, {kSize, kSize});
+
+  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto cmd = pool.value().allocate_primary();
+  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+
+  ASSERT_TRUE(
+      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+  const VkCommandBuffer raw = cmd.value().handle();
+
+  target.prepare(raw);  // color + depth -> attachment layouts
+
+  // loadOp CLEAR fills the attachments (opaque green here); no draw needed.
+  vg::RenderTargetBeginInfo begin_info;
+  begin_info.clear_color.float32[1] = 1.0f;  // G
+  begin_info.clear_color.float32[3] = 1.0f;  // A
+  const vg::RenderTarget rt = target.target();
+  rt.begin(raw, begin_info);
+  rt.end(raw);
+
+  target.record_readback(raw);
+  ASSERT_TRUE(cmd.value().end().ok());
+  submit_and_wait(raw);
+
+  const auto* px = static_cast<const uint8_t*>(target.pixels());
+  ASSERT_NE(px, nullptr);
+  EXPECT_EQ(px[0], 0);    // R
+  EXPECT_EQ(px[1], 255);  // G
+  EXPECT_EQ(px[2], 0);    // B
+  EXPECT_EQ(px[3], 255);  // A
+  const size_t last = (static_cast<size_t>(kSize) * kSize - 1) * 4;
+  EXPECT_EQ(px[last + 1], 255);
   EXPECT_EQ(px[last + 3], 255);
 }
 

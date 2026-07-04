@@ -29,6 +29,7 @@ add_executable(
   descriptor_test.cpp
   graphics_pipeline_test.cpp
   render_target_test.cpp
+  image_barrier_test.cpp
   offscreen_target_test.cpp
   command_buffer_test.cpp
   sampler_test.cpp

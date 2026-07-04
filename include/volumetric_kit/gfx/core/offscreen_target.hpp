@@ -43,10 +43,11 @@ struct OffscreenTargetDesc {
 /// be both rendered into and copied out; an optional depth attachment is added
 /// when @ref OffscreenTargetDesc::depth_format is set. @ref target hands out a
 /// non-owning @ref RenderTarget over the attachments, @ref layout gives the
-/// matching pipeline signature, and @ref record_readback records the
-/// copy-to-buffer the readback path needs. This is the headless sibling of the
-/// windowing tier's swapchain; both produce a @ref RenderTarget, so a pass
-/// renders into either unchanged.
+/// matching pipeline signature, @ref prepare records the transitions into the
+/// attachment layouts, and @ref record_readback records the copy-to-buffer the
+/// readback path needs. This is the headless sibling of the windowing tier's
+/// swapchain; both produce a @ref RenderTarget, so a pass renders into either
+/// unchanged.
 ///
 /// @warning The @p allocator passed to @ref create must outlive the target: the
 ///          owned @ref Texture / @ref Buffer free through it. Retire the target
@@ -56,7 +57,7 @@ struct OffscreenTargetDesc {
 /// Result<OffscreenTarget> rt = OffscreenTarget::create(
 ///     allocator, {.extent = {1280, 720}, .color_format = kFormat});
 /// if (!rt) return rt.status();
-/// // ... barrier color image UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL ...
+/// rt.value().prepare(cmd);              // attachments -> attachment layouts
 /// rt.value().target().begin(cmd, {});   // draw ...   .end(cmd);
 /// rt.value().record_readback(cmd);      // copy color -> host buffer
 /// // ... submit + fence-wait ...
@@ -106,6 +107,22 @@ class VG_CORE_API OffscreenTarget {
   /// @return The depth `VkImage` for the caller's barriers, or `VK_NULL_HANDLE`
   ///         when the target has no depth attachment.
   VkImage depth_image() const noexcept { return depth_.image(); }
+
+  /// @brief Record the transitions into the attachment layouts (dynamic
+  ///        rendering performs none itself): the color image
+  ///        `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` and, when the target has a
+  ///        depth attachment, the depth image
+  ///        `UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL`.
+  ///
+  /// Call before @ref RenderTarget::begin. The `UNDEFINED` source layout
+  /// discards any previous contents (a load-op clear rewrites them), so this
+  /// also re-prepares the target for another render after a
+  /// @ref record_readback left the color image in `TRANSFER_SRC_OPTIMAL`.
+  /// Consumers sequencing their own layouts (e.g. preserving the previous
+  /// render) record @ref cmd_image_barrier directly instead.
+  /// @param cmd  A command buffer in the recording state.
+  /// @pre `valid()`.
+  void prepare(VkCommandBuffer cmd) const;
 
   /// @brief Record the color-attachment → host-buffer copy-out.
   ///
