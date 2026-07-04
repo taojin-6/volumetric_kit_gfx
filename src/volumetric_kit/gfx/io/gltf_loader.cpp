@@ -377,22 +377,32 @@ Image convert_image(tinygltf::Image& src) {
   return img;
 }
 
-// Convert one primitive into a Mesh. Returns false if it has no POSITION, an
-// unsupported layout, or indices that do not form whole triangles. Skips
-// non-triangle primitives (mode != TRIANGLES).
+// Convert one primitive into a Mesh. Returns false if it cannot be
+// represented -- no POSITION, an unsupported accessor layout or primitive
+// mode, or indices that do not form whole triangles -- pointing `reason` at a
+// static string naming the category for the caller's warning.
 bool convert_primitive(const tinygltf::Model& gltf,
                        const tinygltf::Primitive& primitive,
-                       const std::string& name, Mesh& out) {
+                       const std::string& name, Mesh& out,
+                       const char*& reason) {
   if (primitive.mode != TINYGLTF_MODE_TRIANGLES && primitive.mode != -1) {
-    return false;  // TODO: line/point primitive modes
+    // TODO: line/point primitive modes
+    reason = "unsupported primitive mode (only TRIANGLES)";
+    return false;
   }
   const auto pos_it = primitive.attributes.find("POSITION");
-  if (pos_it == primitive.attributes.end()) return false;
+  if (pos_it == primitive.attributes.end()) {
+    reason = "no POSITION attribute";
+    return false;
+  }
 
   std::vector<float> positions;
   int pos_comps = 0;
   if (!read_float_accessor(gltf, pos_it->second, positions, pos_comps) ||
       pos_comps != 3) {
+    reason =
+        "unsupported POSITION accessor (sparse, bufferView-less, non-VEC3, or "
+        "out-of-bounds layout)";
     return false;
   }
   const std::size_t vertex_count = positions.size() / 3;
@@ -452,10 +462,14 @@ bool convert_primitive(const tinygltf::Model& gltf,
   }
 
   if (!read_indices(gltf, primitive, vertex_count, out.indices)) {
+    reason =
+        "unsupported index accessor (sparse, bufferView-less, out-of-bounds "
+        "layout, or an index addressing no vertex)";
     return false;
   }
   if (out.indices.size() % 3 != 0) {
-    return false;  // triangle list must be whole triangles
+    reason = "index count is not a whole number of triangles";
+    return false;
   }
   out.material = (primitive.material >= 0 &&
                   primitive.material < static_cast<int>(gltf.materials.size()))
@@ -466,7 +480,8 @@ bool convert_primitive(const tinygltf::Model& gltf,
 
 }  // namespace
 
-std::optional<Model> load_gltf(std::string_view path, std::string* error) {
+std::optional<Model> load_gltf(std::string_view path, std::string* error,
+                               std::vector<std::string>* warnings) {
   const std::string ext = extension_of(path);
   const std::string filename(path);
 
@@ -519,10 +534,21 @@ std::optional<Model> load_gltf(std::string_view path, std::string* error) {
     const tinygltf::Mesh& gmesh = gltf.meshes[mi];
     const std::uint32_t first = static_cast<std::uint32_t>(model.meshes.size());
     std::uint32_t count = 0;
-    for (const tinygltf::Primitive& prim : gmesh.primitives) {
+    for (std::size_t pi = 0; pi < gmesh.primitives.size(); ++pi) {
       Mesh mesh;
-      if (!convert_primitive(gltf, prim, gmesh.name, mesh)) {
-        continue;  // skip empty / unsupported primitive
+      const char* reason = "unsupported primitive";
+      if (!convert_primitive(gltf, gmesh.primitives[pi], gmesh.name, mesh,
+                             reason)) {
+        // A spec-valid file can land here (see the sparse-accessor @note on
+        // load_gltf) and the load still succeeds, so report every dropped
+        // primitive -- otherwise the model silently loses geometry.
+        if (warnings != nullptr) {
+          std::string what = "mesh " + std::to_string(mi);
+          if (!gmesh.name.empty()) what += " ('" + gmesh.name + "')";
+          what += " primitive " + std::to_string(pi) + " dropped: " + reason;
+          warnings->push_back(std::move(what));
+        }
+        continue;
       }
       model.meshes.push_back(std::move(mesh));
       ++count;

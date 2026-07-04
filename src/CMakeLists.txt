@@ -45,10 +45,21 @@ if(VG_INSTALL)
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
     PATTERN "*.hpp"
+    # ui/ needs the generated ui/export.hpp and the ImGui headers, and neither
+    # is installed while gfx_ui stays build-tree-only (see the install TODO in
+    # volumetric_kit/gfx/ui/CMakeLists.txt), so an installed copy would not
+    # compile -- keep the tier out until gfx_ui is exported.
+    REGEX "volumetric_kit/gfx/ui(/|$)" EXCLUDE
     # impl/vk_format.hpp is internal (no public header includes it) and pulls
     # the vendored <vulkan/utility/...> header that the package neither ships
     # nor re-exports, so an installed copy would not compile -- keep it out.
-    PATTERN "vk_format.hpp" EXCLUDE)
+    PATTERN "vk_format.hpp" EXCLUDE
+    # impl/command.hpp and impl/vk_query.hpp are internal too ("Not a public
+    # header."); no installed header includes them, so keep them out. The other
+    # impl/ headers ship because public headers include them (impl/result.hpp,
+    # impl/retire_list.hpp, impl/debug_utils_table.hpp, ...).
+    REGEX "volumetric_kit/gfx/core/impl/command\\.hpp$" EXCLUDE
+    REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE)
 
   install(
     EXPORT volumetric_kit_gfxTargets

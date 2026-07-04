@@ -160,6 +160,14 @@ TEST_F(CommandTest, BufferSelfMoveAssignIsSafe) {
   EXPECT_TRUE(cmd.valid());
 }
 
+// No device needed: create() must reject a null device up front instead of
+// dispatching VK_NULL_HANDLE into the driver.
+TEST(CommandPoolTest, CreateRejectsNullDevice) {
+  auto pool = vg::CommandPool::create(VK_NULL_HANDLE, 0);
+  ASSERT_FALSE(pool.ok());
+  EXPECT_EQ(pool.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 // No device needed: a default-constructed CommandBuffer owns nothing.
 TEST(CommandBufferTest, DefaultConstructedIsEmpty) {
   vg::CommandBuffer cmd;

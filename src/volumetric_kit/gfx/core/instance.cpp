@@ -114,8 +114,22 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
   // to lack the macro also has no portability driver to enumerate.
   VkInstanceCreateFlags flags = 0;
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
-  if (has_extension(available, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+  // As with debug_utils above, skip the push when the caller already supplied
+  // the name via extra_instance_extensions.
+  bool portability =
+      std::any_of(extensions.begin(), extensions.end(), [](const char* e) {
+        return std::strcmp(e, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) ==
+               0;
+      });
+  if (!portability &&
+      has_extension(available, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    portability = true;
+  }
+  // Key the flag on the extension being in the final list -- pushed here or
+  // caller-supplied -- since the flag is valid only alongside the extension and
+  // the extension takes effect only alongside the flag.
+  if (portability) {
     flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
   }
 #endif

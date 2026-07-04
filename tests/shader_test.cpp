@@ -24,6 +24,14 @@ using ShaderTest = VulkanDeviceTest;
 
 // --- Validation rejects: no device needed (checked before the Vulkan call) ---
 
+TEST(ShaderModuleTest, NullDeviceRejected) {
+  // Valid-shaped code, so the device is the only invalid argument.
+  const uint32_t word = 0;
+  auto module = vg::ShaderModule::create(VK_NULL_HANDLE, &word, 4);
+  ASSERT_FALSE(module.ok());
+  EXPECT_EQ(module.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST(ShaderModuleTest, NullCodeRejected) {
   auto module = vg::ShaderModule::create(VK_NULL_HANDLE, nullptr, 4);
   ASSERT_FALSE(module.ok());

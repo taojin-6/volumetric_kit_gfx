@@ -94,8 +94,8 @@ target_link_libraries(
 vg_target_warnings(gfx_ui)
 
 # TODO: install/export gfx_ui once the ImGui headers it exposes (PUBLIC, build
-# tree only) and the PRIVATE vg_imgui static lib are co-installed -- the
-# packaging step deferred from this tier's first PR. Until then gfx_ui is
-# build-tree-only: examples + tests link it directly, and the umbrella pulls it
-# in through BUILD_INTERFACE (see src/CMakeLists.txt), so the installed package
-# is unaffected.
+# tree only) and the PRIVATE vg_imgui static lib are co-installed. Until then
+# gfx_ui is build-tree-only: examples + tests link it directly, the umbrella
+# pulls it in through BUILD_INTERFACE, and the header install excludes ui/ (both
+# in src/CMakeLists.txt), so the installed package carries no trace of this
+# tier.

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/io/export.hpp"
@@ -31,20 +32,37 @@ namespace volumetric_kit::gfx::io {
 /// reason (parser error, unsupported feature, missing file). Warnings from the
 /// parser are not fatal and are not surfaced here.
 ///
-/// @param path   Filesystem path to a `.gltf` or `.glb` file.
-/// @param error  Optional out-param; on failure, set to the failure reason
-///               (left unchanged on success). Pass `nullptr` to ignore it.
+/// A load can also succeed *partially*: a mesh primitive the converter cannot
+/// represent is dropped from the returned model rather than failing the load.
+/// Pass @p warnings to observe such drops -- a silently incomplete model is
+/// otherwise indistinguishable from a complete one.
+///
+/// @note Sparse accessors and accessors without a bufferView (both spec-valid)
+///       are not supported yet; a primitive whose POSITION or index accessor
+///       uses either is dropped and reported through @p warnings.
+///
+/// @param path      Filesystem path to a `.gltf` or `.glb` file.
+/// @param error     Optional out-param; on failure, set to the failure reason
+///                  (left unchanged on success). Pass `nullptr` to ignore it.
+/// @param warnings  Optional out-param; one message is appended per dropped
+///                  primitive, naming the mesh, the primitive index, and the
+///                  reason. Never cleared, and untouched when nothing is
+///                  dropped. Pass `nullptr` to ignore drops.
 /// @return The loaded @ref assets::Model on success, or `std::nullopt` on
 ///         failure.
 ///
 /// @code
 /// std::string err;
-/// std::optional<assets::Model> model = io::load_gltf("box.glb", &err);
+/// std::vector<std::string> warnings;
+/// std::optional<assets::Model> model =
+///     io::load_gltf("box.glb", &err, &warnings);
 /// if (!model) { handle_error(err); return; }
+/// for (const std::string& w : warnings) log_warning(w);
 /// use(*model);
 /// @endcode
-VG_IO_API std::optional<assets::Model> load_gltf(std::string_view path,
-                                                 std::string* error = nullptr);
+VG_IO_API std::optional<assets::Model> load_gltf(
+    std::string_view path, std::string* error = nullptr,
+    std::vector<std::string>* warnings = nullptr);
 
 // TODO: OBJ loader (load_obj) -- thin per-format loader into this same Model.
 // TODO: PLY loader (load_ply) -- produces PointCloud for scanned/point data.
