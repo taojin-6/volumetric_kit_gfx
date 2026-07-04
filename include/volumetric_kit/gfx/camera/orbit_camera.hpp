@@ -29,7 +29,10 @@ namespace volumetric_kit::gfx::camera {
 /// @ref azimuth (yaw, radians, around world +Y) and @ref elevation (pitch,
 /// radians, measured from the horizontal plane). At `azimuth == 0,
 /// elevation == 0` the eye is directly in front of the target on +Z, looking
-/// toward -Z, with world +Y up.
+/// toward -Z, with world +Y up. The offset follows the camera tier's shared
+/// parametrization (@ref spherical_direction) -- the same angles, negated,
+/// that level @ref CameraRig's look ray -- so the two controllers agree on
+/// angle signs by construction.
 ///
 /// @ref elevation is clamped just shy of the poles (@ref kMaxElevation) so the
 /// view direction never becomes parallel to world up -- which would collapse
@@ -44,6 +47,8 @@ namespace volumetric_kit::gfx::camera {
 /// orbit.dolly(-1.0f);                                     // wheel to zoom in
 /// Camera cam = orbit.to_camera(glm::radians(60.0f), 16.0f / 9, 0.1f, 100.0f);
 /// @endcode
+// TODO: fold OrbitCamera into CameraRig once downstream consumers exist to
+// inform the choice.
 class VG_CAMERA_API OrbitCamera {
  public:
   /// @brief Elevation clamp magnitude: just under a quarter turn (`~89.5°`).
@@ -55,6 +60,8 @@ class VG_CAMERA_API OrbitCamera {
   static constexpr float kMaxElevation = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref distance, so the eye cannot reach the target.
+  ///        Shares the camera tier's @ref kMinPivotDistance with
+  ///        @ref CameraRig::kMinFocusDistance.
   static constexpr float kMinDistance = kMinPivotDistance;
 
   /// Construct a default controller: target at the origin, unit distance,

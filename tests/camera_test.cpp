@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
@@ -190,6 +191,34 @@ TEST(OrbitCamera, DistanceClampsToPositiveMinimum) {
   orbit.set_distance(10.0f);
   orbit.zoom(0.0f);  // multiplicative collapse
   EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
+}
+
+// A NaN distance write -- via zoom, set_distance, or dolly -- clamps to the
+// floor instead of poisoning the state (std::max floors it -- the arg order
+// matters for NaN), mirroring CameraRig's NonFiniteFocusDistanceClampsToFloor.
+TEST(OrbitCamera, NonFiniteDistanceClampsToFloor) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+
+  cam::OrbitCamera orbit;
+  orbit.set_distance(4.0f);
+  orbit.zoom(nan);
+  EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
+  EXPECT_TRUE(std::isfinite(orbit.eye().x));
+  EXPECT_TRUE(std::isfinite(orbit.eye().y));
+  EXPECT_TRUE(std::isfinite(orbit.eye().z));
+
+  orbit.set_distance(nan);
+  EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
+
+  orbit.dolly(nan);  // kMinDistance + NaN is NaN again; the clamp re-floors it
+  EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
+
+  // The controller stays usable: a subsequent valid verb yields a finite eye.
+  orbit.dolly(2.0f);
+  EXPECT_NEAR(orbit.distance(), 2.0f + cam::OrbitCamera::kMinDistance, 1e-6f);
+  EXPECT_TRUE(std::isfinite(orbit.eye().x));
+  EXPECT_TRUE(std::isfinite(orbit.eye().y));
+  EXPECT_TRUE(std::isfinite(orbit.eye().z));
 }
 
 // dolly moves the eye along the view ray without rotating it: at the default

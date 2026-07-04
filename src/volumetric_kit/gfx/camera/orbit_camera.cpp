@@ -4,10 +4,9 @@
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
-#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // kWorldUp, level_basis
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // shared controller math
 //
-#include <algorithm>  // std::clamp, std::max
-#include <cmath>      // std::cos, std::sin
+#include <algorithm>  // std::clamp
 
 #include <glm/ext/matrix_transform.hpp>  // lookAt
 
@@ -30,7 +29,7 @@ void OrbitCamera::dolly(float delta) { set_distance(distance_ + delta); }
 void OrbitCamera::zoom(float factor) { set_distance(distance_ * factor); }
 
 void OrbitCamera::set_distance(float distance) noexcept {
-  distance_ = std::max(distance, kMinDistance);
+  distance_ = clamp_pivot_distance(distance);
 }
 
 void OrbitCamera::set_elevation(float elevation) noexcept {
@@ -38,14 +37,9 @@ void OrbitCamera::set_elevation(float elevation) noexcept {
 }
 
 glm::vec3 OrbitCamera::eye() const {
-  // Spherical -> cartesian offset from the target. elevation is measured from
-  // the horizontal plane; at azimuth 0 / elevation 0 the offset is +Z, so the
-  // eye sits in front of the target.
-  const float cos_elev = std::cos(elevation_);
-  const glm::vec3 offset(distance_ * cos_elev * std::sin(azimuth_),
-                         distance_ * std::sin(elevation_),
-                         distance_ * cos_elev * std::cos(azimuth_));
-  return target_ + offset;
+  // The target->eye offset runs *along* the shared spherical direction; at
+  // azimuth 0 / elevation 0 that is +Z, so the eye sits in front of the target.
+  return target_ + distance_ * spherical_direction(azimuth_, elevation_);
 }
 
 glm::mat4 OrbitCamera::view() const {
@@ -54,10 +48,7 @@ glm::mat4 OrbitCamera::view() const {
 
 Camera OrbitCamera::to_camera(float fovy_radians, float aspect, float z_near,
                               float z_far) const {
-  Camera camera;
-  camera.set_view(view());
-  camera.set_perspective(fovy_radians, aspect, z_near, z_far);
-  return camera;
+  return bake_camera(view(), fovy_radians, aspect, z_near, z_far);
 }
 
 }  // namespace volumetric_kit::gfx::camera

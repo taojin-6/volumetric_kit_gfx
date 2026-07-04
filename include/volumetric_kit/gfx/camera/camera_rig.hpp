@@ -72,8 +72,8 @@ class VG_CAMERA_API CameraRig {
   static constexpr float kMaxPitch = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref focus_distance, so the pivot never reaches
-  /// the
-  ///        eye (which would collapse the view ray).
+  ///        the eye (which would collapse the view ray). Shares the camera
+  ///        tier's @ref kMinPivotDistance with @ref OrbitCamera::kMinDistance.
   static constexpr float kMinFocusDistance = kMinPivotDistance;
 
   /// Construct the default rig: at the origin, looking down world `-Z` with
@@ -84,16 +84,15 @@ class VG_CAMERA_API CameraRig {
 
   /// @brief Swing the eye around the focus pivot (the drag-to-rotate verb).
   /// @param delta_yaw    Yaw change, in radians; `+` turns left (counter-
-  ///                     clockwise about world up), matching @ref OrbitCamera.
+  ///                     clockwise about world up).
   /// @param delta_pitch  Pitch change, in radians; `+` raises the eye over the
-  ///                     pivot (tilting the view down), matching
-  ///                     @ref OrbitCamera's elevation sign. In
-  ///                     @ref level_horizon mode it is clamped to
-  ///                     `[-kMaxPitch, +kMaxPitch]`.
+  ///                     pivot (tilting the view down). In @ref level_horizon
+  ///                     mode it is clamped to `[-kMaxPitch, +kMaxPitch]`.
   ///
   /// @ref focus_point and @ref focus_distance are preserved: the eye moves
   /// along a sphere around the pivot while the look direction stays aimed at
-  /// it.
+  /// it. The yaw/pitch signs are @ref OrbitCamera's by construction: both
+  /// controllers build on the shared @ref spherical_direction parametrization.
   void orbit(float delta_yaw, float delta_pitch);
 
   /// @brief Rotate the look direction in place, leaving @ref position fixed

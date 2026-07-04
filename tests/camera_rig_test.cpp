@@ -195,7 +195,10 @@ TEST(CameraRig, StageTransformIsEyeToWorldPose) {
 }
 
 // orbit's +pitch matches OrbitCamera's +elevation: it raises the eye over the
-// pivot (tilting the view down), the same vertical sense as OrbitCamera::orbit.
+// pivot (tilting the view down). Both controllers build on the shared
+// spherical_direction parametrization (negated between them), so this
+// cross-check guards that shared math and its negated uses against a sign
+// regression.
 TEST(CameraRig, OrbitPitchRaisesEyeLikeOrbitCamera) {
   cam::CameraRig rig;  // origin, pivot at (0, 0, -1)
   rig.orbit(0.0f, glm::radians(30.0f));
