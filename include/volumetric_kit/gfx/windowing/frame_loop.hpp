@@ -8,6 +8,7 @@
 ///        that drive a @ref Swapchain's acquire → render → present cycle.
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -50,35 +51,36 @@ struct Frame {
 /// render-finished semaphore. The split matters: reusing one render-finished
 /// semaphore across slots races the presentation engine, so it is keyed by
 /// image (and an image still in flight from an earlier slot is fence-waited
-/// before reuse). @ref begin_frame waits the slot, acquires an image, and
-/// transitions it for rendering; @ref end_frame transitions it for
-/// presentation, submits, and presents. Both surface `VK_ERROR_OUT_OF_DATE_KHR`
-/// so the caller can
-/// @ref Swapchain::recreate.
+/// before reuse).
+///
+/// The extent-taking @ref begin_frame drives the whole windowed protocol: it
+/// rebuilds the swapchain when it went stale or the window resized (running the
+/// @ref set_recreate_callback hook after each rebuild), skips the tick while
+/// the window is minimized, and hands back a @ref Frame otherwise — @ref
+/// end_frame then submits and presents it. The zero-argument @ref begin_frame
+/// is the raw building block for callers that own the recreate policy
+/// themselves; it and @ref end_frame surface stale results as statuses
+/// classified by @ref swapchain_stale.
 ///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
-///          the loop (it borrows both). Idle the device (or drain the loop)
-///          before destroying it while frames are in flight. A profiler
-///          attached via @ref set_profiler is likewise borrowed and must
-///          outlive the loop, or be detached with `nullptr` first.
+///          the loop (it borrows both). Destruction drains the loop's in-flight
+///          frames (a device wait), so teardown is safe mid-flight. A profiler
+///          attached via @ref set_profiler and anything captured by the @ref
+///          set_recreate_callback hook are likewise borrowed and must outlive
+///          the loop, or be detached first.
 ///
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
 /// while (running) {
-///   auto frame = loop.value().begin_frame();
-///   if (!frame) {
-///     // Out-of-date (a resize): rebuild and retry. recreate rejects a zero
-///     // extent (minimized window) while keeping the old chain usable — wait
-///     // for a restore event then; do not spin on a persistent failure.
-///     if (!swapchain.recreate(window_extent()).ok()) wait_for_restore();
-///     continue;
-///   }
-///   frame.value().target->begin(frame.value().cmd, clear);
+///   auto frame = loop.value().begin_frame(window_extent());
+///   if (!frame) return fail(frame.status());          // hard error only
+///   if (!frame.value()) { wait_events(); continue; }  // minimized
+///   const Frame& f = *frame.value();
+///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
-///   frame.value().target->end(frame.value().cmd);
-///   if (!loop.value().end_frame(frame.value())) {
-///     if (!swapchain.recreate(window_extent()).ok()) wait_for_restore();
-///   }
+///   f.target->end(f.cmd);
+///   Status end = loop.value().end_frame(f);
+///   if (!end.ok() && !swapchain_stale(end)) return fail(end);
 /// }
 /// @endcode
 class VG_WINDOWING_API FrameLoop {
@@ -95,15 +97,39 @@ class VG_WINDOWING_API FrameLoop {
   static Result<FrameLoop> create(const Device& device, Swapchain& swapchain,
                                   uint32_t frames_in_flight = 2);
 
-  ~FrameLoop() = default;
+  ~FrameLoop();
   FrameLoop(FrameLoop&& other) noexcept;
   FrameLoop& operator=(FrameLoop&& other) noexcept;
   FrameLoop(const FrameLoop&) = delete;
   FrameLoop& operator=(const FrameLoop&) = delete;
 
-  /// @brief Begin the next frame: wait this slot's fence, acquire an image,
-  ///        begin its command buffer, and transition the image into
-  ///        `COLOR_ATTACHMENT_OPTIMAL`.
+  /// @brief Begin the next frame, owning the windowed-loop protocol: rebuilds
+  ///        the swapchain when it went stale (a prior out-of-date / suboptimal
+  ///        result) or @p current_extent changed, re-runs the @ref
+  ///        set_recreate_callback hook after each rebuild, and retries the
+  ///        acquire once.
+  /// @param current_extent  The window's current framebuffer extent (e.g. from
+  ///                        `glfwGetFramebufferSize`).
+  /// @return The @ref Frame to record and pass to @ref end_frame; an *empty*
+  ///         optional when nothing can render this tick (minimized window, or
+  ///         the surface is still settling after a rebuild) — poll/wait for
+  ///         events and call again; a non-OK @ref Status only for hard failures
+  ///         (device loss, a failed rebuild or recreate hook) — do not retry
+  ///         those.
+  Result<std::optional<Frame>> begin_frame(VkExtent2D current_extent);
+
+  /// @brief Register a hook run after every internal swapchain rebuild by the
+  ///        extent-taking @ref begin_frame, before the next acquire — rebuild
+  ///        swapchain-sized resources here (e.g. a depth attachment).
+  /// @param callback  Receives the rebuilt swapchain's extent; a non-OK return
+  ///                  aborts the frame and surfaces from @ref begin_frame.
+  ///                  Whatever it captures must outlive the loop. Pass an empty
+  ///                  function to detach.
+  void set_recreate_callback(std::function<Status(VkExtent2D)> callback);
+
+  /// @brief Begin the next frame (raw protocol): wait this slot's fence,
+  ///        acquire an image, begin its command buffer, and transition the
+  ///        image into `COLOR_ATTACHMENT_OPTIMAL`.
   /// @return The @ref Frame to record into; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` (recreate the swapchain and retry) or
   ///         another failed `VkResult`; @ref Status::Code::InvalidArgument when
@@ -124,8 +150,9 @@ class VG_WINDOWING_API FrameLoop {
   ///        advance to the next slot.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return OK on success; a non-OK @ref Status carrying
-  ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (recreate the
-  ///         swapchain) or another failed `VkResult`.
+  ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
+  ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
+  ///         rebuilds automatically) or another failed `VkResult`.
   /// @note On a failure *before* the submit reaches the queue, the slot's sync
   ///       state is restored (a brief blocking submit) so the *slot* stays
   ///       reusable — but the image this frame acquired was never presented,
@@ -169,6 +196,11 @@ class VG_WINDOWING_API FrameLoop {
   // next begin_frame never blocks on it. Blocking; error-path only.
   Status recover_slot(uint32_t slot);
 
+  // Wait out this loop's in-flight frames (a device wait) so teardown cannot
+  // free command buffers / semaphores the GPU still references. Best-effort:
+  // errors are unreportable from the destructor and moot on a lost device.
+  void drain() noexcept;
+
   const Device* device_ = nullptr;  // borrowed; outlives this
   Swapchain* swapchain_ = nullptr;  // borrowed; outlives this
   // Optional only because CommandPool is create-only (no public default ctor);
@@ -189,6 +221,13 @@ class VG_WINDOWING_API FrameLoop {
   VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
   uint32_t current_slot_ = 0;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
+  // Managed-protocol state (the extent-taking begin_frame): the rebuild hook,
+  // whether a stale acquire/present armed a rebuild, and the last extent the
+  // caller requested — compared against the *requested* (not the clamped
+  // built) extent, so a clamped request does not rebuild every tick.
+  std::function<Status(VkExtent2D)> recreate_callback_;
+  bool needs_recreate_ = false;
+  VkExtent2D last_requested_extent_{};
 };
 
 }  // namespace windowing

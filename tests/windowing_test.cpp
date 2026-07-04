@@ -410,6 +410,89 @@ TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
   vkDeviceWaitIdle(device_->handle());
 }
 
+// The extent-taking begin_frame owns the loop protocol: a zero extent skips
+// the tick (minimized) without acquiring, a matching extent renders normally,
+// and a changed extent rebuilds the swapchain and runs the recreate callback
+// (with the rebuilt extent) before delivering the next frame.
+TEST_F(WindowingTest, ManagedBeginFrameSkipsAndRebuilds) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+
+  int callback_runs = 0;
+  VkExtent2D callback_extent{};
+  loop.value().set_recreate_callback([&](VkExtent2D extent) {
+    ++callback_runs;
+    callback_extent = extent;
+    return vg::Status{};
+  });
+
+  // Zero extent: a skipped tick — no acquire, no rebuild.
+  auto skipped = loop.value().begin_frame(VkExtent2D{0, 0});
+  ASSERT_TRUE(skipped.ok()) << skipped.status().message();
+  EXPECT_FALSE(skipped.value().has_value());
+  EXPECT_EQ(callback_runs, 0);
+
+  // Matching extent: a normal frame, still no rebuild.
+  auto frame = loop.value().begin_frame(VkExtent2D{256, 256});
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  ASSERT_TRUE(frame.value().has_value());
+  {
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color.float32[3] = 1.0f;
+    frame.value()->target->begin(frame.value()->cmd, begin);
+    frame.value()->target->end(frame.value()->cmd);
+  }
+  ASSERT_TRUE(loop.value().end_frame(*frame.value()).ok());
+  EXPECT_EQ(callback_runs, 0);
+
+  // Changed extent: the loop rebuilds the swapchain, runs the callback with
+  // the rebuilt extent, and still delivers a frame.
+  auto resized = loop.value().begin_frame(VkExtent2D{320, 240});
+  ASSERT_TRUE(resized.ok()) << resized.status().message();
+  ASSERT_TRUE(resized.value().has_value());
+  EXPECT_EQ(callback_runs, 1);
+  EXPECT_EQ(callback_extent.width, 320u);
+  EXPECT_EQ(callback_extent.height, 240u);
+  EXPECT_EQ(sc.extent().width, 320u);
+  {
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color.float32[3] = 1.0f;
+    resized.value()->target->begin(resized.value()->cmd, begin);
+    resized.value()->target->end(resized.value()->cmd);
+  }
+  ASSERT_TRUE(loop.value().end_frame(*resized.value()).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// A failing recreate callback aborts the frame as a hard error the caller must
+// not retry — the loop does not swallow it into a skipped tick.
+TEST_F(WindowingTest, ManagedBeginFramePropagatesCallbackFailure) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  loop.value().set_recreate_callback([](VkExtent2D) {
+    return vg::Status::out_of_memory("test: depth rebuild failed");
+  });
+
+  auto resized = loop.value().begin_frame(VkExtent2D{320, 240});
+  ASSERT_FALSE(resized.ok());
+  EXPECT_EQ(resized.status().domain(), vg::Status::Code::OutOfMemory);
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// Destruction drains in-flight frames: no explicit device wait before the loop
+// goes out of scope. The fixture's validation capture fails the test if the
+// destructor freed command buffers / semaphores the GPU still referenced.
+TEST_F(WindowingTest, DestructionDrainsInFlightFrames) {
+  win::Swapchain sc = make_swapchain();
+  {
+    auto loop = win::FrameLoop::create(*device_, sc, 2);
+    ASSERT_TRUE(loop.ok()) << loop.status().message();
+    EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  }
+}
+
 // Acquire / present / recreate on an empty swapchain (default-constructed,
 // moved-from, or after a failed rebuild) fail with InvalidArgument instead of
 // dereferencing null handles. Needs no instance/device, so it runs everywhere.

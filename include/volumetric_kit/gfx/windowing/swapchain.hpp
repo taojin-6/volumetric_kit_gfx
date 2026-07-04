@@ -38,6 +38,19 @@ struct SwapchainConfig {
   uint32_t min_image_count = 0;
 };
 
+/// @brief Classify a status from acquire / present / @ref FrameLoop as
+///        "swapchain stale": the swapchain merely needs recreation
+///        (`VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR`), as opposed to an
+///        error to abort on (device loss, invalid usage).
+/// @param status  A status returned by @ref Swapchain::acquire_next_image,
+///                @ref Swapchain::present, or the @ref FrameLoop frame calls.
+/// @return `true` when the right response is to recreate and continue.
+inline bool swapchain_stale(const Status& status) noexcept {
+  return status.domain() == Status::Code::Vulkan &&
+         (status.code() == VK_ERROR_OUT_OF_DATE_KHR ||
+          status.code() == VK_SUBOPTIMAL_KHR);
+}
+
 /// @brief Owns a `VkSwapchainKHR`, an image view per swapchain image, and a
 ///        @ref RenderTarget over each — the windowing-tier sibling of
 ///        @ref OffscreenTarget, so a pass renders into either.

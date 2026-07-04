@@ -25,6 +25,9 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   FrameLoop loop;
   loop.device_ = &device;
   loop.swapchain_ = &swapchain;
+  // Seed the managed protocol's resize detection with the built extent, so the
+  // first extent-taking begin_frame does not rebuild a fresh swapchain.
+  loop.last_requested_extent_ = swapchain.extent();
 
   VG_ASSIGN(CommandPool pool,
             CommandPool::create(device.handle(), device.graphics_family()));
@@ -73,6 +76,54 @@ Status FrameLoop::ensure_image_sync() {
   images_in_flight_.assign(image_count, VK_NULL_HANDLE);
   last_swapchain_ = current;
   return Status{};
+}
+
+Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
+  if (swapchain_ == nullptr) {
+    return Status::invalid_argument("FrameLoop::begin_frame on an empty loop");
+  }
+  if (current_extent.width == 0 || current_extent.height == 0) {
+    // Minimized: nothing to acquire or rebuild; an armed rebuild stays armed
+    // for the restore.
+    return std::optional<Frame>{};
+  }
+  if (current_extent.width != last_requested_extent_.width ||
+      current_extent.height != last_requested_extent_.height) {
+    // The window resized under us; some platforms (MoltenVK in particular)
+    // never report OUT_OF_DATE for it.
+    needs_recreate_ = true;
+  }
+  // One rebuild + one acquire retry per call: a second stale result yields a
+  // skipped tick rather than looping here while the surface settles.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (needs_recreate_) {
+      const Status rebuilt = swapchain_->recreate(current_extent);
+      if (!rebuilt.ok()) {
+        if (rebuilt.domain() == Status::Code::InvalidArgument &&
+            swapchain_->valid()) {
+          // The surface reported a zero extent mid-rebuild (still minimized):
+          // the old chain is intact, so skip this tick and retry later.
+          return std::optional<Frame>{};
+        }
+        return rebuilt;
+      }
+      needs_recreate_ = false;
+      last_requested_extent_ = current_extent;
+      if (recreate_callback_) {
+        VG_TRY(recreate_callback_(swapchain_->extent()));
+      }
+    }
+    Result<Frame> frame = begin_frame();
+    if (frame.ok()) {
+      return std::optional<Frame>(frame.value());
+    }
+    if (swapchain_stale(frame.status())) {
+      needs_recreate_ = true;
+      continue;
+    }
+    return frame.status();
+  }
+  return std::optional<Frame>{};
 }
 
 Result<Frame> FrameLoop::begin_frame() {
@@ -215,6 +266,10 @@ Status FrameLoop::end_frame(const Frame& frame) {
   }
 
   Status present = swapchain_->present(frame.image_index, signal_sem);
+  if (swapchain_stale(present)) {
+    // Arm the managed protocol's rebuild; raw callers see the status as ever.
+    needs_recreate_ = true;
+  }
   // Advance regardless: the work was submitted and the fence will signal, so
   // the slot is reusable next round even when present reports out-of-date.
   current_slot_ =
@@ -268,6 +323,19 @@ void FrameLoop::set_profiler(Profiler* profiler) noexcept {
   profiler_ = profiler;
 }
 
+void FrameLoop::set_recreate_callback(
+    std::function<Status(VkExtent2D)> callback) {
+  recreate_callback_ = std::move(callback);
+}
+
+FrameLoop::~FrameLoop() { drain(); }
+
+void FrameLoop::drain() noexcept {
+  if (device_ != nullptr && !in_flight_.empty()) {
+    (void)vkDeviceWaitIdle(device_->handle());
+  }
+}
+
 // Hand-written (not defaulted) because the command buffers free back to the
 // pool: destruction order matters, and the move pair must null the borrowed
 // pointers on the source so a moved-from loop is fully empty.
@@ -282,20 +350,28 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
       images_in_flight_(std::move(other.images_in_flight_)),
       last_swapchain_(other.last_swapchain_),
       current_slot_(other.current_slot_),
-      profiler_(other.profiler_) {
+      profiler_(other.profiler_),
+      recreate_callback_(std::move(other.recreate_callback_)),
+      needs_recreate_(other.needs_recreate_),
+      last_requested_extent_(other.last_requested_extent_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
   other.last_swapchain_ = VK_NULL_HANDLE;
   other.current_slot_ = 0;
   other.profiler_ = nullptr;
+  other.recreate_callback_ = nullptr;
+  other.needs_recreate_ = false;
+  other.last_requested_extent_ = VkExtent2D{};
 }
 
 FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
   if (this != &other) {
-    // Release our resources in dependency order before adopting other's: the
-    // command buffers free back to the pool, so they must be destroyed before
-    // the pool. (A defaulted move-assign assigns members in declaration order,
-    // freeing the pool first while our command buffers still reference it.)
+    // Wait out our own in-flight frames, then release our resources in
+    // dependency order before adopting other's: the command buffers free back
+    // to the pool, so they must be destroyed before the pool. (A defaulted
+    // move-assign assigns members in declaration order, freeing the pool first
+    // while our command buffers still reference it.)
+    drain();
     command_buffers_.clear();
     pool_.reset();
 
@@ -310,12 +386,18 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     last_swapchain_ = other.last_swapchain_;
     current_slot_ = other.current_slot_;
     profiler_ = other.profiler_;
+    recreate_callback_ = std::move(other.recreate_callback_);
+    needs_recreate_ = other.needs_recreate_;
+    last_requested_extent_ = other.last_requested_extent_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
     other.last_swapchain_ = VK_NULL_HANDLE;
     other.current_slot_ = 0;
     other.profiler_ = nullptr;
+    other.recreate_callback_ = nullptr;
+    other.needs_recreate_ = false;
+    other.last_requested_extent_ = VkExtent2D{};
   }
   return *this;
 }
