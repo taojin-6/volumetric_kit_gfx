@@ -28,7 +28,7 @@ namespace volumetric_kit::gfx::assets {
 ///
 /// @code
 /// std::string err;
-/// if (auto model = assets::load_gltf("scene.glb", &err)) {
+/// if (auto model = io::load_gltf("scene.glb", &err)) {
 ///   for (const assets::Mesh& m : model->meshes) upload(m);  // GPU tier
 /// } else {
 ///   log_message(LogLevel::Error, err);

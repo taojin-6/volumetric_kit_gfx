@@ -9,6 +9,9 @@ namespace volumetric_kit::gfx {
 
 Result<CommandPool> CommandPool::create(VkDevice device, uint32_t queue_family,
                                         VkCommandPoolCreateFlags flags) {
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument("CommandPool::create: device is null");
+  }
   VkCommandPoolCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   info.flags = flags;

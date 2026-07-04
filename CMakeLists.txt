@@ -29,12 +29,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(VG_BUILD_EXAMPLES "Build example programs" ${VG_IS_TOP_LEVEL})
 option(VG_BUILD_TESTS "Build tests" ${VG_IS_TOP_LEVEL})
 option(VG_INSTALL "Generate install/export rules" ${VG_IS_TOP_LEVEL})
-# TODO: VG_WITH_GLFW / VG_WITH_CUDA are reserved for the windowing / interop
-# tiers and are not consumed yet (no target reads them, so toggling them is a
-# no-op). Wire them up — or drop them and the matching CI GLFW packages — when
-# those tiers land.
-option(VG_WITH_GLFW "Enable GLFW desktop windowing (reserved; not yet wired)"
-       ON)
+# VG_WITH_GLFW gates the examples: examples/CMakeLists.txt skips the whole
+# directory when it is OFF (or when GLFW is not installed). The library tiers
+# never read it — windowing is GLFW-free by design.
+#
+# TODO: wire VG_WITH_CUDA into the interop tier when it lands; until then no
+# target reads it, so toggling it is a no-op.
+option(VG_WITH_GLFW "Enable GLFW desktop windowing (gates examples/)" ON)
 option(
   VG_WITH_CUDA
   "Enable CUDA <-> Vulkan external-memory interop (reserved; not yet wired)"
@@ -88,10 +89,6 @@ if(VG_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# Guard: examples/ may not exist yet, so don't error when it is absent.
-#
-# TODO: drop the guard once examples/ is added.
-if(VG_BUILD_EXAMPLES AND EXISTS
-                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
+if(VG_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <glm/geometric.hpp>  // length
 #include <glm/mat4x4.hpp>
@@ -148,11 +149,57 @@ TEST(GltfLoader, RejectsOutOfBoundsAccessor) {
   }
 
   std::string err;
-  std::optional<assets::Model> model = io::load_gltf(path, &err);
+  std::vector<std::string> warnings;
+  std::optional<assets::Model> model = io::load_gltf(path, &err, &warnings);
   std::remove(path.c_str());
 
   // The JSON parses, so the load itself succeeds; the over-long primitive is
   // safely skipped, leaving no mesh -- and, crucially, no out-of-bounds read.
   ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
   EXPECT_TRUE(model->meshes.empty());
+
+  // The drop is not silent: the warnings channel names the primitive.
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings.front().find("mesh 0"), std::string::npos)
+      << warnings.front();
+  EXPECT_NE(warnings.front().find("primitive 0"), std::string::npos)
+      << warnings.front();
+}
+
+// An accessor may omit bufferView entirely (spec-valid: the data is then all
+// zeros, typically overlaid by a sparse substitution). The loader does not
+// support that yet -- see the @note on load_gltf -- so the primitive is
+// dropped, but never silently: the load succeeds AND the drop is reported
+// through the warnings channel.
+TEST(GltfLoader, ReportsDroppedPrimitiveThroughWarnings) {
+  const std::string gltf = R"({
+    "asset": {"version": "2.0"},
+    "scene": 0,
+    "scenes": [{"nodes": [0]}],
+    "nodes": [{"mesh": 0}],
+    "meshes": [{"name": "NoView",
+                "primitives": [{"attributes": {"POSITION": 0}}]}],
+    "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+  })";
+  const std::string path = std::string(testing::TempDir()) + "vg_no_view.gltf";
+  {
+    std::ofstream(path) << gltf;
+  }
+
+  std::string err;
+  std::vector<std::string> warnings;
+  std::optional<assets::Model> model = io::load_gltf(path, &err, &warnings);
+  std::remove(path.c_str());
+
+  ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
+  EXPECT_TRUE(model->meshes.empty());  // the primitive is absent...
+
+  // ...and the warning names the mesh, the primitive, and the reason.
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings.front().find("NoView"), std::string::npos)
+      << warnings.front();
+  EXPECT_NE(warnings.front().find("primitive 0"), std::string::npos)
+      << warnings.front();
+  EXPECT_NE(warnings.front().find("POSITION"), std::string::npos)
+      << warnings.front();
 }
