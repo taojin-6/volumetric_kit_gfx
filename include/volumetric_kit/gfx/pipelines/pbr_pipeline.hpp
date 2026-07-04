@@ -43,9 +43,9 @@ struct PbrFrame;
 ///     pipelines::PbrPipeline::create(device, target.layout());
 /// if (!pbr) return pbr.status();
 /// // Build set 0 (PbrScene) + set 1 (PbrMaterial) against its reflected
-/// // layouts, then each frame:
-/// scene.set_camera(eye, prefilter_max_lod);
-/// pbr.value().submit(cmd, frame);  // frame names the scene + the draws
+/// // layouts, then each frame (f.slot = the in-flight slot):
+/// scene.set_camera(f.slot, eye, prefilter_max_lod);
+/// pbr.value().submit(cmd, frame);  // frame names the scene, slot, and draws
 /// @endcode
 class VG_PIPELINES_API PbrPipeline {
  public:
@@ -139,6 +139,10 @@ struct PbrFrame {
   const PbrScene* scene = nullptr;  ///< Set 0, bound once for the frame.
   const PbrDraw* draws = nullptr;   ///< The draw list.
   uint32_t draw_count = 0;          ///< Number of @ref draws.
+  /// The frame's in-flight slot (e.g. the windowing `Frame::slot`): selects
+  /// which of @ref scene's per-slot camera UBOs / descriptor sets to bind.
+  /// Appended last so adding it leaves the other fields' positions unchanged.
+  uint32_t slot = 0;
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

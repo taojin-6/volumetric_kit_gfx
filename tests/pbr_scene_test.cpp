@@ -87,9 +87,40 @@ TEST_F(PbrSceneTest, CreatesSet0) {
                                            scene_layout(), full_desc());
   ASSERT_TRUE(scene.ok()) << scene.status().message();
   EXPECT_TRUE(scene.value().valid());
+  EXPECT_EQ(scene.value().frames_in_flight(), 1u);  // the default ring depth
   EXPECT_NE(scene.value().descriptor_set(), VK_NULL_HANDLE);
   // The mapped camera UBO is writable without a device present.
-  scene.value().set_camera(glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
+  scene.value().set_camera(0, glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
+}
+
+// One camera UBO + descriptor set per frame-in-flight slot. Distinct set
+// handles are the observable proxy for the ring's anti-race property: each set
+// comes from its own OwnedDescriptorSet -- hence its own UBO buffer -- so
+// writing one slot cannot touch another's. (PbrScene exposes no UBO read-back
+// to assert that directly; CLAUDE.md prefers behavior tests over private-state
+// backdoors.) Both slots accept a write; an out-of-range slot is a no-op.
+TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
+  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+                                           scene_layout(), full_desc(),
+                                           /*frames_in_flight=*/2);
+  ASSERT_TRUE(scene.ok()) << scene.status().message();
+  EXPECT_EQ(scene.value().frames_in_flight(), 2u);
+  EXPECT_NE(scene.value().descriptor_set(0), VK_NULL_HANDLE);
+  EXPECT_NE(scene.value().descriptor_set(1), VK_NULL_HANDLE);
+  EXPECT_NE(scene.value().descriptor_set(0), scene.value().descriptor_set(1));
+  EXPECT_EQ(scene.value().descriptor_set(2), VK_NULL_HANDLE);
+  scene.value().set_camera(0, glm::vec3(1.0f, 0.0f, 0.0f), 4.0f);
+  scene.value().set_camera(1, glm::vec3(0.0f, 1.0f, 0.0f), 4.0f);
+  // Out-of-range slot: guarded no-op, not a write through a bad pointer.
+  scene.value().set_camera(2, glm::vec3(0.0f), 4.0f);
+}
+
+TEST_F(PbrSceneTest, RejectsZeroFramesInFlight) {
+  auto scene =
+      pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
+                                  full_desc(), /*frames_in_flight=*/0);
+  ASSERT_FALSE(scene.ok());
+  EXPECT_EQ(scene.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, RejectsNullMap) {
@@ -160,11 +191,12 @@ TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
                                           full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrScene scene = std::move(made).value();
-  scene.set_camera(glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
+  scene.set_camera(0, glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
 
   pipelines::PbrFrame frame;
   frame.extent = {16, 16};
   frame.scene = &scene;
+  frame.slot = 0;
   frame.draws = nullptr;
   frame.draw_count = 0;
 

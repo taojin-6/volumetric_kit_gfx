@@ -478,7 +478,8 @@ struct PbrResources {
 // meshes). The set 0 / set 1 layouts are reflected from the pipeline's shaders.
 PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
                        const pipelines::PbrPipeline& pipeline,
-                       const assets::Model& model, const Ibl& ibl, bool* ok) {
+                       const assets::Model& model, const Ibl& ibl,
+                       uint32_t frames_in_flight, bool* ok) {
   PbrResources r;
   *ok = true;  // output flag; cleared on the first failure below
 
@@ -552,15 +553,17 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
     }
   }
 
-  // Scene (set 0): the per-frame camera + the IBL maps. The caller refreshes
-  // the camera each frame through r.scene.set_camera().
+  // Scene (set 0): the per-frame camera + the IBL maps, one UBO ring slot per
+  // frame in flight. The caller refreshes the acquired slot's camera each
+  // frame through r.scene.set_camera(slot, ...).
   pipelines::PbrSceneDesc scene_desc;
   scene_desc.irradiance = ibl.irradiance.view();
   scene_desc.prefilter = ibl.prefilter.view();
   scene_desc.brdf_lut = ibl.brdf_lut.view();
   scene_desc.sampler = ibl.sampler->handle();
-  auto scene = pipelines::PbrScene::create(
-      device.handle(), alloc, pipeline.descriptor_set_layout(0), scene_desc);
+  auto scene = pipelines::PbrScene::create(device.handle(), alloc,
+                                           pipeline.descriptor_set_layout(0),
+                                           scene_desc, frames_in_flight);
   if (!scene.ok()) {
     std::fprintf(stderr, "scene set: %s\n", scene.status().message().c_str());
     *ok = false;
@@ -1279,14 +1282,15 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   if (!ok) {
     return 1;
   }
-  PbrResources pbr = setup_pbr(device.value(), allocator.value(),
-                               pipeline.value(), model, ibl, &ok);
+  PbrResources pbr =
+      setup_pbr(device.value(), allocator.value(), pipeline.value(), model, ibl,
+                /*frames_in_flight=*/1, &ok);
   if (!ok) {
     return 1;
   }
 
   // Fixed camera for the still: write the eye into the scene set once.
-  pbr.scene.set_camera(rig.position(), ibl.prefilter_max_lod);
+  pbr.scene.set_camera(0, rig.position(), ibl.prefilter_max_lod);
   const std::vector<pipelines::PbrDraw> pbr_draws =
       build_pbr_draws(model, meshes, pbr, draws);
 
@@ -1529,16 +1533,19 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   }
 
   // One frame in flight: the single depth image is then never written by two
-  // frames at once (see the file header).
+  // frames at once (see the file header). The scene UBO no longer constrains
+  // this — it rings per slot.
   // TODO: promote depth into the windowing tier (a per-slot depth ring on the
   // swapchain's RenderTarget) so consumers get a depth-capable target and can
   // run more frames in flight, instead of the example owning a single depth.
+  constexpr uint32_t kFramesInFlight = 1;
   Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
   if (!ok) {
     return 1;
   }
-  PbrResources pbr = setup_pbr(device.value(), allocator.value(),
-                               pipeline.value(), model, ibl, &ok);
+  PbrResources pbr =
+      setup_pbr(device.value(), allocator.value(), pipeline.value(), model, ibl,
+                kFramesInFlight, &ok);
   if (!ok) {
     return 1;
   }
@@ -1551,10 +1558,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
 
-  // CPU-ahead depth shared by the loop and the profiler driving it. One here:
-  // the single shared depth image forbids more (see the note above). Declared
-  // before the loop that borrows it, so it outlives the loop.
-  constexpr uint32_t kFramesInFlight = 1;
+  // CPU-ahead depth shared by the loop and the profiler driving it (declared
+  // above, before setup_pbr, so the scene UBO ring matches).
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = kFramesInFlight;
   auto profiler = vg::Profiler::create(device.value(), profiler_config);
@@ -1640,11 +1645,10 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
         static_cast<float>(extent.height == 0 ? 1 : extent.height);
     const glm::mat4 view_proj =
         rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
-    // The camera moves each frame, so refresh the scene camera before drawing.
-    // Safe with one frame in flight: begin_frame waited the previous frame's
-    // fence above, so the GPU has finished reading this single shared UBO.
-    // Raising frames_in_flight > 1 would need a per-slot scene UBO.
-    pbr.scene.set_camera(rig.position(), ibl.prefilter_max_lod);
+    // The camera moves each frame, so refresh the acquired slot's camera UBO
+    // before drawing: begin_frame waited that slot's fence, so the GPU is not
+    // reading it.
+    pbr.scene.set_camera(f.slot, rig.position(), ibl.prefilter_max_lod);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
       // around each, resolved into the metrics printed below.
@@ -1656,6 +1660,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     frame_info.extent = extent;
     frame_info.view_proj = view_proj;
     frame_info.scene = &pbr.scene;
+    frame_info.slot = f.slot;
     frame_info.draws = pbr_draws.data();
     frame_info.draw_count = static_cast<uint32_t>(pbr_draws.size());
     {

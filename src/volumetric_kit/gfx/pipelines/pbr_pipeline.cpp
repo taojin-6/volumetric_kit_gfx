@@ -84,9 +84,10 @@ void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
   scissor.extent = frame.extent;
   vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-  // Set 0 (scene: camera + IBL) binds once for every draw.
+  // Set 0 (scene: camera + IBL) binds once for every draw, selecting the
+  // frame's in-flight slot from the scene's UBO ring.
   if (frame.scene != nullptr) {
-    const VkDescriptorSet scene = frame.scene->descriptor_set();
+    const VkDescriptorSet scene = frame.scene->descriptor_set(frame.slot);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipeline_.layout(), 0, 1, &scene, 0, nullptr);
   }
