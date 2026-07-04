@@ -10,6 +10,10 @@
 include(CMakeFindDependencyMacro)
 find_dependency(Vulkan)
 
+# Threads is a PRIVATE dependency of gfx_pipelines (the IBL bake's std::async),
+# but a static archive still needs the flag/library at consumer link time.
+find_dependency(Threads)
+
 # glm is a PUBLIC dependency of the camera and assets tiers (their public headers
 # name glm types), so the installed package re-finds it. The vendored build-from-
 # source copy is not re-exported, so consuming an installed package requires a

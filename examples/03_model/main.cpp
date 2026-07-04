@@ -8,9 +8,9 @@
 // depth-tested with glTF metallic-roughness PBR: a per-draw model/MVP push
 // constant, a per-frame scene set (set 0: camera + IBL), and a per-material
 // set (set 1: factor UBO + the five maps) -- all reflected automatically into
-// the pipeline layout. The ambient comes from a CPU-baked IBL of the analytic
-// sky, drawn as a skybox behind the model. The camera auto-frames the model's
-// bounds, so any model fills the view.
+// the pipeline layout. The ambient comes from pipelines::bake_ibl convolving
+// the analytic sky, which is also drawn as a skybox behind the model. The
+// camera auto-frames the model's bounds, so any model fills the view.
 //
 // Usage:
 //   example_03_model                       # built-in cube, in a window
@@ -74,6 +74,7 @@
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
+#include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_model.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
@@ -89,7 +90,6 @@ namespace {
 
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
-constexpr float kPi = 3.14159265359f;
 
 // TODO: load_spirv + framebuffer_extent are duplicated across examples
 // 01/02/03; hoist the shared pieces into an examples/common helper in a focused
@@ -310,18 +310,6 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
   return wrote == rgb.size();
 }
 
-// Precomputed image-based-lighting textures, convolved on the CPU from the
-// analytic sky (see make_ibl) and bound into the model's scene set (set 0): a
-// diffuse irradiance cube, a roughness-prefiltered specular cube (mipped), and
-// the BRDF integration LUT. Outlives the draw loop.
-struct Ibl {
-  std::optional<vg::Sampler> sampler;  // CLAMP_TO_EDGE, trilinear (mipped cube)
-  vg::Texture irradiance;              // diffuse, small single-mip cube
-  vg::Texture prefilter;               // specular, mipped cube
-  vg::Texture brdf_lut;                // 2D RG integration LUT
-  float prefilter_max_lod = 0.0f;      // prefilter mip count - 1
-};
-
 // Build the pipelines-tier PbrScene (set 0: camera + IBL) against the
 // pipeline's reflected set-0 layout, one camera UBO ring slot per frame in
 // flight. The caller refreshes the acquired slot's camera each frame through
@@ -331,16 +319,11 @@ struct Ibl {
 pipelines::PbrScene make_pbr_scene(const vg::Device& device,
                                    vg::Allocator& alloc,
                                    const pipelines::PbrPipeline& pipeline,
-                                   const Ibl& ibl, uint32_t frames_in_flight,
-                                   bool* ok) {
-  pipelines::PbrSceneDesc desc;
-  desc.irradiance = ibl.irradiance.view();
-  desc.prefilter = ibl.prefilter.view();
-  desc.brdf_lut = ibl.brdf_lut.view();
-  desc.sampler = ibl.sampler->handle();
+                                   const pipelines::IblMaps& ibl,
+                                   uint32_t frames_in_flight, bool* ok) {
   auto scene = pipelines::PbrScene::create(device.handle(), alloc,
                                            pipeline.descriptor_set_layout(0),
-                                           desc, frames_in_flight);
+                                           ibl.scene_desc(), frames_in_flight);
   if (!scene.ok()) {
     std::fprintf(stderr, "scene set: %s\n", scene.status().message().c_str());
     *ok = false;
@@ -369,29 +352,11 @@ glm::vec3 sky_color(const glm::vec3& dir) {
   return base + glm::vec3(1.0f, 0.95f, 0.85f) * (sun * 20.0f);
 }
 
-// World direction for cube face `f` (Vulkan layer order +X,-X,+Y,-Y,+Z,-Z) at
-// face coordinates u, v in [-1, 1].
-glm::vec3 cube_dir(int f, float u, float v) {
-  switch (f) {
-    case 0:
-      return glm::normalize(glm::vec3(1.0f, -v, -u));
-    case 1:
-      return glm::normalize(glm::vec3(-1.0f, -v, u));
-    case 2:
-      return glm::normalize(glm::vec3(u, 1.0f, v));
-    case 3:
-      return glm::normalize(glm::vec3(u, -1.0f, -v));
-    case 4:
-      return glm::normalize(glm::vec3(u, -v, 1.0f));
-    default:
-      return glm::normalize(glm::vec3(-u, -v, -1.0f));
-  }
-}
-
-// Bake the analytic sky into a sampled-ready cubemap: generate the six faces on
-// the CPU and upload them through the core cube-upload path in one submit.
-// Stores linear HDR color in a float cube (the skybox shader tone-maps it on
-// output).
+// Bake the analytic sky into a sampled-ready cubemap: generate the six faces
+// on the CPU (pipelines::cube_face_direction keeps the orientation in lockstep
+// with the IBL bake) and upload them through the core cube-upload path in one
+// submit. Stores linear HDR color in a float cube (the skybox shader tone-maps
+// it on output).
 vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
                           uint32_t size, bool* ok) {
   // RGBA16F (half) pixels: 16-bit float filters on the broad device set (incl.
@@ -405,7 +370,7 @@ vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
       for (uint32_t x = 0; x < size; ++x) {
         const float u = (static_cast<float>(x) + 0.5f) / size * 2.0f - 1.0f;
         const float v = (static_cast<float>(y) + 0.5f) / size * 2.0f - 1.0f;
-        const glm::vec3 c = sky_color(cube_dir(f, u, v));
+        const glm::vec3 c = sky_color(pipelines::cube_face_direction(f, u, v));
         pixels.push_back(glm::packHalf2x16(glm::vec2(c.x, c.y)));
         pixels.push_back(glm::packHalf2x16(glm::vec2(c.z, 1.0f)));
       }
@@ -535,266 +500,6 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
   vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
-// --- IBL: convolve the analytic sky into diffuse/specular/BRDF textures ------
-
-// Hammersley low-discrepancy 2D sample (van der Corput radical inverse).
-glm::vec2 hammersley(uint32_t i, uint32_t n) {
-  uint32_t bits = i;
-  bits = (bits << 16u) | (bits >> 16u);
-  bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-  bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-  bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-  bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-  const float radical = static_cast<float>(bits) * 2.3283064365386963e-10f;
-  return glm::vec2(static_cast<float>(i) / static_cast<float>(n), radical);
-}
-
-// GGX-importance-sampled half-vector around `n` for `roughness`.
-glm::vec3 importance_sample_ggx(glm::vec2 xi, const glm::vec3& n,
-                                float roughness) {
-  const float a = roughness * roughness;
-  const float phi = 2.0f * kPi * xi.x;
-  const float cos_t = std::sqrt((1.0f - xi.y) / (1.0f + (a * a - 1.0f) * xi.y));
-  const float sin_t = std::sqrt(1.0f - cos_t * cos_t);
-  const glm::vec3 h(std::cos(phi) * sin_t, std::sin(phi) * sin_t, cos_t);
-  const glm::vec3 up =
-      std::abs(n.z) < 0.999f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0);
-  const glm::vec3 tangent = glm::normalize(glm::cross(up, n));
-  const glm::vec3 bitangent = glm::cross(n, tangent);
-  return glm::normalize(tangent * h.x + bitangent * h.y + n * h.z);
-}
-
-// Smith geometry with the IBL roughness remap (k = roughness^2 / 2 -- the
-// material roughness, per Karis; not the squared GGX alpha).
-float geometry_smith_ibl(float n_dot_v, float n_dot_l, float roughness) {
-  const float k = roughness * roughness / 2.0f;
-  const float gv = n_dot_v / (n_dot_v * (1.0f - k) + k);
-  const float gl = n_dot_l / (n_dot_l * (1.0f - k) + k);
-  return gv * gl;
-}
-
-// Cosine-weighted hemisphere integral of the analytic sky around `n`: the
-// diffuse irradiance for that normal. PI is folded in (LearnOpenGL form), so
-// the shader's diffuse term is just irradiance * albedo.
-glm::vec4 irradiance_at(const glm::vec3& n) {
-  glm::vec3 up =
-      std::abs(n.y) < 0.999f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-  const glm::vec3 right = glm::normalize(glm::cross(up, n));
-  up = glm::cross(n, right);
-  glm::vec3 sum(0.0f);
-  int samples = 0;
-  // ~0.1 rad hemisphere step (~63 x 16 taps); coarse vs the tight HDR sun (mild
-  // diffuse banding), but adequate for the low-frequency diffuse fill.
-  for (float phi = 0.0f; phi < 2.0f * kPi; phi += 0.1f) {
-    for (float theta = 0.0f; theta < 0.5f * kPi; theta += 0.1f) {
-      const float st = std::sin(theta);
-      const glm::vec3 tan_sample(st * std::cos(phi), st * std::sin(phi),
-                                 std::cos(theta));
-      const glm::vec3 world =
-          right * tan_sample.x + up * tan_sample.y + n * tan_sample.z;
-      sum += sky_color(world) * std::cos(theta) * st;
-      ++samples;
-    }
-  }
-  return glm::vec4(kPi * sum / static_cast<float>(samples), 1.0f);
-}
-
-// GGX-prefiltered specular radiance from `r` at `roughness`: the environment
-// blurred for that gloss level (the split sum's L_i term).
-glm::vec4 prefilter_at(const glm::vec3& r, float roughness, uint32_t samples) {
-  const glm::vec3 n = r;
-  const glm::vec3 v = r;
-  glm::vec3 sum(0.0f);
-  float weight = 0.0f;
-  for (uint32_t i = 0; i < samples; ++i) {
-    const glm::vec3 h =
-        importance_sample_ggx(hammersley(i, samples), n, roughness);
-    const glm::vec3 l = glm::normalize(2.0f * glm::dot(v, h) * h - v);
-    const float n_dot_l = glm::dot(n, l);
-    if (n_dot_l > 0.0f) {
-      sum += sky_color(l) * n_dot_l;
-      weight += n_dot_l;
-    }
-  }
-  return glm::vec4(weight > 0.0f ? sum / weight : sky_color(r), 1.0f);
-}
-
-// Environment-BRDF integration (scale, bias) for the split sum, per (NdotV,
-// roughness). Independent of the environment -- the standard BRDF LUT.
-glm::vec2 brdf_integrate(float n_dot_v, float roughness, uint32_t samples) {
-  const glm::vec3 v(std::sqrt(1.0f - n_dot_v * n_dot_v), 0.0f, n_dot_v);
-  const glm::vec3 n(0.0f, 0.0f, 1.0f);
-  float a = 0.0f;
-  float b = 0.0f;
-  for (uint32_t i = 0; i < samples; ++i) {
-    const glm::vec3 h =
-        importance_sample_ggx(hammersley(i, samples), n, roughness);
-    const glm::vec3 l = glm::normalize(2.0f * glm::dot(v, h) * h - v);
-    const float n_dot_l = std::fmax(l.z, 0.0f);
-    const float n_dot_h = std::fmax(h.z, 0.0f);
-    const float v_dot_h = std::fmax(glm::dot(v, h), 0.0f);
-    if (n_dot_l > 0.0f) {
-      const float g = geometry_smith_ibl(n_dot_v, n_dot_l, roughness);
-      const float g_vis = (g * v_dot_h) / std::fmax(n_dot_h * n_dot_v, 1e-6f);
-      const float fc = std::pow(1.0f - v_dot_h, 5.0f);
-      a += (1.0f - fc) * g_vis;
-      b += fc * g_vis;
-    }
-  }
-  return glm::vec2(a / static_cast<float>(samples),
-                   b / static_cast<float>(samples));
-}
-
-// Pack per-(mip, face) RGBA float pixels from `gen` into tightly packed
-// RGBA16F (2 uint32 = 8 bytes/texel), mip-major then face -- ImageUploadDesc's
-// layout. 16-bit float cubes filter on the broad device set (incl.
-// MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
-// lack.
-template <class Gen>
-std::vector<uint32_t> pack_cube_rgba16f(uint32_t base_size, uint32_t mips,
-                                        Gen gen) {
-  std::vector<uint32_t> data;
-  for (uint32_t m = 0; m < mips; ++m) {
-    const uint32_t size = (base_size >> m) > 0 ? (base_size >> m) : 1u;
-    for (uint32_t f = 0; f < 6; ++f) {
-      const std::vector<glm::vec4> face = gen(m, static_cast<int>(f), size);
-      for (const glm::vec4& px : face) {
-        data.push_back(glm::packHalf2x16(glm::vec2(px.x, px.y)));
-        data.push_back(glm::packHalf2x16(glm::vec2(px.z, px.w)));
-      }
-    }
-  }
-  return data;
-}
-
-// Convolve the analytic sky into the IBL texture set. CPU-side because the
-// environment is analytic; a loaded HDR environment would convolve on the GPU.
-// All three textures upload through one UploadBatch: one submit instead
-// of a blocking round trip each.
-Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
-  Ibl ibl;
-  *ok = true;
-
-  vg::SamplerDesc sd;
-  sd.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  sd.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  sd.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  auto sampler = vg::Sampler::create(device.handle(), sd);
-  if (!sampler.ok()) {
-    std::fprintf(stderr, "ibl sampler: %s\n",
-                 sampler.status().message().c_str());
-    *ok = false;
-    return ibl;
-  }
-  ibl.sampler = std::move(sampler).value();
-
-  auto batch = vg::UploadBatch::begin(device, alloc);
-  if (!batch.ok()) {
-    std::fprintf(stderr, "ibl batch: %s\n", batch.status().message().c_str());
-    *ok = false;
-    return ibl;
-  }
-
-  // Queue an RGBA16F cube upload (sampled-ready once the batch finishes);
-  // returns an empty texture and clears *ok on failure.
-  auto add_cube = [&](uint32_t base_size, uint32_t mips,
-                      const std::vector<uint32_t>& data) -> vg::Texture {
-    vg::ImageUploadDesc d;
-    d.extent = {base_size, base_size};
-    d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    d.pixels = data.data();
-    d.size = data.size() * sizeof(uint32_t);
-    d.array_layers = 6;
-    d.cube = true;
-    d.mip_levels = mips;
-    auto tex = batch.value().add(d);
-    if (!tex.ok()) {
-      std::fprintf(stderr, "ibl cube: %s\n", tex.status().message().c_str());
-      *ok = false;
-      return {};
-    }
-    return std::move(tex).value();
-  };
-
-  // Diffuse irradiance: 16x16 single-mip cube -- ample for the low-frequency,
-  // heavily-blurred cosine convolution.
-  const std::vector<uint32_t> irradiance =
-      pack_cube_rgba16f(16, 1, [](uint32_t, int face, uint32_t size) {
-        std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
-        for (uint32_t y = 0; y < size; ++y) {
-          for (uint32_t x = 0; x < size; ++x) {
-            const float u = (x + 0.5f) / size * 2.0f - 1.0f;
-            const float v = (y + 0.5f) / size * 2.0f - 1.0f;
-            px[y * size + x] = irradiance_at(cube_dir(face, u, v));
-          }
-        }
-        return px;
-      });
-  ibl.irradiance = add_cube(16, 1, irradiance);
-  if (!*ok) {
-    return ibl;
-  }
-
-  // Prefiltered specular: a 64x64 base over kPrefilterMips mips maps mip ->
-  // roughness 0..1; 64 GGX samples/texel (the tight HDR sun can alias on low
-  // mips -- accepted for the example).
-  constexpr uint32_t kPrefilterMips = 5;
-  const std::vector<uint32_t> prefilter = pack_cube_rgba16f(
-      64, kPrefilterMips, [](uint32_t mip, int face, uint32_t size) {
-        const float roughness =
-            static_cast<float>(mip) / static_cast<float>(kPrefilterMips - 1);
-        std::vector<glm::vec4> px(static_cast<size_t>(size) * size);
-        for (uint32_t y = 0; y < size; ++y) {
-          for (uint32_t x = 0; x < size; ++x) {
-            const float u = (x + 0.5f) / size * 2.0f - 1.0f;
-            const float v = (y + 0.5f) / size * 2.0f - 1.0f;
-            px[y * size + x] =
-                prefilter_at(cube_dir(face, u, v), roughness, 64u);
-          }
-        }
-        return px;
-      });
-  ibl.prefilter = add_cube(64, kPrefilterMips, prefilter);
-  if (!*ok) {
-    return ibl;
-  }
-  ibl.prefilter_max_lod = static_cast<float>(kPrefilterMips - 1);
-
-  // BRDF integration LUT (2D RG16F), environment-independent. 128x128 with 256
-  // importance samples/texel is the standard split-sum table resolution.
-  // TODO: this table never changes -- bake it to an asset rather than
-  // recomputing it (~4M importance samples) on every launch.
-  constexpr uint32_t kLutSize = 128;
-  std::vector<uint32_t> lut(static_cast<size_t>(kLutSize) * kLutSize);
-  for (uint32_t y = 0; y < kLutSize; ++y) {
-    for (uint32_t x = 0; x < kLutSize; ++x) {
-      lut[y * kLutSize + x] = glm::packHalf2x16(
-          brdf_integrate((x + 0.5f) / kLutSize, (y + 0.5f) / kLutSize, 256u));
-    }
-  }
-  vg::ImageUploadDesc lut_desc;
-  lut_desc.extent = {kLutSize, kLutSize};
-  lut_desc.format = VK_FORMAT_R16G16_SFLOAT;
-  lut_desc.pixels = lut.data();
-  lut_desc.size = lut.size() * sizeof(uint32_t);
-  auto brdf = batch.value().add(lut_desc);
-  if (!brdf.ok()) {
-    std::fprintf(stderr, "brdf lut: %s\n", brdf.status().message().c_str());
-    *ok = false;
-    return ibl;
-  }
-  ibl.brdf_lut = std::move(brdf).value();
-
-  // One submit + fence wait for all three IBL textures.
-  const vg::Status finished = batch.value().finish();
-  if (!finished.ok()) {
-    std::fprintf(stderr, "ibl upload: %s\n", finished.message().c_str());
-    *ok = false;
-    return ibl;
-  }
-  return ibl;
-}
-
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
@@ -866,19 +571,22 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
-  Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
-  if (!ok) {
+  // Convolve the analytic sky into the IBL maps (irradiance + prefiltered
+  // specular + BRDF LUT); sky_color is pure, as the concurrent bake requires.
+  auto ibl = pipelines::bake_ibl(device.value(), allocator.value(), sky_color);
+  if (!ibl.ok()) {
+    std::fprintf(stderr, "ibl: %s\n", ibl.status().message().c_str());
     return 1;
   }
   pipelines::PbrScene scene =
-      make_pbr_scene(device.value(), allocator.value(), pipeline.value(), ibl,
-                     /*frames_in_flight=*/1, &ok);
+      make_pbr_scene(device.value(), allocator.value(), pipeline.value(),
+                     ibl.value(), /*frames_in_flight=*/1, &ok);
   if (!ok) {
     return 1;
   }
 
   // Fixed camera for the still: write the eye into the scene set once.
-  scene.set_camera(0, rig.position(), ibl.prefilter_max_lod);
+  scene.set_camera(0, rig.position(), ibl.value().prefilter_max_lod);
 
   Skybox skybox = setup_skybox(device.value(), allocator.value(),
                                target.value().layout(), &ok);
@@ -1113,13 +821,16 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // Two frames in flight: the swapchain keeps depth per image and the scene
   // UBO rings per slot, so nothing is shared across in-flight frames.
   constexpr uint32_t kFramesInFlight = 2;
-  Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
-  if (!ok) {
+  // Convolve the analytic sky into the IBL maps (irradiance + prefiltered
+  // specular + BRDF LUT); sky_color is pure, as the concurrent bake requires.
+  auto ibl = pipelines::bake_ibl(device.value(), allocator.value(), sky_color);
+  if (!ibl.ok()) {
+    std::fprintf(stderr, "ibl: %s\n", ibl.status().message().c_str());
     return 1;
   }
   pipelines::PbrScene scene =
-      make_pbr_scene(device.value(), allocator.value(), pipeline.value(), ibl,
-                     kFramesInFlight, &ok);
+      make_pbr_scene(device.value(), allocator.value(), pipeline.value(),
+                     ibl.value(), kFramesInFlight, &ok);
   if (!ok) {
     return 1;
   }
@@ -1204,7 +915,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // The camera moves each frame, so refresh the acquired slot's camera UBO
     // before drawing: begin_frame waited that slot's fence, so the GPU is not
     // reading it.
-    scene.set_camera(f.slot, rig.position(), ibl.prefilter_max_lod);
+    scene.set_camera(f.slot, rig.position(), ibl.value().prefilter_max_lod);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
       // around each, resolved into the metrics printed below.

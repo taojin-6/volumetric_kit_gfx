@@ -16,8 +16,14 @@ add_library(gfx_pipelines)
 add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
 target_sources(
-  gfx_pipelines PRIVATE gpu_mesh.cpp owned_descriptor_set.cpp pbr_material.cpp
-                        pbr_model.cpp pbr_pipeline.cpp pbr_scene.cpp)
+  gfx_pipelines
+  PRIVATE gpu_mesh.cpp
+          ibl.cpp
+          owned_descriptor_set.cpp
+          pbr_material.cpp
+          pbr_model.cpp
+          pbr_pipeline.cpp
+          pbr_scene.cpp)
 
 generate_export_header(
   gfx_pipelines
@@ -49,11 +55,14 @@ target_include_directories(
 
 # core (Allocator/Buffer/Result) and assets (the Mesh data model) appear in this
 # tier's public API, so both are PUBLIC. The Vulkan loader is PRIVATE:
-# record_draw records vkCmd*, but no loader type crosses the public API.
+# record_draw records vkCmd*, but no loader type crosses the public API. Threads
+# is PRIVATE too: the IBL bake convolves faces via std::async, but no thread
+# type crosses the public API.
+find_package(Threads REQUIRED)
 target_link_libraries(
   gfx_pipelines
   PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_assets
-  PRIVATE Vulkan::Vulkan)
+  PRIVATE Vulkan::Vulkan Threads::Threads)
 
 # --- Embedded PBR shaders ---------------------------------------------------
 # PbrPipeline ships its own technique: compile shaders/model.{vert,frag} to
