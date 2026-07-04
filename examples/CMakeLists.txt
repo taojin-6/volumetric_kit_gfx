@@ -12,11 +12,12 @@ if(NOT VG_WITH_GLFW OR NOT glfw3_FOUND)
   return()
 endif()
 
-# 01_triangle: the hello-triangle in a window, via Surface + Swapchain +
-# FrameLoop. Links the Vulkan loader directly because it records vkCmd* itself.
+# 01_triangle: the hello-triangle in a window; the bring-up chain comes from the
+# app tier (WindowedApp). Links the Vulkan loader directly because it records
+# vkCmd* itself.
 add_executable(example_01_triangle 01_triangle/main.cpp)
-target_link_libraries(example_01_triangle PRIVATE volumetric_kit::gfx_windowing
-                                                  glfw Vulkan::Vulkan)
+target_link_libraries(example_01_triangle PRIVATE volumetric_kit::gfx_app glfw
+                                                  Vulkan::Vulkan)
 vg_target_warnings(example_01_triangle)
 
 vg_compile_shaders(
@@ -41,8 +42,8 @@ add_executable(
 target_include_directories(example_02_imgui SYSTEM
                            PRIVATE "${VG_IMGUI_SOURCE_DIR}/backends")
 target_link_libraries(
-  example_02_imgui PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_windowing
-                           glfw Vulkan::Vulkan)
+  example_02_imgui PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_app glfw
+                           Vulkan::Vulkan)
 # Strict first-party warnings apply to the example's own main.cpp; the bundled
 # third-party ImGui TUs opt out (the source-level -w follows the target flags on
 # the command line, so it wins over -Werror).
@@ -51,14 +52,15 @@ set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp" PROPERTIES COMPILE_OPTIONS "-w")
 
-# 03_model: load a glTF model (io tier) and view it depth-tested through Surface
-# + Swapchain + FrameLoop, with an interactive CameraRig (camera tier) and a
-# reflected per-draw MVP push constant. Links the io + camera tiers on top of
-# windowing; the Vulkan loader directly because it records vkCmd* itself.
+# 03_model: load a glTF model (io tier) and view it depth-tested, with an
+# interactive CameraRig (camera tier) and a reflected per-draw MVP push
+# constant; the windowed and --screenshot bring-up chains come from the app tier
+# (WindowedApp / HeadlessApp). Links the io + camera tiers on top of app; the
+# Vulkan loader directly because it records vkCmd* itself.
 add_executable(example_03_model 03_model/main.cpp)
 target_link_libraries(
   example_03_model
-  PRIVATE volumetric_kit::gfx_windowing volumetric_kit::gfx_io
+  PRIVATE volumetric_kit::gfx_app volumetric_kit::gfx_io
           volumetric_kit::gfx_camera volumetric_kit::gfx_pipelines glfw
           Vulkan::Vulkan)
 vg_target_warnings(example_03_model)

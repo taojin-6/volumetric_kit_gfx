@@ -2,8 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // examples/01_triangle: open a window and draw the hello-triangle into the
-// swapchain through the windowing tier (Surface + Swapchain + FrameLoop) on
-// dynamic rendering. Run with `--frames N` to render N frames and exit — CI
+// swapchain on dynamic rendering. The whole instance -> surface -> device ->
+// swapchain -> frame-loop bring-up is one app::WindowedApp::create call; the
+// example keeps only what is its own — the GLFW window, the shaders/pipeline,
+// and the render loop. Run with `--frames N` to render N frames and exit — CI
 // drives that under Xvfb to validate the real window -> surface -> swapchain ->
 // present path headlessly.
 
@@ -19,9 +21,8 @@
 #include <fstream>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
@@ -58,39 +59,28 @@ int run(GLFWwindow* window, int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
-  vg::InstanceConfig instance_config;
-  instance_config.app_name = "01_triangle";
-  instance_config.enable_validation = true;  // a no-op when the layer is absent
-  instance_config.extra_instance_extensions.assign(glfw_exts,
-                                                   glfw_exts + glfw_ext_count);
-  auto instance = vg::Instance::create(instance_config);
-  if (!instance.ok()) {
-    std::fprintf(stderr, "instance: %s\n", instance.status().message().c_str());
+  // The whole bring-up chain in one call; the lambda supplies the GLFW
+  // surface, keeping the library tier window-system-free.
+  vg::app::WindowedAppConfig config;
+  config.app_name = "01_triangle";
+  config.enable_validation = true;  // a no-op when the layer is absent
+  config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
+  config.swapchain.extent = framebuffer_extent(window);
+  auto created = vg::app::WindowedApp::create(
+      config, [window](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        const VkResult result =
+            glfwCreateWindowSurface(instance, window, nullptr, &surface);
+        if (result != VK_SUCCESS) {
+          return vg::vk_error(result, "glfwCreateWindowSurface");
+        }
+        return surface;
+      });
+  if (!created.ok()) {
+    std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
   }
-
-  VkSurfaceKHR raw_surface = VK_NULL_HANDLE;
-  if (glfwCreateWindowSurface(instance.value().handle(), window, nullptr,
-                              &raw_surface) != VK_SUCCESS) {
-    std::fprintf(stderr, "glfwCreateWindowSurface failed\n");
-    return 1;
-  }
-  win::Surface surface(instance.value().handle(), raw_surface);
-
-  auto physical = instance.value().select_physical_device(surface.handle());
-  if (!physical.ok()) {
-    std::fprintf(stderr, "device: %s\n", physical.status().message().c_str());
-    return 1;
-  }
-
-  vg::DeviceConfig device_config;
-  device_config.needs_present = true;
-  auto device = vg::Device::create(instance.value().handle(), physical.value(),
-                                   device_config, surface.handle());
-  if (!device.ok()) {
-    std::fprintf(stderr, "device: %s\n", device.status().message().c_str());
-    return 1;
-  }
+  vg::app::WindowedApp app = std::move(created).value();
 
   std::vector<uint32_t> vert_code =
       load_spirv(VG_EXAMPLE_SHADER_DIR "/triangle.vert.spv");
@@ -101,41 +91,23 @@ int run(GLFWwindow* window, int max_frames) {
                  VG_EXAMPLE_SHADER_DIR);
     return 1;
   }
-  auto vert =
-      vg::ShaderModule::create(device.value().handle(), vert_code.data(),
-                               vert_code.size() * sizeof(uint32_t));
-  auto frag =
-      vg::ShaderModule::create(device.value().handle(), frag_code.data(),
-                               frag_code.size() * sizeof(uint32_t));
+  auto vert = vg::ShaderModule::create(app.device().handle(), vert_code.data(),
+                                       vert_code.size() * sizeof(uint32_t));
+  auto frag = vg::ShaderModule::create(app.device().handle(), frag_code.data(),
+                                       frag_code.size() * sizeof(uint32_t));
   if (!vert.ok() || !frag.ok()) {
     std::fprintf(stderr, "shader module creation failed\n");
-    return 1;
-  }
-
-  win::SwapchainConfig swapchain_config;
-  swapchain_config.extent = framebuffer_extent(window);
-  auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
-                                          swapchain_config);
-  if (!swapchain.ok()) {
-    std::fprintf(stderr, "swapchain: %s\n",
-                 swapchain.status().message().c_str());
     return 1;
   }
 
   vg::GraphicsPipelineDesc pipeline_desc;
   pipeline_desc.vertex_shader = &vert.value();
   pipeline_desc.fragment_shader = &frag.value();
-  pipeline_desc.layout = swapchain.value().layout();
+  pipeline_desc.layout = app.swapchain().layout();
   auto pipeline =
-      vg::GraphicsPipeline::create(device.value().handle(), pipeline_desc);
+      vg::GraphicsPipeline::create(app.device().handle(), pipeline_desc);
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
-    return 1;
-  }
-
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(), 2);
-  if (!loop.ok()) {
-    std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
     return 1;
   }
 
@@ -146,10 +118,10 @@ int run(GLFWwindow* window, int max_frames) {
     }
     glfwPollEvents();
 
-    // The loop owns the staleness protocol: it rebuilds the swapchain after a
-    // resize / out-of-date result and skips ticks while the window is
+    // The app's loop owns the staleness protocol: it rebuilds the swapchain
+    // after a resize / out-of-date result and skips ticks while the window is
     // minimized, so only hard failures surface here.
-    auto frame = loop.value().begin_frame(framebuffer_extent(window));
+    auto frame = app.begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -173,7 +145,7 @@ int run(GLFWwindow* window, int max_frames) {
 
     vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline.value().handle());
-    const VkExtent2D extent = swapchain.value().extent();
+    const VkExtent2D extent = app.swapchain().extent();
     VkViewport viewport{};
     viewport.width = static_cast<float>(extent.width);
     viewport.height = static_cast<float>(extent.height);
@@ -187,14 +159,18 @@ int run(GLFWwindow* window, int max_frames) {
 
     f.target->end(f.cmd);
 
-    const vg::Status present = loop.value().end_frame(f);
+    const vg::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-      return 1;  // ~FrameLoop drains the submitted frame before teardown
+      return 1;
     }
     ++rendered;
   }
 
+  // The shaders + pipeline were created after the app, so they destruct before
+  // it — while its frame loop may still have frames in flight that reference
+  // them. Idle the device first so their destruction is safe.
+  app.wait_idle();
   std::printf("01_triangle: rendered %d frame(s)\n", rendered);
   return 0;
 }

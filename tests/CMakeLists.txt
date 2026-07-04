@@ -66,6 +66,16 @@ target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
 vg_target_warnings(vg_windowing_test)
 gtest_discover_tests(vg_windowing_test)
 
+# app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
+# through a VK_EXT_headless_surface factory (the windowing-test vehicle) and
+# skips where that surface or a present-capable device is unavailable (e.g.
+# MoltenVK); HeadlessApp runs wherever a Vulkan device exists.
+add_executable(vg_app_test app_test.cpp)
+target_link_libraries(vg_app_test PRIVATE volumetric_kit::gfx_app
+                                          GTest::gtest_main)
+vg_target_warnings(vg_app_test)
+gtest_discover_tests(vg_app_test TEST_PREFIX "app.")
+
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device
 # availability.

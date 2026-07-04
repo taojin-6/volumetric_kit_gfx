@@ -2,12 +2,13 @@
 // Copyright (c) 2026 Tao Jin
 
 // examples/02_imgui: a Dear ImGui debug overlay drawn into the swapchain
-// through the ui tier (ImGuiOverlay) on dynamic rendering. Shows the split the
-// ui tier is built around: this example owns the *platform* backend
-// (imgui_impl_glfw — input + window sizing), while ImGuiOverlay wraps only the
-// *renderer* backend (imgui_impl_vulkan), so the library tier stays GLFW-free
-// like windowing. Run with `--frames N` to render N frames and exit — CI drives
-// that under Xvfb with validation enabled to exercise the path headlessly.
+// through the ui tier (ImGuiOverlay) on dynamic rendering. The Vulkan bring-up
+// is one app::WindowedApp::create call; the example shows the split the ui
+// tier is built around: it owns the *platform* backend (imgui_impl_glfw —
+// input + window sizing), while ImGuiOverlay wraps only the *renderer* backend
+// (imgui_impl_vulkan), so the library tier stays GLFW-free like windowing. Run
+// with `--frames N` to render N frames and exit — CI drives that under Xvfb
+// with validation enabled to exercise the path headlessly.
 
 #include "volumetric_kit/gfx/core/vulkan.hpp"  // before GLFW, so glfw3.h sees
 // Vulkan and declares its helpers
@@ -21,8 +22,7 @@
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
@@ -56,97 +56,70 @@ int run(GLFWwindow* window, int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
-  vg::InstanceConfig instance_config;
-  instance_config.app_name = "02_imgui";
-  instance_config.enable_validation = true;  // a no-op when the layer is absent
-  instance_config.extra_instance_extensions.assign(glfw_exts,
-                                                   glfw_exts + glfw_ext_count);
-  auto instance = vg::Instance::create(instance_config);
-  if (!instance.ok()) {
-    std::fprintf(stderr, "instance: %s\n", instance.status().message().c_str());
-    return 1;
-  }
-
-  VkSurfaceKHR raw_surface = VK_NULL_HANDLE;
-  if (glfwCreateWindowSurface(instance.value().handle(), window, nullptr,
-                              &raw_surface) != VK_SUCCESS) {
-    std::fprintf(stderr, "glfwCreateWindowSurface failed\n");
-    return 1;
-  }
-  win::Surface surface(instance.value().handle(), raw_surface);
-
-  auto physical = instance.value().select_physical_device(surface.handle());
-  if (!physical.ok()) {
-    std::fprintf(stderr, "device: %s\n", physical.status().message().c_str());
-    return 1;
-  }
-
-  vg::DeviceConfig device_config;
-  device_config.needs_present = true;
-  auto device = vg::Device::create(instance.value().handle(), physical.value(),
-                                   device_config, surface.handle());
-  if (!device.ok()) {
-    std::fprintf(stderr, "device: %s\n", device.status().message().c_str());
-    return 1;
-  }
-
-  // CPU-ahead depth shared by the frame loop and the profiler that drives it.
+  // CPU-ahead depth shared by the app's frame loop and the profiler driving it.
   constexpr uint32_t kFramesInFlight = 2;
 
-  // Created before the FrameLoop that borrows it (set_profiler below), so it
-  // outlives the loop. On MoltenVK (zero timestamp valid bits) GPU scopes fall
-  // back to CPU-only timing; the panel shows whatever resolved.
+  // The whole bring-up chain in one call; the lambda supplies the GLFW
+  // surface, keeping the library tier window-system-free.
+  vg::app::WindowedAppConfig config;
+  config.app_name = "02_imgui";
+  config.enable_validation = true;  // a no-op when the layer is absent
+  config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
+  config.swapchain.extent = framebuffer_extent(window);
+  config.frames_in_flight = kFramesInFlight;
+  auto created = vg::app::WindowedApp::create(
+      config, [window](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        const VkResult result =
+            glfwCreateWindowSurface(instance, window, nullptr, &surface);
+        if (result != VK_SUCCESS) {
+          return vg::vk_error(result, "glfwCreateWindowSurface");
+        }
+        return surface;
+      });
+  if (!created.ok()) {
+    std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
+    return 1;
+  }
+  vg::app::WindowedApp app = std::move(created).value();
+
+  // On MoltenVK (zero timestamp valid bits) GPU scopes fall back to CPU-only
+  // timing; the panel shows whatever resolved. Borrowed by the app's loop
+  // (set_profiler below) and detached again before teardown.
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = kFramesInFlight;
-  auto profiler = vg::Profiler::create(device.value(), profiler_config);
+  auto profiler = vg::Profiler::create(app.device(), profiler_config);
   if (!profiler.ok()) {
     std::fprintf(stderr, "profiler: %s\n", profiler.status().message().c_str());
     return 1;
   }
 
-  win::SwapchainConfig swapchain_config;
-  swapchain_config.extent = framebuffer_extent(window);
-  auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
-                                          swapchain_config);
-  if (!swapchain.ok()) {
-    std::fprintf(stderr, "swapchain: %s\n",
-                 swapchain.status().message().c_str());
-    return 1;
-  }
-
   // The overlay's pipeline is built for the swapchain's layout; the swapchain
   // holds its format AND image count stable across recreate, so the overlay
-  // survives resizes without rebuilding. Declared before the FrameLoop so the
-  // loop — which drains its in-flight frames on destruction — is destroyed
-  // first, on every exit path.
+  // survives resizes without rebuilding.
   // TODO: a swapchain that changed its image count on recreate would need the
   // overlay's backend updated (ImGui_ImplVulkan_SetMinImageCount, not yet
   // exposed by the ui tier); the kit's swapchain keeps it stable today.
   vg::ui::ImGuiOverlayConfig overlay_config;
-  overlay_config.layout = swapchain.value().layout();
-  overlay_config.min_image_count = swapchain.value().image_count();
-  overlay_config.image_count = swapchain.value().image_count();
+  overlay_config.layout = app.swapchain().layout();
+  overlay_config.min_image_count = app.swapchain().image_count();
+  overlay_config.image_count = app.swapchain().image_count();
   auto overlay = vg::ui::ImGuiOverlay::create(
-      device.value(), instance.value().handle(), overlay_config);
+      app.device(), app.instance().handle(), overlay_config);
   if (!overlay.ok()) {
     std::fprintf(stderr, "overlay: %s\n", overlay.status().message().c_str());
     return 1;
   }
 
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
-                                     kFramesInFlight);
-  if (!loop.ok()) {
-    std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
-    return 1;
-  }
   // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
   // render loop below only opens a scope around its work.
-  loop.value().set_profiler(&profiler.value());
+  app.set_profiler(&profiler.value());
 
   // Platform backend (this example's half): bind it to the overlay's context,
   // then let it feed input + io.DisplaySize each frame. Initialized last, after
-  // the fallible loop create, so no earlier error return leaves a live
-  // ImGui_ImplGlfw backend without its paired Shutdown at teardown.
+  // the app's fallible bring-up and set_profiler, so no earlier error return
+  // leaves a live ImGui_ImplGlfw backend without its paired Shutdown at
+  // teardown.
   ImGui::SetCurrentContext(overlay.value().context());
   if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
     std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
@@ -163,7 +136,7 @@ int run(GLFWwindow* window, int max_frames) {
     // Begin the Vulkan frame *before* the ImGui frame: the loop skips ticks
     // while minimized / rebuilding, so a skipped tick never opens an ImGui
     // frame that would then need an EndFrame() discard to stay paired.
-    auto frame = loop.value().begin_frame(framebuffer_extent(window));
+    auto frame = app.begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -201,17 +174,23 @@ int run(GLFWwindow* window, int max_frames) {
       f.target->end(f.cmd);
     }
 
-    const vg::Status present = loop.value().end_frame(f);
+    const vg::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-      return 1;  // ~FrameLoop drains the submitted frame before teardown
+      return 1;
     }
     ++rendered;
   }
 
+  // The overlay + profiler were created after the app, so they destruct before
+  // it — while its frame loop may still have frames in flight that reference
+  // them. Idle the device first so their destruction is safe, and detach the
+  // borrowed profiler from the loop before it goes out of scope.
+  app.wait_idle();
+  app.set_profiler(nullptr);
+
   // Tear the platform backend down while the ImGui context is still alive; the
-  // overlay's destructor shuts the renderer backend down and destroys it (after
-  // the loop, declared later, drained the in-flight frames in its own dtor).
+  // overlay's destructor then shuts the renderer backend down and destroys it.
   ImGui::SetCurrentContext(overlay.value().context());
   ImGui_ImplGlfw_Shutdown();
   std::printf("02_imgui: rendered %d frame(s)\n", rendered);
