@@ -53,6 +53,15 @@ target_link_libraries(
   PUBLIC volumetric_kit::gfx_core Vulkan::Headers
   PRIVATE Vulkan::Vulkan)
 
+# swapchain.cpp classifies the depth format through core/impl/vk_format.hpp
+# (vkuFormat*), so this tier's own TUs need the same pinned Vulkan-Headers +
+# Vulkan-Utility-Libraries repointing as gfx_core: BEFORE so they win over the
+# Vulkan::Headers include above, SYSTEM to keep vendored warnings out of
+# -Werror, and PRIVATE so nothing leaks to consumers.
+target_include_directories(
+  gfx_windowing SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
+                                      "${VG_VULKAN_UTILITY_INCLUDE}")
+
 vg_target_warnings(gfx_windowing)
 
 if(VG_INSTALL)
