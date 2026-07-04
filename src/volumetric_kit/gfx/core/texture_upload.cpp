@@ -42,6 +42,57 @@ VkExtent2D mip_extent(VkExtent2D extent, uint32_t m) {
 constexpr VkPipelineStageFlags kSampleStages =
     VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 
+// The stages and accesses that may consume an uploaded buffer, per its usage
+// flags -- the dst scope of the copy -> consume barrier (the buffer analogue
+// of the image path's SHADER_READ transitions, with the same cross-submission
+// fence argument as kSampleStages). Precise for the common usages so the
+// barrier never blocks the batch's own later copies; an unmapped usage bit
+// widens to a full ALL_COMMANDS scope rather than leaving its consumer outside
+// the barrier.
+struct BufferConsumeScope {
+  VkPipelineStageFlags stages = 0;
+  VkAccessFlags access = 0;
+};
+
+BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
+  constexpr VkBufferUsageFlags kMappedUsages =
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  BufferConsumeScope scope;
+  if ((usage & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) != 0) {
+    scope.stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+    scope.access |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+  }
+  if ((usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0) {
+    scope.stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+    scope.access |= VK_ACCESS_INDEX_READ_BIT;
+  }
+  if ((usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) != 0) {
+    scope.stages |= kSampleStages;
+    scope.access |= VK_ACCESS_UNIFORM_READ_BIT;
+  }
+  if ((usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0) {
+    scope.stages |= kSampleStages;
+    scope.access |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  }
+  if ((usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) != 0) {
+    scope.stages |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+    scope.access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+  }
+  if ((usage & (VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT)) != 0) {
+    scope.stages |= VK_PIPELINE_STAGE_TRANSFER_BIT;
+    scope.access |= VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+  }
+  if ((usage & ~kMappedUsages) != 0) {
+    scope.stages |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    scope.access |= VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+  }
+  return scope;
+}
+
 // What plan_upload derives from a validated ImageUploadDesc.
 struct UploadPlan {
   uint32_t texel = 0;       // bytes per texel of desc.format
@@ -273,8 +324,8 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
 
 }  // namespace
 
-Result<TextureUploadBatch> TextureUploadBatch::begin(const Device& device,
-                                                     Allocator& allocator) {
+Result<UploadBatch> UploadBatch::begin(const Device& device,
+                                       Allocator& allocator) {
   // One primary command buffer from the device's shared graphics pool -- the
   // same pool Device::submit_single_time allocates from (and the same
   // external-synchronization caveat; see the class docs).
@@ -290,16 +341,16 @@ Result<TextureUploadBatch> TextureUploadBatch::begin(const Device& device,
   CommandBuffer cmd(device.handle(), device.command_pool(), raw);
   VG_TRY(cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
 
-  TextureUploadBatch batch;
+  UploadBatch batch;
   batch.device_ = &device;
   batch.allocator_ = &allocator;
   batch.cmd_ = std::move(cmd);
   return batch;
 }
 
-TextureUploadBatch::~TextureUploadBatch() = default;
+UploadBatch::~UploadBatch() = default;
 
-TextureUploadBatch::TextureUploadBatch(TextureUploadBatch&& other) noexcept
+UploadBatch::UploadBatch(UploadBatch&& other) noexcept
     : device_(other.device_),
       allocator_(other.allocator_),
       cmd_(std::move(other.cmd_)),
@@ -309,8 +360,7 @@ TextureUploadBatch::TextureUploadBatch(TextureUploadBatch&& other) noexcept
   other.staging_.clear();
 }
 
-TextureUploadBatch& TextureUploadBatch::operator=(
-    TextureUploadBatch&& other) noexcept {
+UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   if (this != &other) {
     // The member moves free this batch's current command buffer and staging
     // buffers (nothing was submitted, so freeing them is always safe).
@@ -325,11 +375,11 @@ TextureUploadBatch& TextureUploadBatch::operator=(
   return *this;
 }
 
-Result<Texture> TextureUploadBatch::add(const ImageUploadDesc& desc) {
+Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
   if (!valid()) {
     return Status::invalid_argument(
-        "TextureUploadBatch::add on an empty batch (begin one first; a batch "
-        "is one-shot after finish)");
+        "UploadBatch::add on an empty batch (begin one first; a batch is "
+        "one-shot after finish)");
   }
   UploadPlan plan;
   VG_TRY(plan_upload(*device_, desc, &plan));
@@ -368,10 +418,72 @@ Result<Texture> TextureUploadBatch::add(const ImageUploadDesc& desc) {
   return texture;
 }
 
-Status TextureUploadBatch::finish() {
+Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   if (!valid()) {
     return Status::invalid_argument(
-        "TextureUploadBatch::finish on an empty batch");
+        "UploadBatch::add_buffer on an empty batch (begin one first; a batch "
+        "is one-shot after finish)");
+  }
+  if (desc.data == nullptr) {
+    return Status::invalid_argument("upload_buffer: data must not be null");
+  }
+  if (desc.size == 0) {
+    return Status::invalid_argument("upload_buffer: size must be non-zero");
+  }
+  if (desc.usage == 0) {
+    return Status::invalid_argument(
+        "upload_buffer: usage must name at least one buffer usage");
+  }
+
+  // Staging buffer: host-visible, mapped, written once front-to-back (the same
+  // recipe add() stages pixels through).
+  BufferDesc staging_desc;
+  staging_desc.size = desc.size;
+  staging_desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  staging_desc.memory = MemoryUsage::HostVisible;
+  staging_desc.mapped = true;
+  staging_desc.host_access = HostAccess::SequentialWrite;
+  VG_ASSIGN(Buffer staging, allocator_->create_buffer(staging_desc));
+  std::memcpy(staging.mapped(), desc.data, desc.size);
+
+  // Destination: device-local, TRANSFER_DST for the staging copy plus the
+  // caller's usage.
+  BufferDesc dst_desc;
+  dst_desc.size = desc.size;
+  dst_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | desc.usage;
+  dst_desc.memory = MemoryUsage::DeviceLocal;
+  VG_ASSIGN(Buffer buffer, allocator_->create_buffer(dst_desc));
+
+  // Everything that can fail has; recording is plain vkCmd* calls, so a failed
+  // add above leaves the open command buffer untouched and the batch usable.
+  VkBufferCopy region{};
+  region.size = desc.size;
+  vkCmdCopyBuffer(cmd_.handle(), staging.handle(), buffer.handle(), 1, &region);
+
+  // Make the copy visible to the usage-implied consumers. Within this
+  // submission the scope never bites (the batch records no consumers of its
+  // own), and it stays off the TRANSFER stage for the mapped usages, so the
+  // batch's copies still overlap.
+  const BufferConsumeScope scope = buffer_consume_scope(desc.usage);
+  VkBufferMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = scope.access;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.buffer = buffer.handle();
+  barrier.offset = 0;
+  barrier.size = VK_WHOLE_SIZE;
+  vkCmdPipelineBarrier(cmd_.handle(), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       scope.stages, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+
+  staging_.push_back(std::move(staging));
+  return buffer;
+}
+
+Status UploadBatch::finish() {
+  if (!valid()) {
+    return Status::invalid_argument("UploadBatch::finish on an empty batch");
   }
   // Move the owned state into locals first: whatever happens below, the batch
   // ends empty (one-shot), and the locals keep the staging buffers and command
@@ -396,11 +508,20 @@ Result<Texture> upload_texture(const Device& device, Allocator& allocator,
   // The one-texture batch: exactly the shared validate/record path, one
   // submit, one fence wait. A failed add leaves the batch to its destructor,
   // which discards the never-submitted command buffer.
-  VG_ASSIGN(TextureUploadBatch batch,
-            TextureUploadBatch::begin(device, allocator));
+  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
   VG_ASSIGN(Texture texture, batch.add(desc));
   VG_TRY(batch.finish());
   return texture;
+}
+
+Result<Buffer> upload_buffer(const Device& device, Allocator& allocator,
+                             const BufferUploadDesc& desc) {
+  // The one-buffer batch: shared validate/record path, one submit, one fence
+  // wait (see upload_texture).
+  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VG_ASSIGN(Buffer buffer, batch.add_buffer(desc));
+  VG_TRY(batch.finish());
+  return buffer;
 }
 
 }  // namespace volumetric_kit::gfx

@@ -169,7 +169,7 @@ class VG_CORE_API Device {
   ///        queue and block on a throwaway fence until it completes.
   ///
   /// The command-buffer-owning tail of @ref submit_single_time, exposed so a
-  /// caller that records incrementally (e.g. @ref TextureUploadBatch) shares
+  /// caller that records incrementally (e.g. @ref UploadBatch) shares
   /// one submit+fence+wait implementation. Ownership of @p cmd stays with the
   /// caller; it must be in the executable (ended) state.
   /// @param cmd  A recorded, ended command buffer.

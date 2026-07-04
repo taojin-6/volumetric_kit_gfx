@@ -15,6 +15,8 @@
 
 namespace volumetric_kit::gfx {
 class Allocator;
+class Device;
+class UploadBatch;
 namespace assets {
 struct Mesh;
 }  // namespace assets
@@ -22,8 +24,8 @@ struct Mesh;
 
 namespace volumetric_kit::gfx::pipelines {
 
-/// @brief Owns a triangle mesh's interleaved vertex buffer and 32-bit index
-///        buffer, and records an indexed draw of them.
+/// @brief Owns a triangle mesh's device-local interleaved vertex buffer and
+///        32-bit index buffer, and records an indexed draw of them.
 ///
 /// Produced by @ref upload_mesh from an @ref assets::Mesh. A
 /// default-constructed `GpuMesh` is empty (`valid()` is false) and safe to
@@ -31,10 +33,19 @@ namespace volumetric_kit::gfx::pipelines {
 /// mesh (see @ref Buffer).
 ///
 /// @code
-/// Result<pipelines::GpuMesh> mesh = pipelines::upload_mesh(allocator, m);
-/// if (!mesh) return mesh.status();
-/// // ... bind a pipeline + descriptor sets, then:
-/// mesh.value().record_draw(cmd);
+/// // Many meshes: record every upload into one batch, one submit total.
+/// Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
+/// if (!batch) return batch.status();
+/// std::vector<pipelines::GpuMesh> meshes;
+/// for (const assets::Mesh& m : model.meshes) {
+///   Result<pipelines::GpuMesh> mesh =
+///       pipelines::upload_mesh(batch.value(), m);
+///   if (!mesh) return mesh.status();
+///   meshes.push_back(std::move(mesh).value());
+/// }
+/// VG_TRY(batch.value().finish());  // meshes now draw-ready
+/// // ... bind a pipeline + descriptor sets, then per mesh:
+/// meshes[0].record_draw(cmd);
 /// @endcode
 class VG_PIPELINES_API GpuMesh {
  public:
@@ -76,15 +87,45 @@ class VG_PIPELINES_API GpuMesh {
   uint32_t index_count_ = 0;
 };
 
-/// @brief Upload @p mesh's interleaved vertices + 32-bit indices into GPU
-///        vertex/index buffers.
+/// @brief Record @p mesh's vertex + index uploads into @p batch, returning
+///        the device-local GPU mesh they fill.
+///
+/// Two @ref UploadBatch::add_buffer calls (`VERTEX_BUFFER`, then
+/// `INDEX_BUFFER`), so the mesh shares the caller's one submit with everything
+/// else the batch carries.
+/// @param batch  An open batch; the mesh is drawable only after the caller's
+///               @ref UploadBatch::finish returns OK.
+/// @param mesh   The CPU mesh; its `vertices` and `indices` must be non-empty.
+/// @return The GPU mesh on success, or a non-OK @ref Status: @ref
+///         Status::Code::InvalidArgument when @p mesh has no vertices or
+///         indices (checked before anything records, leaving @p batch
+///         unchanged) or when @p batch is empty; otherwise a Vulkan-domain
+///         Status from buffer allocation.
+/// @warning Keep the returned mesh alive at least until the batch's finish
+///          returns (see @ref UploadBatch::add_buffer). A Vulkan-domain
+///          failure here can land between the two recorded uploads; the batch
+///          then holds a copy into the dropped vertex buffer, so discard it
+///          (destroy without finishing) rather than finishing it.
+VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
+                                             const assets::Mesh& mesh);
+
+/// @brief Upload @p mesh's interleaved vertices + 32-bit indices into
+///        device-local vertex/index buffers in one blocking submit.
+///
+/// A one-mesh batch (begin + record + finish). Uploading many meshes? Share
+/// one @ref UploadBatch via the other overload instead of paying a CPU-GPU
+/// round trip each.
+/// @param device     The device whose graphics queue runs the one-time
+///                   transfer.
 /// @param allocator  Allocates the buffers; must outlive the returned mesh.
 /// @param mesh       The CPU mesh; its `vertices` and `indices` must be
 ///                   non-empty.
-/// @return The GPU mesh on success, or a non-OK @ref Status: @ref
-///         Status::Code::InvalidArgument when @p mesh has no vertices or
-///         indices; otherwise a Vulkan-domain Status from buffer allocation.
-VG_PIPELINES_API Result<GpuMesh> upload_mesh(Allocator& allocator,
+/// @return The GPU mesh -- draw-ready -- on success, or a non-OK @ref Status:
+///         @ref Status::Code::InvalidArgument when @p mesh has no vertices or
+///         indices; otherwise a Vulkan-domain Status from the buffer or
+///         submit step.
+VG_PIPELINES_API Result<GpuMesh> upload_mesh(const Device& device,
+                                             Allocator& allocator,
                                              const assets::Mesh& mesh);
 
 }  // namespace volumetric_kit::gfx::pipelines
