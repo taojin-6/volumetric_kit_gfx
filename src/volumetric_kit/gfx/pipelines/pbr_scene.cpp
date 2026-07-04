@@ -65,6 +65,9 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
 
 void PbrScene::set_camera(uint32_t slot, const glm::vec3& eye,
                           float prefilter_max_lod) noexcept {
+  // Out-of-range slot is a no-op, mirroring descriptor_set()'s graceful degrade
+  // rather than writing through a garbage mapped() pointer.
+  if (slot >= slots_.size()) return;
   *static_cast<SceneUbo*>(slots_[slot].mapped()) =
       SceneUbo{glm::vec4(eye, prefilter_max_lod)};
 }

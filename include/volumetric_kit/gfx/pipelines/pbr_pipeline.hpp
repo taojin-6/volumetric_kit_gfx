@@ -137,11 +137,12 @@ struct PbrFrame {
   VkExtent2D extent{};        ///< Target size (sets the dynamic viewport).
   glm::mat4 view_proj{1.0f};  ///< projection * view; per draw `* world`.
   const PbrScene* scene = nullptr;  ///< Set 0, bound once for the frame.
+  const PbrDraw* draws = nullptr;   ///< The draw list.
+  uint32_t draw_count = 0;          ///< Number of @ref draws.
   /// The frame's in-flight slot (e.g. the windowing `Frame::slot`): selects
-  /// which of the scene's per-slot camera UBOs / descriptor sets to bind.
+  /// which of @ref scene's per-slot camera UBOs / descriptor sets to bind.
+  /// Appended last so adding it leaves the other fields' positions unchanged.
   uint32_t slot = 0;
-  const PbrDraw* draws = nullptr;  ///< The draw list.
-  uint32_t draw_count = 0;         ///< Number of @ref draws.
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

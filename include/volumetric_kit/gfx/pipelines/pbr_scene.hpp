@@ -109,7 +109,8 @@ class VG_PIPELINES_API PbrScene {
   /// @param prefilter_max_lod The specular prefilter's highest mip index
   ///                          (mip count - 1); the shader clamps roughness LOD
   ///                          to it.
-  /// @pre `valid()` and @p slot < @ref frames_in_flight.
+  /// @pre `valid()` and @p slot < @ref frames_in_flight; an out-of-range slot
+  ///      is ignored (no write), mirroring @ref descriptor_set.
   void set_camera(uint32_t slot, const glm::vec3& eye,
                   float prefilter_max_lod) noexcept;
 
