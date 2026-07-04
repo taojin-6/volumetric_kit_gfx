@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
@@ -106,6 +107,10 @@ class WindowingTest : public ::testing::Test {
                                      dcfg, surface_.handle());
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
+
+    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+    allocator_.emplace(std::move(allocator).value());
   }
 
   void TearDown() override {
@@ -168,6 +173,16 @@ class WindowingTest : public ::testing::Test {
     return make_swapchain_on(surface_.handle(), extent);
   }
 
+  win::Swapchain make_depth_swapchain(VkExtent2D extent = {256, 256}) {
+    win::SwapchainConfig cfg;
+    cfg.extent = extent;
+    cfg.depth_format = VK_FORMAT_D32_SFLOAT;  // mandatory depth-attach format
+    auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
+                                     &allocator_.value());
+    EXPECT_TRUE(sc.ok()) << sc.status().message();
+    return sc.ok() ? std::move(sc).value() : win::Swapchain{};
+  }
+
   // Drive `count` clear-only frames through the loop. A fixed headless extent
   // never goes out of date, so any non-OK status is a real failure.
   vg::Status run_frames(win::FrameLoop& loop, int count) {
@@ -192,6 +207,9 @@ class WindowingTest : public ::testing::Test {
   std::optional<vg::Instance> instance_;
   win::Surface surface_;
   std::optional<vg::Device> device_;
+  // Declared after device_ so reverse member-destruction tears the allocator
+  // down before the device it wraps.
+  std::optional<vg::Allocator> allocator_;
   std::vector<std::string> validation_errors_;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
   PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger_ = nullptr;
@@ -372,6 +390,56 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
   ASSERT_TRUE(sc.recreate({320, 240}).ok());
   EXPECT_TRUE(run_frames(loop.value(), 2).ok());
   vkDeviceWaitIdle(device_->handle());
+}
+
+// A depth-configured swapchain owns one depth attachment per image: layout()
+// advertises the depth format, every render target is depth-capable, and the
+// loop renders depth-cleared frames at two frames in flight (each image has
+// its own depth, so nothing is shared across in-flight frames). The fixture's
+// validation capture turns a wrong depth barrier/layout into a test failure.
+TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
+  win::Swapchain sc = make_depth_swapchain();
+  ASSERT_TRUE(sc.valid());
+  EXPECT_EQ(sc.layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    EXPECT_TRUE(sc.render_target(i).valid());
+    EXPECT_EQ(sc.render_target(i).layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  }
+
+  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  // run_frames' begin info clears depth too: load_op defaults to CLEAR and
+  // clear_depth to the far plane, so every frame writes the depth attachment.
+  EXPECT_TRUE(run_frames(loop.value(), 6).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// recreate() rebuilds the per-image depth attachments with the chain: the
+// swapchain stays depth-capable at the new extent, and the same FrameLoop
+// keeps rendering over the rebuilt targets.
+TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
+  win::Swapchain sc = make_depth_swapchain({256, 256});
+  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+
+  ASSERT_TRUE(sc.recreate({320, 240}).ok());
+  EXPECT_EQ(sc.extent().width, 320u);
+  EXPECT_EQ(sc.extent().height, 240u);
+  EXPECT_EQ(sc.layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// A set depth_format without an allocator is rejected up front
+// (validate-before-create), not deferred to a null dereference mid-build.
+TEST_F(WindowingTest, DepthSwapchainRejectsMissingAllocator) {
+  win::SwapchainConfig cfg;
+  cfg.extent = {256, 256};
+  cfg.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
+  ASSERT_FALSE(sc.ok());
+  EXPECT_EQ(sc.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
