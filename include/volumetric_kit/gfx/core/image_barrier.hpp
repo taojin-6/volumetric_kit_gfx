@@ -52,7 +52,8 @@ struct ImageBarrierDesc {
   VkAccessFlags dst_access = 0;
   /// Current layout (`VK_IMAGE_LAYOUT_UNDEFINED` discards contents).
   VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  /// Layout to transition into.
+  /// Layout to transition into. Required: the `VK_IMAGE_LAYOUT_UNDEFINED`
+  /// default is a placeholder, never a legal target -- set a real layout.
   VkImageLayout new_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   /// Image aspect(s) the barrier covers (color by default).
   VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -70,8 +71,10 @@ struct ImageBarrierDesc {
 /// @param cmd   A command buffer in the recording state.
 /// @param desc  The image, execution/memory scopes, layouts, and subresource
 ///              range to transition.
-/// @pre `desc.image != VK_NULL_HANDLE`, and `desc.old_layout` matches the
-///      subresource range's current layout (or is `VK_IMAGE_LAYOUT_UNDEFINED`).
+/// @pre `desc.image != VK_NULL_HANDLE`; `desc.old_layout` matches the
+///      subresource range's current layout (or is `VK_IMAGE_LAYOUT_UNDEFINED`);
+///      and `desc.new_layout` is a real target layout, not the placeholder
+///      `VK_IMAGE_LAYOUT_UNDEFINED` default (checked with `VG_CHECK`).
 VG_CORE_API void cmd_image_barrier(VkCommandBuffer cmd,
                                    const ImageBarrierDesc& desc);
 
