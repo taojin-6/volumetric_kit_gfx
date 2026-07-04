@@ -11,7 +11,7 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
@@ -275,15 +275,17 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // the contents each frame with no further transition.
     VG_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
       for (const Texture& depth : depth_textures_) {
-        cmd_image_barrier(cmd, depth.image(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          0,
-                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                          VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                          VK_IMAGE_ASPECT_DEPTH_BIT);
+        ImageBarrierDesc to_depth;
+        to_depth.image = depth.image();
+        to_depth.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        to_depth.dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        to_depth.dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        to_depth.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_depth.new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        to_depth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        cmd_image_barrier(cmd, to_depth);
       }
     }));
   }

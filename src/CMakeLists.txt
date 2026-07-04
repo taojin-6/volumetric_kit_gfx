@@ -54,11 +54,10 @@ if(VG_INSTALL)
     # the vendored <vulkan/utility/...> header that the package neither ships
     # nor re-exports, so an installed copy would not compile -- keep it out.
     PATTERN "vk_format.hpp" EXCLUDE
-    # impl/command.hpp and impl/vk_query.hpp are internal too ("Not a public
-    # header."); no installed header includes them, so keep them out. The other
-    # impl/ headers ship because public headers include them (impl/result.hpp,
-    # impl/retire_list.hpp, impl/debug_utils_table.hpp, ...).
-    REGEX "volumetric_kit/gfx/core/impl/command\\.hpp$" EXCLUDE
+    # impl/vk_query.hpp is internal too ("Not a public header."); no installed
+    # header includes it, so keep it out. The other impl/ headers ship because
+    # public headers include them (impl/result.hpp, impl/retire_list.hpp,
+    # impl/debug_utils_table.hpp, ...).
     REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE)
 
   install(

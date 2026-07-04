@@ -200,6 +200,47 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   EXPECT_EQ(px[last + 3], 255);
 }
 
+// prepare() records the same transitions itself -- including the depth image
+// when the target has one -- so the render needs no hand-written barriers.
+TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
+  constexpr uint32_t kSize = 4;
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTarget target = make_depth_target(allocator, {kSize, kSize});
+
+  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto cmd = pool.value().allocate_primary();
+  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+
+  ASSERT_TRUE(
+      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+  const VkCommandBuffer raw = cmd.value().handle();
+
+  target.prepare(raw);  // color + depth -> attachment layouts
+
+  // loadOp CLEAR fills the attachments (opaque green here); no draw needed.
+  vg::RenderTargetBeginInfo begin_info;
+  begin_info.clear_color.float32[1] = 1.0f;  // G
+  begin_info.clear_color.float32[3] = 1.0f;  // A
+  const vg::RenderTarget rt = target.target();
+  rt.begin(raw, begin_info);
+  rt.end(raw);
+
+  target.record_readback(raw);
+  ASSERT_TRUE(cmd.value().end().ok());
+  submit_and_wait(raw);
+
+  const auto* px = static_cast<const uint8_t*>(target.pixels());
+  ASSERT_NE(px, nullptr);
+  EXPECT_EQ(px[0], 0);    // R
+  EXPECT_EQ(px[1], 255);  // G
+  EXPECT_EQ(px[2], 0);    // B
+  EXPECT_EQ(px[3], 255);  // A
+  const size_t last = (static_cast<size_t>(kSize) * kSize - 1) * 4;
+  EXPECT_EQ(px[last + 1], 255);
+  EXPECT_EQ(px[last + 3], 255);
+}
+
 // --- Optional depth attachment ---------------------------------------------
 
 TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
