@@ -66,11 +66,19 @@ struct Frame {
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
 /// while (running) {
 ///   auto frame = loop.value().begin_frame();
-///   if (!frame) { swapchain.recreate(window_extent()); continue; }
+///   if (!frame) {
+///     // Out-of-date (a resize): rebuild and retry. recreate rejects a zero
+///     // extent (minimized window) while keeping the old chain usable — wait
+///     // for a restore event then; do not spin on a persistent failure.
+///     if (!swapchain.recreate(window_extent()).ok()) wait_for_restore();
+///     continue;
+///   }
 ///   frame.value().target->begin(frame.value().cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   frame.value().target->end(frame.value().cmd);
-///   if (!loop.value().end_frame(frame.value())) swapchain.recreate(...);
+///   if (!loop.value().end_frame(frame.value())) {
+///     if (!swapchain.recreate(window_extent()).ok()) wait_for_restore();
+///   }
 /// }
 /// @endcode
 class VG_WINDOWING_API FrameLoop {
@@ -98,12 +106,15 @@ class VG_WINDOWING_API FrameLoop {
   ///        `COLOR_ATTACHMENT_OPTIMAL`.
   /// @return The @ref Frame to record into; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` (recreate the swapchain and retry) or
-  ///         another failed `VkResult`.
+  ///         another failed `VkResult`; @ref Status::Code::InvalidArgument when
+  ///         the borrowed swapchain is empty (after a failed rebuild).
   /// @note A *successful* `begin_frame` must be paired with exactly one @ref
   ///       end_frame for the returned @ref Frame: the acquire signals this
   ///       slot's image-available semaphore, and only @ref end_frame consumes
   ///       it. Dropping a returned @ref Frame leaves that semaphore signalled.
-  ///       A failed `begin_frame` returns no @ref Frame and needs no pairing.
+  ///       A failed `begin_frame` returns no @ref Frame and needs no pairing —
+  ///       on an internal failure *after* the acquire, the slot's sync state is
+  ///       restored (a brief blocking submit) before the error returns.
   /// @note Adapts automatically when @ref Swapchain::recreate changes the image
   ///       count: the per-image sync objects are rebuilt to match on entry.
   Result<Frame> begin_frame();
@@ -115,6 +126,10 @@ class VG_WINDOWING_API FrameLoop {
   /// @return OK on success; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (recreate the
   ///         swapchain) or another failed `VkResult`.
+  /// @note On a failure *before* the submit reaches the queue, the slot's sync
+  ///       state is restored (a brief blocking submit) so the loop stays
+  ///       usable. A failed present already submitted the frame: the slot
+  ///       advances normally and only the presentation is reported.
   Status end_frame(const Frame& frame);
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
@@ -141,6 +156,11 @@ class VG_WINDOWING_API FrameLoop {
   // when they no longer match the swapchain's image count — i.e. after a
   // Swapchain::recreate. A no-op (one size comparison) on the common path.
   Status ensure_image_sync();
+
+  // Restore a slot whose acquire signal was never consumed (a failure between
+  // acquire and submit): drain image_available_[slot] with an empty submit and
+  // re-signal the slot fence. Blocking; error-path only.
+  Status recover_slot(uint32_t slot);
 
   const Device* device_ = nullptr;  // borrowed; outlives this
   Swapchain* swapchain_ = nullptr;  // borrowed; outlives this

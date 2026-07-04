@@ -43,8 +43,18 @@ Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
     return Status::unsupported("Swapchain: surface reports no formats");
   }
   std::vector<VkSurfaceFormatKHR> formats(format_count);
-  VG_VK_TRY(vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface_, &format_count,
-                                                 formats.data()));
+  // The list can change size between the count and fill calls (a display
+  // reconfiguration): VK_INCOMPLETE is a success code reporting how many
+  // entries were written, so choose from those instead of failing the build.
+  const VkResult formats_filled = vkGetPhysicalDeviceSurfaceFormatsKHR(
+      phys, surface_, &format_count, formats.data());
+  if (formats_filled != VK_SUCCESS && formats_filled != VK_INCOMPLETE) {
+    return vk_error(formats_filled, "vkGetPhysicalDeviceSurfaceFormatsKHR");
+  }
+  formats.resize(format_count);
+  if (formats.empty()) {
+    return Status::unsupported("Swapchain: surface reports no formats");
+  }
   // Prefer the requested format + color space; else take the first supported.
   VkSurfaceFormatKHR chosen = formats[0];
   for (const VkSurfaceFormatKHR& f : formats) {
@@ -64,8 +74,12 @@ Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
     return Status::unsupported("Swapchain: surface reports no present modes");
   }
   std::vector<VkPresentModeKHR> modes(mode_count);
-  VG_VK_TRY(vkGetPhysicalDeviceSurfacePresentModesKHR(
-      phys, surface_, &mode_count, modes.data()));
+  const VkResult modes_filled = vkGetPhysicalDeviceSurfacePresentModesKHR(
+      phys, surface_, &mode_count, modes.data());
+  if (modes_filled != VK_SUCCESS && modes_filled != VK_INCOMPLETE) {
+    return vk_error(modes_filled, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+  }
+  modes.resize(mode_count);
   // FIFO is guaranteed; upgrade to the preferred mode only if offered.
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
   for (VkPresentModeKHR m : modes) {
@@ -165,9 +179,26 @@ Status Swapchain::build(VkExtent2D desired) {
   }
   info.presentMode = present_mode_;
   info.clipped = VK_TRUE;
-  info.oldSwapchain = VK_NULL_HANDLE;
+  // Hand the driver the current swapchain (if any): it can carry resources
+  // across a resize, and creating the replacement *before* destroying anything
+  // keeps this object presentable when the rebuild fails early (the zero-extent
+  // return above leaves the old chain untouched).
+  info.oldSwapchain = swapchain_;
 
-  VG_VK_TRY(vkCreateSwapchainKHR(dev, &info, nullptr, &swapchain_));
+  VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
+  const VkResult created =
+      vkCreateSwapchainKHR(dev, &info, nullptr, &new_swapchain);
+  if (created != VK_SUCCESS) {
+    // Passing oldSwapchain retires it even when creation fails, and a retired
+    // chain can neither acquire nor seed a later rebuild — drop everything so
+    // this object reports empty instead of dangling a retired chain.
+    destroy_resources();
+    extent_ = VkExtent2D{};
+    return vk_error(created, "vkCreateSwapchainKHR");
+  }
+  // The old chain (now retired) and its views are dead; replace them.
+  destroy_resources();
+  swapchain_ = new_swapchain;
 
   // Build the image views + render targets. On any failure, roll back to an
   // empty state (valid() == false) rather than leaving a half-built swapchain
@@ -176,6 +207,7 @@ Status Swapchain::build(VkExtent2D desired) {
   const Status images = create_image_resources(extent);
   if (!images.ok()) {
     destroy_resources();
+    extent_ = VkExtent2D{};
     return images;
   }
   extent_ = extent;
@@ -211,6 +243,10 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
 
 Result<uint32_t> Swapchain::acquire_next_image(VkSemaphore image_available,
                                                uint64_t timeout_ns) {
+  if (!valid()) {
+    return Status::invalid_argument(
+        "Swapchain::acquire_next_image on an empty swapchain");
+  }
   uint32_t index = 0;
   // vkAcquireNextImageKHR has several success codes, so it is checked by hand
   // (VG_VK_TRY would treat SUBOPTIMAL as a failure). SUBOPTIMAL still yields a
@@ -225,6 +261,9 @@ Result<uint32_t> Swapchain::acquire_next_image(VkSemaphore image_available,
 }
 
 Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
+  if (!valid()) {
+    return Status::invalid_argument("Swapchain::present on an empty swapchain");
+  }
   VkPresentInfoKHR info{};
   info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
   info.waitSemaphoreCount = 1;
@@ -241,10 +280,19 @@ Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
 }
 
 Status Swapchain::recreate(VkExtent2D extent) {
-  // Drain the device before tearing the old images down; surface a device-loss
-  // rather than destroying resources that may still be referenced by the GPU.
+  if (!valid()) {
+    return Status::invalid_argument(
+        "Swapchain::recreate on an empty swapchain");
+  }
+  if (extent.width == 0 || extent.height == 0) {
+    // A minimized window: skip the device drain and leave the current
+    // (out-of-date but presentable) chain in place until the window restores.
+    return Status::invalid_argument(
+        "Swapchain::recreate: extent is zero (window minimized?)");
+  }
+  // Drain the device before the rebuild retires the old images; surface a
+  // device-loss rather than destroying resources the GPU may still reference.
   VG_VK_TRY(vkDeviceWaitIdle(device_->handle()));
-  destroy_resources();
   return build(extent);
 }
 

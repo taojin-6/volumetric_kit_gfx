@@ -90,6 +90,7 @@ class VG_WINDOWING_API Swapchain {
   /// @return The acquired image index. `VK_SUBOPTIMAL_KHR` still returns an
   ///         index (render proceeds); `VK_ERROR_OUT_OF_DATE_KHR` returns a
   ///         non-OK @ref Status carrying that code — @ref recreate and retry.
+  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
   Result<uint32_t> acquire_next_image(VkSemaphore image_available,
                                       uint64_t timeout_ns = UINT64_MAX);
 
@@ -100,14 +101,19 @@ class VG_WINDOWING_API Swapchain {
   /// @return OK on success; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` when the
   ///         swapchain should be recreated, or another failed `VkResult`.
+  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
   Status present(uint32_t image_index, VkSemaphore render_finished);
 
   /// @brief Rebuild the swapchain for @p extent (resize / out-of-date), keeping
-  ///        the format and present mode. Idles the device before tearing the
-  ///        old images down.
+  ///        the format and present mode. Idles the device, then hands the old
+  ///        chain to `vkCreateSwapchainKHR` as `oldSwapchain` so the driver can
+  ///        carry resources across the resize.
   /// @param extent  The new desired size (clamped/overridden as in @ref
   /// create).
-  /// @return OK on success, or a non-OK @ref Status.
+  /// @return OK on success. A zero @p extent (minimized window) fails with
+  ///         @ref Status::Code::InvalidArgument *without touching the current
+  ///         swapchain* — it stays valid for a later retry; only a failed
+  ///         `vkCreateSwapchainKHR` leaves the object empty (`valid()` false).
   Status recreate(VkExtent2D extent);
 
   /// @return The render target for swapchain image @p image_index.
