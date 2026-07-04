@@ -12,7 +12,7 @@
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/impl/command.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
+#include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
 namespace volumetric_kit::gfx::windowing {
@@ -35,19 +35,10 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
           "Swapchain::create: depth_format requires an allocator to create "
           "the per-image depth attachments");
     }
-    if (!format_has_depth(config.depth_format)) {
-      return Status::invalid_argument(
-          "Swapchain::create: depth_format must be a depth format (or "
-          "VK_FORMAT_UNDEFINED for a color-only swapchain)");
-    }
-    // RenderTarget renders depth through DEPTH_ATTACHMENT_OPTIMAL, valid for a
-    // stencil-bearing image only with separateDepthStencilLayouts — the same
-    // constraint (and message) as OffscreenTarget's depth attachment.
-    if (format_has_stencil(config.depth_format)) {
-      return Status::unsupported(
-          "Swapchain::create: combined depth/stencil depth_format is not yet "
-          "supported; use a depth-only format such as VK_FORMAT_D32_SFLOAT");
-    }
+    // Depth-only format check (shared with OffscreenTarget); the device-support
+    // check below is swapchain-specific (it has the Device's caps to hand).
+    VG_TRY(
+        validate_depth_only_format(config.depth_format, "Swapchain::create"));
     if (!device.caps().format_supports(
             config.depth_format, VK_IMAGE_TILING_OPTIMAL,
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
@@ -255,21 +246,26 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
 
     // One depth attachment per image (not one shared image): frames in flight
     // rendering to different images then never contend for the same depth.
+    // Intentionally one per *swapchain* image, which can exceed the loop's
+    // frames-in-flight (a few surplus depth buffers): it keeps depth on the
+    // swapchain's own render targets and is safe at any in-flight depth without
+    // the swapchain having to know the loop's.
     RenderTargetAttachment depth_attachment{};
     if (depth_format_ != VK_FORMAT_UNDEFINED) {
-      TextureDesc depth_desc;
-      depth_desc.extent = extent;
-      depth_desc.format = depth_format_;
-      depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-      VG_ASSIGN(Texture depth, allocator_->create_image(depth_desc));
+      VG_ASSIGN(Texture depth,
+                make_depth_attachment(*allocator_, extent, depth_format_));
       depth_attachment = {depth.image(), depth.view(), depth_format_};
       depth_textures_.push_back(std::move(depth));
     }
 
+    // RenderTarget ignores an empty-view depth, so pass it unconditionally (no
+    // caller-side null guard). The depth reuses the target's shared load/store
+    // op — color must STORE to present, so depth is stored too; harmless here
+    // since it is cleared each frame (see RenderTarget's per-attachment-op
+    // TODO).
     const RenderTargetAttachment attachment{image, view, format_};
-    targets_.emplace_back(
-        extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT,
-        depth_attachment.view != VK_NULL_HANDLE ? &depth_attachment : nullptr);
+    targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT,
+                          &depth_attachment);
   }
 
   if (!depth_textures_.empty()) {

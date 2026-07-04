@@ -45,6 +45,13 @@ struct SwapchainConfig {
   /// depth-capable and depth is safe at any frames-in-flight count (no
   /// cross-frame sharing of one depth image). Requires the @p allocator
   /// argument of @ref Swapchain::create.
+  ///
+  /// @note The depth image is transitioned once into its attachment layout and
+  ///       carries no per-frame barrier; cross-frame correctness relies on each
+  ///       frame *clearing* depth (`load_op = CLEAR`, the default). A consumer
+  ///       that instead loads a prior frame's depth (temporal reuse) must
+  ///       insert its own barrier — the swapchain does not synchronize a
+  ///       cross-frame depth read.
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
 };
 

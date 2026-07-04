@@ -394,9 +394,14 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
 
 // A depth-configured swapchain owns one depth attachment per image: layout()
 // advertises the depth format, every render target is depth-capable, and the
-// loop renders depth-cleared frames at two frames in flight (each image has
-// its own depth, so nothing is shared across in-flight frames). The fixture's
-// validation capture turns a wrong depth barrier/layout into a test failure.
+// loop renders depth-cleared frames at two frames in flight. The fixture's
+// validation capture catches a wrong depth *layout* (the attachment layout not
+// matching the one-time transition). It does NOT catch a missing/incorrect
+// *synchronization* scope — synchronization validation is not enabled — and the
+// per-image "no cross-frame sharing" property is guaranteed by construction
+// (one Texture per image below), not asserted here (RenderTarget hides its
+// depth handle). run_frames only *clears* depth; functional depth *testing* is
+// exercised end-to-end by example_03_model.
 TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   win::Swapchain sc = make_depth_swapchain();
   ASSERT_TRUE(sc.valid());
@@ -419,6 +424,7 @@ TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
 // keeps rendering over the rebuilt targets.
 TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
   win::Swapchain sc = make_depth_swapchain({256, 256});
+  ASSERT_TRUE(sc.valid());
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
   EXPECT_TRUE(run_frames(loop.value(), 3).ok());
@@ -427,6 +433,12 @@ TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
   EXPECT_EQ(sc.extent().width, 320u);
   EXPECT_EQ(sc.extent().height, 240u);
   EXPECT_EQ(sc.layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  // Every rebuilt target is depth-capable (not just the front one layout()
+  // derives from), so a partial-rebuild regression is caught.
+  for (uint32_t i = 0; i < sc.image_count(); ++i) {
+    EXPECT_TRUE(sc.render_target(i).valid());
+    EXPECT_EQ(sc.render_target(i).layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  }
   EXPECT_TRUE(run_frames(loop.value(), 3).ok());
   vkDeviceWaitIdle(device_->handle());
 }
@@ -438,6 +450,30 @@ TEST_F(WindowingTest, DepthSwapchainRejectsMissingAllocator) {
   cfg.extent = {256, 256};
   cfg.depth_format = VK_FORMAT_D32_SFLOAT;
   auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
+  ASSERT_FALSE(sc.ok());
+  EXPECT_EQ(sc.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+// A combined depth/stencil depth_format is rejected as Unsupported (rendering
+// depth through DEPTH_ATTACHMENT_OPTIMAL needs separateDepthStencilLayouts).
+TEST_F(WindowingTest, DepthSwapchainRejectsStencilFormat) {
+  win::SwapchainConfig cfg;
+  cfg.extent = {256, 256};
+  cfg.depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
+  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
+                                   &allocator_.value());
+  ASSERT_FALSE(sc.ok());
+  EXPECT_EQ(sc.status().domain(), vg::Status::Code::Unsupported);
+}
+
+// A non-depth depth_format is rejected as InvalidArgument (a color format has
+// no depth aspect to render through).
+TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
+  win::SwapchainConfig cfg;
+  cfg.extent = {256, 256};
+  cfg.depth_format = VK_FORMAT_R8G8B8A8_UNORM;
+  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
+                                   &allocator_.value());
   ASSERT_FALSE(sc.ok());
   EXPECT_EQ(sc.status().domain(), vg::Status::Code::InvalidArgument);
 }

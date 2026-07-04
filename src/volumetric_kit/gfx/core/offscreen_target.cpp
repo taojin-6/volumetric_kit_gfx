@@ -8,6 +8,7 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
@@ -24,20 +25,8 @@ Result<OffscreenTarget> OffscreenTarget::create(
         "VK_FORMAT_UNDEFINED");
   }
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    if (!format_has_depth(desc.depth_format)) {
-      return Status::invalid_argument(
-          "OffscreenTarget::create: depth_format must be a depth format (or "
-          "VK_FORMAT_UNDEFINED for a color-only target)");
-    }
-    // TODO: support combined depth/stencil formats -- needs a stencil
-    // attachment wired through RenderTarget and the separateDepthStencilLayouts
-    // device feature; today only depth-only formats render correctly.
-    if (format_has_stencil(desc.depth_format)) {
-      return Status::unsupported(
-          "OffscreenTarget::create: combined depth/stencil depth_format is not "
-          "yet supported; use a depth-only format such as "
-          "VK_FORMAT_D32_SFLOAT");
-    }
+    VG_TRY(validate_depth_only_format(desc.depth_format,
+                                      "OffscreenTarget::create"));
   }
 
   VkDeviceSize readback_size = 0;
@@ -66,11 +55,8 @@ Result<OffscreenTarget> OffscreenTarget::create(
   // Optional depth attachment: device-local, depth-stencil usage. depth_format
   // is validated depth-only above, so create_image derives a DEPTH-aspect view.
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    TextureDesc depth_desc;
-    depth_desc.extent = desc.extent;
-    depth_desc.format = desc.depth_format;
-    depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    VG_ASSIGN(Texture depth, allocator.create_image(depth_desc));
+    VG_ASSIGN(Texture depth,
+              make_depth_attachment(allocator, desc.extent, desc.depth_format));
     target.depth_ = std::move(depth);
   }
 
