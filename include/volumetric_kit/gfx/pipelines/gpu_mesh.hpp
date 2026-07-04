@@ -102,10 +102,13 @@ class VG_PIPELINES_API GpuMesh {
 ///         unchanged) or when @p batch is empty; otherwise a Vulkan-domain
 ///         Status from buffer allocation.
 /// @warning Keep the returned mesh alive at least until the batch's finish
-///          returns (see @ref UploadBatch::add_buffer). A Vulkan-domain
-///          failure here can land between the two recorded uploads; the batch
-///          then holds a copy into the dropped vertex buffer, so discard it
-///          (destroy without finishing) rather than finishing it.
+///          returns (see @ref UploadBatch::add_buffer). A Vulkan-domain failure
+///          here can land between the two recorded uploads; it then
+///          @ref UploadBatch::poison "poisons" the batch, so a later
+///          @ref UploadBatch::finish safely discards (returns @ref
+///          Status::Code::InvalidArgument) instead of submitting the dropped
+///          vertex buffer's now-dangling copy. Discarding the batch directly
+///          (destroy without finishing) is equally fine.
 VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
                                              const assets::Mesh& mesh);
 

@@ -684,7 +684,11 @@ TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
       buffer_desc(vertices.data(), vertices.size() * sizeof(float)));
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
 
-  // Device-local destination: no host mapping (the staging is internal).
+  // Not host-mapped (the staging is internal) -- a necessary but not sufficient
+  // proxy for DeviceLocal residency. A positive DEVICE_LOCAL check needs a
+  // memory-property accessor Buffer does not expose, and would be moot on the
+  // UMA/software CI devices anyway (their single heap is device-local), so the
+  // residency rests on the DeviceLocal request in add_buffer + review.
   EXPECT_EQ(buffer.value().mapped(), nullptr);
   EXPECT_EQ(buffer.value().size(), vertices.size() * sizeof(float));
 
@@ -733,4 +737,22 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
   const auto* got = static_cast<const std::uint8_t*>(readback.value().mapped());
   ASSERT_NE(got, nullptr);
   EXPECT_EQ(std::memcmp(got, src.data(), src.size()), 0);
+}
+
+// poison() makes finish() discard the recorded work instead of submitting it --
+// the safety net for a multi-resource caller (e.g. pipelines::upload_mesh) that
+// dropped a resource an earlier add recorded a copy into, where finishing would
+// otherwise submit a copy referencing freed memory.
+TEST_F(TextureUploadTest, PoisonedBatchFinishDiscardsWithoutSubmitting) {
+  const std::array<std::uint8_t, 16> px{};
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+  auto buffer = batch.value().add_buffer(buffer_desc(px.data(), px.size()));
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+
+  batch.value().poison();
+  const vg::Status finished = batch.value().finish();
+  EXPECT_FALSE(finished.ok());
+  EXPECT_EQ(finished.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_FALSE(batch.value().valid());  // discarded, one-shot
 }

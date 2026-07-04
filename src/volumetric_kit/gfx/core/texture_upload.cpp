@@ -43,12 +43,21 @@ constexpr VkPipelineStageFlags kSampleStages =
     VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 
 // The stages and accesses that may consume an uploaded buffer, per its usage
-// flags -- the dst scope of the copy -> consume barrier (the buffer analogue
-// of the image path's SHADER_READ transitions, with the same cross-submission
-// fence argument as kSampleStages). Precise for the common usages so the
-// barrier never blocks the batch's own later copies; an unmapped usage bit
-// widens to a full ALL_COMMANDS scope rather than leaving its consumer outside
-// the barrier.
+// flags -- the dst scope of the copy -> consume barrier that carries the bytes
+// across to the later submission that reads them (the buffer analogue of the
+// image path's SHADER_READ transition). This barrier -- NOT the finish() fence
+// -- is what makes the copy visible to that consumer: a host fence gives
+// execution + host-domain visibility only, so the precise dst scope is
+// load-bearing for correctness, not merely perf.
+//
+// The mapped shader usages resolve to the graphics sampling stages
+// (kSampleStages = VERTEX|FRAGMENT). A consumer in a stage the upload's
+// graphics queue does not run -- compute (the library keeps compute on
+// CUDA/Metal, but the usage bit is public), geometry/tessellation
+// (feature-gated, so naming their stages unconditionally here would be an
+// invalid dstStageMask), or a different queue -- is outside this scope and must
+// synchronize itself. An unmapped usage bit widens to a full ALL_COMMANDS scope
+// rather than leaving its consumer outside the barrier.
 struct BufferConsumeScope {
   VkPipelineStageFlags stages = 0;
   VkAccessFlags access = 0;
@@ -58,6 +67,8 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
   constexpr VkBufferUsageFlags kMappedUsages =
       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
       VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   BufferConsumeScope scope;
@@ -73,7 +84,12 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
     scope.stages |= kSampleStages;
     scope.access |= VK_ACCESS_UNIFORM_READ_BIT;
   }
-  if ((usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0) {
+  if ((usage & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) != 0) {
+    scope.stages |= kSampleStages;
+    scope.access |= VK_ACCESS_SHADER_READ_BIT;
+  }
+  if ((usage & (VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)) != 0) {
     scope.stages |= kSampleStages;
     scope.access |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
   }
@@ -91,6 +107,22 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
     scope.access |= VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
   }
   return scope;
+}
+
+// A host-visible, mapped staging buffer holding @p size bytes copied from
+// @p src, written once front-to-back -- the single recipe both add() (pixels)
+// and add_buffer() (bytes) stage their source through.
+Result<Buffer> make_staging(Allocator& allocator, const void* src,
+                            VkDeviceSize size) {
+  BufferDesc desc;
+  desc.size = size;
+  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = MemoryUsage::HostVisible;
+  desc.mapped = true;
+  desc.host_access = HostAccess::SequentialWrite;
+  VG_ASSIGN(Buffer staging, allocator.create_buffer(desc));
+  std::memcpy(staging.mapped(), src, size);
+  return staging;
 }
 
 // What plan_upload derives from a validated ImageUploadDesc.
@@ -354,10 +386,12 @@ UploadBatch::UploadBatch(UploadBatch&& other) noexcept
     : device_(other.device_),
       allocator_(other.allocator_),
       cmd_(std::move(other.cmd_)),
-      staging_(std::move(other.staging_)) {
+      staging_(std::move(other.staging_)),
+      poisoned_(other.poisoned_) {
   other.device_ = nullptr;
   other.allocator_ = nullptr;
   other.staging_.clear();
+  other.poisoned_ = false;
 }
 
 UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
@@ -368,9 +402,11 @@ UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
     allocator_ = other.allocator_;
     cmd_ = std::move(other.cmd_);
     staging_ = std::move(other.staging_);
+    poisoned_ = other.poisoned_;
     other.device_ = nullptr;
     other.allocator_ = nullptr;
     other.staging_.clear();
+    other.poisoned_ = false;
   }
   return *this;
 }
@@ -384,15 +420,7 @@ Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
   UploadPlan plan;
   VG_TRY(plan_upload(*device_, desc, &plan));
 
-  // Staging buffer: host-visible, mapped, written once front-to-back.
-  BufferDesc staging_desc;
-  staging_desc.size = desc.size;
-  staging_desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  staging_desc.memory = MemoryUsage::HostVisible;
-  staging_desc.mapped = true;
-  staging_desc.host_access = HostAccess::SequentialWrite;
-  VG_ASSIGN(Buffer staging, allocator_->create_buffer(staging_desc));
-  std::memcpy(staging.mapped(), desc.pixels, desc.size);
+  VG_ASSIGN(Buffer staging, make_staging(*allocator_, desc.pixels, desc.size));
 
   // Destination: device-local sampled image. SAMPLED to read it in shaders,
   // TRANSFER_DST for the staging copy, and TRANSFER_SRC so the mip-chain blits
@@ -435,16 +463,7 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
         "upload_buffer: usage must name at least one buffer usage");
   }
 
-  // Staging buffer: host-visible, mapped, written once front-to-back (the same
-  // recipe add() stages pixels through).
-  BufferDesc staging_desc;
-  staging_desc.size = desc.size;
-  staging_desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  staging_desc.memory = MemoryUsage::HostVisible;
-  staging_desc.mapped = true;
-  staging_desc.host_access = HostAccess::SequentialWrite;
-  VG_ASSIGN(Buffer staging, allocator_->create_buffer(staging_desc));
-  std::memcpy(staging.mapped(), desc.data, desc.size);
+  VG_ASSIGN(Buffer staging, make_staging(*allocator_, desc.data, desc.size));
 
   // Destination: device-local, TRANSFER_DST for the staging copy plus the
   // caller's usage.
@@ -460,10 +479,13 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   region.size = desc.size;
   vkCmdCopyBuffer(cmd_.handle(), staging.handle(), buffer.handle(), 1, &region);
 
-  // Make the copy visible to the usage-implied consumers. Within this
-  // submission the scope never bites (the batch records no consumers of its
-  // own), and it stays off the TRANSFER stage for the mapped usages, so the
-  // batch's copies still overlap.
+  // Make the copy visible to the usage-implied consumers in the later
+  // submission that reads them (see buffer_consume_scope). Within this
+  // submission the scope never bites -- the batch records no consumers of its
+  // own. For the shader / vertex-input usages the dst scope stays off the
+  // TRANSFER stage, so the batch's copies overlap; a TRANSFER_SRC/DST (or
+  // unmapped) destination does include TRANSFER and so serializes later copies
+  // behind this barrier -- fine for those rarer cases.
   const BufferConsumeScope scope = buffer_consume_scope(desc.usage);
   VkBufferMemoryBarrier barrier{};
   barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -481,9 +503,23 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   return buffer;
 }
 
+void UploadBatch::poison() noexcept { poisoned_ = true; }
+
 Status UploadBatch::finish() {
   if (!valid()) {
     return Status::invalid_argument("UploadBatch::finish on an empty batch");
+  }
+  if (poisoned_) {
+    // A caller dropped a resource an earlier add recorded a copy into (see
+    // poison()): submitting would reference freed memory. Discard the recorded
+    // work instead of submitting it -- moving into a temporary frees the
+    // command buffer + staging on return, and never submits.
+    UploadBatch discard(std::move(*this));
+    return Status::invalid_argument(
+        "UploadBatch::finish on a poisoned batch: an added resource was "
+        "dropped "
+        "before finish, so a recorded copy would reference freed memory; begin "
+        "a new batch");
   }
   // Move the owned state into locals first: whatever happens below, the batch
   // ends empty (one-shot), and the locals keep the staging buffers and command

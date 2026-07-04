@@ -179,9 +179,22 @@ class VG_CORE_API UploadBatch {
   /// contents).
   /// @return OK once every added texture is sampled-ready and every added
   ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
-  ///         batch is empty, or a Vulkan-domain @ref Status from the
-  ///         end/submit/wait step.
+  ///         batch is empty or @ref poison ed, or a Vulkan-domain @ref Status
+  ///         from the end/submit/wait step.
   Status finish();
+
+  /// @brief Mark the batch unfinishable: a subsequent @ref finish discards the
+  ///        recorded work instead of submitting it.
+  ///
+  /// For a multi-resource caller (e.g. @ref pipelines::upload_mesh, which
+  /// records two buffers) that has *dropped* a resource an earlier @ref add /
+  /// @ref add_buffer already recorded a copy into: the command buffer then
+  /// holds a copy into freed memory, so submitting would be a use-after-free.
+  /// Poisoning makes @ref finish return @ref Status::Code::InvalidArgument and
+  /// free the recorded work rather than submit it. A single failed @ref add /
+  /// @ref add_buffer records nothing and does *not* need this -- the batch
+  /// stays usable; only a caller that drops an already-recorded resource does.
+  void poison() noexcept;
 
   /// @return `true` while the batch holds an open command buffer (begun, not
   ///         yet finished or moved-from).
@@ -195,6 +208,9 @@ class VG_CORE_API UploadBatch {
   // fence proves the GPU is done reading them (or until an unfinished batch
   // discards them).
   std::vector<Buffer> staging_;
+  // Set by poison(): finish() then discards instead of submitting (a caller
+  // dropped a resource an add recorded a copy into).
+  bool poisoned_ = false;
 };
 
 /// @brief Upload @p desc.pixels into a new device-local, shader-sampled @ref

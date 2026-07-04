@@ -49,15 +49,26 @@ Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
   }
   BufferUploadDesc vertex_desc;
   vertex_desc.data = mesh.vertices.data();
-  vertex_desc.size = mesh.vertices.size() * sizeof(assets::Vertex);
+  // Widen before multiplying so the byte count cannot overflow a 32-bit size_t.
+  vertex_desc.size =
+      VkDeviceSize{mesh.vertices.size()} * sizeof(assets::Vertex);
   vertex_desc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+  // A failed first add records nothing, so the batch stays usable (VG_ASSIGN
+  // returns without poisoning it).
   VG_ASSIGN(Buffer vertices, batch.add_buffer(vertex_desc));
   BufferUploadDesc index_desc;
   index_desc.data = mesh.indices.data();
-  index_desc.size = mesh.indices.size() * sizeof(uint32_t);
+  index_desc.size = VkDeviceSize{mesh.indices.size()} * sizeof(uint32_t);
   index_desc.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  VG_ASSIGN(Buffer indices, batch.add_buffer(index_desc));
-  return GpuMesh(std::move(vertices), std::move(indices),
+  Result<Buffer> indices = batch.add_buffer(index_desc);
+  if (!indices.ok()) {
+    // The vertex copy is already recorded into `vertices`, which unwinds (and
+    // frees) as we return: poison the batch so a later finish() discards that
+    // now-dangling copy instead of submitting a use-after-free.
+    batch.poison();
+    return indices.status();
+  }
+  return GpuMesh(std::move(vertices), std::move(indices).value(),
                  static_cast<uint32_t>(mesh.indices.size()));
 }
 
