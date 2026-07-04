@@ -146,27 +146,32 @@ int run(GLFWwindow* window, int max_frames) {
     }
     glfwPollEvents();
 
-    auto frame = loop.value().begin_frame();
+    // The loop owns the staleness protocol: it rebuilds the swapchain after a
+    // resize / out-of-date result and skips ticks while the window is
+    // minimized, so only hard failures surface here.
+    auto frame = loop.value().begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
-      if (frame.status().code() == VK_ERROR_OUT_OF_DATE_KHR) {
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-        continue;
-      }
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
       return 1;
     }
+    if (!frame.value().has_value()) {
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
+      continue;
+    }
+    const win::Frame& f = *frame.value();
 
     vg::RenderTargetBeginInfo begin;
     begin.clear_color.float32[0] = 0.02f;
     begin.clear_color.float32[1] = 0.02f;
     begin.clear_color.float32[2] = 0.05f;
     begin.clear_color.float32[3] = 1.0f;
-    frame.value().target->begin(frame.value().cmd, begin);
+    f.target->begin(f.cmd, begin);
 
-    vkCmdBindPipeline(frame.value().cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+    vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline.value().handle());
     const VkExtent2D extent = swapchain.value().extent();
     VkViewport viewport{};
@@ -174,30 +179,22 @@ int run(GLFWwindow* window, int max_frames) {
     viewport.height = static_cast<float>(extent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(frame.value().cmd, 0, 1, &viewport);
+    vkCmdSetViewport(f.cmd, 0, 1, &viewport);
     VkRect2D scissor{};
     scissor.extent = extent;
-    vkCmdSetScissor(frame.value().cmd, 0, 1, &scissor);
-    vkCmdDraw(frame.value().cmd, 3, 1, 0, 0);
+    vkCmdSetScissor(f.cmd, 0, 1, &scissor);
+    vkCmdDraw(f.cmd, 3, 1, 0, 0);
 
-    frame.value().target->end(frame.value().cmd);
+    f.target->end(f.cmd);
 
-    const vg::Status present = loop.value().end_frame(frame.value());
-    if (!present.ok()) {
-      if (present.code() == VK_ERROR_OUT_OF_DATE_KHR ||
-          present.code() == VK_SUBOPTIMAL_KHR) {
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-      } else {
-        std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-        return 1;
-      }
+    const vg::Status present = loop.value().end_frame(f);
+    if (!present.ok() && !win::swapchain_stale(present)) {
+      std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+      return 1;  // ~FrameLoop drains the submitted frame before teardown
     }
     ++rendered;
   }
 
-  vkDeviceWaitIdle(device.value().handle());
   std::printf("01_triangle: rendered %d frame(s)\n", rendered);
   return 0;
 }

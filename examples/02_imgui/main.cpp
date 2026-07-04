@@ -114,19 +114,11 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
-  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
-                                     kFramesInFlight);
-  if (!loop.ok()) {
-    std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
-    return 1;
-  }
-  // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
-  // render loop below only opens a scope around its work.
-  loop.value().set_profiler(&profiler.value());
-
   // The overlay's pipeline is built for the swapchain's layout; the swapchain
   // holds its format AND image count stable across recreate, so the overlay
-  // survives resizes without rebuilding.
+  // survives resizes without rebuilding. Declared before the FrameLoop so the
+  // loop — which drains its in-flight frames on destruction — is destroyed
+  // first, on every exit path.
   // TODO: a swapchain that changed its image count on recreate would need the
   // overlay's backend updated (ImGui_ImplVulkan_SetMinImageCount, not yet
   // exposed by the ui tier); the kit's swapchain keeps it stable today.
@@ -141,8 +133,20 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
+  auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
+                                     kFramesInFlight);
+  if (!loop.ok()) {
+    std::fprintf(stderr, "frame loop: %s\n", loop.status().message().c_str());
+    return 1;
+  }
+  // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
+  // render loop below only opens a scope around its work.
+  loop.value().set_profiler(&profiler.value());
+
   // Platform backend (this example's half): bind it to the overlay's context,
-  // then let it feed input + io.DisplaySize each frame.
+  // then let it feed input + io.DisplaySize each frame. Initialized last, after
+  // the fallible loop create, so no earlier error return leaves a live
+  // ImGui_ImplGlfw backend without its paired Shutdown at teardown.
   ImGui::SetCurrentContext(overlay.value().context());
   if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
     std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
@@ -156,26 +160,30 @@ int run(GLFWwindow* window, int max_frames) {
     }
     glfwPollEvents();
 
+    // Begin the Vulkan frame *before* the ImGui frame: the loop skips ticks
+    // while minimized / rebuilding, so a skipped tick never opens an ImGui
+    // frame that would then need an EndFrame() discard to stay paired.
+    auto frame = loop.value().begin_frame(framebuffer_extent(window));
+    if (!frame.ok()) {
+      std::fprintf(stderr, "begin_frame: %s\n",
+                   frame.status().message().c_str());
+      return 1;
+    }
+    if (!frame.value().has_value()) {
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
+      continue;
+    }
+    const win::Frame& f = *frame.value();
+
     ImGui_ImplGlfw_NewFrame();    // platform: sets io.DisplaySize + input
     overlay.value().new_frame();  // renderer: begins the ImGui frame
     build_ui(rendered);
     // The live profiler view; the resolved metrics lag the in-flight depth, so
     // it is empty for the first couple of frames, then fills in.
     vg::ui::draw_metrics_panel(profiler.value().metrics());
-
-    auto frame = loop.value().begin_frame();
-    if (!frame.ok()) {
-      if (frame.status().code() == VK_ERROR_OUT_OF_DATE_KHR) {
-        ImGui::EndFrame();  // discard the frame we began; no render() will pair
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-        continue;
-      }
-      std::fprintf(stderr, "begin_frame: %s\n",
-                   frame.status().message().c_str());
-      return 1;
-    }
 
     vg::RenderTargetBeginInfo begin;
     begin.clear_color.float32[0] = 0.02f;
@@ -185,35 +193,25 @@ int run(GLFWwindow* window, int max_frames) {
     {
       // A GPU-timed, debug-labelled stage around the frame's rendering; the
       // profiler resolves it into the metrics the panel above displays.
-      vg::Profiler::Scope scope =
-          profiler.value().gpu_scope(frame.value().cmd, "overlay");
-      frame.value().target->begin(frame.value().cmd, begin);
+      vg::Profiler::Scope scope = profiler.value().gpu_scope(f.cmd, "overlay");
+      f.target->begin(f.cmd, begin);
       // A consumer would record its scene here first; the overlay composes on
       // top within the same dynamic-rendering scope.
-      overlay.value().render(frame.value().cmd);
-      frame.value().target->end(frame.value().cmd);
+      overlay.value().render(f.cmd);
+      f.target->end(f.cmd);
     }
 
-    const vg::Status present = loop.value().end_frame(frame.value());
-    if (!present.ok()) {
-      if (present.code() == VK_ERROR_OUT_OF_DATE_KHR ||
-          present.code() == VK_SUBOPTIMAL_KHR) {
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-      } else {
-        std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-        return 1;
-      }
+    const vg::Status present = loop.value().end_frame(f);
+    if (!present.ok() && !win::swapchain_stale(present)) {
+      std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+      return 1;  // ~FrameLoop drains the submitted frame before teardown
     }
     ++rendered;
   }
 
-  if (vkDeviceWaitIdle(device.value().handle()) != VK_SUCCESS) {
-    std::fprintf(stderr, "vkDeviceWaitIdle failed at teardown\n");
-  }
   // Tear the platform backend down while the ImGui context is still alive; the
-  // overlay's destructor shuts the renderer backend down and destroys it.
+  // overlay's destructor shuts the renderer backend down and destroys it (after
+  // the loop, declared later, drained the in-flight frames in its own dtor).
   ImGui::SetCurrentContext(overlay.value().context());
   ImGui_ImplGlfw_Shutdown();
   std::printf("02_imgui: rendered %d frame(s)\n", rendered);

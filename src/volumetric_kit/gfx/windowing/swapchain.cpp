@@ -188,10 +188,11 @@ Status Swapchain::build(VkExtent2D desired) {
   // once everything succeeds.
   const Status images = create_image_resources(extent);
   if (!images.ok()) {
-    destroy_resources();  // also zeroes extent_ (see destroy_resources)
+    destroy_resources();  // also zeroes extent_ / requested_extent_
     return images;
   }
   extent_ = extent;
+  requested_extent_ = desired;
   return Status{};
 }
 
@@ -320,9 +321,11 @@ void Swapchain::destroy_resources() noexcept {
     vkDestroySwapchainKHR(dev, swapchain_, nullptr);
     swapchain_ = VK_NULL_HANDLE;
   }
-  // A torn-down swapchain has no meaningful size; zero the extent so it stays
-  // consistent with valid() == false (the recurring "forgot a scalar" miss).
+  // A torn-down swapchain has no meaningful size; zero both extents so they
+  // stay consistent with valid() == false (the recurring "forgot a scalar"
+  // miss).
   extent_ = VkExtent2D{};
+  requested_extent_ = VkExtent2D{};
 }
 
 void Swapchain::reset_state() noexcept {
@@ -330,6 +333,7 @@ void Swapchain::reset_state() noexcept {
   surface_ = VK_NULL_HANDLE;
   swapchain_ = VK_NULL_HANDLE;
   extent_ = VkExtent2D{};
+  requested_extent_ = VkExtent2D{};
   format_ = VK_FORMAT_UNDEFINED;
   color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
@@ -354,6 +358,7 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
       color_space_(other.color_space_),
       present_mode_(other.present_mode_),
       extent_(other.extent_),
+      requested_extent_(other.requested_extent_),
       requested_min_image_count_(other.requested_min_image_count_) {
   other.reset_state();
 }
@@ -371,6 +376,7 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     color_space_ = other.color_space_;
     present_mode_ = other.present_mode_;
     extent_ = other.extent_;
+    requested_extent_ = other.requested_extent_;
     requested_min_image_count_ = other.requested_min_image_count_;
     other.reset_state();
   }

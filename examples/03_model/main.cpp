@@ -389,6 +389,7 @@ vg::Texture create_depth(vg::Allocator& allocator, const vg::Device& device,
     *ok = false;
     return {};
   }
+  *ok = true;
   return std::move(depth).value();
 }
 
@@ -1571,6 +1572,15 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
   // render loop only opens a scope around each pass.
   loop.value().set_profiler(&profiler.value());
+  // Depth is swapchain-sized: rebuild it whenever the loop rebuilds the chain
+  // (the rebuild idled the device, so replacing the old image is safe).
+  loop.value().set_recreate_callback([&](VkExtent2D extent) -> vg::Status {
+    bool rebuilt = false;
+    depth = create_depth(allocator.value(), device.value(), extent, &rebuilt);
+    return rebuilt ? vg::Status{}
+                   : vg::Status::out_of_memory(
+                         "03_model: depth attachment recreate failed");
+  });
 
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -1579,42 +1589,27 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     }
     glfwPollEvents();
 
-    // Pause while minimized (zero framebuffer): a zero-extent swapchain/depth
-    // recreate would fail. Block until the window is restored or closed.
-    VkExtent2D fb = framebuffer_extent(window);
-    while ((fb.width == 0 || fb.height == 0) &&
-           !glfwWindowShouldClose(window)) {
-      glfwWaitEvents();
-      fb = framebuffer_extent(window);
-    }
-    if (glfwWindowShouldClose(window)) {
-      break;
-    }
-
-    auto frame = loop.value().begin_frame();
+    // The loop owns the staleness protocol: it rebuilds the swapchain (and,
+    // via the callback above, the depth attachment) after a resize, and skips
+    // ticks while the window is minimized.
+    auto frame = loop.value().begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
-      if (frame.status().code() == VK_ERROR_OUT_OF_DATE_KHR) {
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-        depth = create_depth(allocator.value(), device.value(),
-                             swapchain.value().extent(), &ok);
-        if (!ok) {
-          return 1;
-        }
-        continue;
-      }
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
-      // Drain a possibly-still-in-flight submission before teardown frees the
-      // command buffers / profiler query pool it references.
-      vkDeviceWaitIdle(device.value().handle());
-      return 1;
+      return 1;  // ~FrameLoop drains any in-flight submission before teardown
     }
+    if (!frame.value().has_value()) {
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
+      continue;
+    }
+    const win::Frame& f = *frame.value();
 
     const VkExtent2D extent = swapchain.value().extent();
-    const uint32_t image_index = frame.value().image_index;
-    const VkCommandBuffer cmd = frame.value().cmd;
+    const uint32_t image_index = f.image_index;
+    const VkCommandBuffer cmd = f.cmd;
 
     // Assemble this image's color view + our depth into a render target.
     const vg::RenderTargetAttachment color{
@@ -1670,25 +1665,10 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
     rt.end(cmd);
 
-    const vg::Status present = loop.value().end_frame(frame.value());
-    if (!present.ok()) {
-      if (present.code() == VK_ERROR_OUT_OF_DATE_KHR ||
-          present.code() == VK_SUBOPTIMAL_KHR) {
-        if (!swapchain.value().recreate(framebuffer_extent(window)).ok()) {
-          break;
-        }
-        depth = create_depth(allocator.value(), device.value(),
-                             swapchain.value().extent(), &ok);
-        if (!ok) {
-          return 1;
-        }
-      } else {
-        std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-        // end_frame already submitted this frame before present failed; drain
-        // it before teardown frees the cmd buffer + query pool it references.
-        vkDeviceWaitIdle(device.value().handle());
-        return 1;
-      }
+    const vg::Status present = loop.value().end_frame(f);
+    if (!present.ok() && !win::swapchain_stale(present)) {
+      std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+      return 1;  // ~FrameLoop drains the submitted frame before teardown
     }
 
     // Periodically dump the resolved per-pass timings. At one frame in flight
@@ -1711,7 +1691,6 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     ++rendered;
   }
 
-  vkDeviceWaitIdle(device.value().handle());
   std::printf("03_model: rendered %d frame(s)\n", rendered);
   return 0;
 }

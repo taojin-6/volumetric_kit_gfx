@@ -75,6 +75,63 @@ Status FrameLoop::ensure_image_sync() {
   return Status{};
 }
 
+Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
+  if (swapchain_ == nullptr) {
+    return Status::invalid_argument("FrameLoop::begin_frame on an empty loop");
+  }
+  if (current_extent.width == 0 || current_extent.height == 0) {
+    // Minimized: nothing to acquire or rebuild; an armed rebuild stays armed
+    // for the restore.
+    return std::optional<Frame>{};
+  }
+  if (current_extent.width != swapchain_->requested_extent().width ||
+      current_extent.height != swapchain_->requested_extent().height) {
+    // The window resized under us; some platforms (MoltenVK in particular)
+    // never report OUT_OF_DATE for it. Checked against the swapchain's last
+    // *requested* extent (not its surface-clamped one), so a request the
+    // surface pins to a different size does not rebuild every tick.
+    needs_recreate_ = true;
+  }
+  // At most one rebuild + one acquire retry per call: rebuild once if armed,
+  // then on a stale acquire retry the acquire without a second rebuild. A
+  // still-stale result skips the tick rather than spinning -- or churning
+  // rebuilds and depth reallocations -- while the surface settles.
+  bool rebuilt_this_call = false;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (needs_recreate_ && !rebuilt_this_call) {
+      const Status rebuilt = swapchain_->recreate(current_extent);
+      if (!rebuilt.ok()) {
+        if (rebuilt.domain() == Status::Code::InvalidArgument &&
+            swapchain_->valid()) {
+          // The surface reported a zero extent mid-rebuild (still minimized):
+          // the old chain is intact, so skip this tick and retry later.
+          return std::optional<Frame>{};
+        }
+        return rebuilt;
+      }
+      rebuilt_this_call = true;
+      // Run the consumer hook *before* clearing needs_recreate_, so a failed
+      // resource rebuild leaves the loop armed rather than falsely "in sync".
+      // (The rebuild produced a fresh swapchain handle, so the next raw
+      // begin_frame's ensure_image_sync refreshes the per-image semaphores.)
+      if (recreate_callback_) {
+        VG_TRY(recreate_callback_(swapchain_->extent()));
+      }
+      needs_recreate_ = false;
+    }
+    Result<Frame> frame = begin_frame();
+    if (frame.ok()) {
+      return std::optional<Frame>(frame.value());
+    }
+    if (swapchain_stale(frame.status())) {
+      needs_recreate_ = true;
+      continue;
+    }
+    return frame.status();
+  }
+  return std::optional<Frame>{};
+}
+
 Result<Frame> FrameLoop::begin_frame() {
   if (swapchain_ == nullptr || !swapchain_->valid()) {
     return Status::invalid_argument(
@@ -215,6 +272,15 @@ Status FrameLoop::end_frame(const Frame& frame) {
   }
 
   Status present = swapchain_->present(frame.image_index, signal_sem);
+  if (swapchain_stale(present)) {
+    // Arm the managed protocol's rebuild; raw callers see the status as ever
+    // (they never read needs_recreate_). This is the one managed-state write on
+    // the raw path: the protocol is asymmetric (a managed begin_frame(extent),
+    // but end_frame stays single, so stale-present has nowhere else to land).
+    // TODO: fold the managed begin/end protocol into an app-tier frame driver
+    // so end_frame carries no managed state and the raw path is policy-free.
+    needs_recreate_ = true;
+  }
   // Advance regardless: the work was submitted and the fence will signal, so
   // the slot is reusable next round even when present reports out-of-date.
   current_slot_ =
@@ -268,6 +334,19 @@ void FrameLoop::set_profiler(Profiler* profiler) noexcept {
   profiler_ = profiler;
 }
 
+void FrameLoop::set_recreate_callback(
+    std::function<Status(VkExtent2D)> callback) {
+  recreate_callback_ = std::move(callback);
+}
+
+FrameLoop::~FrameLoop() { drain(); }
+
+void FrameLoop::drain() noexcept {
+  if (device_ != nullptr && valid()) {
+    (void)vkDeviceWaitIdle(device_->handle());
+  }
+}
+
 // Hand-written (not defaulted) because the command buffers free back to the
 // pool: destruction order matters, and the move pair must null the borrowed
 // pointers on the source so a moved-from loop is fully empty.
@@ -282,20 +361,26 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
       images_in_flight_(std::move(other.images_in_flight_)),
       last_swapchain_(other.last_swapchain_),
       current_slot_(other.current_slot_),
-      profiler_(other.profiler_) {
+      profiler_(other.profiler_),
+      recreate_callback_(std::move(other.recreate_callback_)),
+      needs_recreate_(other.needs_recreate_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
   other.last_swapchain_ = VK_NULL_HANDLE;
   other.current_slot_ = 0;
   other.profiler_ = nullptr;
+  other.recreate_callback_ = nullptr;
+  other.needs_recreate_ = false;
 }
 
 FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
   if (this != &other) {
-    // Release our resources in dependency order before adopting other's: the
-    // command buffers free back to the pool, so they must be destroyed before
-    // the pool. (A defaulted move-assign assigns members in declaration order,
-    // freeing the pool first while our command buffers still reference it.)
+    // Wait out our own in-flight frames, then release our resources in
+    // dependency order before adopting other's: the command buffers free back
+    // to the pool, so they must be destroyed before the pool. (A defaulted
+    // move-assign assigns members in declaration order, freeing the pool first
+    // while our command buffers still reference it.)
+    drain();
     command_buffers_.clear();
     pool_.reset();
 
@@ -310,12 +395,16 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     last_swapchain_ = other.last_swapchain_;
     current_slot_ = other.current_slot_;
     profiler_ = other.profiler_;
+    recreate_callback_ = std::move(other.recreate_callback_);
+    needs_recreate_ = other.needs_recreate_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
     other.last_swapchain_ = VK_NULL_HANDLE;
     other.current_slot_ = 0;
     other.profiler_ = nullptr;
+    other.recreate_callback_ = nullptr;
+    other.needs_recreate_ = false;
   }
   return *this;
 }
