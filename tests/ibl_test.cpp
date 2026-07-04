@@ -268,14 +268,20 @@ TEST_F(IblTest, RebakeIsByteIdentical) {
   ASSERT_TRUE(first.ok()) << first.status().message();
   ASSERT_TRUE(second.ok()) << second.status().message();
 
-  // RGBA16F cubes are 8 bytes/texel over 6 layers; the RG16F LUT is 4.
-  EXPECT_EQ(read_back(first.value().irradiance, 6, 8),
-            read_back(second.value().irradiance, 6, 8));
-  EXPECT_EQ(read_back(first.value().prefilter, 6, 8),
-            read_back(second.value().prefilter, 6, 8));
-  EXPECT_EQ(read_back(first.value().brdf_lut, 1, 4),
-            read_back(second.value().brdf_lut, 1, 4));
-  EXPECT_FALSE(read_back(first.value().irradiance, 6, 8).empty());
+  // RGBA16F cubes are 8 bytes/texel over 6 layers; the RG16F LUT is 4. Each
+  // image is read back exactly once: read_back leaves it in TRANSFER_SRC, so a
+  // second read_back of the same image would declare a stale SHADER_READ
+  // oldLayout. Keep the first-bake reads to assert they are non-empty.
+  const std::vector<uint8_t> first_irradiance =
+      read_back(first.value().irradiance, 6, 8);
+  const std::vector<uint8_t> first_prefilter =
+      read_back(first.value().prefilter, 6, 8);
+  const std::vector<uint8_t> first_brdf =
+      read_back(first.value().brdf_lut, 1, 4);
+  EXPECT_EQ(first_irradiance, read_back(second.value().irradiance, 6, 8));
+  EXPECT_EQ(first_prefilter, read_back(second.value().prefilter, 6, 8));
+  EXPECT_EQ(first_brdf, read_back(second.value().brdf_lut, 1, 4));
+  EXPECT_FALSE(first_irradiance.empty());
 }
 
 TEST_F(IblTest, MoveLeavesSourceEmpty) {
