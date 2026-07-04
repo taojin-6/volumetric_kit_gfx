@@ -345,6 +345,58 @@ TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
   vkDeviceWaitIdle(device_->handle());
 }
 
+// A zero-extent recreate (minimized window) must fail *without* destroying the
+// current swapchain: the old chain stays valid and presentable, so the render
+// loop keeps working until a restore-sized recreate succeeds. Regression test:
+// recreate used to destroy-then-rebuild, leaving a null chain that the next
+// begin_frame handed straight to vkAcquireNextImageKHR.
+TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  ASSERT_TRUE(sc.valid());
+  const VkSwapchainKHR before = sc.handle();
+
+  const vg::Status zero = sc.recreate({0, 0});
+  EXPECT_FALSE(zero.ok());
+  EXPECT_EQ(zero.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_TRUE(sc.valid());
+  EXPECT_EQ(sc.handle(), before);  // untouched, not rebuilt
+  EXPECT_EQ(sc.extent().width, 256u);
+  EXPECT_EQ(sc.extent().height, 256u);
+
+  // The untouched chain still drives frames...
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
+
+  // ...and a later non-zero recreate recovers normally under the same loop.
+  ASSERT_TRUE(sc.recreate({320, 240}).ok());
+  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
+// as after a failed rebuild) fails cleanly instead of acquiring on a null
+// handle. NOTE: this covers begin_frame's empty-swapchain guard only, NOT the
+// post-acquire recover_slot path — reaching that needs a Vulkan call (fence
+// wait / command begin/end / queue submit) to fail, which does not happen on a
+// healthy device; see the TODO in FrameLoop::recover_slot on the missing
+// fault-injection coverage for those branches.
+TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  EXPECT_TRUE(run_frames(loop.value(), 1).ok());
+  vkDeviceWaitIdle(device_->handle());
+
+  // Move the swapchain out from under the loop: the borrowed &sc now refers to
+  // an empty object.
+  win::Swapchain stolen = std::move(sc);
+  auto frame = loop.value().begin_frame();
+  ASSERT_FALSE(frame.ok());
+  EXPECT_EQ(frame.status().domain(), vg::Status::Code::InvalidArgument);
+  vkDeviceWaitIdle(device_->handle());
+}
+
 TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
   win::Swapchain sc = make_swapchain({256, 256});
   auto loop = win::FrameLoop::create(*device_, sc, 2);
@@ -356,6 +408,22 @@ TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
   ASSERT_TRUE(sc.recreate({320, 240}).ok());
   EXPECT_TRUE(run_frames(loop.value(), 3).ok());
   vkDeviceWaitIdle(device_->handle());
+}
+
+// Acquire / present / recreate on an empty swapchain (default-constructed,
+// moved-from, or after a failed rebuild) fail with InvalidArgument instead of
+// dereferencing null handles. Needs no instance/device, so it runs everywhere.
+TEST(SwapchainEmpty, OperationsFailCleanly) {
+  win::Swapchain sc;
+  auto acquired = sc.acquire_next_image(VK_NULL_HANDLE);
+  ASSERT_FALSE(acquired.ok());
+  EXPECT_EQ(acquired.status().domain(), vg::Status::Code::InvalidArgument);
+  const vg::Status presented = sc.present(0, VK_NULL_HANDLE);
+  ASSERT_FALSE(presented.ok());
+  EXPECT_EQ(presented.domain(), vg::Status::Code::InvalidArgument);
+  const vg::Status recreated = sc.recreate({256, 256});
+  ASSERT_FALSE(recreated.ok());
+  EXPECT_EQ(recreated.domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(WindowingTest, SwapchainMoveLeavesSourceEmpty) {

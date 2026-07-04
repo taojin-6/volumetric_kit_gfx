@@ -90,6 +90,7 @@ class VG_WINDOWING_API Swapchain {
   /// @return The acquired image index. `VK_SUBOPTIMAL_KHR` still returns an
   ///         index (render proceeds); `VK_ERROR_OUT_OF_DATE_KHR` returns a
   ///         non-OK @ref Status carrying that code — @ref recreate and retry.
+  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
   Result<uint32_t> acquire_next_image(VkSemaphore image_available,
                                       uint64_t timeout_ns = UINT64_MAX);
 
@@ -100,14 +101,25 @@ class VG_WINDOWING_API Swapchain {
   /// @return OK on success; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` when the
   ///         swapchain should be recreated, or another failed `VkResult`.
+  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
   Status present(uint32_t image_index, VkSemaphore render_finished);
 
   /// @brief Rebuild the swapchain for @p extent (resize / out-of-date), keeping
-  ///        the format and present mode. Idles the device before tearing the
-  ///        old images down.
+  ///        the format and present mode. Idles the device, then hands the old
+  ///        chain to `vkCreateSwapchainKHR` as `oldSwapchain` so the driver can
+  ///        carry resources across the resize.
   /// @param extent  The new desired size (clamped/overridden as in @ref
   /// create).
-  /// @return OK on success, or a non-OK @ref Status.
+  /// @return OK on success. A zero @p extent (minimized window) fails with
+  ///         @ref Status::Code::InvalidArgument *without touching the current
+  ///         swapchain*, which stays valid for a later retry. A failed rebuild
+  ///         (`vkCreateSwapchainKHR`, or the image-view creation that follows)
+  ///         empties the object (`valid()` false) but keeps its device /
+  ///         surface / format, so a later @ref recreate can retry it once the
+  ///         transient failure clears. Called on a moved-from or
+  ///         default-constructed swapchain (no device to rebuild on), fails
+  ///         with
+  ///         @ref Status::Code::InvalidArgument.
   Status recreate(VkExtent2D extent);
 
   /// @return The render target for swapchain image @p image_index.
@@ -150,8 +162,8 @@ class VG_WINDOWING_API Swapchain {
   Status select_surface_properties(const SwapchainConfig& config);
   Status build(VkExtent2D extent);
   Status create_image_resources(VkExtent2D extent);  // views + render targets
-  void destroy_resources() noexcept;                 // image views + swapchain
-  void reset_state() noexcept;  // null handles + zero metadata to empty
+  void destroy_resources() noexcept;  // image views + swapchain; zeroes extent_
+  void reset_state() noexcept;        // null handles + zero metadata to empty
   void destroy() noexcept;
 
   const Device* device_ = nullptr;         // borrowed; outlives this

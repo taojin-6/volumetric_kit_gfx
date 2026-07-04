@@ -51,14 +51,19 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
 }
 
 Status FrameLoop::ensure_image_sync() {
-  const uint32_t image_count = swapchain_->image_count();
-  if (render_finished_.size() == image_count) {
+  // Rebuild the per-image sync objects when the swapchain handle changes — i.e.
+  // after a Swapchain::recreate produced a fresh chain. Keying on the handle
+  // (not just the image count) also covers a same-count rebuild: that still
+  // retires the old images, and a failed present (OUT_OF_DATE) can leave a
+  // render-finished semaphore signaled, so reusing it would double-signal on
+  // the next submit. recreate() idles the device first, so the old per-image
+  // objects are drained and safe to replace. A no-op (one handle comparison)
+  // on the common path.
+  const VkSwapchainKHR current = swapchain_->handle();
+  if (current == last_swapchain_) {
     return Status{};
   }
-  // The image count changed under us (a Swapchain::recreate). recreate() idles
-  // the device first, so the old per-image semaphores are drained and safe to
-  // replace; rebuild render_finished_ / images_in_flight_ to the new size so
-  // the per-image indexing below stays in bounds.
+  const uint32_t image_count = swapchain_->image_count();
   render_finished_.clear();
   render_finished_.reserve(image_count);
   for (uint32_t i = 0; i < image_count; ++i) {
@@ -66,10 +71,16 @@ Status FrameLoop::ensure_image_sync() {
     render_finished_.push_back(std::move(finished));
   }
   images_in_flight_.assign(image_count, VK_NULL_HANDLE);
+  last_swapchain_ = current;
   return Status{};
 }
 
 Result<Frame> FrameLoop::begin_frame() {
+  if (swapchain_ == nullptr || !swapchain_->valid()) {
+    return Status::invalid_argument(
+        "FrameLoop::begin_frame: swapchain is empty (moved-from, or a failed "
+        "rebuild)");
+  }
   // A Swapchain::recreate may have changed the image count since the last
   // frame; resize the per-image sync arrays before indexing them below.
   VG_TRY(ensure_image_sync());
@@ -94,15 +105,26 @@ Result<Frame> FrameLoop::begin_frame() {
   // The acquired image may still be in use by an earlier (different) slot when
   // there are more images than in-flight frames; wait that fence too.
   if (images_in_flight_[image_index] != VK_NULL_HANDLE) {
-    VG_VK_TRY(vkWaitForFences(device_->handle(), 1,
-                              &images_in_flight_[image_index], VK_TRUE,
-                              UINT64_MAX));
+    const VkResult waited =
+        vkWaitForFences(device_->handle(), 1, &images_in_flight_[image_index],
+                        VK_TRUE, UINT64_MAX);
+    if (waited != VK_SUCCESS) {
+      // The acquire above left this slot's semaphore with a pending signal;
+      // restore the slot before surfacing the error (best-effort: the original
+      // error outranks a recovery failure).
+      (void)recover_slot(slot);
+      return vk_error(waited, "vkWaitForFences");
+    }
   }
   images_in_flight_[image_index] = in_flight_[slot].handle();
 
   const VkCommandBuffer cmd = command_buffers_[slot].handle();
-  VG_TRY(command_buffers_[slot].begin(
-      VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+  const Status begun =
+      command_buffers_[slot].begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+  if (!begun.ok()) {
+    (void)recover_slot(slot);
+    return begun;
+  }
 
   // Dynamic rendering does not transition images; move it into the attachment
   // layout. UNDEFINED discards the previous (presented) contents, which is fine
@@ -151,7 +173,14 @@ Status FrameLoop::end_frame(const Frame& frame) {
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-  VG_TRY(command_buffers_[slot].end());
+  const Status ended = command_buffers_[slot].end();
+  if (!ended.ok()) {
+    // This frame's acquire signal was never consumed by a submit; restore the
+    // slot's sync state so the loop stays usable (best-effort: the original
+    // error outranks a recovery failure).
+    (void)recover_slot(slot);
+    return ended;
+  }
 
   const VkSemaphore wait_sem = image_available_[slot].handle();
   const VkSemaphore signal_sem = render_finished_[frame.image_index].handle();
@@ -171,9 +200,19 @@ Status FrameLoop::end_frame(const Frame& frame) {
   // Resetting here (rather than in begin_frame) keeps the fence signalled on
   // every earlier failure or abandoned Frame, so the next begin_frame on this
   // slot never blocks forever on a fence that will never be submitted.
-  VG_TRY(in_flight_[slot].reset());
-  VG_VK_TRY(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          in_flight_[slot].handle()));
+  const Status fence_ready = in_flight_[slot].reset();
+  if (!fence_ready.ok()) {
+    (void)recover_slot(slot);
+    return fence_ready;
+  }
+  const VkResult submitted = vkQueueSubmit(device_->graphics_queue(), 1,
+                                           &submit, in_flight_[slot].handle());
+  if (submitted != VK_SUCCESS) {
+    // The failed submit consumed nothing: the acquire signal is still pending
+    // and the fence was just reset, so recover_slot restores both.
+    (void)recover_slot(slot);
+    return vk_error(submitted, "vkQueueSubmit");
+  }
 
   Status present = swapchain_->present(frame.image_index, signal_sem);
   // Advance regardless: the work was submitted and the fence will signal, so
@@ -181,6 +220,48 @@ Status FrameLoop::end_frame(const Frame& frame) {
   current_slot_ =
       static_cast<uint32_t>((current_slot_ + 1) % in_flight_.size());
   return present;
+}
+
+Status FrameLoop::recover_slot(uint32_t slot) {
+  // A successful acquire left image_available_[slot] with a pending signal that
+  // only a queue submit may consume: an empty submit drains it and re-signals
+  // the slot fence, restoring both invariants (semaphore unsignaled, fence
+  // signaled) so the next begin_frame on this slot neither trips the validation
+  // layers nor deadlocks. Blocks until the drain completes; reached only on a
+  // failed frame.
+  // TODO: these recovery branches (here and the callers') lack test coverage —
+  // no queue/fence call fails on a healthy device, so a fault-injection seam is
+  // needed to exercise them; today they ship verified only by inspection.
+  const VkSemaphore wait_sem = image_available_[slot].handle();
+  const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.waitSemaphoreCount = 1;
+  submit.pWaitSemaphores = &wait_sem;
+  submit.pWaitDstStageMask = &wait_stage;
+
+  // The fence must be unsignaled for the submit to signal it: reset, submit,
+  // then wait. If any step fails the queue itself is failing — fall through.
+  Status status = in_flight_[slot].reset();
+  if (status.ok()) {
+    const VkResult submitted = vkQueueSubmit(
+        device_->graphics_queue(), 1, &submit, in_flight_[slot].handle());
+    if (submitted == VK_SUCCESS) {
+      return in_flight_[slot].wait();
+    }
+    status = vk_error(submitted, "vkQueueSubmit");
+  }
+
+  // The drain never reached the queue, so the fence is now unsignaled with
+  // nothing that will ever signal it. Replace it with a fresh signaled fence
+  // (safe — no submit references this slot's fence here) so the next
+  // begin_frame fails cleanly instead of blocking forever in
+  // in_flight_[slot].wait(). The acquire semaphore may stay signaled, but only
+  // when the queue is already broken, where the next frame errors out anyway.
+  VG_ASSIGN(Fence resignaled,
+            Fence::create(device_->handle(), /*signaled=*/true));
+  in_flight_[slot] = std::move(resignaled);
+  return status;
 }
 
 void FrameLoop::set_profiler(Profiler* profiler) noexcept {
@@ -199,10 +280,12 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
       in_flight_(std::move(other.in_flight_)),
       render_finished_(std::move(other.render_finished_)),
       images_in_flight_(std::move(other.images_in_flight_)),
+      last_swapchain_(other.last_swapchain_),
       current_slot_(other.current_slot_),
       profiler_(other.profiler_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
+  other.last_swapchain_ = VK_NULL_HANDLE;
   other.current_slot_ = 0;
   other.profiler_ = nullptr;
 }
@@ -224,11 +307,13 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     in_flight_ = std::move(other.in_flight_);
     render_finished_ = std::move(other.render_finished_);
     images_in_flight_ = std::move(other.images_in_flight_);
+    last_swapchain_ = other.last_swapchain_;
     current_slot_ = other.current_slot_;
     profiler_ = other.profiler_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
+    other.last_swapchain_ = VK_NULL_HANDLE;
     other.current_slot_ = 0;
     other.profiler_ = nullptr;
   }
