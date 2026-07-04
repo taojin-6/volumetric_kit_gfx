@@ -20,18 +20,10 @@ namespace volumetric_kit::gfx::pipelines {
 
 namespace {
 
-// One mesh instance flattened out of the scene tree: a Model::meshes index
-// under a composed world transform (a glTF mesh may be instanced by several
-// nodes, so the transform lives on the instance, not the mesh).
-struct DrawItem {
-  uint32_t mesh = 0;
-  glm::mat4 world{1.0f};
-};
-
 // Walk the scene tree, composing each node's transform down to world space,
-// and emit one DrawItem per (instanced) mesh.
+// and emit one MeshInstance per (instanced) mesh.
 void collect_node(const assets::Model& model, uint32_t node_index,
-                  const glm::mat4& parent, std::vector<DrawItem>& out,
+                  const glm::mat4& parent, std::vector<MeshInstance>& out,
                   std::vector<bool>& visited) {
   // Guard a malformed node graph: glTF requires a strict forest, but an
   // arbitrary file may not be conformant. An out-of-range or already-visited
@@ -57,21 +49,6 @@ void collect_node(const assets::Model& model, uint32_t node_index,
   }
 }
 
-std::vector<DrawItem> collect_draws(const assets::Model& model) {
-  std::vector<DrawItem> draws;
-  std::vector<bool> visited(model.scene.nodes.size(), false);
-  for (uint32_t root : model.scene.roots) {
-    collect_node(model, root, glm::mat4(1.0f), draws, visited);
-  }
-  // Some files carry meshes but no scene graph: draw every mesh at the origin.
-  if (draws.empty()) {
-    for (uint32_t i = 0; i < model.meshes.size(); ++i) {
-      draws.push_back({i, glm::mat4(1.0f)});
-    }
-  }
-  return draws;
-}
-
 // Expand a decoded CPU image to tightly-packed RGBA8 (the layout an image
 // upload takes): pass 4-channel through, replicate 1/2-channel luminance into
 // RGB, and pad 3-channel with opaque alpha -- most GPUs do not sample
@@ -91,6 +68,21 @@ std::vector<uint8_t> to_rgba8(const assets::Image& img) {
 }
 
 }  // namespace
+
+std::vector<MeshInstance> flatten_scene(const assets::Model& model) {
+  std::vector<MeshInstance> instances;
+  std::vector<bool> visited(model.scene.nodes.size(), false);
+  for (uint32_t root : model.scene.roots) {
+    collect_node(model, root, glm::mat4(1.0f), instances, visited);
+  }
+  // Some files carry meshes but no scene graph: draw every mesh at the origin.
+  if (instances.empty()) {
+    for (uint32_t i = 0; i < model.meshes.size(); ++i) {
+      instances.push_back({i, glm::mat4(1.0f)});
+    }
+  }
+  return instances;
+}
 
 PbrMaterialDesc pbr_material_desc(const assets::Material& material) {
   PbrMaterialDesc desc;
@@ -175,9 +167,11 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     }
   }
 
-  // Upload each image once; image_tex maps a model.images index into
-  // textures_ (-1 = absent/invalid, resolved to a fallback below).
-  std::vector<int> image_tex(model.images.size(), -1);
+  // Upload each image once; image_tex maps a model.images index into textures_.
+  // kAbsent = the image was absent/invalid, resolved to a fallback below (a
+  // size_t index + named sentinel, so no signed -1 round-trip through casts).
+  constexpr size_t kAbsent = static_cast<size_t>(-1);
+  std::vector<size_t> image_tex(model.images.size(), kAbsent);
   for (size_t i = 0; i < model.images.size(); ++i) {
     const assets::Image& img = model.images[i];
     if (!img.valid()) {
@@ -191,7 +185,7 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     desc.size = rgba.size();
     desc.generate_mips = true;
     VG_ASSIGN(Texture tex, batch.add(desc));
-    image_tex[i] = static_cast<int>(out.textures_.size());
+    image_tex[i] = out.textures_.size();
     out.textures_.push_back(std::move(tex));
   }
 
@@ -202,8 +196,8 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
   // Texture index for a slot, or the given fallback (assets::kNoTexture is out
   // of image_tex's range, so it resolves to the fallback).
   const auto tex_for = [&image_tex](uint32_t slot, size_t fallback) -> size_t {
-    return (slot < image_tex.size() && image_tex[slot] >= 0)
-               ? static_cast<size_t>(image_tex[slot])
+    return (slot < image_tex.size() && image_tex[slot] != kAbsent)
+               ? image_tex[slot]
                : fallback;
   };
 
@@ -253,10 +247,10 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
   // transform, and the material its mesh names (or the fallback). The
   // pointers reach into out's own vectors -- stable across moves, since a
   // vector move keeps its elements' addresses.
-  const std::vector<DrawItem> items = collect_draws(model);
+  const std::vector<MeshInstance> items = flatten_scene(model);
   const size_t source_materials = model.materials.size();
   out.draws_.reserve(items.size());
-  for (const DrawItem& item : items) {
+  for (const MeshInstance& item : items) {
     const uint32_t mat = model.meshes[item.mesh].material;
     const PbrMaterial* material =
         (mat != assets::Mesh::kNoMaterial && mat < source_materials)

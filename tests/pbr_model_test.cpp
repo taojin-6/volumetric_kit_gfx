@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -65,10 +66,61 @@ assets::Model one_mesh_model() {
   return model;
 }
 
+// A minimal triangle mesh naming material @p material (kNoMaterial for none).
+assets::Mesh tri_mesh(std::uint32_t material = assets::Mesh::kNoMaterial) {
+  assets::Mesh mesh;
+  mesh.vertices.resize(3);
+  mesh.vertices[0].position = {0.0f, 0.0f, 0.0f};
+  mesh.vertices[1].position = {1.0f, 0.0f, 0.0f};
+  mesh.vertices[2].position = {0.0f, 1.0f, 0.0f};
+  mesh.indices = {0, 1, 2};
+  mesh.material = material;
+  return mesh;
+}
+
+// One triangle whose material references two images: a 3-channel base-color
+// (an sRGB slot, exercising RGB->RGBA padding) and a 4-channel normal map (a
+// linear slot). Drives the full texture path: to_rgba8, the sRGB-vs-UNORM
+// per-slot policy, and tex_for resolving to a real uploaded image.
+assets::Model textured_model() {
+  assets::Model model;
+  model.meshes.push_back(tri_mesh(/*material=*/0));
+
+  assets::Image base;
+  base.width = 2;
+  base.height = 2;
+  base.channels = 3;  // RGB -> to_rgba8 pads opaque alpha
+  base.pixels.assign(2u * 2u * 3u, 0x80);
+  model.images.push_back(std::move(base));
+
+  assets::Image normal;
+  normal.width = 2;
+  normal.height = 2;
+  normal.channels = 4;
+  normal.pixels.assign(2u * 2u * 4u, 0x80);
+  model.images.push_back(std::move(normal));
+
+  assets::Material mat;
+  mat.base_color_texture = 0;  // -> sRGB
+  mat.normal_texture = 1;      // -> linear
+  model.materials.push_back(mat);
+
+  assets::Node node;
+  node.mesh = 0;
+  node.mesh_count = 1;
+  model.scene.nodes.push_back(std::move(node));
+  model.scene.roots.push_back(0);
+  return model;
+}
+
 // An allocator + a PbrPipeline (for the reflected material layout), on top of
 // the shared device fixture. Skips wholesale when no Vulkan device is present.
 class PbrModelTest : public VulkanDeviceTest {
  protected:
+  // Upload records copies + layout transitions + descriptor writes, so run
+  // under the validation layer with teeth (on CI, where the layer is present).
+  bool wants_validation() const override { return true; }
+
   void SetUp() override {
     VulkanDeviceTest::SetUp();
     if (IsSkipped()) {
@@ -144,6 +196,77 @@ TEST_F(PbrModelTest, CreatesFromBoxGlb) {
   // One material per source material plus the shared fallback.
   EXPECT_EQ(gpu.material_count(),
             static_cast<uint32_t>(model->materials.size()) + 1u);
+}
+
+// A material with real texture maps drives the full upload path (to_rgba8, the
+// sRGB-vs-UNORM per-slot policy, tex_for -> a real image) -- which Box.glb (no
+// images) never exercises. Under validation-with-teeth, a wrong format/barrier
+// for the uploaded maps fails the test.
+TEST_F(PbrModelTest, UploadsTexturedMaterial) {
+  pipelines::PbrModel gpu = make_model(textured_model());
+  EXPECT_TRUE(gpu.valid());
+  ASSERT_EQ(gpu.draws().size(), 1u);
+  EXPECT_NE(gpu.draws()[0].mesh, nullptr);
+  ASSERT_NE(gpu.draws()[0].material, nullptr);
+  EXPECT_TRUE(gpu.draws()[0].material->valid());
+  EXPECT_EQ(gpu.material_count(), 2u);  // the one source material + fallback
+}
+
+// The node tree composes parent * child down to world space: a mesh under a
+// child node inherits its parent's transform. Guards the multiply order and
+// that the parent transform is not dropped (Box.glb has a -90deg root rotation
+// no other test checks).
+TEST_F(PbrModelTest, ComposesNodeWorldTransforms) {
+  glm::mat4 parent_xf(1.0f);
+  parent_xf[3] = glm::vec4(10.0f, 0.0f, 0.0f, 1.0f);  // translate (10,0,0)
+  glm::mat4 child_xf(1.0f);
+  child_xf[3] = glm::vec4(0.0f, 20.0f, 0.0f, 1.0f);  // translate (0,20,0)
+
+  assets::Model model;
+  model.meshes.push_back(tri_mesh());
+  assets::Node child;  // node 0: holds the mesh, its own transform
+  child.mesh = 0;
+  child.mesh_count = 1;
+  child.transform = child_xf;
+  model.scene.nodes.push_back(std::move(child));
+  assets::Node parent;  // node 1: parent of node 0
+  parent.transform = parent_xf;
+  parent.children = {0};
+  model.scene.nodes.push_back(std::move(parent));
+  model.scene.roots.push_back(1);
+
+  pipelines::PbrModel gpu = make_model(model);
+  ASSERT_EQ(gpu.draws().size(), 1u);
+  EXPECT_EQ(gpu.draws()[0].world, parent_xf * child_xf);
+}
+
+// Material index resolution: a real index binds that material; kNoMaterial and
+// an out-of-range index both bind the shared fallback (and the out-of-range one
+// must not index materials_ out of bounds).
+TEST_F(PbrModelTest, MaterialIndexResolvesRealAndFallback) {
+  assets::Model model;
+  model.meshes.push_back(tri_mesh(/*material=*/0));             // real
+  model.meshes.push_back(tri_mesh(assets::Mesh::kNoMaterial));  // none
+  model.meshes.push_back(tri_mesh(/*material=*/5));  // out of range -> fallback
+  model.materials.push_back(assets::Material{});     // one source material
+  for (std::uint32_t i = 0; i < 3; ++i) {
+    assets::Node node;
+    node.mesh = i;
+    node.mesh_count = 1;
+    model.scene.nodes.push_back(std::move(node));
+    model.scene.roots.push_back(i);
+  }
+
+  pipelines::PbrModel gpu = make_model(model);
+  ASSERT_EQ(gpu.draws().size(), 3u);
+  for (const pipelines::PbrDraw& d : gpu.draws()) {
+    ASSERT_NE(d.material, nullptr);
+    EXPECT_TRUE(d.material->valid());
+  }
+  // Draw 0 binds the real material; draws 1 (kNoMaterial) and 2 (out of range)
+  // both bind the one shared fallback.
+  EXPECT_NE(gpu.draws()[0].material, gpu.draws()[1].material);
+  EXPECT_EQ(gpu.draws()[1].material, gpu.draws()[2].material);
 }
 
 // A malformed node graph -- a cycle plus out-of-range child/mesh indices --

@@ -12,6 +12,8 @@
 #include <optional>
 #include <vector>
 
+#include <glm/mat4x4.hpp>
+
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
@@ -48,6 +50,33 @@ namespace volumetric_kit::gfx::pipelines {
 ///         the sampler left `VK_NULL_HANDLE`.
 VG_PIPELINES_API PbrMaterialDesc
 pbr_material_desc(const assets::Material& material);
+
+/// @brief One mesh instance flattened out of a scene tree: a @ref
+///        assets::Model::meshes index under a composed world transform.
+///
+/// A glTF mesh may be instanced by several nodes, so the transform lives on the
+/// instance, not the mesh.
+struct MeshInstance {
+  uint32_t mesh = 0;      ///< Index into @ref assets::Model::meshes.
+  glm::mat4 world{1.0f};  ///< World transform composed down the node tree.
+};
+
+/// @brief Flatten @p model's scene tree into world-transformed mesh instances
+///        -- the one walk @ref PbrModel draws from, shared so consumers (e.g. a
+///        camera framing the CPU-side bounds) traverse the same way.
+///
+/// Walks each root, composing each node's transform down to world space and
+/// emitting one @ref MeshInstance per (instanced) mesh. Guarded against a
+/// malformed graph: an out-of-range or already-visited node (a cycle) is
+/// skipped rather than recursed into, and a `[mesh, mesh + mesh_count)` range
+/// is clamped to @ref assets::Model::meshes. A model with meshes but no scene
+/// graph falls back to every mesh at the origin, so the result is never empty
+/// for a model that has meshes.
+/// @param model  The CPU model to flatten. Not retained.
+/// @return The flattened instances, in traversal order; every `mesh` index is
+///         `< model.meshes.size()`.
+VG_PIPELINES_API std::vector<MeshInstance> flatten_scene(
+    const assets::Model& model);
 
 /// @brief Everything GPU-side for one @ref assets::Model against a
 ///        @ref PbrPipeline: device-local meshes, uploaded material maps, built
@@ -156,8 +185,11 @@ class VG_PIPELINES_API PbrModel {
  private:
   // Destruction runs bottom-up: draws_ (borrowed pointers) first, then the
   // materials -- whose descriptor sets reference textures_ and sampler_ -- and
-  // only then the textures, sampler, and meshes they point at. Keep textures_
-  // and sampler_ declared before materials_.
+  // only then the textures, sampler, and meshes they point at. Keeping
+  // textures_/sampler_ before materials_ frees the sets before the resources
+  // they name -- tidy rather than required: Vulkan lets a not-in-flight
+  // descriptor set outlive its resources, so any order is legal once the device
+  // is idle (which the caller ensures before teardown).
   std::vector<GpuMesh> meshes_;     // parallel to Model::meshes
   std::vector<Texture> textures_;   // every uploaded map + the two fallbacks
   std::optional<Sampler> sampler_;  // filters every material map

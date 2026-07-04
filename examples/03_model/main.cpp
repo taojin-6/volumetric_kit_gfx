@@ -196,50 +196,17 @@ void accumulate_bounds(const assets::Mesh& mesh, const glm::mat4& world,
   }
 }
 
-// Accumulate one node's meshes (composed down to world space) and recurse into
-// its children, guarded against cycles / out-of-range indices like the
-// library's draw flatten. `instances` counts emitted mesh instances so
-// compute_bounds can mirror PbrModel's no-scene-graph fallback exactly.
-void bounds_node(const assets::Model& model, uint32_t node_index,
-                 const glm::mat4& parent, std::vector<bool>& visited, Bounds& b,
-                 bool& any, size_t& instances) {
-  if (node_index >= model.scene.nodes.size() || visited[node_index]) {
-    return;
-  }
-  visited[node_index] = true;
-  const assets::Node& node = model.scene.nodes[node_index];
-  const glm::mat4 world = parent * node.transform;
-  if (node.mesh != assets::Node::kNoMesh) {
-    for (uint32_t k = 0; k < node.mesh_count; ++k) {
-      if (node.mesh + k >= model.meshes.size()) {
-        break;
-      }
-      accumulate_bounds(model.meshes[node.mesh + k], world, b, any);
-      ++instances;
-    }
-  }
-  for (uint32_t child : node.children) {
-    bounds_node(model, child, world, visited, b, any, instances);
-  }
-}
-
-// Walks the same scene tree PbrModel flattens its draws from, but over the
-// CPU-side vertices -- framing needs positions, which the uploaded GPU meshes
-// no longer expose -- so the camera frames exactly what is drawn.
+// Bounds over exactly what PbrModel draws: it flattens the scene the same way
+// (pipelines::flatten_scene, shared so the two never diverge), accumulated over
+// each instance's CPU-side vertices -- framing needs positions, which the
+// uploaded GPU meshes no longer expose -- so the camera frames precisely the
+// drawn geometry. flatten_scene guarantees every instance.mesh is in range and
+// handles the no-scene-graph fallback (every mesh at the origin).
 Bounds compute_bounds(const assets::Model& model) {
   bool any = false;
-  size_t instances = 0;
   Bounds b;
-  std::vector<bool> visited(model.scene.nodes.size(), false);
-  for (uint32_t root : model.scene.roots) {
-    bounds_node(model, root, glm::mat4(1.0f), visited, b, any, instances);
-  }
-  // Some files carry meshes but no scene graph: PbrModel then draws every mesh
-  // at the origin, so bound them the same way.
-  if (instances == 0) {
-    for (const assets::Mesh& mesh : model.meshes) {
-      accumulate_bounds(mesh, glm::mat4(1.0f), b, any);
-    }
+  for (const pipelines::MeshInstance& inst : pipelines::flatten_scene(model)) {
+    accumulate_bounds(model.meshes[inst.mesh], inst.world, b, any);
   }
   if (!any) {  // no vertices anywhere: a unit box so framing stays finite
     b.min = glm::vec3(-0.5f);
