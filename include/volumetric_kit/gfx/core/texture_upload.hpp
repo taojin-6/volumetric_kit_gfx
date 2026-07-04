@@ -4,9 +4,12 @@
 #pragma once
 
 /// @file texture_upload.hpp
-/// @brief Create sampled @ref Texture objects and fill them from CPU pixels:
-///        one blocking transfer per texture (@ref upload_texture) or many
-///        textures per submit (@ref TextureUploadBatch).
+/// @brief Fill device-local GPU resources from CPU data: sampled @ref Texture
+///        objects from pixels and @ref Buffer objects from bytes, one blocking
+///        transfer each (@ref upload_texture, @ref upload_buffer) or many
+///        uploads per submit (@ref UploadBatch).
+// TODO: rename texture_upload.{hpp,cpp} to upload.{hpp,cpp} once io/assets
+// consumers settle.
 
 #include <cstdint>
 #include <vector>
@@ -64,47 +67,58 @@ struct ImageUploadDesc {
   bool generate_mips = false;
 };
 
-/// @brief Batches texture uploads into one command buffer and one blocking
-///        queue submission, replacing N serial CPU-GPU round trips with one.
+/// @brief CPU bytes plus the options for uploading them into a device-local
+///        @ref Buffer (vertex, index, uniform, storage, ... per @ref usage).
+struct BufferUploadDesc {
+  const void* data = nullptr;    ///< Source bytes.
+  VkDeviceSize size = 0;         ///< Byte length of @ref data.
+  VkBufferUsageFlags usage = 0;  ///< How the buffer will be used after the
+                                 ///< upload (`TRANSFER_DST` is added).
+};
+
+/// @brief Batches texture and buffer uploads into one command buffer and one
+///        blocking queue submission, replacing N serial CPU-GPU round trips
+///        with one.
 ///
 /// @ref begin opens a one-time command buffer on the device's graphics pool;
-/// each @ref add validates its @ref ImageUploadDesc, creates the destination
-/// @ref Texture plus a staging @ref Buffer, and records the copies and layout
-/// transitions into that open buffer; @ref finish submits everything at once
-/// and blocks on a fence, after which every added texture is sampled-ready in
-/// `SHADER_READ_ONLY_OPTIMAL`. A batch is one-shot: after @ref finish
-/// (successful or not) it is empty (`valid()` is false) and cannot be reused --
-/// @ref begin a new one. A default-constructed batch is likewise empty and safe
-/// to move-assign into.
+/// each @ref add / @ref add_buffer validates its desc, creates the device-local
+/// destination (@ref Texture or @ref Buffer) plus a staging @ref Buffer, and
+/// records the copies -- and, for textures, layout transitions -- into that
+/// open buffer; @ref finish submits everything at once and blocks on a fence,
+/// after which every added texture is sampled-ready in
+/// `SHADER_READ_ONLY_OPTIMAL` and every added buffer holds its bytes. A batch
+/// is one-shot: after @ref finish (successful or not) it is empty (`valid()` is
+/// false) and cannot be reused -- @ref begin a new one. A default-constructed
+/// batch is likewise empty and safe to move-assign into.
 ///
 /// @warning The @p device and @p allocator passed to @ref begin must outlive
-///          the batch (and, per @ref Texture, every texture it produced).
-///          Destroying a batch without calling @ref finish discards the
-///          pending uploads: nothing is submitted, the staging buffers and
-///          command buffer are freed, and the textures returned by @ref add
-///          hold undefined contents.
+///          the batch (and, per @ref Texture / @ref Buffer, every resource it
+///          produced). Destroying a batch without calling @ref finish discards
+///          the pending uploads: nothing is submitted, the staging buffers and
+///          command buffer are freed, and the resources returned by @ref add /
+///          @ref add_buffer hold undefined contents.
 ///
 /// @code
-/// Result<TextureUploadBatch> batch =
-///     TextureUploadBatch::begin(device, allocator);
+/// Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
 /// if (!batch) return batch.status();
 /// Result<Texture> albedo = batch.value().add(albedo_desc);
 /// if (!albedo) return albedo.status();
-/// Result<Texture> normal = batch.value().add(normal_desc);
-/// if (!normal) return normal.status();
-/// VG_TRY(batch.value().finish());  // one submit; textures now sampled-ready
+/// Result<Buffer> vertices = batch.value().add_buffer(vertex_desc);
+/// if (!vertices) return vertices.status();
+/// VG_TRY(batch.value().finish());  // one submit; resources now GPU-ready
 /// @endcode
-class VG_CORE_API TextureUploadBatch {
+class VG_CORE_API UploadBatch {
  public:
   /// @brief Construct an empty batch (owns nothing; `valid()` is false).
-  TextureUploadBatch() noexcept = default;
+  UploadBatch() noexcept = default;
 
   /// @brief Open a batch: allocate a primary command buffer from @p device's
   ///        graphics pool and start recording.
   /// @param device     Supplies the command pool and, at @ref finish, the
   ///                   graphics queue; must outlive the batch.
-  /// @param allocator  Allocates each @ref add's staging buffer and texture;
-  ///                   must outlive the batch and the returned textures.
+  /// @param allocator  Allocates each add's staging buffer and destination
+  ///                   resource; must outlive the batch and everything it
+  ///                   returned.
   /// @return The open batch, or a Vulkan-domain @ref Status if the command
   ///         buffer could not be allocated or begun.
   /// @note Not internally synchronized: like @ref Device::submit_single_time,
@@ -112,14 +126,13 @@ class VG_CORE_API TextureUploadBatch {
   ///       on its queue, both of which Vulkan requires be externally
   ///       synchronized. Serialize batches against other users of that
   ///       pool/queue.
-  static Result<TextureUploadBatch> begin(const Device& device,
-                                          Allocator& allocator);
+  static Result<UploadBatch> begin(const Device& device, Allocator& allocator);
 
-  ~TextureUploadBatch();
-  TextureUploadBatch(TextureUploadBatch&& other) noexcept;
-  TextureUploadBatch& operator=(TextureUploadBatch&& other) noexcept;
-  TextureUploadBatch(const TextureUploadBatch&) = delete;
-  TextureUploadBatch& operator=(const TextureUploadBatch&) = delete;
+  ~UploadBatch();
+  UploadBatch(UploadBatch&& other) noexcept;
+  UploadBatch& operator=(UploadBatch&& other) noexcept;
+  UploadBatch(const UploadBatch&) = delete;
+  UploadBatch& operator=(const UploadBatch&) = delete;
 
   /// @brief Create a texture for @p desc and record its upload into the open
   ///        command buffer.
@@ -137,16 +150,51 @@ class VG_CORE_API TextureUploadBatch {
   ///          earlier would submit against a freed image.
   Result<Texture> add(const ImageUploadDesc& desc);
 
+  /// @brief Create a device-local buffer for @p desc and record its upload
+  ///        into the open command buffer.
+  ///
+  /// The destination is created with `TRANSFER_DST | desc.usage` in
+  /// @ref MemoryUsage::DeviceLocal memory; the bytes stage through an internal
+  /// host-visible buffer that lives until @ref finish. Validation and resource
+  /// creation happen before any recording, so a failed add leaves the batch
+  /// open and unchanged, with nothing recorded.
+  /// @param desc  Source bytes, byte length, and destination usage.
+  /// @return The created buffer -- holding its bytes only after @ref finish
+  ///         returns OK -- or a non-OK @ref Status: @ref
+  ///         Status::Code::InvalidArgument when the batch is empty (not begun,
+  ///         moved-from, or already finished), `desc.data` is null, `desc.size`
+  ///         is zero, or `desc.usage` names no usage; otherwise a Vulkan-domain
+  ///         Status from buffer allocation.
+  /// @warning Keep the returned buffer alive at least until @ref finish
+  ///          returns: the recorded copy writes into it, so destroying it
+  ///          earlier would submit against a freed buffer.
+  Result<Buffer> add_buffer(const BufferUploadDesc& desc);
+
   /// @brief Submit the batch and block until the GPU completes it.
   ///
   /// Ends the command buffer, submits it once on the device's graphics queue,
   /// waits on a fence, then frees the staging buffers and the command buffer.
   /// The batch is empty afterwards -- on success and on failure alike (a failed
-  /// batch's uploads are discarded, and its textures hold undefined contents).
-  /// @return OK once every added texture is sampled-ready, @ref
-  ///         Status::Code::InvalidArgument if the batch is empty, or a
-  ///         Vulkan-domain @ref Status from the end/submit/wait step.
+  /// batch's uploads are discarded, and its textures and buffers hold undefined
+  /// contents).
+  /// @return OK once every added texture is sampled-ready and every added
+  ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
+  ///         batch is empty or @ref poison ed, or a Vulkan-domain @ref Status
+  ///         from the end/submit/wait step.
   Status finish();
+
+  /// @brief Mark the batch unfinishable: a subsequent @ref finish discards the
+  ///        recorded work instead of submitting it.
+  ///
+  /// For a multi-resource caller (e.g. @ref pipelines::upload_mesh, which
+  /// records two buffers) that has *dropped* a resource an earlier @ref add /
+  /// @ref add_buffer already recorded a copy into: the command buffer then
+  /// holds a copy into freed memory, so submitting would be a use-after-free.
+  /// Poisoning makes @ref finish return @ref Status::Code::InvalidArgument and
+  /// free the recorded work rather than submit it. A single failed @ref add /
+  /// @ref add_buffer records nothing and does *not* need this -- the batch
+  /// stays usable; only a caller that drops an already-recorded resource does.
+  void poison() noexcept;
 
   /// @return `true` while the batch holds an open command buffer (begun, not
   ///         yet finished or moved-from).
@@ -156,15 +204,19 @@ class VG_CORE_API TextureUploadBatch {
   const Device* device_ = nullptr;
   Allocator* allocator_ = nullptr;
   CommandBuffer cmd_;
-  // Each add()'s staging buffer, kept alive until finish()'s fence proves the
-  // GPU is done reading them (or until an unfinished batch discards them).
+  // Each add()/add_buffer()'s staging buffer, kept alive until finish()'s
+  // fence proves the GPU is done reading them (or until an unfinished batch
+  // discards them).
   std::vector<Buffer> staging_;
+  // Set by poison(): finish() then discards instead of submitting (a caller
+  // dropped a resource an add recorded a copy into).
+  bool poisoned_ = false;
 };
 
 /// @brief Upload @p desc.pixels into a new device-local, shader-sampled @ref
 ///        Texture, returning once the copy has completed on the GPU.
 ///
-/// A one-texture @ref TextureUploadBatch (begin + add + finish): stages the
+/// A one-texture @ref UploadBatch (begin + add + finish): stages the
 /// pixels through a host-visible buffer and records one
 /// `VkBufferImageCopy` per mip level -- each spanning all
 /// @ref ImageUploadDesc::array_layers layers, which the packing contract keeps
@@ -197,5 +249,30 @@ class VG_CORE_API TextureUploadBatch {
 VG_CORE_API Result<Texture> upload_texture(const Device& device,
                                            Allocator& allocator,
                                            const ImageUploadDesc& desc);
+
+/// @brief Upload @p desc.data into a new device-local @ref Buffer, returning
+///        once the copy has completed on the GPU.
+///
+/// A one-buffer @ref UploadBatch (begin + add_buffer + finish): stages the
+/// bytes through a host-visible buffer, records one `vkCmdCopyBuffer` into the
+/// `TRANSFER_DST | desc.usage` destination, then submits once and blocks on a
+/// fence. Uploading many buffers (or buffers and textures)? Share one batch
+/// instead of paying a round trip each.
+///
+/// @param device     The device whose graphics queue runs the one-time
+///                   transfer; must outlive the returned buffer's use.
+/// @param allocator  Allocates the staging and destination buffers; must
+///                   outlive the returned buffer (see @ref Buffer).
+/// @param desc       Source bytes, byte length, and destination usage.
+/// @return The buffer -- device-local, holding @p desc.size bytes of
+///         @p desc.data -- or a non-OK @ref Status: @ref
+///         Status::Code::InvalidArgument for null `data`, zero `size`, or a
+///         `usage` that names no usage; otherwise a Vulkan-domain Status from
+///         the staging-buffer, destination, or submit step.
+/// @note Blocking and queue-serializing -- a setup/load-time path, never the
+///       per-frame one (see @ref Device::submit_single_time).
+VG_CORE_API Result<Buffer> upload_buffer(const Device& device,
+                                         Allocator& allocator,
+                                         const BufferUploadDesc& desc);
 
 }  // namespace volumetric_kit::gfx

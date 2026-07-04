@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -479,7 +480,7 @@ TEST_F(TextureUploadTest, RejectsMipLevelsBeyondFullChain) {
             vg::Status::Code::InvalidArgument);
 }
 
-// --- TextureUploadBatch ------------------------------------------------------
+// --- UploadBatch -------------------------------------------------------------
 
 namespace {
 
@@ -490,6 +491,15 @@ vg::ImageUploadDesc small_desc(const std::array<std::uint8_t, 16>& pixels) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.pixels = pixels.data();
   desc.size = pixels.size();
+  return desc;
+}
+
+// A vertex-buffer upload desc over caller-owned bytes.
+vg::BufferUploadDesc buffer_desc(const void* data, VkDeviceSize size) {
+  vg::BufferUploadDesc desc;
+  desc.data = data;
+  desc.size = size;
+  desc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
   return desc;
 }
 
@@ -506,7 +516,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
     }
   }
 
-  auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   EXPECT_TRUE(batch.value().valid());
 
@@ -538,12 +548,17 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
   EXPECT_FALSE(batch.value().valid());
   EXPECT_EQ(batch.value().add(small_desc(px)).status().domain(),
             vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(batch.value()
+                .add_buffer(buffer_desc(px.data(), px.size()))
+                .status()
+                .domain(),
+            vg::Status::Code::InvalidArgument);
   EXPECT_EQ(batch.value().finish().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
 
   vg::ImageUploadDesc bad = small_desc(px);
@@ -561,12 +576,12 @@ TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
 
 TEST_F(TextureUploadTest, BatchMoveConstructLeavesSourceEmpty) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto texture = batch.value().add(small_desc(px));
   ASSERT_TRUE(texture.ok()) << texture.status().message();
 
-  vg::TextureUploadBatch moved(std::move(batch).value());
+  vg::UploadBatch moved(std::move(batch).value());
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(batch.value().valid());  // NOLINT(bugprone-use-after-move)
 
@@ -578,12 +593,12 @@ TEST_F(TextureUploadTest, BatchMoveConstructLeavesSourceEmpty) {
 
 TEST_F(TextureUploadTest, BatchMoveAssignOverLiveDiscardsTheOldBatch) {
   const std::array<std::uint8_t, 16> px{};
-  auto dst = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto dst = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(dst.ok()) << dst.status().message();
   auto discarded = dst.value().add(small_desc(px));  // outlives the discard
   ASSERT_TRUE(discarded.ok()) << discarded.status().message();
 
-  auto src = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto src = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(src.ok()) << src.status().message();
   auto texture = src.value().add(small_desc(px));
   ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -599,14 +614,14 @@ TEST_F(TextureUploadTest, BatchMoveAssignOverLiveDiscardsTheOldBatch) {
 
 TEST_F(TextureUploadTest, BatchSelfMoveAssignIsSafe) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto texture = batch.value().add(small_desc(px));  // must outlive finish()
   ASSERT_TRUE(texture.ok()) << texture.status().message();
 
   // Pointer-laundered self-move (dodges -Wself-move under -Werror); the guard
   // must keep the open batch intact.
-  vg::TextureUploadBatch* alias = &batch.value();
+  vg::UploadBatch* alias = &batch.value();
   batch.value() = std::move(*alias);
   EXPECT_TRUE(batch.value().valid());
   ASSERT_TRUE(batch.value().finish().ok());
@@ -617,7 +632,7 @@ TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
   const std::array<std::uint8_t, 16> px{};
   std::vector<vg::Texture> textures;
   {
-    auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
+    auto batch = vg::UploadBatch::begin(*device_, *allocator_);
     ASSERT_TRUE(batch.ok()) << batch.status().message();
     auto texture = batch.value().add(small_desc(px));
     ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -627,4 +642,117 @@ TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
     // "no leak" half). The texture stays alive but holds undefined contents.
   }
   EXPECT_TRUE(textures[0].valid());
+}
+
+// --- Buffer uploads (add_buffer / upload_buffer) -----------------------------
+
+TEST_F(TextureUploadTest, AddBufferRejectsInvalidDescs) {
+  const std::array<std::uint8_t, 4> bytes{};
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+
+  vg::BufferUploadDesc null_data = buffer_desc(nullptr, bytes.size());
+  EXPECT_EQ(batch.value().add_buffer(null_data).status().domain(),
+            vg::Status::Code::InvalidArgument);
+
+  vg::BufferUploadDesc zero_size = buffer_desc(bytes.data(), 0);
+  EXPECT_EQ(batch.value().add_buffer(zero_size).status().domain(),
+            vg::Status::Code::InvalidArgument);
+
+  vg::BufferUploadDesc zero_usage = buffer_desc(bytes.data(), bytes.size());
+  zero_usage.usage = 0;
+  EXPECT_EQ(batch.value().add_buffer(zero_usage).status().domain(),
+            vg::Status::Code::InvalidArgument);
+
+  // The failed adds recorded nothing; the batch still uploads.
+  auto buffer =
+      batch.value().add_buffer(buffer_desc(bytes.data(), bytes.size()));
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  ASSERT_TRUE(batch.value().finish().ok());
+  EXPECT_TRUE(buffer.value().valid());
+}
+
+TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
+  const std::array<std::uint8_t, 16> px{};
+  const std::array<float, 12> vertices{};
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+
+  auto texture = batch.value().add(small_desc(px));
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  auto buffer = batch.value().add_buffer(
+      buffer_desc(vertices.data(), vertices.size() * sizeof(float)));
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+
+  // Not host-mapped (the staging is internal) -- a necessary but not sufficient
+  // proxy for DeviceLocal residency. A positive DEVICE_LOCAL check needs a
+  // memory-property accessor Buffer does not expose, and would be moot on the
+  // UMA/software CI devices anyway (their single heap is device-local), so the
+  // residency rests on the DeviceLocal request in add_buffer + review.
+  EXPECT_EQ(buffer.value().mapped(), nullptr);
+  EXPECT_EQ(buffer.value().size(), vertices.size() * sizeof(float));
+
+  const vg::Status finished = batch.value().finish();
+  ASSERT_TRUE(finished.ok()) << finished.message();
+  EXPECT_TRUE(texture.value().valid());
+  EXPECT_TRUE(buffer.value().valid());
+}
+
+TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
+  constexpr std::size_t kBytes = 64;
+  std::array<std::uint8_t, kBytes> src{};
+  for (std::size_t i = 0; i < src.size(); ++i) {
+    src[i] = static_cast<std::uint8_t>(i * 3 + 1);
+  }
+
+  vg::BufferUploadDesc desc = buffer_desc(src.data(), src.size());
+  // TRANSFER_SRC on top of the draw usage so the test can copy the
+  // device-local result back out.
+  desc.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  auto buffer = vg::upload_buffer(*device_, *allocator_, desc);
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  EXPECT_TRUE(buffer.value().valid());
+  EXPECT_EQ(buffer.value().size(), src.size());
+  EXPECT_EQ(buffer.value().mapped(), nullptr);  // device-local, not mapped
+
+  // Copy back into a host-visible buffer and confirm the bytes survived the
+  // staging -> device-local -> readback round trip.
+  vg::BufferDesc rb;
+  rb.size = src.size();
+  rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  rb.memory = vg::MemoryUsage::HostVisible;
+  rb.mapped = true;
+  auto readback = allocator_->create_buffer(rb);
+  ASSERT_TRUE(readback.ok()) << readback.status().message();
+
+  const VkBuffer gpu = buffer.value().handle();
+  const VkBuffer dst = readback.value().handle();
+  auto recorded = device_->submit_single_time([gpu, dst](VkCommandBuffer cmd) {
+    VkBufferCopy region{};
+    region.size = kBytes;
+    vkCmdCopyBuffer(cmd, gpu, dst, 1, &region);
+  });
+  ASSERT_TRUE(recorded.ok()) << recorded.message();
+
+  const auto* got = static_cast<const std::uint8_t*>(readback.value().mapped());
+  ASSERT_NE(got, nullptr);
+  EXPECT_EQ(std::memcmp(got, src.data(), src.size()), 0);
+}
+
+// poison() makes finish() discard the recorded work instead of submitting it --
+// the safety net for a multi-resource caller (e.g. pipelines::upload_mesh) that
+// dropped a resource an earlier add recorded a copy into, where finishing would
+// otherwise submit a copy referencing freed memory.
+TEST_F(TextureUploadTest, PoisonedBatchFinishDiscardsWithoutSubmitting) {
+  const std::array<std::uint8_t, 16> px{};
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+  auto buffer = batch.value().add_buffer(buffer_desc(px.data(), px.size()));
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+
+  batch.value().poison();
+  const vg::Status finished = batch.value().finish();
+  EXPECT_FALSE(finished.ok());
+  EXPECT_EQ(finished.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_FALSE(batch.value().valid());  // discarded, one-shot
 }

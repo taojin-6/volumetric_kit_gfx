@@ -3,32 +3,12 @@
 
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 
-#include <cstring>
 #include <utility>
 
 #include "volumetric_kit/gfx/assets/mesh.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
-namespace {
-
-// Upload `size` bytes of `data` into a host-visible, mapped buffer of `usage`.
-// TODO: stage through a DeviceLocal buffer (as upload_texture does) so the
-// vertex/index data lives in GPU-preferred memory rather than host-visible.
-Result<Buffer> upload_buffer(Allocator& allocator, const void* data,
-                             VkDeviceSize size, VkBufferUsageFlags usage) {
-  BufferDesc desc;
-  desc.size = size;
-  desc.usage = usage;
-  desc.memory = MemoryUsage::HostVisible;
-  desc.mapped = true;
-  desc.host_access = HostAccess::SequentialWrite;
-  VG_ASSIGN(Buffer buffer, allocator.create_buffer(desc));
-  std::memcpy(buffer.mapped(), data, size);
-  return buffer;
-}
-
-}  // namespace
 
 GpuMesh::GpuMesh(Buffer vertices, Buffer indices, uint32_t index_count) noexcept
     : vertices_(std::move(vertices)),
@@ -60,21 +40,47 @@ void GpuMesh::record_draw(VkCommandBuffer cmd) const {
   vkCmdDrawIndexed(cmd, index_count_, 1, 0, 0, 0);
 }
 
-Result<GpuMesh> upload_mesh(Allocator& allocator, const assets::Mesh& mesh) {
+Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
+  // Mesh-level validation before either add_buffer, so an invalid mesh leaves
+  // the batch untouched (add_buffer rejects an empty batch itself).
   if (mesh.vertices.empty() || mesh.indices.empty()) {
     return Status::invalid_argument(
         "upload_mesh: mesh has no vertices or indices");
   }
-  VG_ASSIGN(Buffer vertices,
-            upload_buffer(allocator, mesh.vertices.data(),
-                          mesh.vertices.size() * sizeof(assets::Vertex),
-                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
-  VG_ASSIGN(Buffer indices,
-            upload_buffer(allocator, mesh.indices.data(),
-                          mesh.indices.size() * sizeof(uint32_t),
-                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT));
-  return GpuMesh(std::move(vertices), std::move(indices),
+  BufferUploadDesc vertex_desc;
+  vertex_desc.data = mesh.vertices.data();
+  // Widen before multiplying so the byte count cannot overflow a 32-bit size_t.
+  vertex_desc.size =
+      VkDeviceSize{mesh.vertices.size()} * sizeof(assets::Vertex);
+  vertex_desc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+  // A failed first add records nothing, so the batch stays usable (VG_ASSIGN
+  // returns without poisoning it).
+  VG_ASSIGN(Buffer vertices, batch.add_buffer(vertex_desc));
+  BufferUploadDesc index_desc;
+  index_desc.data = mesh.indices.data();
+  index_desc.size = VkDeviceSize{mesh.indices.size()} * sizeof(uint32_t);
+  index_desc.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+  Result<Buffer> indices = batch.add_buffer(index_desc);
+  if (!indices.ok()) {
+    // The vertex copy is already recorded into `vertices`, which unwinds (and
+    // frees) as we return: poison the batch so a later finish() discards that
+    // now-dangling copy instead of submitting a use-after-free.
+    batch.poison();
+    return indices.status();
+  }
+  return GpuMesh(std::move(vertices), std::move(indices).value(),
                  static_cast<uint32_t>(mesh.indices.size()));
+}
+
+Result<GpuMesh> upload_mesh(const Device& device, Allocator& allocator,
+                            const assets::Mesh& mesh) {
+  // The one-mesh batch: record both buffers, one submit, one fence wait. A
+  // failed record leaves the batch to its destructor, which discards the
+  // never-submitted command buffer.
+  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VG_ASSIGN(GpuMesh gpu, upload_mesh(batch, mesh));
+  VG_TRY(batch.finish());
+  return gpu;
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

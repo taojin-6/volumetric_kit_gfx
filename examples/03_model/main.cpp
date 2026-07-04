@@ -284,25 +284,41 @@ std::pair<float, float> fit_clip(const Bounds& bounds, const glm::vec3& eye) {
   return {z_near, z_far};
 }
 
-// Upload every non-empty mesh through the pipelines tier; the returned vector
-// is parallel to model.meshes so a DrawItem's mesh index addresses it directly
-// (empty primitives stay a default, skipped GpuMesh).
-std::vector<pipelines::GpuMesh> upload_meshes(vg::Allocator& allocator,
+// Upload every non-empty mesh through the pipelines tier, all recorded into
+// one UploadBatch so the whole model's geometry lands device-local in a single
+// submit. The returned vector is parallel to model.meshes so a DrawItem's mesh
+// index addresses it directly (empty primitives stay a default, skipped
+// GpuMesh).
+std::vector<pipelines::GpuMesh> upload_meshes(const vg::Device& device,
+                                              vg::Allocator& allocator,
                                               const assets::Model& model,
                                               bool* ok) {
   std::vector<pipelines::GpuMesh> gpu(model.meshes.size());
-  for (size_t i = 0; i < model.meshes.size() && *ok; ++i) {
+  auto batch = vg::UploadBatch::begin(device, allocator);
+  if (!batch.ok()) {
+    std::fprintf(stderr, "mesh batch: %s\n", batch.status().message().c_str());
+    *ok = false;
+    return gpu;
+  }
+  for (size_t i = 0; i < model.meshes.size(); ++i) {
     const assets::Mesh& mesh = model.meshes[i];
     if (mesh.vertices.empty() || mesh.indices.empty()) {
       continue;
     }
-    auto uploaded = pipelines::upload_mesh(allocator, mesh);
+    auto uploaded = pipelines::upload_mesh(batch.value(), mesh);
     if (!uploaded.ok()) {
+      // Return without finishing: the batch (and its pending copies into any
+      // dropped buffers) is discarded, never submitted.
       std::fprintf(stderr, "upload: %s\n", uploaded.status().message().c_str());
       *ok = false;
       return gpu;
     }
     gpu[i] = std::move(uploaded).value();
+  }
+  const vg::Status finished = batch.value().finish();
+  if (!finished.ok()) {
+    std::fprintf(stderr, "mesh upload: %s\n", finished.message().c_str());
+    *ok = false;
   }
   return gpu;
 }
@@ -435,7 +451,7 @@ PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
 
   // One batch for the fallbacks + every material map: the uploads below record
   // into a single submit, finished before the descriptor sets are built.
-  auto batch = vg::TextureUploadBatch::begin(device, alloc);
+  auto batch = vg::UploadBatch::begin(device, alloc);
   if (!batch.ok()) {
     std::fprintf(stderr, "upload batch: %s\n",
                  batch.status().message().c_str());
@@ -938,7 +954,7 @@ std::vector<uint32_t> pack_cube_rgba16f(uint32_t base_size, uint32_t mips,
 
 // Convolve the analytic sky into the IBL texture set. CPU-side because the
 // environment is analytic; a loaded HDR environment would convolve on the GPU.
-// All three textures upload through one TextureUploadBatch: one submit instead
+// All three textures upload through one UploadBatch: one submit instead
 // of a blocking round trip each.
 Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   Ibl ibl;
@@ -957,7 +973,7 @@ Ibl make_ibl(const vg::Device& device, vg::Allocator& alloc, bool* ok) {
   }
   ibl.sampler = std::move(sampler).value();
 
-  auto batch = vg::TextureUploadBatch::begin(device, alloc);
+  auto batch = vg::UploadBatch::begin(device, alloc);
   if (!batch.ok()) {
     std::fprintf(stderr, "ibl batch: %s\n", batch.status().message().c_str());
     *ok = false;
@@ -1103,7 +1119,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   }
   const std::vector<DrawItem> draws = collect_draws(model);
   const std::vector<pipelines::GpuMesh> meshes =
-      upload_meshes(allocator.value(), model, &ok);
+      upload_meshes(device.value(), allocator.value(), model, &ok);
   if (!ok) {
     return 1;
   }
@@ -1329,7 +1345,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   }
   const std::vector<DrawItem> draws = collect_draws(model);
   const std::vector<pipelines::GpuMesh> meshes =
-      upload_meshes(allocator.value(), model, &ok);
+      upload_meshes(device.value(), allocator.value(), model, &ok);
   if (!ok) {
     return 1;
   }
