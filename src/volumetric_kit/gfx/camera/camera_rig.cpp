@@ -4,10 +4,10 @@
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
 
 #include "volumetric_kit/gfx/camera/impl/glm_config.hpp"
-#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // kWorldUp, level_basis
+#include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // shared controller math
 //
-#include <algorithm>  // std::clamp, std::max
-#include <cmath>      // std::asin, std::atan2, std::cos, std::sin
+#include <algorithm>  // std::clamp
+#include <cmath>      // std::asin, std::atan2
 
 #include <glm/ext/matrix_transform.hpp>  // translate
 #include <glm/geometric.hpp>             // length, normalize
@@ -29,23 +29,21 @@ glm::quat level_orientation(const glm::vec3& forward) {
 }
 
 // The roll-free orientation whose forward points at `yaw` (about world up) and
-// `elevation` (angle above the horizontal): forward is world -Z at (0, 0), a
-// positive yaw turns left, a positive elevation lifts forward toward world up.
-// rotate() maps the public pitch sign onto `elevation`.
+// `elevation` (angle above the horizontal): the level look ray runs back down
+// the shared spherical direction (see spherical_direction for the sign
+// relationship), so forward is world -Z at (0, 0), a positive yaw turns left,
+// and a positive elevation lifts forward toward world up. rotate() maps the
+// public pitch sign onto `elevation`.
 glm::quat level_look(float yaw, float elevation) {
-  const float cos_e = std::cos(elevation);
-  const glm::vec3 forward(-cos_e * std::sin(yaw), std::sin(elevation),
-                          -cos_e * std::cos(yaw));
-  return level_orientation(forward);
+  return level_orientation(-spherical_direction(yaw, -elevation));
 }
 
 }  // namespace
 
 void CameraRig::rotate(float delta_yaw, float delta_pitch) {
-  // Positive delta_pitch tilts the view down -- raising the eye when orbiting
-  // -- to match OrbitCamera's elevation sign. `elevation` below measures
-  // forward's lift toward world +Y, the opposite sense, so negate the incoming
-  // pitch.
+  // Positive delta_pitch tilts the view down -- raising the eye when orbiting.
+  // `elevation` below measures forward's lift toward world +Y, the opposite
+  // sense, so negate the incoming pitch.
   const float delta_elevation = -delta_pitch;
   if (level_horizon_) {
     // Decompose the current look into yaw + elevation, advance them, clamp the
@@ -92,10 +90,7 @@ void CameraRig::pan(float delta_right, float delta_up) {
 
 void CameraRig::zoom(float factor) {
   const glm::vec3 pivot = focus_point();
-  // Floor first so a NaN / non-positive factor clamps to kMinFocusDistance
-  // instead of poisoning focus_distance_ (std::max returns its first argument
-  // when neither compares greater, i.e. against a NaN).
-  focus_distance_ = std::max(kMinFocusDistance, focus_distance_ * factor);
+  focus_distance_ = clamp_pivot_distance(focus_distance_ * factor);
   position_ = pivot - forward() * focus_distance_;
 }
 
@@ -118,7 +113,7 @@ void CameraRig::set_focus(const glm::vec3& target) {
 }
 
 void CameraRig::set_focus_distance(float distance) noexcept {
-  focus_distance_ = std::max(kMinFocusDistance, distance);
+  focus_distance_ = clamp_pivot_distance(distance);
 }
 
 glm::vec3 CameraRig::forward() const {
@@ -144,10 +139,9 @@ glm::mat4 CameraRig::stage_transform() const {
 
 Camera CameraRig::to_camera(float fovy_radians, float aspect, float z_near,
                             float z_far) const {
-  Camera camera;
-  camera.set_view(glm::inverse(stage_transform()));
-  camera.set_perspective(fovy_radians, aspect, z_near, z_far);
-  return camera;
+  // The view matrix is the inverse of the eye-to-world stage pose.
+  return bake_camera(glm::inverse(stage_transform()), fovy_radians, aspect,
+                     z_near, z_far);
 }
 
 }  // namespace volumetric_kit::gfx::camera

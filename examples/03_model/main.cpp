@@ -228,7 +228,9 @@ void frame_camera(camera::CameraRig& rig, const Bounds& bounds) {
   const float radius = std::fmax(bounds.radius(), 1e-3f);
   const float distance = radius / std::sin(kFovY * 0.5f) * 1.3f;  // fit sphere
   // Eye offset from the center: a slight yaw for a three-quarter view, tilted
-  // up so the camera looks down on the model.
+  // up so the camera looks down on the model. Mirrors
+  // camera::spherical_direction (in camera/impl/orientation.hpp, internal to
+  // the tier so the example can't include it) -- keep the two in step.
   constexpr float kAzimuth = 0.7f;
   constexpr float kElevation = 0.35f;
   const float cos_e = std::cos(kElevation);
