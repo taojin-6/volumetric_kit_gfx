@@ -264,3 +264,40 @@ TEST(OrbitCamera, ToCameraCentersOnTarget) {
   EXPECT_NEAR(ndc.x, 0.0f, 1e-4f);
   EXPECT_NEAR(ndc.y, 0.0f, 1e-4f);
 }
+
+// to_camera routes its projection arguments through bake_camera into
+// set_perspective; ToCameraCentersOnTarget only checks a target-axis point
+// (which lands at NDC (0,0) for any centered frustum) and so is blind to which
+// slot each argument reaches. Pin all four: depth at the near/far planes fixes
+// z_near and z_far (and their order), the vertical frustum edge fixes fovy, and
+// the horizontal edge fixes aspect.
+TEST(OrbitCamera, ToCameraForwardsProjectionArguments) {
+  constexpr float kFovy = glm::radians(60.0f);
+  constexpr float kAspect = 1.6f;  // != 1 and != kFovy, so a fovy/aspect swap
+                                   // is observable
+  constexpr float kNear = 0.1f;
+  constexpr float kFar = 100.0f;
+  constexpr float kDist = 5.0f;
+
+  cam::OrbitCamera orbit;  // default angles: eye on +Z at kDist, looking -Z
+  orbit.set_target({0.0f, 0.0f, 0.0f});
+  orbit.set_distance(kDist);
+  const cam::Camera camera = orbit.to_camera(kFovy, kAspect, kNear, kFar);
+
+  // Eye at z = kDist looking -Z, so the near/far planes sit at world
+  // z = kDist - kNear and kDist - kFar: depth 0 at near, 1 at far. Swapping
+  // z_near/z_far inverts this.
+  EXPECT_NEAR(to_ndc(camera, {0.0f, 0.0f, kDist - kNear}).z, 0.0f, 1e-4f);
+  EXPECT_NEAR(to_ndc(camera, {0.0f, 0.0f, kDist - kFar}).z, 1.0f, 1e-4f);
+
+  // A point tan(fovy/2)*kDist above center is at the top frustum edge, which
+  // the Vulkan Y flip sends to NDC y == -1: sensitive to fovy.
+  const float half = std::tan(kFovy * 0.5f);
+  EXPECT_NEAR(to_ndc(camera, {0.0f, half * kDist, 0.0f}).y, -1.0f, 1e-4f);
+
+  // The horizontal half-extent scales the vertical by aspect, so a point
+  // tan(fovy/2)*aspect*kDist to the right maps to NDC x == +1: sensitive to
+  // aspect (and breaks if fovy lands in aspect's slot).
+  EXPECT_NEAR(to_ndc(camera, {half * kAspect * kDist, 0.0f, 0.0f}).x, 1.0f,
+              1e-4f);
+}
