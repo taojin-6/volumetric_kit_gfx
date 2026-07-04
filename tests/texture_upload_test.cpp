@@ -24,6 +24,11 @@ namespace {
 // device_/instance_, and each test's textures/buffers before any of them.
 class TextureUploadTest : public VulkanDeviceTest {
  protected:
+  // Records copies + subresource barriers, so run under the validation layer
+  // with teeth: a wrong per-mip/layer copy region or barrier fails the test (on
+  // CI, where the layer is present).
+  bool wants_validation() const override { return true; }
+
   void SetUp() override {
     VulkanDeviceTest::SetUp();
     if (IsSkipped()) {
@@ -32,6 +37,55 @@ class TextureUploadTest : public VulkanDeviceTest {
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
+  }
+
+  // Copy one (mip, layer-range) subresource of `image` -- which the upload left
+  // in SHADER_READ_ONLY_OPTIMAL -- into host memory and return its tightly
+  // packed bytes (layers contiguous within the mip). Proves the per-mip /
+  // per-layer copy offsets landed, not just that a submit succeeded.
+  std::vector<std::uint8_t> read_subresource(VkImage image, uint32_t mip,
+                                             uint32_t base_layer,
+                                             uint32_t layer_count,
+                                             VkExtent2D mip_ext,
+                                             uint32_t texel_bytes) {
+    const VkDeviceSize bytes = VkDeviceSize{mip_ext.width} * mip_ext.height *
+                               layer_count * texel_bytes;
+    vg::BufferDesc rb;
+    rb.size = bytes;
+    rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    rb.memory = vg::MemoryUsage::HostVisible;
+    rb.mapped = true;
+    auto readback = allocator_->create_buffer(rb);
+    EXPECT_TRUE(readback.ok()) << readback.status().message();
+    if (!readback.ok()) {
+      return {};
+    }
+    const VkBuffer dst = readback.value().handle();
+    const vg::Status recorded =
+        device_->submit_single_time([&](VkCommandBuffer cmd) {
+          vg::ImageBarrierDesc to_src;
+          to_src.image = image;
+          to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+          to_src.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
+          to_src.old_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+          to_src.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+          to_src.base_mip = mip;
+          to_src.mip_count = 1;
+          to_src.base_layer = base_layer;
+          to_src.layer_count = layer_count;
+          vg::cmd_image_barrier(cmd, to_src);
+
+          VkBufferImageCopy copy{};
+          copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, base_layer,
+                                   layer_count};
+          copy.imageExtent = {mip_ext.width, mip_ext.height, 1};
+          vkCmdCopyImageToBuffer(
+              cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, 1, &copy);
+        });
+    EXPECT_TRUE(recorded.ok()) << recorded.message();
+    const auto* mapped =
+        static_cast<const std::uint8_t*>(readback.value().mapped());
+    return std::vector<std::uint8_t>(mapped, mapped + bytes);
   }
 
   std::optional<vg::Allocator> allocator_;
@@ -106,12 +160,18 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
 }
 
 TEST_F(TextureUploadTest, GeneratesMipChain) {
-  // 8x8 RGBA8 -> 4 mip levels (8, 4, 2, 1). A successful multi-level blit
-  // exercises the per-level barriers and the SHADER_READ end state; the default
-  // view spans the whole chain.
+  // 8x8 RGBA8 -> 4 mip levels (8, 4, 2, 1). A *solid-color* source makes every
+  // generated level that same color (a linear box downsample of a uniform image
+  // is that image), so reading a generated level back proves the per-level blit
+  // landed content -- not just that four levels exist. Validation-with-teeth
+  // covers the per-level barrier correctness alongside.
+  constexpr std::uint8_t kR = 0x12, kG = 0x34, kB = 0x56, kA = 0x78;
   std::array<std::uint8_t, 8 * 8 * 4> src{};
-  for (std::size_t i = 0; i < src.size(); ++i) {
-    src[i] = static_cast<std::uint8_t>(i);
+  for (std::size_t p = 0; p < src.size(); p += 4) {
+    src[p + 0] = kR;
+    src[p + 1] = kG;
+    src[p + 2] = kB;
+    src[p + 3] = kA;
   }
 
   vg::ImageUploadDesc desc;
@@ -125,7 +185,20 @@ TEST_F(TextureUploadTest, GeneratesMipChain) {
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
-  EXPECT_EQ(texture.value().mip_levels(), 4u);  // 8 -> 4 -> 2 -> 1
+  ASSERT_EQ(texture.value().mip_levels(), 4u);  // 8 -> 4 -> 2 -> 1
+
+  // Mip 2 (2x2) is reached by two successive blits down from mip 0; every texel
+  // must be the source color.
+  const std::vector<std::uint8_t> got =
+      read_subresource(texture.value().image(), /*mip=*/2, /*base_layer=*/0,
+                       /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
+  ASSERT_EQ(got.size(), std::size_t{2 * 2 * 4});
+  for (std::size_t p = 0; p < got.size(); p += 4) {
+    EXPECT_EQ(got[p + 0], kR) << "texel " << p / 4;
+    EXPECT_EQ(got[p + 1], kG) << "texel " << p / 4;
+    EXPECT_EQ(got[p + 2], kB) << "texel " << p / 4;
+    EXPECT_EQ(got[p + 3], kA) << "texel " << p / 4;
+  }
 }
 
 TEST_F(TextureUploadTest, RejectsZeroExtent) {
@@ -266,6 +339,43 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
   }
 }
 
+TEST_F(TextureUploadTest, UploadsTwoDArrayAndRoutesLayers) {
+  // A non-cube 2x2 RGBA8 array with three layers exercises the
+  // VK_IMAGE_VIEW_TYPE_2D_ARRAY create/view path (distinct from cube) and the
+  // per-layer copy routing -- no cube test covers it. Packed layer-minor within
+  // the single mip.
+  constexpr uint32_t kLayers = 3;
+  constexpr std::size_t kLayerBytes = 2 * 2 * 4;
+  std::array<std::uint8_t, kLayerBytes * kLayers> src{};
+  for (std::size_t i = 0; i < src.size(); ++i) {
+    src[i] = static_cast<std::uint8_t>(i);
+  }
+
+  vg::ImageUploadDesc desc;
+  desc.extent = {2, 2};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.pixels = src.data();
+  desc.size = src.size();
+  desc.array_layers = kLayers;  // cube stays false -> a plain 2D array
+
+  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  EXPECT_TRUE(texture.value().valid());
+  EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
+
+  // Each layer reads back its own slice of the packed source.
+  for (uint32_t layer = 0; layer < kLayers; ++layer) {
+    const std::vector<std::uint8_t> got =
+        read_subresource(texture.value().image(), /*mip=*/0, layer,
+                         /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
+    ASSERT_EQ(got.size(), kLayerBytes);
+    for (std::size_t i = 0; i < kLayerBytes; ++i) {
+      EXPECT_EQ(got[i], src[layer * kLayerBytes + i])
+          << "layer " << layer << " byte " << i;
+    }
+  }
+}
+
 TEST_F(TextureUploadTest, UploadsPreMippedCube) {
   // A 4x4 cube with two supplied mips: [mip0: 6 faces of 4x4][mip1: 6 of 2x2].
   constexpr std::size_t kBytes = ((4 * 4) + (2 * 2)) * 4 * 6;
@@ -288,6 +398,20 @@ TEST_F(TextureUploadTest, UploadsPreMippedCube) {
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
   EXPECT_EQ(texture.value().mip_levels(), 2u);
+
+  // Read mip 1, face 0 (2x2) back and compare to the packed source at the
+  // mip-major offset (all six faces of mip 0, then mip 1's face 0). This is the
+  // only check that exercises the per-mip bufferOffset for mip >= 1 -- the size
+  // validation uses the same total, so it cannot catch a scrambled offset.
+  constexpr std::size_t kMip0Bytes = (4 * 4) * 4 * 6;  // six faces of mip 0
+  constexpr std::size_t kMip1FaceBytes = (2 * 2) * 4;
+  const std::vector<std::uint8_t> got =
+      read_subresource(texture.value().image(), /*mip=*/1, /*base_layer=*/0,
+                       /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
+  ASSERT_EQ(got.size(), kMip1FaceBytes);
+  for (std::size_t i = 0; i < kMip1FaceBytes; ++i) {
+    EXPECT_EQ(got[i], src[kMip0Bytes + i]) << "mip1 face0 byte " << i;
+  }
 }
 
 TEST_F(TextureUploadTest, RejectsCubeSizeMismatch) {
@@ -372,26 +496,45 @@ vg::ImageUploadDesc small_desc(const std::array<std::uint8_t, 16>& pixels) {
 }  // namespace
 
 TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
-  const std::array<std::uint8_t, 16> px{};
+  // Three textures with *distinct* content in one submit, each read back: a
+  // regression that dropped a copy, submitted N-1 of N, or paired staging[i]
+  // with the wrong texture fails here -- valid handles alone would not.
+  std::array<std::array<std::uint8_t, 16>, 3> src{};
+  for (int t = 0; t < 3; ++t) {
+    for (std::size_t i = 0; i < src[t].size(); ++i) {
+      src[t][i] = static_cast<std::uint8_t>(t * 16 + i);
+    }
+  }
+
   auto batch = vg::TextureUploadBatch::begin(*device_, *allocator_);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   EXPECT_TRUE(batch.value().valid());
 
   std::vector<vg::Texture> textures;
-  for (int i = 0; i < 3; ++i) {
-    auto texture = batch.value().add(small_desc(px));
+  for (int t = 0; t < 3; ++t) {
+    auto texture = batch.value().add(small_desc(src[t]));
     ASSERT_TRUE(texture.ok()) << texture.status().message();
     textures.push_back(std::move(texture).value());
   }
 
   const vg::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
-  for (const vg::Texture& texture : textures) {
-    EXPECT_TRUE(texture.valid());
-    EXPECT_NE(texture.view(), VK_NULL_HANDLE);
+
+  // Each texture holds its own pixels -- proving per-texture copy routing.
+  for (int t = 0; t < 3; ++t) {
+    ASSERT_TRUE(textures[t].valid());
+    EXPECT_NE(textures[t].view(), VK_NULL_HANDLE);
+    const std::vector<std::uint8_t> got =
+        read_subresource(textures[t].image(), /*mip=*/0, /*base_layer=*/0,
+                         /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
+    ASSERT_EQ(got.size(), src[t].size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+      EXPECT_EQ(got[i], src[t][i]) << "texture " << t << " byte " << i;
+    }
   }
 
   // One-shot: after finish the batch is empty and rejects further use.
+  const std::array<std::uint8_t, 16> px{};
   EXPECT_FALSE(batch.value().valid());
   EXPECT_EQ(batch.value().add(small_desc(px)).status().domain(),
             vg::Status::Code::InvalidArgument);

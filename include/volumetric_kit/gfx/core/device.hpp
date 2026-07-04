@@ -165,6 +165,19 @@ class VG_CORE_API Device {
   Status submit_single_time(
       const std::function<void(VkCommandBuffer)>& record) const;
 
+  /// @brief Submit an already-recorded, ended command buffer on the graphics
+  ///        queue and block on a throwaway fence until it completes.
+  ///
+  /// The command-buffer-owning tail of @ref submit_single_time, exposed so a
+  /// caller that records incrementally (e.g. @ref TextureUploadBatch) shares
+  /// one submit+fence+wait implementation. Ownership of @p cmd stays with the
+  /// caller; it must be in the executable (ended) state.
+  /// @param cmd  A recorded, ended command buffer.
+  /// @return OK once the work completes, or a non-OK @ref Status (submit or
+  ///         wait failure).
+  /// @note Same external-synchronization caveat as @ref submit_single_time.
+  Status submit_and_wait(VkCommandBuffer cmd) const;
+
  private:
   Device() = default;
   void destroy() noexcept;

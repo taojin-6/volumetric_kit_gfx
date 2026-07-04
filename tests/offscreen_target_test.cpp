@@ -32,7 +32,17 @@ TEST(OffscreenTargetTest, DefaultConstructedIsEmpty) {
 
 class OffscreenTargetDeviceTest : public VulkanDeviceTest {
  protected:
+  // Records attachment/readback barriers, so run under the validation layer
+  // with teeth: a wrong color/depth transition fails the test (on CI, where the
+  // layer is present).
+  bool wants_validation() const override { return true; }
+
   vg::Allocator make_allocator() {
+    // Allocator has no public empty state, so this one keeps the value()
+    // (a VG_CHECK abort on the near-impossible failure of allocator creation
+    // against the already-asserted device); the fallible image allocations that
+    // can realistically OOM live in make_target / make_depth_target, which
+    // return empty on failure instead of aborting.
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     EXPECT_TRUE(allocator.ok()) << allocator.status().message();
     return std::move(allocator).value();
@@ -45,7 +55,8 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
     desc.color_format = kFormat;
     auto target = vg::OffscreenTarget::create(allocator, desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    return std::move(target).value();
+    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 
   // A target that also owns a depth attachment, for exercising the depth member
@@ -58,7 +69,8 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
     desc.depth_format = VK_FORMAT_D32_SFLOAT;
     auto target = vg::OffscreenTarget::create(allocator, desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    return std::move(target).value();
+    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 };
 

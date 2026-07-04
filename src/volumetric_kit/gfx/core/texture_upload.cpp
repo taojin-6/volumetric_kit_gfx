@@ -11,7 +11,6 @@
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_format.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -25,6 +24,13 @@ uint32_t mip_levels_for(VkExtent2D extent) {
     ++levels;
   }
   return levels;
+}
+
+// The texel extent of mip level `m` of `extent`: each dimension halved, floored
+// at 1. The single source of truth for the packing layout, so plan_upload's
+// size validation and record_upload's per-mip copy offsets cannot drift.
+VkExtent2D mip_extent(VkExtent2D extent, uint32_t m) {
+  return {std::max(extent.width >> m, 1u), std::max(extent.height >> m, 1u)};
 }
 
 // Shader stages that may sample the finished texture. Moving each level to
@@ -107,9 +113,8 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   // mip-major then layer, per-mip extents halved with a floor of 1.
   VkDeviceSize texels_per_layer = 0;
   for (uint32_t m = 0; m < desc.mip_levels; ++m) {
-    const uint32_t w = std::max(desc.extent.width >> m, 1u);
-    const uint32_t h = std::max(desc.extent.height >> m, 1u);
-    texels_per_layer += VkDeviceSize{w} * h;
+    const VkExtent2D e = mip_extent(desc.extent, m);
+    texels_per_layer += VkDeviceSize{e.width} * e.height;
   }
   const VkDeviceSize expected = texels_per_layer * texel * desc.array_layers;
   if (desc.size != expected) {
@@ -120,7 +125,12 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
 
   // The destination is always created with SAMPLED usage + optimal tiling, so
   // the format must support being sampled there. Reject up front with a clean
-  // Unsupported rather than letting create_image trip a validation error.
+  // Unsupported rather than letting create_image trip a validation error. The
+  // image also gets TRANSFER_SRC/DST usage (staging copy + mip blits); those
+  // features are not screened separately because Vulkan 1.1 /
+  // VK_KHR_maintenance1 guarantees any optimal-tiling format reporting
+  // SAMPLED_IMAGE also reports TRANSFER_SRC/DST, and the device floor is 1.3 --
+  // so this SAMPLED gate implies them. Re-check here if that gate is relaxed.
   if (!device.caps().format_supports(desc.format, VK_IMAGE_TILING_OPTIMAL,
                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
     return Status::unsupported(
@@ -154,21 +164,33 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
 // mip 0 holds the source pixels; on exit every level is SHADER_READ.
 void record_mip_chain(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
                       uint32_t mip_levels) {
+  // Every barrier here is a single-mip transition on `image` sourced at the
+  // TRANSFER stage; a local helper stands in for the designated initializers
+  // C++17 lacks, so each is one call instead of a nine-line struct.
+  auto barrier = [&](uint32_t mip, VkImageLayout old_layout,
+                     VkImageLayout new_layout, VkPipelineStageFlags dst_stage,
+                     VkAccessFlags src_access, VkAccessFlags dst_access) {
+    ImageBarrierDesc b;
+    b.image = image;
+    b.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    b.dst_stage = dst_stage;
+    b.src_access = src_access;
+    b.dst_access = dst_access;
+    b.old_layout = old_layout;
+    b.new_layout = new_layout;
+    b.base_mip = mip;
+    b.mip_count = 1;
+    cmd_image_barrier(cmd, b);
+  };
+
   int32_t mip_w = static_cast<int32_t>(extent.width);
   int32_t mip_h = static_cast<int32_t>(extent.height);
   for (uint32_t level = 1; level < mip_levels; ++level) {
     // Source (level - 1): TRANSFER_DST -> TRANSFER_SRC for the blit read.
-    ImageBarrierDesc to_src;
-    to_src.image = image;
-    to_src.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    to_src.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-    to_src.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
-    to_src.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_src.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    to_src.base_mip = level - 1;
-    to_src.mip_count = 1;
-    cmd_image_barrier(cmd, to_src);
+    barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT);
 
     const int32_t dst_w = mip_w > 1 ? mip_w / 2 : 1;
     const int32_t dst_h = mip_h > 1 ? mip_h / 2 : 1;
@@ -182,17 +204,9 @@ void record_mip_chain(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
                    VK_FILTER_LINEAR);
 
     // Source level done being read: TRANSFER_SRC -> SHADER_READ.
-    ImageBarrierDesc src_done;
-    src_done.image = image;
-    src_done.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    src_done.dst_stage = kSampleStages;
-    src_done.src_access = VK_ACCESS_TRANSFER_READ_BIT;
-    src_done.dst_access = VK_ACCESS_SHADER_READ_BIT;
-    src_done.old_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    src_done.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    src_done.base_mip = level - 1;
-    src_done.mip_count = 1;
-    cmd_image_barrier(cmd, src_done);
+    barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kSampleStages,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     mip_w = dst_w;
     mip_h = dst_h;
@@ -200,17 +214,9 @@ void record_mip_chain(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
 
   // The last level was only ever a blit destination (never a source), so it is
   // still TRANSFER_DST: move it to SHADER_READ too.
-  ImageBarrierDesc last;
-  last.image = image;
-  last.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  last.dst_stage = kSampleStages;
-  last.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  last.dst_access = VK_ACCESS_SHADER_READ_BIT;
-  last.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  last.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  last.base_mip = mip_levels - 1;
-  last.mip_count = 1;
-  cmd_image_barrier(cmd, last);
+  barrier(mip_levels - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kSampleStages,
+          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 }
 
 // Copy staging into every supplied (mip, layer), generate the mip chain when
@@ -234,13 +240,12 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
   std::vector<VkBufferImageCopy> copies(desc.mip_levels);
   VkDeviceSize offset = 0;
   for (uint32_t m = 0; m < desc.mip_levels; ++m) {
-    const uint32_t w = std::max(desc.extent.width >> m, 1u);
-    const uint32_t h = std::max(desc.extent.height >> m, 1u);
+    const VkExtent2D e = mip_extent(desc.extent, m);
     copies[m].bufferOffset = offset;
     copies[m].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0,
                                   desc.array_layers};
-    copies[m].imageExtent = {w, h, 1};
-    offset += VkDeviceSize{w} * h * plan.texel * desc.array_layers;
+    copies[m].imageExtent = {e.width, e.height, 1};
+    offset += VkDeviceSize{e.width} * e.height * plan.texel * desc.array_layers;
   }
   vkCmdCopyBufferToImage(cmd, staging, image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, desc.mip_levels,
@@ -380,17 +385,10 @@ Status TextureUploadBatch::finish() {
   staging_.clear();
 
   VG_TRY(cmd.end());
-  VG_ASSIGN(Fence fence, Fence::create(device->handle()));
-  const VkCommandBuffer raw = cmd.handle();
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &raw;
-  VG_VK_TRY(
-      vkQueueSubmit(device->graphics_queue(), 1, &submit, fence.handle()));
-  // A device loss (or other failure) while waiting means the submitted work
-  // did not complete; report it rather than claiming success.
-  return fence.wait();
+  // One submit + fence wait, shared with Device::submit_single_time. The
+  // moved-out cmd and staging buffers stay alive on the stack until it returns
+  // (the GPU is then done reading them), error paths included.
+  return device->submit_and_wait(cmd.handle());
 }
 
 Result<Texture> upload_texture(const Device& device, Allocator& allocator,

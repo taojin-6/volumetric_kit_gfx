@@ -101,22 +101,36 @@ void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
   VG_CHECK(valid(), "OffscreenTarget::prepare on an empty target");
 
   // UNDEFINED discards the previous contents (a load-op clear rewrites them),
-  // so this is valid whatever layout a prior render/readback left them in.
+  // so this is valid whatever layout a prior render/readback left them in. The
+  // src scope covers those priors so a *same-submit* re-prepare is safe: a
+  // prior render's color write (COLOR_ATTACHMENT_OUTPUT) and a prior
+  // @ref record_readback's copy-out (a TRANSFER read of the color image) must
+  // both complete before the next render's clear reuses the image -- a
+  // TOP_OF_PIPE src would not order the readback copy, letting the clear race
+  // it into a torn readback. On the first prepare (no prior access) the wider
+  // src simply waits on nothing.
   ImageBarrierDesc to_color;
   to_color.image = color_.image();
-  to_color.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+  to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_TRANSFER_BIT;
   to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  to_color.src_access =
+      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
   to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
   cmd_image_barrier(cmd, to_color);
 
   if (depth_.valid()) {
+    // Depth is never read back; its only prior use is an earlier render's
+    // depth write, which the src scope orders before the next clear.
     ImageBarrierDesc to_depth;
     to_depth.image = depth_.image();
-    to_depth.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    to_depth.src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     to_depth.dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    to_depth.src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     to_depth.dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     to_depth.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;

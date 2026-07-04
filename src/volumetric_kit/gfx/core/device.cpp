@@ -290,36 +290,38 @@ Status Device::submit_single_time(
   }
 
   if (status.ok()) {
-    VkFenceCreateInfo fence_info{};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    VkFence fence = VK_NULL_HANDLE;
-    VkResult fence_result =
-        vkCreateFence(device_, &fence_info, nullptr, &fence);
-    if (fence_result == VK_SUCCESS) {
-      VkSubmitInfo submit{};
-      submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-      submit.commandBufferCount = 1;
-      submit.pCommandBuffers = &cmd;
-      VkResult submit_result =
-          vkQueueSubmit(graphics_queue_, 1, &submit, fence);
-      if (submit_result == VK_SUCCESS) {
-        VkResult wait_result =
-            vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-        if (wait_result != VK_SUCCESS) {
-          // A device loss (or other failure) while waiting means the submitted
-          // work did not complete; report it rather than claiming success.
-          status = vk_error(wait_result, "vkWaitForFences");
-        }
-      } else {
-        status = vk_error(submit_result, "vkQueueSubmit");
-      }
-      vkDestroyFence(device_, fence, nullptr);
-    } else {
-      status = vk_error(fence_result, "vkCreateFence");
-    }
+    status = submit_and_wait(cmd);
   }
 
   vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+  return status;
+}
+
+Status Device::submit_and_wait(VkCommandBuffer cmd) const {
+  VkFenceCreateInfo fence_info{};
+  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFence fence = VK_NULL_HANDLE;
+  VG_VK_TRY(vkCreateFence(device_, &fence_info, nullptr, &fence));
+
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &cmd;
+
+  Status status;
+  VkResult submit_result = vkQueueSubmit(graphics_queue_, 1, &submit, fence);
+  if (submit_result == VK_SUCCESS) {
+    VkResult wait_result =
+        vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+    if (wait_result != VK_SUCCESS) {
+      // A device loss (or other failure) while waiting means the submitted
+      // work did not complete; report it rather than claiming success.
+      status = vk_error(wait_result, "vkWaitForFences");
+    }
+  } else {
+    status = vk_error(submit_result, "vkQueueSubmit");
+  }
+  vkDestroyFence(device_, fence, nullptr);
   return status;
 }
 

@@ -23,6 +23,11 @@ namespace {
 // TextureUploadTest) to create the images the barriers address.
 class ImageBarrierTest : public VulkanDeviceTest {
  protected:
+  // Records real barriers, so run under the validation layer with teeth: a
+  // wrong subresource range / stage / layout fails the test (on CI, where the
+  // layer is present).
+  bool wants_validation() const override { return true; }
+
   void SetUp() override {
     VulkanDeviceTest::SetUp();
     if (IsSkipped()) {
