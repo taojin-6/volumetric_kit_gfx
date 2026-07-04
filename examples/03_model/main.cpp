@@ -389,6 +389,7 @@ vg::Texture create_depth(vg::Allocator& allocator, const vg::Device& device,
     *ok = false;
     return {};
   }
+  *ok = true;
   return std::move(depth).value();
 }
 
@@ -1598,7 +1599,10 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       return 1;  // ~FrameLoop drains any in-flight submission before teardown
     }
     if (!frame.value().has_value()) {
-      glfwWaitEvents();  // minimized: sleep until something changes
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
       continue;
     }
     const win::Frame& f = *frame.value();

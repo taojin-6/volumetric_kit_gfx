@@ -156,7 +156,10 @@ int run(GLFWwindow* window, int max_frames) {
       return 1;
     }
     if (!frame.value().has_value()) {
-      glfwWaitEvents();  // minimized: sleep until something changes
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
       continue;
     }
     const win::Frame& f = *frame.value();

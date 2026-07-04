@@ -25,9 +25,6 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   FrameLoop loop;
   loop.device_ = &device;
   loop.swapchain_ = &swapchain;
-  // Seed the managed protocol's resize detection with the built extent, so the
-  // first extent-taking begin_frame does not rebuild a fresh swapchain.
-  loop.last_requested_extent_ = swapchain.extent();
 
   VG_ASSIGN(CommandPool pool,
             CommandPool::create(device.handle(), device.graphics_family()));
@@ -87,16 +84,21 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
     // for the restore.
     return std::optional<Frame>{};
   }
-  if (current_extent.width != last_requested_extent_.width ||
-      current_extent.height != last_requested_extent_.height) {
+  if (current_extent.width != swapchain_->requested_extent().width ||
+      current_extent.height != swapchain_->requested_extent().height) {
     // The window resized under us; some platforms (MoltenVK in particular)
-    // never report OUT_OF_DATE for it.
+    // never report OUT_OF_DATE for it. Checked against the swapchain's last
+    // *requested* extent (not its surface-clamped one), so a request the
+    // surface pins to a different size does not rebuild every tick.
     needs_recreate_ = true;
   }
-  // One rebuild + one acquire retry per call: a second stale result yields a
-  // skipped tick rather than looping here while the surface settles.
+  // At most one rebuild + one acquire retry per call: rebuild once if armed,
+  // then on a stale acquire retry the acquire without a second rebuild. A
+  // still-stale result skips the tick rather than spinning -- or churning
+  // rebuilds and depth reallocations -- while the surface settles.
+  bool rebuilt_this_call = false;
   for (int attempt = 0; attempt < 2; ++attempt) {
-    if (needs_recreate_) {
+    if (needs_recreate_ && !rebuilt_this_call) {
       const Status rebuilt = swapchain_->recreate(current_extent);
       if (!rebuilt.ok()) {
         if (rebuilt.domain() == Status::Code::InvalidArgument &&
@@ -107,11 +109,15 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
         }
         return rebuilt;
       }
-      needs_recreate_ = false;
-      last_requested_extent_ = current_extent;
+      rebuilt_this_call = true;
+      // Run the consumer hook *before* clearing needs_recreate_, so a failed
+      // resource rebuild leaves the loop armed rather than falsely "in sync".
+      // (The rebuild produced a fresh swapchain handle, so the next raw
+      // begin_frame's ensure_image_sync refreshes the per-image semaphores.)
       if (recreate_callback_) {
         VG_TRY(recreate_callback_(swapchain_->extent()));
       }
+      needs_recreate_ = false;
     }
     Result<Frame> frame = begin_frame();
     if (frame.ok()) {
@@ -267,7 +273,12 @@ Status FrameLoop::end_frame(const Frame& frame) {
 
   Status present = swapchain_->present(frame.image_index, signal_sem);
   if (swapchain_stale(present)) {
-    // Arm the managed protocol's rebuild; raw callers see the status as ever.
+    // Arm the managed protocol's rebuild; raw callers see the status as ever
+    // (they never read needs_recreate_). This is the one managed-state write on
+    // the raw path: the protocol is asymmetric (a managed begin_frame(extent),
+    // but end_frame stays single, so stale-present has nowhere else to land).
+    // TODO: fold the managed begin/end protocol into an app-tier frame driver
+    // so end_frame carries no managed state and the raw path is policy-free.
     needs_recreate_ = true;
   }
   // Advance regardless: the work was submitted and the fence will signal, so
@@ -331,7 +342,7 @@ void FrameLoop::set_recreate_callback(
 FrameLoop::~FrameLoop() { drain(); }
 
 void FrameLoop::drain() noexcept {
-  if (device_ != nullptr && !in_flight_.empty()) {
+  if (device_ != nullptr && valid()) {
     (void)vkDeviceWaitIdle(device_->handle());
   }
 }
@@ -352,8 +363,7 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
       current_slot_(other.current_slot_),
       profiler_(other.profiler_),
       recreate_callback_(std::move(other.recreate_callback_)),
-      needs_recreate_(other.needs_recreate_),
-      last_requested_extent_(other.last_requested_extent_) {
+      needs_recreate_(other.needs_recreate_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
   other.last_swapchain_ = VK_NULL_HANDLE;
@@ -361,7 +371,6 @@ FrameLoop::FrameLoop(FrameLoop&& other) noexcept
   other.profiler_ = nullptr;
   other.recreate_callback_ = nullptr;
   other.needs_recreate_ = false;
-  other.last_requested_extent_ = VkExtent2D{};
 }
 
 FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
@@ -388,7 +397,6 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     profiler_ = other.profiler_;
     recreate_callback_ = std::move(other.recreate_callback_);
     needs_recreate_ = other.needs_recreate_;
-    last_requested_extent_ = other.last_requested_extent_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
@@ -397,7 +405,6 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     other.profiler_ = nullptr;
     other.recreate_callback_ = nullptr;
     other.needs_recreate_ = false;
-    other.last_requested_extent_ = VkExtent2D{};
   }
   return *this;
 }

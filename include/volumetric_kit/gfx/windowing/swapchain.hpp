@@ -158,8 +158,14 @@ class VG_WINDOWING_API Swapchain {
   ///         compatible pipeline.
   RenderTargetLayout layout() const noexcept;
 
-  /// @return The current image extent in texels.
+  /// @return The current image extent in texels (as clamped/overridden by the
+  ///         surface).
   VkExtent2D extent() const noexcept { return extent_; }
+  /// @return The extent last *requested* of @ref create / @ref recreate, before
+  ///         the surface clamped or overrode it (which @ref extent reflects).
+  ///         A resize check against this (not @ref extent) does not rebuild
+  ///         every frame when the surface pins a request to a different size.
+  VkExtent2D requested_extent() const noexcept { return requested_extent_; }
   /// @return The chosen color format.
   VkFormat format() const noexcept { return format_; }
   /// @return The number of swapchain images.
@@ -188,7 +194,8 @@ class VG_WINDOWING_API Swapchain {
   VkFormat format_ = VK_FORMAT_UNDEFINED;
   VkColorSpaceKHR color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
   VkPresentModeKHR present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
-  VkExtent2D extent_{};
+  VkExtent2D extent_{};            // current image size, surface-clamped
+  VkExtent2D requested_extent_{};  // last requested size, pre-clamp
   uint32_t requested_min_image_count_ = 0;
 };
 

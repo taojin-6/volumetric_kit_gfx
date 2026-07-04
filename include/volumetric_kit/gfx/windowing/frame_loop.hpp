@@ -63,11 +63,12 @@ struct Frame {
 /// classified by @ref swapchain_stale.
 ///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
-///          the loop (it borrows both). Destruction drains the loop's in-flight
-///          frames (a device wait), so teardown is safe mid-flight. A profiler
-///          attached via @ref set_profiler and anything captured by the @ref
-///          set_recreate_callback hook are likewise borrowed and must outlive
-///          the loop, or be detached first.
+///          the loop (it borrows both). Destruction idles the device
+///          (`vkDeviceWaitIdle`) to drain in-flight frames, so teardown is safe
+///          mid-flight — note that idles every queue on the device, not only
+///          this loop's work. A profiler attached via @ref set_profiler and
+///          anything captured by the @ref set_recreate_callback hook are
+///          likewise borrowed and must outlive the loop, or be detached first.
 ///
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
@@ -185,8 +186,9 @@ class VG_WINDOWING_API FrameLoop {
 
  private:
   // Rebuild the per-image sync objects (render_finished_ / images_in_flight_)
-  // when they no longer match the swapchain's image count — i.e. after a
-  // Swapchain::recreate. A no-op (one size comparison) on the common path.
+  // when the swapchain handle changed — i.e. after a Swapchain::recreate
+  // produced a fresh chain (see last_swapchain_). A no-op (one handle
+  // comparison) on the common path.
   Status ensure_image_sync();
 
   // Restore a slot whose acquire signal was never consumed (a failure between
@@ -196,9 +198,12 @@ class VG_WINDOWING_API FrameLoop {
   // next begin_frame never blocks on it. Blocking; error-path only.
   Status recover_slot(uint32_t slot);
 
-  // Wait out this loop's in-flight frames (a device wait) so teardown cannot
-  // free command buffers / semaphores the GPU still references. Best-effort:
-  // errors are unreportable from the destructor and moot on a lost device.
+  // Idle the whole device (vkDeviceWaitIdle) so teardown cannot free command
+  // buffers / semaphores the GPU still references. A device-wide wait, not just
+  // this loop's fences: a present that reported out-of-date may leave a
+  // render-finished semaphore with no fence to wait on, so the queues are
+  // drained wholesale. Best-effort: errors are unreportable from the destructor
+  // and moot on a lost device.
   void drain() noexcept;
 
   const Device* device_ = nullptr;  // borrowed; outlives this
@@ -221,13 +226,12 @@ class VG_WINDOWING_API FrameLoop {
   VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
   uint32_t current_slot_ = 0;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
-  // Managed-protocol state (the extent-taking begin_frame): the rebuild hook,
-  // whether a stale acquire/present armed a rebuild, and the last extent the
-  // caller requested — compared against the *requested* (not the clamped
-  // built) extent, so a clamped request does not rebuild every tick.
+  // Managed-protocol state (the extent-taking begin_frame): the rebuild hook
+  // and whether a stale acquire/present or a resize armed a rebuild. Resize is
+  // detected against Swapchain::requested_extent() (the pre-clamp requested
+  // size), so a request the surface pins does not rebuild every tick.
   std::function<Status(VkExtent2D)> recreate_callback_;
   bool needs_recreate_ = false;
-  VkExtent2D last_requested_extent_{};
 };
 
 }  // namespace windowing

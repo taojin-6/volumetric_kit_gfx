@@ -133,14 +133,6 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
-  // Platform backend (this example's half): bind it to the overlay's context,
-  // then let it feed input + io.DisplaySize each frame.
-  ImGui::SetCurrentContext(overlay.value().context());
-  if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
-    std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
-    return 1;
-  }
-
   auto loop = win::FrameLoop::create(device.value(), swapchain.value(),
                                      kFramesInFlight);
   if (!loop.ok()) {
@@ -150,6 +142,16 @@ int run(GLFWwindow* window, int max_frames) {
   // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
   // render loop below only opens a scope around its work.
   loop.value().set_profiler(&profiler.value());
+
+  // Platform backend (this example's half): bind it to the overlay's context,
+  // then let it feed input + io.DisplaySize each frame. Initialized last, after
+  // the fallible loop create, so no earlier error return leaves a live
+  // ImGui_ImplGlfw backend without its paired Shutdown at teardown.
+  ImGui::SetCurrentContext(overlay.value().context());
+  if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
+    std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
+    return 1;
+  }
 
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -168,7 +170,10 @@ int run(GLFWwindow* window, int max_frames) {
       return 1;
     }
     if (!frame.value().has_value()) {
-      glfwWaitEvents();  // minimized: sleep until something changes
+      // Paused: minimized, or the surface is still settling after a rebuild.
+      // Idle briefly rather than block outright, so a settling surface retries
+      // even when the compositor sends no further event.
+      glfwWaitEventsTimeout(0.1);
       continue;
     }
     const win::Frame& f = *frame.value();
