@@ -61,6 +61,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "common/glfw_surface.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
@@ -94,9 +95,9 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 
-// TODO: load_spirv + framebuffer_extent are duplicated across examples
-// 01/02/03; hoist the shared pieces into an examples/common helper in a focused
-// cleanup.
+// TODO: load_spirv + framebuffer_extent are still duplicated across examples
+// 01/02/03; hoist them into examples/common/ too (the GLFW surface factory
+// already lives there) in a focused cleanup.
 std::vector<uint32_t> load_spirv(const char* path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -726,15 +727,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   app_config.swapchain.depth_format = kDepthFormat;
   app_config.frames_in_flight = kFramesInFlight;
   auto created = vg::app::WindowedApp::create(
-      app_config, [window](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
-        VkSurfaceKHR surface = VK_NULL_HANDLE;
-        const VkResult result =
-            glfwCreateWindowSurface(instance, window, nullptr, &surface);
-        if (result != VK_SUCCESS) {
-          return vg::vk_error(result, "glfwCreateWindowSurface");
-        }
-        return surface;
-      });
+      app_config, example::glfw_surface_factory(window));
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
@@ -816,6 +809,11 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // hook — the swapchain rebuilds its own depth attachments with the chain.
   app.set_profiler(&profiler.value());
 
+  // A hard error inside the loop breaks out to the shared wait_idle() teardown
+  // below rather than returning straight away, so any in-flight frame is
+  // drained before the after-app resources (pipeline, model, scene, skybox,
+  // profiler) destruct.
+  int exit_code = 0;
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
     if (max_frames >= 0 && rendered >= max_frames) {
@@ -830,7 +828,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
-      return 1;  // the app's FrameLoop drains in-flight frames on teardown
+      exit_code = 1;
+      break;
     }
     if (!frame.value().has_value()) {
       // Paused: minimized, or the surface is still settling after a rebuild.
@@ -895,7 +894,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const vg::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-      return 1;  // the app's FrameLoop drains in-flight frames on teardown
+      exit_code = 1;
+      break;
     }
 
     // Periodically dump the resolved per-pass timings. A slot's GPU times
@@ -921,13 +921,13 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
   // Everything above (pipeline, model, scene, skybox, profiler) was created
   // after the app, so it destructs before it — while the app's frame loop may
-  // still have frames in flight referencing it. Idle the device first so that
-  // teardown is safe, and detach the borrowed profiler from the loop before it
-  // goes out of scope.
+  // still have frames in flight referencing it (including after an error break
+  // above). Idle the device first so that teardown is safe, and detach the
+  // borrowed profiler from the loop before it goes out of scope.
   app.wait_idle();
   app.set_profiler(nullptr);
   std::printf("03_model: rendered %d frame(s)\n", rendered);
-  return 0;
+  return exit_code;
 }
 
 bool parse_uint(const char* arg, uint32_t* out) {

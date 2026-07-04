@@ -188,6 +188,42 @@ TEST_F(WindowedAppTest, DepthConfigBuildsDepthCapableSwapchain) {
   EXPECT_TRUE(app.wait_idle().ok());
 }
 
+// set_recreate_callback forwards to the loop: a frame at the built extent runs
+// nothing, and a changed extent rebuilds the swapchain and runs the callback
+// with the rebuilt extent.
+TEST_F(WindowedAppTest, RecreateCallbackForwardsToLoop) {
+  vg::app::WindowedApp app = make_app(windowed_config());
+  ASSERT_TRUE(app.valid());
+
+  int callback_runs = 0;
+  VkExtent2D callback_extent{};
+  app.set_recreate_callback([&](VkExtent2D extent) {
+    ++callback_runs;
+    callback_extent = extent;
+    return vg::Status{};
+  });
+
+  // A frame at the current extent: no rebuild, the callback stays quiet.
+  ASSERT_TRUE(run_frames(app, 1).ok());
+  EXPECT_EQ(callback_runs, 0);
+
+  // A changed extent: the loop rebuilds the swapchain and runs the callback
+  // once with the rebuilt extent (the headless surface honors the request).
+  auto resized = app.begin_frame(VkExtent2D{320, 240});
+  ASSERT_TRUE(resized.ok()) << resized.status().message();
+  ASSERT_TRUE(resized.value().has_value());
+  EXPECT_EQ(callback_runs, 1);
+  EXPECT_EQ(callback_extent.width, app.swapchain().extent().width);
+  EXPECT_EQ(callback_extent.height, app.swapchain().extent().height);
+  EXPECT_EQ(app.swapchain().extent().width, 320u);
+  vg::RenderTargetBeginInfo begin;
+  begin.clear_color.float32[3] = 1.0f;
+  resized.value()->target->begin(resized.value()->cmd, begin);
+  resized.value()->target->end(resized.value()->cmd);
+  EXPECT_TRUE(app.end_frame(*resized.value()).ok());
+  EXPECT_TRUE(app.wait_idle().ok());
+}
+
 // A zero frames_in_flight reaches FrameLoop::create, whose own rejection
 // propagates out of the facade unchanged.
 TEST_F(WindowedAppTest, ZeroFramesInFlightPropagatesLoopError) {

@@ -12,6 +12,11 @@ if(NOT VG_WITH_GLFW OR NOT glfw3_FOUND)
   return()
 endif()
 
+# The examples share small header-only helpers under common/ (e.g. the GLFW
+# surface factory the windowed examples hand to WindowedApp::create), so this
+# dir is on every example target's include path for `#include "common/...".
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
+
 # 01_triangle: the hello-triangle in a window; the bring-up chain comes from the
 # app tier (WindowedApp). Links the Vulkan loader directly because it records
 # vkCmd* itself.

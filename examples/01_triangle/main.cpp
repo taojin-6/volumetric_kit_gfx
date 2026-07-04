@@ -21,6 +21,7 @@
 #include <fstream>
 #include <vector>
 
+#include "common/glfw_surface.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
@@ -59,23 +60,15 @@ int run(GLFWwindow* window, int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
-  // The whole bring-up chain in one call; the lambda supplies the GLFW
-  // surface, keeping the library tier window-system-free.
+  // The whole bring-up chain in one call; example::glfw_surface_factory
+  // supplies the GLFW surface, keeping the library tier window-system-free.
   vg::app::WindowedAppConfig config;
   config.app_name = "01_triangle";
   config.enable_validation = true;  // a no-op when the layer is absent
   config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
   config.swapchain.extent = framebuffer_extent(window);
   auto created = vg::app::WindowedApp::create(
-      config, [window](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
-        VkSurfaceKHR surface = VK_NULL_HANDLE;
-        const VkResult result =
-            glfwCreateWindowSurface(instance, window, nullptr, &surface);
-        if (result != VK_SUCCESS) {
-          return vg::vk_error(result, "glfwCreateWindowSurface");
-        }
-        return surface;
-      });
+      config, example::glfw_surface_factory(window));
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
@@ -111,6 +104,10 @@ int run(GLFWwindow* window, int max_frames) {
     return 1;
   }
 
+  // A hard error inside the loop breaks out to the shared wait_idle() teardown
+  // below rather than returning straight away, so any in-flight frame is
+  // drained before the after-app resources (pipeline, shaders) destruct.
+  int exit_code = 0;
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
     if (max_frames >= 0 && rendered >= max_frames) {
@@ -125,7 +122,8 @@ int run(GLFWwindow* window, int max_frames) {
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
-      return 1;
+      exit_code = 1;
+      break;
     }
     if (!frame.value().has_value()) {
       // Paused: minimized, or the surface is still settling after a rebuild.
@@ -162,17 +160,19 @@ int run(GLFWwindow* window, int max_frames) {
     const vg::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
-      return 1;
+      exit_code = 1;
+      break;
     }
     ++rendered;
   }
 
   // The shaders + pipeline were created after the app, so they destruct before
   // it — while its frame loop may still have frames in flight that reference
-  // them. Idle the device first so their destruction is safe.
+  // them (including after an error break above). Idle the device first so their
+  // destruction is safe.
   app.wait_idle();
   std::printf("01_triangle: rendered %d frame(s)\n", rendered);
-  return 0;
+  return exit_code;
 }
 
 }  // namespace
