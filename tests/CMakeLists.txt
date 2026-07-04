@@ -75,12 +75,17 @@ target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
 vg_target_warnings(vg_camera_test)
 gtest_discover_tests(vg_camera_test)
 
-# pipelines tier: GPU mesh upload, driven through the shared device fixture
-# (skips when no device). Links gfx_pipelines, which brings core + assets.
-add_executable(vg_pipelines_test gpu_mesh_test.cpp pbr_material_test.cpp
-                                 pbr_pipeline_test.cpp pbr_scene_test.cpp)
-target_link_libraries(vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
-                                                GTest::gtest_main)
+# pipelines tier: GPU mesh upload + the PBR building blocks, driven through the
+# shared device fixture (skips when no device). Links gfx_pipelines, which
+# brings core + assets, plus gfx_io so pbr_model_test can drive the real
+# load_gltf -> PbrModel::create path against the Box.glb fixture (defined below,
+# next to the fixture download).
+add_executable(
+  vg_pipelines_test gpu_mesh_test.cpp pbr_material_test.cpp pbr_model_test.cpp
+                    pbr_pipeline_test.cpp pbr_scene_test.cpp)
+target_link_libraries(
+  vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
+                            volumetric_kit::gfx_io GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
 gtest_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
 
@@ -142,6 +147,10 @@ target_link_libraries(vg_io_test PRIVATE volumetric_kit::gfx_io
 vg_target_warnings(vg_io_test)
 if(EXISTS "${_vg_box_glb}")
   target_compile_definitions(vg_io_test
+                             PRIVATE VG_ASSETS_DIR="${_vg_assets_dir}")
+  # pbr_model_test (in vg_pipelines_test, above) drives the same fixture through
+  # load_gltf -> PbrModel::create; gate its define the same way.
+  target_compile_definitions(vg_pipelines_test
                              PRIVATE VG_ASSETS_DIR="${_vg_assets_dir}")
 endif()
 # Prefix the ctest names ("io.GltfLoader.*") so this CPU-only tier is selectable

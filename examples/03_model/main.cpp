@@ -2,14 +2,15 @@
 // Copyright (c) 2026 Tao Jin
 
 // examples/03_model: load a glTF model and fly around it. Parses a
-// `.gltf`/`.glb` with the io tier into a CPU assets::Model, uploads each mesh
-// (vertex + index buffer) and its material maps, and draws it depth-tested with
-// glTF metallic-roughness PBR: a per-draw model/MVP push constant, a per-frame
-// scene set (set 0: camera), and a per-material set (set 1: factor UBO + the
-// five maps) -- all reflected automatically into the pipeline layout. The
-// camera auto-frames the model's bounds, so any model fills the view. IBL
-// (image-based ambient) is the next spine step; today the ambient is a flat
-// fill.
+// `.gltf`/`.glb` with the io tier into a CPU assets::Model, bridges it to the
+// GPU with pipelines::PbrModel (meshes + material maps uploaded in one submit,
+// materials built, the scene flattened into a draw list), and draws it
+// depth-tested with glTF metallic-roughness PBR: a per-draw model/MVP push
+// constant, a per-frame scene set (set 0: camera + IBL), and a per-material
+// set (set 1: factor UBO + the five maps) -- all reflected automatically into
+// the pipeline layout. The ambient comes from a CPU-baked IBL of the analytic
+// sky, drawn as a skybox behind the model. The camera auto-frames the model's
+// bounds, so any model fills the view.
 //
 // Usage:
 //   example_03_model                       # built-in cube, in a window
@@ -73,8 +74,7 @@
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
-#include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
-#include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
+#include "volumetric_kit/gfx/pipelines/pbr_model.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
@@ -90,14 +90,6 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 constexpr float kPi = 3.14159265359f;
-
-// One thing to draw: a GPU mesh under a world transform (a glTF mesh may be
-// instanced by several nodes, so the transform lives on the draw, not the
-// mesh).
-struct DrawItem {
-  uint32_t mesh = 0;
-  glm::mat4 world{1.0f};
-};
 
 // TODO: load_spirv + framebuffer_extent are duplicated across examples
 // 01/02/03; hoist the shared pieces into an examples/common helper in a focused
@@ -180,46 +172,6 @@ assets::Model load_model_or_cube(const char* model_path, bool* ok) {
   return std::move(*loaded);
 }
 
-// Walk the scene tree, composing each node's transform down to world space, and
-// emit one DrawItem per (instanced) mesh primitive.
-void collect_node(const assets::Model& model, uint32_t node_index,
-                  const glm::mat4& parent, std::vector<DrawItem>& out,
-                  std::vector<bool>& visited) {
-  // Guard a malformed node graph: glTF requires a strict forest, but an
-  // arbitrary --model file may not be conformant. An out-of-range or
-  // already-visited index (a cycle) would otherwise recurse until the stack
-  // overflows; skip it instead.
-  if (node_index >= model.scene.nodes.size() || visited[node_index]) {
-    return;
-  }
-  visited[node_index] = true;
-  const assets::Node& node = model.scene.nodes[node_index];
-  const glm::mat4 world = parent * node.transform;
-  if (node.mesh != assets::Node::kNoMesh) {
-    for (uint32_t k = 0; k < node.mesh_count; ++k) {
-      out.push_back({node.mesh + k, world});
-    }
-  }
-  for (uint32_t child : node.children) {
-    collect_node(model, child, world, out, visited);
-  }
-}
-
-std::vector<DrawItem> collect_draws(const assets::Model& model) {
-  std::vector<DrawItem> draws;
-  std::vector<bool> visited(model.scene.nodes.size(), false);
-  for (uint32_t root : model.scene.roots) {
-    collect_node(model, root, glm::mat4(1.0f), draws, visited);
-  }
-  // Some files carry meshes but no scene graph: draw every mesh at the origin.
-  if (draws.empty()) {
-    for (uint32_t i = 0; i < model.meshes.size(); ++i) {
-      draws.push_back({i, glm::mat4(1.0f)});
-    }
-  }
-  return draws;
-}
-
 // World-space axis-aligned bounds over every drawn vertex, for camera framing.
 struct Bounds {
   glm::vec3 min{0.0f};
@@ -228,22 +180,65 @@ struct Bounds {
   float radius() const { return glm::length(max - min) * 0.5f; }
 };
 
-Bounds compute_bounds(const assets::Model& model,
-                      const std::vector<DrawItem>& draws) {
-  bool any = false;
-  Bounds b;
-  for (const DrawItem& draw : draws) {
-    const assets::Mesh& mesh = model.meshes[draw.mesh];
-    for (const assets::Vertex& v : mesh.vertices) {
-      const glm::vec3 p = glm::vec3(draw.world * glm::vec4(v.position, 1.0f));
-      if (!any) {
-        b.min = p;
-        b.max = p;
-        any = true;
-      } else {
-        b.min = glm::min(b.min, p);
-        b.max = glm::max(b.max, p);
+// Grow `b` by one mesh's vertices under `world`.
+void accumulate_bounds(const assets::Mesh& mesh, const glm::mat4& world,
+                       Bounds& b, bool& any) {
+  for (const assets::Vertex& v : mesh.vertices) {
+    const glm::vec3 p = glm::vec3(world * glm::vec4(v.position, 1.0f));
+    if (!any) {
+      b.min = p;
+      b.max = p;
+      any = true;
+    } else {
+      b.min = glm::min(b.min, p);
+      b.max = glm::max(b.max, p);
+    }
+  }
+}
+
+// Accumulate one node's meshes (composed down to world space) and recurse into
+// its children, guarded against cycles / out-of-range indices like the
+// library's draw flatten. `instances` counts emitted mesh instances so
+// compute_bounds can mirror PbrModel's no-scene-graph fallback exactly.
+void bounds_node(const assets::Model& model, uint32_t node_index,
+                 const glm::mat4& parent, std::vector<bool>& visited, Bounds& b,
+                 bool& any, size_t& instances) {
+  if (node_index >= model.scene.nodes.size() || visited[node_index]) {
+    return;
+  }
+  visited[node_index] = true;
+  const assets::Node& node = model.scene.nodes[node_index];
+  const glm::mat4 world = parent * node.transform;
+  if (node.mesh != assets::Node::kNoMesh) {
+    for (uint32_t k = 0; k < node.mesh_count; ++k) {
+      if (node.mesh + k >= model.meshes.size()) {
+        break;
       }
+      accumulate_bounds(model.meshes[node.mesh + k], world, b, any);
+      ++instances;
+    }
+  }
+  for (uint32_t child : node.children) {
+    bounds_node(model, child, world, visited, b, any, instances);
+  }
+}
+
+// Walks the same scene tree PbrModel flattens its draws from, but over the
+// CPU-side vertices -- framing needs positions, which the uploaded GPU meshes
+// no longer expose -- so the camera frames exactly what is drawn.
+Bounds compute_bounds(const assets::Model& model) {
+  bool any = false;
+  size_t instances = 0;
+  Bounds b;
+  std::vector<bool> visited(model.scene.nodes.size(), false);
+  for (uint32_t root : model.scene.roots) {
+    bounds_node(model, root, glm::mat4(1.0f), visited, b, any, instances);
+  }
+  // Some files carry meshes but no scene graph: PbrModel then draws every mesh
+  // at the origin, so bound them the same way.
+  if (instances == 0) {
+    for (const assets::Mesh& mesh : model.meshes) {
+      accumulate_bounds(mesh, glm::mat4(1.0f), b, any);
     }
   }
   if (!any) {  // no vertices anywhere: a unit box so framing stays finite
@@ -282,45 +277,6 @@ std::pair<float, float> fit_clip(const Bounds& bounds, const glm::vec3& eye) {
   const float z_far = distance + radius * 4.0f;
   const float z_near = std::fmax(distance - radius, radius * 0.02f);
   return {z_near, z_far};
-}
-
-// Upload every non-empty mesh through the pipelines tier, all recorded into
-// one UploadBatch so the whole model's geometry lands device-local in a single
-// submit. The returned vector is parallel to model.meshes so a DrawItem's mesh
-// index addresses it directly (empty primitives stay a default, skipped
-// GpuMesh).
-std::vector<pipelines::GpuMesh> upload_meshes(const vg::Device& device,
-                                              vg::Allocator& allocator,
-                                              const assets::Model& model,
-                                              bool* ok) {
-  std::vector<pipelines::GpuMesh> gpu(model.meshes.size());
-  auto batch = vg::UploadBatch::begin(device, allocator);
-  if (!batch.ok()) {
-    std::fprintf(stderr, "mesh batch: %s\n", batch.status().message().c_str());
-    *ok = false;
-    return gpu;
-  }
-  for (size_t i = 0; i < model.meshes.size(); ++i) {
-    const assets::Mesh& mesh = model.meshes[i];
-    if (mesh.vertices.empty() || mesh.indices.empty()) {
-      continue;
-    }
-    auto uploaded = pipelines::upload_mesh(batch.value(), mesh);
-    if (!uploaded.ok()) {
-      // Return without finishing: the batch (and its pending copies into any
-      // dropped buffers) is discarded, never submitted.
-      std::fprintf(stderr, "upload: %s\n", uploaded.status().message().c_str());
-      *ok = false;
-      return gpu;
-    }
-    gpu[i] = std::move(uploaded).value();
-  }
-  const vg::Status finished = batch.value().finish();
-  if (!finished.ok()) {
-    std::fprintf(stderr, "mesh upload: %s\n", finished.message().c_str());
-    *ok = false;
-  }
-  return gpu;
 }
 
 // Load + create one shader module from VG_EXAMPLE_SHADER_DIR by .spv name; null
@@ -387,23 +343,6 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
   return wrote == rgb.size();
 }
 
-// Expand a decoded CPU image to tightly-packed RGBA8 (the layout upload_texture
-// takes): pass 4-channel through, replicate 1/2-channel luminance into RGB, and
-// pad 3-channel with opaque alpha -- most GPUs do not sample 3-channel 8-bit.
-std::vector<uint8_t> to_rgba8(const assets::Image& img) {
-  const size_t texels = static_cast<size_t>(img.width) * img.height;
-  std::vector<uint8_t> out(texels * 4);
-  const uint32_t c = img.channels;
-  for (size_t i = 0; i < texels; ++i) {
-    const uint8_t* src = img.pixels.data() + i * c;
-    out[i * 4 + 0] = src[0];
-    out[i * 4 + 1] = c >= 3 ? src[1] : src[0];
-    out[i * 4 + 2] = c >= 3 ? src[2] : src[0];
-    out[i * 4 + 3] = c == 4 ? src[3] : (c == 2 ? src[1] : 255);
-  }
-  return out;
-}
-
 // Precomputed image-based-lighting textures, convolved on the CPU from the
 // analytic sky (see make_ibl) and bound into the model's scene set (set 0): a
 // diffuse irradiance cube, a roughness-prefiltered specular cube (mipped), and
@@ -416,222 +355,31 @@ struct Ibl {
   float prefilter_max_lod = 0.0f;      // prefilter mip count - 1
 };
 
-// All PBR GPU state built on the pipelines tier, outliving the draw loop: a
-// shared sampler; every uploaded map plus 1x1 white / flat-normal fallbacks;
-// the per-frame scene (set 0: camera + IBL) and one material (set 1) per glTF
-// material, plus a fallback for material-less meshes. The textures back the
-// materials' descriptors, so they are declared first (destroyed last).
-struct PbrResources {
-  std::vector<vg::Texture> textures;   // owns every uploaded map + fallbacks
-  std::optional<vg::Sampler> sampler;  // filters the material maps
-  pipelines::PbrScene scene;           // set 0 (camera + IBL), per frame
-  std::vector<pipelines::PbrMaterial>
-      materials;                             // set 1, parallel to materials
-  pipelines::PbrMaterial fallback_material;  // set 1, material-less meshes
-};
-
-// Upload every material map (each image once, in the color space its slot
-// needs), then build the pipelines-tier PbrScene (set 0) from the IBL and one
-// PbrMaterial (set 1) per glTF material (plus a fallback for material-less
-// meshes). The set 0 / set 1 layouts are reflected from the pipeline's shaders.
-PbrResources setup_pbr(const vg::Device& device, vg::Allocator& alloc,
-                       const pipelines::PbrPipeline& pipeline,
-                       const assets::Model& model, const Ibl& ibl,
-                       uint32_t frames_in_flight, bool* ok) {
-  PbrResources r;
-  *ok = true;  // output flag; cleared on the first failure below
-
-  auto sampler = vg::Sampler::create(device.handle());
-  if (!sampler.ok()) {
-    std::fprintf(stderr, "sampler: %s\n", sampler.status().message().c_str());
-    *ok = false;
-    return r;
-  }
-  r.sampler = std::move(sampler).value();
-
-  // One batch for the fallbacks + every material map: the uploads below record
-  // into a single submit, finished before the descriptor sets are built.
-  auto batch = vg::UploadBatch::begin(device, alloc);
-  if (!batch.ok()) {
-    std::fprintf(stderr, "upload batch: %s\n",
-                 batch.status().message().c_str());
-    *ok = false;
-    return r;
-  }
-
-  // Queue a tightly-packed RGBA8 image upload; returns its index into
-  // r.textures (sampled-ready once the batch finishes), or -1 on failure.
-  auto upload = [&](VkExtent2D ext, VkFormat fmt, const uint8_t* px, size_t sz,
-                    bool mips) -> int {
-    vg::ImageUploadDesc d;
-    d.extent = ext;
-    d.format = fmt;
-    d.pixels = px;
-    d.size = sz;
-    d.generate_mips = mips;
-    auto tex = batch.value().add(d);
-    if (!tex.ok()) {
-      std::fprintf(stderr, "texture upload: %s\n",
-                   tex.status().message().c_str());
-      return -1;
-    }
-    r.textures.push_back(std::move(tex).value());
-    return static_cast<int>(r.textures.size()) - 1;
-  };
-
-  // Fallbacks: white (samples 1.0 for any non-normal slot, so the factor alone
-  // applies) and flat-normal (0.5,0.5,1 -> (0,0,1): no perturbation).
-  const uint8_t white_px[4] = {255, 255, 255, 255};
-  const uint8_t flat_px[4] = {128, 128, 255, 255};
-  const int white =
-      upload({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, white_px, 4, false);
-  const int flat = upload({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, flat_px, 4, false);
-  if (white < 0 || flat < 0) {
-    *ok = false;
-    return r;
-  }
-
-  // Color space per image follows its slot: base-color + emissive are sRGB, the
-  // rest linear. A glTF image fills one role in practice; if shared, sRGB wins.
-  std::vector<bool> srgb(model.images.size(), false);
-  for (const assets::Material& m : model.materials) {
-    if (m.base_color_texture < srgb.size()) {
-      srgb[m.base_color_texture] = true;
-    }
-    if (m.emissive_texture < srgb.size()) {
-      srgb[m.emissive_texture] = true;
-    }
-  }
-
-  // Upload each image once; image_tex maps a model.images index to r.textures.
-  std::vector<int> image_tex(model.images.size(), -1);
-  for (size_t i = 0; i < model.images.size(); ++i) {
-    const assets::Image& img = model.images[i];
-    if (!img.valid()) {
-      continue;
-    }
-    const std::vector<uint8_t> rgba = to_rgba8(img);
-    const VkFormat fmt =
-        srgb[i] ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-    image_tex[i] =
-        upload({img.width, img.height}, fmt, rgba.data(), rgba.size(), true);
-    if (image_tex[i] < 0) {
-      *ok = false;
-      return r;
-    }
-  }
-
-  // Submit every queued upload at once; the textures the materials below bind
-  // are sampled-ready when this returns.
-  const vg::Status uploaded = batch.value().finish();
-  if (!uploaded.ok()) {
-    std::fprintf(stderr, "texture upload: %s\n", uploaded.message().c_str());
-    *ok = false;
-    return r;
-  }
-
-  // Scene (set 0): the per-frame camera + the IBL maps, one UBO ring slot per
-  // frame in flight. The caller refreshes the acquired slot's camera each
-  // frame through r.scene.set_camera(slot, ...).
-  pipelines::PbrSceneDesc scene_desc;
-  scene_desc.irradiance = ibl.irradiance.view();
-  scene_desc.prefilter = ibl.prefilter.view();
-  scene_desc.brdf_lut = ibl.brdf_lut.view();
-  scene_desc.sampler = ibl.sampler->handle();
+// Build the pipelines-tier PbrScene (set 0: camera + IBL) against the
+// pipeline's reflected set-0 layout, one camera UBO ring slot per frame in
+// flight. The caller refreshes the acquired slot's camera each frame through
+// scene.set_camera(slot, ...). Everything else GPU-side for the model -- the
+// meshes, material maps, materials (set 1), and draw list -- comes from
+// pipelines::PbrModel::create.
+pipelines::PbrScene make_pbr_scene(const vg::Device& device,
+                                   vg::Allocator& alloc,
+                                   const pipelines::PbrPipeline& pipeline,
+                                   const Ibl& ibl, uint32_t frames_in_flight,
+                                   bool* ok) {
+  pipelines::PbrSceneDesc desc;
+  desc.irradiance = ibl.irradiance.view();
+  desc.prefilter = ibl.prefilter.view();
+  desc.brdf_lut = ibl.brdf_lut.view();
+  desc.sampler = ibl.sampler->handle();
   auto scene = pipelines::PbrScene::create(device.handle(), alloc,
                                            pipeline.descriptor_set_layout(0),
-                                           scene_desc, frames_in_flight);
+                                           desc, frames_in_flight);
   if (!scene.ok()) {
     std::fprintf(stderr, "scene set: %s\n", scene.status().message().c_str());
     *ok = false;
-    return r;
+    return {};
   }
-  r.scene = std::move(scene).value();
-
-  // Texture index for a slot, or the given fallback (kNoTexture is out of range
-  // of image_tex, so it resolves to the fallback).
-  auto tex_for = [&](uint32_t slot, int fallback) {
-    return (slot < image_tex.size() && image_tex[slot] >= 0) ? image_tex[slot]
-                                                             : fallback;
-  };
-
-  const VkDescriptorSetLayout material_layout =
-      pipeline.descriptor_set_layout(1);
-
-  // Build one PbrMaterial (set 1) from a fully-populated desc.
-  auto make_material = [&](const pipelines::PbrMaterialDesc& desc,
-                           bool* mat_ok) -> pipelines::PbrMaterial {
-    auto mat = pipelines::PbrMaterial::create(device.handle(), alloc,
-                                              material_layout, desc);
-    if (!mat.ok()) {
-      std::fprintf(stderr, "material: %s\n", mat.status().message().c_str());
-      *mat_ok = false;
-      return {};
-    }
-    return std::move(mat).value();
-  };
-
-  // Fallback material for meshes with no material: a matte white dielectric.
-  {
-    pipelines::PbrMaterialDesc d;
-    d.base_color_factor = glm::vec4(1.0f);
-    d.emissive_factor = glm::vec3(0.0f);
-    d.metallic_factor = 0.0f;
-    d.roughness_factor = 1.0f;
-    d.base_color = r.textures[white].view();
-    d.metallic_roughness = r.textures[white].view();
-    d.normal = r.textures[flat].view();
-    d.occlusion = r.textures[white].view();
-    d.emissive = r.textures[white].view();
-    d.sampler = r.sampler->handle();
-    r.fallback_material = make_material(d, ok);
-    if (!*ok) {
-      return r;
-    }
-  }
-
-  r.materials.reserve(model.materials.size());
-  for (const assets::Material& m : model.materials) {
-    pipelines::PbrMaterialDesc d;
-    d.base_color_factor = m.base_color_factor;
-    d.emissive_factor = m.emissive_factor;
-    d.metallic_factor = m.metallic_factor;
-    d.roughness_factor = m.roughness_factor;
-    d.normal_scale = m.normal_scale;
-    d.occlusion_strength = m.occlusion_strength;
-    d.base_color = r.textures[tex_for(m.base_color_texture, white)].view();
-    d.metallic_roughness =
-        r.textures[tex_for(m.metallic_roughness_texture, white)].view();
-    d.normal = r.textures[tex_for(m.normal_texture, flat)].view();
-    d.occlusion = r.textures[tex_for(m.occlusion_texture, white)].view();
-    d.emissive = r.textures[tex_for(m.emissive_texture, white)].view();
-    d.sampler = r.sampler->handle();
-    r.materials.push_back(make_material(d, ok));
-    if (!*ok) {
-      return r;
-    }
-  }
-
-  return r;
-}
-
-// Resolve each collected DrawItem into a PbrDraw: its GPU mesh, world
-// transform, and the material its mesh uses (or the fallback). The returned
-// draws borrow `meshes` and `pbr`, which must outlive them.
-std::vector<pipelines::PbrDraw> build_pbr_draws(
-    const assets::Model& model, const std::vector<pipelines::GpuMesh>& meshes,
-    const PbrResources& pbr, const std::vector<DrawItem>& draws) {
-  std::vector<pipelines::PbrDraw> out;
-  out.reserve(draws.size());
-  for (const DrawItem& d : draws) {
-    const uint32_t mat = model.meshes[d.mesh].material;
-    const pipelines::PbrMaterial* material =
-        (mat != assets::Mesh::kNoMaterial && mat < pbr.materials.size())
-            ? &pbr.materials[mat]
-            : &pbr.fallback_material;
-    out.push_back({&meshes[d.mesh], d.world, material});
-  }
-  return out;
+  return std::move(scene).value();
 }
 
 // --- Skybox: a procedural environment cubemap drawn behind the model --------
@@ -1117,14 +865,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   if (!ok) {
     return 1;
   }
-  const std::vector<DrawItem> draws = collect_draws(model);
-  const std::vector<pipelines::GpuMesh> meshes =
-      upload_meshes(device.value(), allocator.value(), model, &ok);
-  if (!ok) {
-    return 1;
-  }
 
-  const Bounds bounds = compute_bounds(model, draws);
+  const Bounds bounds = compute_bounds(model);
   camera::CameraRig rig;
   frame_camera(rig, bounds);
   const std::pair<float, float> clip = fit_clip(bounds, rig.position());
@@ -1147,21 +889,29 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
+  // The whole assets::Model -> GPU bridge in one call: meshes + material maps
+  // uploaded (a single submit), materials built, the scene flattened into a
+  // draw list ready for PbrFrame.
+  auto gpu_model = pipelines::PbrModel::create(
+      device.value(), allocator.value(), pipeline.value(), model);
+  if (!gpu_model.ok()) {
+    std::fprintf(stderr, "model: %s\n", gpu_model.status().message().c_str());
+    return 1;
+  }
+
   Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
   if (!ok) {
     return 1;
   }
-  PbrResources pbr =
-      setup_pbr(device.value(), allocator.value(), pipeline.value(), model, ibl,
-                /*frames_in_flight=*/1, &ok);
+  pipelines::PbrScene scene =
+      make_pbr_scene(device.value(), allocator.value(), pipeline.value(), ibl,
+                     /*frames_in_flight=*/1, &ok);
   if (!ok) {
     return 1;
   }
 
   // Fixed camera for the still: write the eye into the scene set once.
-  pbr.scene.set_camera(0, rig.position(), ibl.prefilter_max_lod);
-  const std::vector<pipelines::PbrDraw> pbr_draws =
-      build_pbr_draws(model, meshes, pbr, draws);
+  scene.set_camera(0, rig.position(), ibl.prefilter_max_lod);
 
   Skybox skybox = setup_skybox(device.value(), allocator.value(),
                                target.value().layout(), &ok);
@@ -1185,9 +935,10 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
         pipelines::PbrFrame frame;
         frame.extent = {width, height};
         frame.view_proj = view_proj;
-        frame.scene = &pbr.scene;
-        frame.draws = pbr_draws.data();
-        frame.draw_count = static_cast<uint32_t>(pbr_draws.size());
+        frame.scene = &scene;
+        frame.draws = gpu_model.value().draws().data();
+        frame.draw_count =
+            static_cast<uint32_t>(gpu_model.value().draws().size());
         pipeline.value().submit(cmd, frame);
         rt.end(cmd);
         target.value().record_readback(cmd);
@@ -1343,14 +1094,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   if (!ok) {
     return 1;
   }
-  const std::vector<DrawItem> draws = collect_draws(model);
-  const std::vector<pipelines::GpuMesh> meshes =
-      upload_meshes(device.value(), allocator.value(), model, &ok);
-  if (!ok) {
-    return 1;
-  }
 
-  const Bounds bounds = compute_bounds(model, draws);
+  const Bounds bounds = compute_bounds(model);
   camera::CameraRig rig;
   frame_camera(rig, bounds);
   // Interactive by default; a deterministic turntable when --frames is given,
@@ -1388,6 +1133,16 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
 
+  // The whole assets::Model -> GPU bridge in one call: meshes + material maps
+  // uploaded (a single submit), materials built, the scene flattened into a
+  // draw list ready for PbrFrame.
+  auto gpu_model = pipelines::PbrModel::create(
+      device.value(), allocator.value(), pipeline.value(), model);
+  if (!gpu_model.ok()) {
+    std::fprintf(stderr, "model: %s\n", gpu_model.status().message().c_str());
+    return 1;
+  }
+
   // Two frames in flight: the swapchain keeps depth per image and the scene
   // UBO rings per slot, so nothing is shared across in-flight frames.
   constexpr uint32_t kFramesInFlight = 2;
@@ -1395,14 +1150,12 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   if (!ok) {
     return 1;
   }
-  PbrResources pbr =
-      setup_pbr(device.value(), allocator.value(), pipeline.value(), model, ibl,
-                kFramesInFlight, &ok);
+  pipelines::PbrScene scene =
+      make_pbr_scene(device.value(), allocator.value(), pipeline.value(), ibl,
+                     kFramesInFlight, &ok);
   if (!ok) {
     return 1;
   }
-  const std::vector<pipelines::PbrDraw> pbr_draws =
-      build_pbr_draws(model, meshes, pbr, draws);
 
   Skybox skybox = setup_skybox(device.value(), allocator.value(),
                                swapchain.value().layout(), &ok);
@@ -1411,7 +1164,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   }
 
   // CPU-ahead depth shared by the loop and the profiler driving it (declared
-  // above, before setup_pbr, so the scene UBO ring matches).
+  // above, before make_pbr_scene, so the scene UBO ring matches).
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = kFramesInFlight;
   auto profiler = vg::Profiler::create(device.value(), profiler_config);
@@ -1484,7 +1237,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // The camera moves each frame, so refresh the acquired slot's camera UBO
     // before drawing: begin_frame waited that slot's fence, so the GPU is not
     // reading it.
-    pbr.scene.set_camera(f.slot, rig.position(), ibl.prefilter_max_lod);
+    scene.set_camera(f.slot, rig.position(), ibl.prefilter_max_lod);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
       // around each, resolved into the metrics printed below.
@@ -1495,10 +1248,11 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     pipelines::PbrFrame frame_info;
     frame_info.extent = extent;
     frame_info.view_proj = view_proj;
-    frame_info.scene = &pbr.scene;
+    frame_info.scene = &scene;
     frame_info.slot = f.slot;
-    frame_info.draws = pbr_draws.data();
-    frame_info.draw_count = static_cast<uint32_t>(pbr_draws.size());
+    frame_info.draws = gpu_model.value().draws().data();
+    frame_info.draw_count =
+        static_cast<uint32_t>(gpu_model.value().draws().size());
     {
       vg::Profiler::Scope pbr_scope = profiler.value().gpu_scope(cmd, "pbr");
       pipeline.value().submit(cmd, frame_info);
