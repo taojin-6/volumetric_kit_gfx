@@ -23,11 +23,10 @@
 // Two render paths share the model load + upload + draw recording:
 //  * Windowed (default): Surface + Swapchain + FrameLoop, driven by mouse +
 //    keyboard (a deterministic turntable instead under --frames). The
-//    swapchain is color-only, so this example owns the depth image and pairs it
-//    with the swapchain's color view (Swapchain::image_view) into its own
-//    RenderTarget. One frame in flight keeps that single depth image free of
-//    cross-frame hazards; a per-slot depth ring would be the throughput
-//    upgrade.
+//    swapchain owns a depth attachment per image
+//    (SwapchainConfig::depth_format) and rebuilds it on resize, so each frame
+//    renders straight into the loop's depth-capable target at two frames in
+//    flight.
 //  * --screenshot: no window -- renders one frame into an OffscreenTarget
 //    (color + depth + readback) and writes a binary PPM. Headless, so it works
 //    where no display / screen-capture is available.
@@ -351,46 +350,6 @@ VkClearColorValue background() {
   c.float32[2] = 0.05f;
   c.float32[3] = 1.0f;
   return c;
-}
-
-// Allocate the depth image and transition it UNDEFINED -> DEPTH_ATTACHMENT for
-// the dynamic-rendering scope. Recreated (with the swapchain) on resize.
-vg::Texture create_depth(vg::Allocator& allocator, const vg::Device& device,
-                         VkExtent2D extent, bool* ok) {
-  vg::TextureDesc desc;
-  desc.extent = extent;
-  desc.format = kDepthFormat;
-  desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-  auto depth = allocator.create_image(desc);
-  if (!depth.ok()) {
-    std::fprintf(stderr, "depth image: %s\n", depth.status().message().c_str());
-    *ok = false;
-    return {};
-  }
-  const VkImage image = depth.value().image();
-  const vg::Status transition =
-      device.submit_single_time([image](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &b);
-      });
-  if (!transition.ok()) {
-    std::fprintf(stderr, "depth transition: %s\n",
-                 transition.message().c_str());
-    *ok = false;
-    return {};
-  }
-  *ok = true;
-  return std::move(depth).value();
 }
 
 // Write RGBA8 readback pixels out as a binary PPM (P6, RGB -- alpha dropped).
@@ -1503,42 +1462,34 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     glfwSetScrollCallback(window, scroll_callback);
   }
 
+  // The swapchain owns a depth attachment per image (rebuilt with the chain on
+  // resize), so its render targets are depth-capable and frames in flight never
+  // share a depth image. The allocator (created above) is borrowed and must
+  // outlive the swapchain.
   win::SwapchainConfig swapchain_config;
   swapchain_config.extent = framebuffer_extent(window);
+  swapchain_config.depth_format = kDepthFormat;
   auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
-                                          swapchain_config);
+                                          swapchain_config, &allocator.value());
   if (!swapchain.ok()) {
     std::fprintf(stderr, "swapchain: %s\n",
                  swapchain.status().message().c_str());
     return 1;
   }
 
-  vg::Texture depth = create_depth(allocator.value(), device.value(),
-                                   swapchain.value().extent(), &ok);
-  if (!ok) {
-    return 1;
-  }
-
-  // Pipeline layout = swapchain color + our depth format. Size-independent
-  // (dynamic viewport), so it survives resizes without a rebuild.
-  vg::RenderTargetLayout pipeline_layout;
-  pipeline_layout.color_formats[0] = swapchain.value().format();
-  pipeline_layout.color_count = 1;
-  pipeline_layout.depth_format = kDepthFormat;
-  auto pipeline =
-      pipelines::PbrPipeline::create(device.value().handle(), pipeline_layout);
+  // The pipeline is built for the swapchain's layout (color + depth formats).
+  // Size-independent (dynamic viewport), so it survives resizes without a
+  // rebuild.
+  auto pipeline = pipelines::PbrPipeline::create(device.value().handle(),
+                                                 swapchain.value().layout());
   if (!pipeline.ok()) {
     std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
     return 1;
   }
 
-  // One frame in flight: the single depth image is then never written by two
-  // frames at once (see the file header). The scene UBO no longer constrains
-  // this — it rings per slot.
-  // TODO: promote depth into the windowing tier (a per-slot depth ring on the
-  // swapchain's RenderTarget) so consumers get a depth-capable target and can
-  // run more frames in flight, instead of the example owning a single depth.
-  constexpr uint32_t kFramesInFlight = 1;
+  // Two frames in flight: the swapchain keeps depth per image and the scene
+  // UBO rings per slot, so nothing is shared across in-flight frames.
+  constexpr uint32_t kFramesInFlight = 2;
   Ibl ibl = make_ibl(device.value(), allocator.value(), &ok);
   if (!ok) {
     return 1;
@@ -1552,8 +1503,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   const std::vector<pipelines::PbrDraw> pbr_draws =
       build_pbr_draws(model, meshes, pbr, draws);
 
-  Skybox skybox =
-      setup_skybox(device.value(), allocator.value(), pipeline_layout, &ok);
+  Skybox skybox = setup_skybox(device.value(), allocator.value(),
+                               swapchain.value().layout(), &ok);
   if (!ok) {
     return 1;
   }
@@ -1575,17 +1526,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     return 1;
   }
   // Turnkey: the loop now calls profiler.begin_frame/end_frame for us, so the
-  // render loop only opens a scope around each pass.
+  // render loop only opens a scope around each pass. Resizes need no hook —
+  // the swapchain rebuilds its own depth attachments with the chain.
   loop.value().set_profiler(&profiler.value());
-  // Depth is swapchain-sized: rebuild it whenever the loop rebuilds the chain
-  // (the rebuild idled the device, so replacing the old image is safe).
-  loop.value().set_recreate_callback([&](VkExtent2D extent) -> vg::Status {
-    bool rebuilt = false;
-    depth = create_depth(allocator.value(), device.value(), extent, &rebuilt);
-    return rebuilt ? vg::Status{}
-                   : vg::Status::out_of_memory(
-                         "03_model: depth attachment recreate failed");
-  });
 
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -1594,8 +1537,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     }
     glfwPollEvents();
 
-    // The loop owns the staleness protocol: it rebuilds the swapchain (and,
-    // via the callback above, the depth attachment) after a resize, and skips
+    // The loop owns the staleness protocol: it rebuilds the swapchain (which
+    // rebuilds its per-image depth attachments) after a resize, and skips
     // ticks while the window is minimized.
     auto frame = loop.value().begin_frame(framebuffer_extent(window));
     if (!frame.ok()) {
@@ -1613,21 +1556,13 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const win::Frame& f = *frame.value();
 
     const VkExtent2D extent = swapchain.value().extent();
-    const uint32_t image_index = f.image_index;
     const VkCommandBuffer cmd = f.cmd;
 
-    // Assemble this image's color view + our depth into a render target.
-    const vg::RenderTargetAttachment color{
-        swapchain.value().image(image_index),
-        swapchain.value().image_view(image_index), swapchain.value().format()};
-    const vg::RenderTargetAttachment depth_att{depth.image(), depth.view(),
-                                               kDepthFormat};
-    const vg::RenderTarget rt(extent, &color, 1, VK_SAMPLE_COUNT_1_BIT,
-                              &depth_att);
-
+    // The acquired image's target already pairs its color view with its own
+    // depth attachment; the default load op clears both.
     vg::RenderTargetBeginInfo begin;
     begin.clear_color = background();
-    rt.begin(cmd, begin);
+    f.target->begin(cmd, begin);
 
     // Advance the camera: interactive input, or a deterministic per-frame
     // turntable step under --frames (reproducible for CI).
@@ -1668,7 +1603,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       pipeline.value().submit(cmd, frame_info);
     }
 
-    rt.end(cmd);
+    f.target->end(cmd);
 
     const vg::Status present = loop.value().end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
@@ -1676,14 +1611,15 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       return 1;  // ~FrameLoop drains the submitted frame before teardown
     }
 
-    // Periodically dump the resolved per-pass timings. At one frame in flight
-    // the profiler resolves the previous frame on each begin_frame, so the
-    // snapshot is frame (rendered - 1). On a device without timestamp support
-    // (MoltenVK) the GPU column reads n/a; CPU times remain.
+    // Periodically dump the resolved per-pass timings. A slot's GPU times
+    // resolve when the slot recurs, so the snapshot trails the current frame
+    // by kFramesInFlight. On a device without timestamp support (MoltenVK) the
+    // GPU column reads n/a; CPU times remain.
     if (rendered % 30 == 29) {
       const vg::FrameMetrics& metrics = profiler.value().metrics();
-      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n", rendered - 1,
-                  metrics.fps, metrics.cpu_frame_ms);
+      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n",
+                  rendered - static_cast<int>(kFramesInFlight), metrics.fps,
+                  metrics.cpu_frame_ms);
       for (const vg::FrameMetrics::Section& s : metrics.sections) {
         if (s.has_gpu) {
           std::printf("  %-7s cpu %6.3f ms  gpu %6.3f ms\n", s.name, s.cpu_ms,

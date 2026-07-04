@@ -8,14 +8,18 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/impl/command.hpp"
+#include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
 namespace volumetric_kit::gfx::windowing {
 
 Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
-                                    const SwapchainConfig& config) {
+                                    const SwapchainConfig& config,
+                                    Allocator* allocator) {
   if (surface == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "Swapchain::create: surface must be non-null");
@@ -25,9 +29,31 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
         "Swapchain::create: device has no present queue (set "
         "DeviceConfig::needs_present)");
   }
+  if (config.depth_format != VK_FORMAT_UNDEFINED) {
+    if (allocator == nullptr) {
+      return Status::invalid_argument(
+          "Swapchain::create: depth_format requires an allocator to create "
+          "the per-image depth attachments");
+    }
+    // Depth-only format check (shared with OffscreenTarget); the device-support
+    // check below is swapchain-specific (it has the Device's caps to hand).
+    VG_TRY(
+        validate_depth_only_format(config.depth_format, "Swapchain::create"));
+    if (!device.caps().format_supports(
+            config.depth_format, VK_IMAGE_TILING_OPTIMAL,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+      return Status::unsupported(
+          "Swapchain::create: depth_format has no optimal-tiling depth-stencil "
+          "attachment support on this device");
+    }
+  }
   Swapchain sc;
   sc.device_ = &device;
   sc.surface_ = surface;
+  // Borrow the allocator only when the depth attachments actually need it.
+  sc.allocator_ =
+      config.depth_format != VK_FORMAT_UNDEFINED ? allocator : nullptr;
+  sc.depth_format_ = config.depth_format;
   sc.requested_min_image_count_ = config.min_image_count;
   VG_TRY(sc.select_surface_properties(config));
   VG_TRY(sc.build(config.extent));
@@ -205,6 +231,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
   VG_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, images_.data()));
 
   views_.reserve(count);
+  depth_textures_.reserve(depth_format_ != VK_FORMAT_UNDEFINED ? count : 0u);
   targets_.reserve(count);
   for (VkImage image : images_) {
     VkImageViewCreateInfo view_info{};
@@ -217,8 +244,48 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     VG_VK_TRY(vkCreateImageView(dev, &view_info, nullptr, &view));
     views_.push_back(view);
 
+    // One depth attachment per image (not one shared image): frames in flight
+    // rendering to different images then never contend for the same depth.
+    // Intentionally one per *swapchain* image, which can exceed the loop's
+    // frames-in-flight (a few surplus depth buffers): it keeps depth on the
+    // swapchain's own render targets and is safe at any in-flight depth without
+    // the swapchain having to know the loop's.
+    RenderTargetAttachment depth_attachment{};
+    if (depth_format_ != VK_FORMAT_UNDEFINED) {
+      VG_ASSIGN(Texture depth,
+                make_depth_attachment(*allocator_, extent, depth_format_));
+      depth_attachment = {depth.image(), depth.view(), depth_format_};
+      depth_textures_.push_back(std::move(depth));
+    }
+
+    // RenderTarget ignores an empty-view depth, so pass it unconditionally (no
+    // caller-side null guard). The depth reuses the target's shared load/store
+    // op — color must STORE to present, so depth is stored too; harmless here
+    // since it is cleared each frame (see RenderTarget's per-attachment-op
+    // TODO).
     const RenderTargetAttachment attachment{image, view, format_};
-    targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT);
+    targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT,
+                          &depth_attachment);
+  }
+
+  if (!depth_textures_.empty()) {
+    // One-time UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL transitions, batched into
+    // a single blocking submit. The images then stay in that layout for their
+    // lifetime — RenderTarget::begin declares it, and load-op clears rewrite
+    // the contents each frame with no further transition.
+    VG_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
+      for (const Texture& depth : depth_textures_) {
+        cmd_image_barrier(cmd, depth.image(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                          0,
+                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_ASPECT_DEPTH_BIT);
+      }
+    }));
   }
   return Status{};
 }
@@ -301,8 +368,8 @@ VkImageView Swapchain::image_view(uint32_t image_index) const {
 }
 
 RenderTargetLayout Swapchain::layout() const noexcept {
-  // Derive from a live target so the signature always matches the actual images
-  // (and tracks depth/MSAA once RenderTarget grows them); empty when none.
+  // Derive from a live target so the signature always matches the actual
+  // attachments (including the depth format when configured); empty when none.
   return targets_.empty() ? RenderTargetLayout{} : targets_.front().layout();
 }
 
@@ -312,6 +379,7 @@ void Swapchain::destroy_resources() noexcept {
   }
   VkDevice dev = device_->handle();
   targets_.clear();
+  depth_textures_.clear();  // each frees its image + view via the allocator
   for (VkImageView view : views_) {
     vkDestroyImageView(dev, view, nullptr);
   }
@@ -331,10 +399,12 @@ void Swapchain::destroy_resources() noexcept {
 void Swapchain::reset_state() noexcept {
   device_ = nullptr;
   surface_ = VK_NULL_HANDLE;
+  allocator_ = nullptr;
   swapchain_ = VK_NULL_HANDLE;
   extent_ = VkExtent2D{};
   requested_extent_ = VkExtent2D{};
   format_ = VK_FORMAT_UNDEFINED;
+  depth_format_ = VK_FORMAT_UNDEFINED;
   color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
   requested_min_image_count_ = 0;
@@ -350,11 +420,14 @@ Swapchain::~Swapchain() { destroy(); }
 Swapchain::Swapchain(Swapchain&& other) noexcept
     : device_(other.device_),
       surface_(other.surface_),
+      allocator_(other.allocator_),
       swapchain_(other.swapchain_),
       images_(std::move(other.images_)),
       views_(std::move(other.views_)),
+      depth_textures_(std::move(other.depth_textures_)),
       targets_(std::move(other.targets_)),
       format_(other.format_),
+      depth_format_(other.depth_format_),
       color_space_(other.color_space_),
       present_mode_(other.present_mode_),
       extent_(other.extent_),
@@ -368,11 +441,14 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     destroy();
     device_ = other.device_;
     surface_ = other.surface_;
+    allocator_ = other.allocator_;
     swapchain_ = other.swapchain_;
     images_ = std::move(other.images_);
     views_ = std::move(other.views_);
+    depth_textures_ = std::move(other.depth_textures_);
     targets_ = std::move(other.targets_);
     format_ = other.format_;
+    depth_format_ = other.depth_format_;
     color_space_ = other.color_space_;
     present_mode_ = other.present_mode_;
     extent_ = other.extent_;
