@@ -17,7 +17,7 @@ add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
 target_sources(
   gfx_pipelines PRIVATE gpu_mesh.cpp owned_descriptor_set.cpp pbr_material.cpp
-                        pbr_pipeline.cpp pbr_scene.cpp)
+                        pbr_model.cpp pbr_pipeline.cpp pbr_scene.cpp)
 
 generate_export_header(
   gfx_pipelines
