@@ -49,9 +49,12 @@ target_include_directories(example_02_imgui SYSTEM
 target_link_libraries(
   example_02_imgui PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_app glfw
                            Vulkan::Vulkan)
-# Strict first-party warnings apply to the example's own main.cpp; the bundled
-# third-party ImGui TUs opt out (the source-level -w follows the target flags on
-# the command line, so it wins over -Werror).
+# Strict first-party warnings apply to each example's own main.cpp (via
+# vg_target_warnings); the bundled third-party ImGui TUs opt out through the
+# directory-scoped set_source_files_properties below -- the source-level -w
+# follows the target flags on the command line, so it wins over -Werror. Being
+# directory-scoped, that -w also covers example_03_model's imgui_impl_glfw.cpp,
+# so 03 does not repeat it.
 vg_target_warnings(example_02_imgui)
 set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
@@ -60,13 +63,23 @@ set_source_files_properties(
 # 03_model: load a glTF model (io tier) and view it depth-tested, with an
 # interactive CameraRig (camera tier) and a reflected per-draw MVP push
 # constant; the windowed and --screenshot bring-up chains come from the app tier
-# (WindowedApp / HeadlessApp). Links the io + camera tiers on top of app; the
-# Vulkan loader directly because it records vkCmd* itself.
-add_executable(example_03_model 03_model/main.cpp)
+# (WindowedApp / HeadlessApp). Links the io + camera tiers on top of app, and
+# the ui tier for the Dear ImGui profiler-metrics overlay -- like 02, the
+# example owns the imgui_impl_glfw platform backend while the ui tier wraps
+# imgui_impl_vulkan. The Vulkan loader is linked directly (records vkCmd*).
+add_executable(
+  example_03_model 03_model/main.cpp
+                   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+target_include_directories(example_03_model SYSTEM
+                           PRIVATE "${VG_IMGUI_SOURCE_DIR}/backends")
 target_link_libraries(
   example_03_model
-  PRIVATE volumetric_kit::gfx_app volumetric_kit::gfx_io
-          volumetric_kit::gfx_camera volumetric_kit::gfx_pipelines glfw
+  PRIVATE volumetric_kit::gfx_ui
+          volumetric_kit::gfx_app
+          volumetric_kit::gfx_io
+          volumetric_kit::gfx_camera
+          volumetric_kit::gfx_pipelines
+          glfw
           Vulkan::Vulkan)
 vg_target_warnings(example_03_model)
 

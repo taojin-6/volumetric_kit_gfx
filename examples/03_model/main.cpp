@@ -62,6 +62,8 @@
 #include <glm/vec4.hpp>
 
 #include "common/glfw_surface.hpp"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
@@ -82,6 +84,8 @@
 #include "volumetric_kit/gfx/pipelines/pbr_model.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
+#include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -648,7 +652,7 @@ void scroll_callback(GLFWwindow* window, double /*x_offset*/, double y_offset) {
 // wheel zooms, and WASDQE flies (Q/E = down/up, Shift = faster). move_speed
 // scales the fly speed to the model size so it feels right for any model.
 void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
-                 float move_speed) {
+                 float move_speed, bool capture_mouse, bool capture_keyboard) {
   const double now = glfwGetTime();
   float dt =
       input.last_time > 0.0 ? static_cast<float>(now - input.last_time) : 0.0f;
@@ -672,11 +676,16 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
   constexpr float kPanSpeed = 0.0015f;   // world units / pixel, per focus unit
   constexpr float kZoomStep = 0.9f;      // multiplier / wheel notch
 
+  // The ImGui overlay claims the cursor/wheel when hovered (capture_mouse) and
+  // the keys when a widget is focused (capture_keyboard); skip the matching
+  // camera verbs so dragging or scrolling the panel does not move the camera.
   const bool left =
+      !capture_mouse &&
       glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
   const bool panning =
-      glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
-      glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+      !capture_mouse &&
+      (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
+       glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS);
   if (left) {
     rig.orbit(-dx * kOrbitSpeed, -dy * kOrbitSpeed);
   } else if (panning) {
@@ -684,18 +693,22 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
     rig.pan(-dx * scale, dy * scale);
   }
 
-  if (input.scroll != 0.0) {
+  if (capture_mouse) {
+    input.scroll = 0.0;  // the wheel scrolled the panel, not the camera
+  } else if (input.scroll != 0.0) {
     rig.zoom(std::pow(kZoomStep, static_cast<float>(input.scroll)));
     input.scroll = 0.0;
   }
 
   glm::vec3 move(0.0f);
-  move.x += glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ? 1.0f : 0.0f;
-  move.x -= glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ? 1.0f : 0.0f;
-  move.y += glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS ? 1.0f : 0.0f;
-  move.y -= glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS ? 1.0f : 0.0f;
-  move.z += glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ? 1.0f : 0.0f;
-  move.z -= glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ? 1.0f : 0.0f;
+  if (!capture_keyboard) {
+    move.x += glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ? 1.0f : 0.0f;
+    move.x -= glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ? 1.0f : 0.0f;
+    move.y += glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS ? 1.0f : 0.0f;
+    move.y -= glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS ? 1.0f : 0.0f;
+    move.z += glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ? 1.0f : 0.0f;
+    move.z -= glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ? 1.0f : 0.0f;
+  }
   if (glm::dot(move, move) > 0.0f) {  // a movement key is held
     const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                       glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
@@ -811,10 +824,38 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // hook — the swapchain rebuilds its own depth attachments with the chain.
   app.set_profiler(&profiler.value());
 
-  // A hard error inside the loop breaks out to the shared wait_idle() teardown
-  // below rather than returning straight away, so any in-flight frame is
-  // drained before the after-app resources (pipeline, model, scene, skybox,
-  // profiler) destruct.
+  // Debug overlay (ui tier): a Dear ImGui panel of the profiler's per-pass
+  // metrics, composited on top of the scene. Its pipeline bakes the swapchain
+  // layout's color + depth formats, so it draws into the same depth-capable
+  // target; the swapchain holds its format + image count stable across
+  // recreate, so the overlay survives resizes without rebuilding.
+  vg::ui::ImGuiOverlayConfig overlay_config;
+  overlay_config.layout = app.swapchain().layout();
+  overlay_config.min_image_count = app.swapchain().image_count();
+  overlay_config.image_count = app.swapchain().image_count();
+  auto overlay = vg::ui::ImGuiOverlay::create(
+      app.device(), app.instance().handle(), overlay_config);
+  if (!overlay.ok()) {
+    std::fprintf(stderr, "overlay: %s\n", overlay.status().message().c_str());
+    return 1;
+  }
+  // Platform backend (this example's half): bind it to the overlay's context,
+  // then let it feed input + io.DisplaySize each frame. Initialized last, after
+  // the fallible setup above, so no earlier error return leaves a live
+  // ImGui_ImplGlfw backend without its paired Shutdown at teardown; it chains
+  // onto the scroll callback registered above (interactive), so the wheel still
+  // reaches the camera.
+  ImGui::SetCurrentContext(overlay.value().context());
+  if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
+    std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
+    return 1;
+  }
+
+  // A hard error inside the loop breaks out to the shared teardown below
+  // (wait_idle + set_profiler(nullptr) + ImGui_ImplGlfw_Shutdown) rather than
+  // returning straight away, so in-flight frames are drained before the
+  // after-app resources (pipeline, model, scene, skybox, profiler, overlay)
+  // destruct.
   int exit_code = 0;
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -845,6 +886,14 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const VkExtent2D extent = app.swapchain().extent();
     const VkCommandBuffer cmd = f.cmd;
 
+    // Open the ImGui frame and build the metrics panel before recording:
+    // new_frame computes io.WantCaptureMouse/Keyboard, which gate the camera
+    // input below so the panel takes the cursor/keys when the user is on it.
+    ImGui_ImplGlfw_NewFrame();
+    overlay.value().new_frame();
+    const ImGuiIO& io = ImGui::GetIO();
+    vg::ui::draw_metrics_panel(profiler.value().metrics());
+
     // The acquired image's target already pairs its color view with its own
     // depth attachment; the default load op clears both.
     vg::RenderTargetBeginInfo begin;
@@ -854,7 +903,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // Advance the camera: interactive input, or a deterministic per-frame
     // turntable step under --frames (reproducible for CI).
     if (interactive) {
-      apply_input(window, input, rig, move_speed);
+      apply_input(window, input, rig, move_speed, io.WantCaptureMouse,
+                  io.WantCaptureKeyboard);
     } else {
       rig.orbit(0.0075f, 0.0f);
     }
@@ -873,7 +923,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     scene.set_camera(f.slot, rig.position(), ibl.value().prefilter_max_lod);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
-      // around each, resolved into the metrics printed below.
+      // around each, resolved into the metrics the overlay panel shows.
       vg::Profiler::Scope skybox_scope =
           profiler.value().gpu_scope(cmd, "skybox");
       record_skybox(cmd, extent, skybox, view_proj, rig.position());
@@ -890,6 +940,9 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       vg::Profiler::Scope pbr_scope = profiler.value().gpu_scope(cmd, "pbr");
       pipeline.value().submit(cmd, frame_info);
     }
+    // Composite the debug overlay on top of the scene, within the same
+    // dynamic-rendering scope.
+    overlay.value().render(cmd);
 
     f.target->end(cmd);
 
@@ -900,34 +953,24 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
       break;
     }
 
-    // Periodically dump the resolved per-pass timings. A slot's GPU times
-    // resolve when the slot recurs, so the snapshot trails the current frame
-    // by kFramesInFlight. On a device without timestamp support (MoltenVK) the
-    // GPU column reads n/a; CPU times remain.
-    if (rendered % 30 == 29) {
-      const vg::FrameMetrics& metrics = profiler.value().metrics();
-      std::printf("03_model frame %d: %.1f fps, %.2f ms/frame\n",
-                  rendered - static_cast<int>(kFramesInFlight), metrics.fps,
-                  metrics.cpu_frame_ms);
-      for (const vg::FrameMetrics::Section& s : metrics.sections) {
-        if (s.has_gpu) {
-          std::printf("  %-7s cpu %6.3f ms  gpu %6.3f ms\n", s.name, s.cpu_ms,
-                      s.gpu_ms);
-        } else {
-          std::printf("  %-7s cpu %6.3f ms  gpu     n/a\n", s.name, s.cpu_ms);
-        }
-      }
-    }
+    // The resolved per-pass timings now show live in the overlay panel (a
+    // slot's GPU times resolve when the slot recurs, so they trail the current
+    // frame by kFramesInFlight; on a device without timestamp support the GPU
+    // column reads n/a and CPU times remain).
     ++rendered;
   }
 
-  // Everything above (pipeline, model, scene, skybox, profiler) was created
-  // after the app, so it destructs before it — while the app's frame loop may
-  // still have frames in flight referencing it (including after an error break
-  // above). Idle the device first so that teardown is safe, and detach the
-  // borrowed profiler from the loop before it goes out of scope.
+  // Everything above (pipeline, model, scene, skybox, profiler, overlay) was
+  // created after the app, so it destructs before it — while the app's frame
+  // loop may still have frames in flight referencing it (including after an
+  // error break above). Idle the device first so that teardown is safe, and
+  // detach the borrowed profiler from the loop before it goes out of scope.
   app.wait_idle();
   app.set_profiler(nullptr);
+  // Tear the platform backend down while the ImGui context is still alive; the
+  // overlay's destructor then shuts the renderer backend down and destroys it.
+  ImGui::SetCurrentContext(overlay.value().context());
+  ImGui_ImplGlfw_Shutdown();
   std::printf("03_model: rendered %d frame(s)\n", rendered);
   return exit_code;
 }
