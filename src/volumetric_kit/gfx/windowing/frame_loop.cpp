@@ -266,8 +266,10 @@ Status FrameLoop::end_frame(const Frame& frame) {
     (void)recover_slot(slot);
     return fence_ready;
   }
-  const VkResult submitted = vkQueueSubmit(device_->graphics_queue(), 1,
-                                           &submit, in_flight_[slot].handle());
+  // Route through the device so a shared (adopted) graphics queue stays
+  // externally synchronized under its submit mutex.
+  const VkResult submitted =
+      device_->queue_submit(1, &submit, in_flight_[slot].handle());
   if (submitted != VK_SUCCESS) {
     // The failed submit consumed nothing: the acquire signal is still pending
     // and the fence was just reset, so recover_slot restores both.
@@ -314,8 +316,8 @@ Status FrameLoop::recover_slot(uint32_t slot) {
   // then wait. If any step fails the queue itself is failing — fall through.
   Status status = in_flight_[slot].reset();
   if (status.ok()) {
-    const VkResult submitted = vkQueueSubmit(
-        device_->graphics_queue(), 1, &submit, in_flight_[slot].handle());
+    const VkResult submitted =
+        device_->queue_submit(1, &submit, in_flight_[slot].handle());
     if (submitted == VK_SUCCESS) {
       return in_flight_[slot].wait();
     }
@@ -347,7 +349,9 @@ FrameLoop::~FrameLoop() { drain(); }
 
 void FrameLoop::drain() noexcept {
   if (device_ != nullptr && valid()) {
-    (void)vkDeviceWaitIdle(device_->handle());
+    // Wait on the renderer's own queues (never device-wide) so a shared adopted
+    // device does not idle a sibling library's queues too.
+    (void)device_->wait_idle();
   }
 }
 

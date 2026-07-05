@@ -63,10 +63,11 @@ struct Frame {
 /// classified by @ref swapchain_stale.
 ///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
-///          the loop (it borrows both). Destruction idles the device
-///          (`vkDeviceWaitIdle`) to drain in-flight frames, so teardown is safe
-///          mid-flight — note that idles every queue on the device, not only
-///          this loop's work. A profiler attached via @ref set_profiler and
+///          the loop (it borrows both). Destruction drains the renderer's
+///          queues (@ref Device::wait_idle) to finish in-flight frames, so
+///          teardown is safe mid-flight; on a shared adopted device that waits
+///          only on the renderer's queues, not a sibling library's. A profiler
+///          attached via @ref set_profiler and
 ///          anything captured by the @ref set_recreate_callback hook are
 ///          likewise borrowed and must outlive the loop, or be detached first.
 ///
@@ -198,12 +199,13 @@ class VG_WINDOWING_API FrameLoop {
   // next begin_frame never blocks on it. Blocking; error-path only.
   Status recover_slot(uint32_t slot);
 
-  // Idle the whole device (vkDeviceWaitIdle) so teardown cannot free command
-  // buffers / semaphores the GPU still references. A device-wide wait, not just
-  // this loop's fences: a present that reported out-of-date may leave a
-  // render-finished semaphore with no fence to wait on, so the queues are
-  // drained wholesale. Best-effort: errors are unreportable from the destructor
-  // and moot on a lost device.
+  // Drain the renderer's own queues (@ref Device::wait_idle: graphics, and
+  // present when distinct) so teardown cannot free command buffers / semaphores
+  // the GPU still references. Waiting the queues (not this loop's fences) still
+  // covers a present that reported out-of-date and left a render-finished
+  // semaphore with no fence to wait on. Never device-wide: on a shared adopted
+  // device that would idle a sibling library's queues too. Best-effort: errors
+  // are unreportable from the destructor and moot on a lost device.
   void drain() noexcept;
 
   const Device* device_ = nullptr;  // borrowed; outlives this

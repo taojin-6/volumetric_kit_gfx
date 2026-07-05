@@ -104,8 +104,9 @@ Status WindowedApp::wait_idle() const {
   if (state_ == nullptr) {
     return Status::invalid_argument("WindowedApp::wait_idle: empty app");
   }
-  VG_VK_TRY(vkDeviceWaitIdle(state_->device->handle()));
-  return {};
+  // Queue-scoped (not device-wide): on a shared adopted device this must not
+  // idle a sibling library's queues.
+  return state_->device->wait_idle();
 }
 
 }  // namespace volumetric_kit::gfx::app

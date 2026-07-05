@@ -9,6 +9,7 @@
 ///        rendering.
 
 #include <cstdint>
+#include <mutex>
 
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -63,10 +64,10 @@ struct ImGuiOverlayConfig {
 /// move-assign into.
 ///
 /// @warning The @p instance and @p device passed to @ref create must outlive
-///          the overlay (it borrows both). Idle the device
-///          (`vkDeviceWaitIdle`) before destroying the overlay while frames it
-///          rendered are still in flight — teardown frees the ImGui pipeline
-///          and descriptor pool.
+///          the overlay (it borrows both). Wait for the renderer's queues to
+///          idle (@ref Device::wait_idle) before destroying the overlay while
+///          frames it rendered are still in flight — teardown frees the ImGui
+///          pipeline and descriptor pool.
 ///
 /// @code
 /// auto overlay = ui::ImGuiOverlay::create(
@@ -127,9 +128,12 @@ class VG_UI_API ImGuiOverlay {
   ///             layout is compatible with @ref ImGuiOverlayConfig::layout.
   /// @pre `valid()`, and @ref new_frame was called this frame. Makes @ref
   ///      context the current ImGui context.
-  /// @note On the first call the font atlas uploads through the backend's own
-  ///       command buffer (a blocking queue submit), not @p cmd, so it is safe
-  ///       inside the rendering scope.
+  /// @note On the first call (and whenever a texture is (re)created) the atlas
+  ///       uploads through the backend's own command buffer via a blocking
+  ///       queue submit on the graphics queue, not @p cmd, so it is safe inside
+  ///       the rendering scope. That submit is taken under the device's
+  ///       @ref Device::submit_mutex, so it is serialized on a shared (adopted)
+  ///       queue like every other renderer submit.
   void render(VkCommandBuffer cmd);
 
   /// @return The owned `ImGuiContext` (`nullptr` when empty). Pass to
@@ -145,6 +149,10 @@ class VG_UI_API ImGuiOverlay {
   void destroy() noexcept;
 
   ImGuiContext* context_ = nullptr;  ///< Owns the backend via its BackendData.
+  /// Borrowed from @ref Device::submit_mutex at @ref create: guards the
+  /// backend's internal texture-upload submit on a shared queue (`nullptr` when
+  /// the queue is exclusively the device's).
+  std::mutex* submit_mutex_ = nullptr;
 };
 
 }  // namespace ui

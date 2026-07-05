@@ -68,6 +68,11 @@ struct DeviceConfig {
 ///
 /// Derived from a @ref DeviceConfig by @ref Device::requirements. Expressed in
 /// raw Vulkan data so the bundle carries no type a sibling library must import.
+///
+/// @warning `device_extensions` and `feature_chain` borrow their pointers from
+///          the @ref DeviceConfig passed to @ref Device::requirements
+///          (extension name strings, the caller's feature `pNext` chain); they
+///          must outlive any use of this descriptor.
 struct DeviceRequirements {
   /// Minimum device Vulkan version (the renderer targets 1.3 core).
   uint32_t api_version = VK_API_VERSION_1_3;
@@ -75,7 +80,8 @@ struct DeviceRequirements {
   VkQueueFlags queue_flags = VK_QUEUE_GRAPHICS_BIT;
   /// Also needs a present-capable queue (implies `VK_KHR_swapchain`).
   bool needs_present = false;
-  /// Device extensions to enable (swapchain / external-memory / caller extras).
+  /// Device extensions to enable (swapchain / external-memory / caller extras),
+  /// de-duplicated.
   std::vector<const char*> device_extensions;
   /// Core (1.0) features to enable.
   VkPhysicalDeviceFeatures features = {};
@@ -83,6 +89,11 @@ struct DeviceRequirements {
   bool timeline_semaphore = true;
   /// `dynamicRendering` (1.3 core) — required by `RenderTarget`.
   bool dynamic_rendering = true;
+  /// The `DeviceConfig::feature_chain` the renderer would enable (extended
+  /// `*Features` structs), passed through so an embedder building the shared
+  /// device can merge it. @ref Device::adopt cannot introspect an opaque chain,
+  /// so the embedder is responsible for enabling these; `nullptr` when none.
+  const void* feature_chain = nullptr;
 };
 
 /// @brief A `VkDevice` the caller already created, plus a description of what
@@ -90,23 +101,36 @@ struct DeviceRequirements {
 ///
 /// The `enabled_*` fields exist because Vulkan gives no way to query which
 /// extensions/features were enabled at device-creation time; the creator must
-/// declare them so @ref Device::adopt can verify by set-comparison. The arrays
-/// and structs it points to need only outlive the `adopt` call.
+/// declare them so @ref Device::adopt can verify by set-comparison.
+///
+/// @warning The `enabled_device_extensions` array need only outlive the
+///          @ref Device::adopt call (it is consumed synchronously). The
+///          `instance`, `physical_device`, `device`, and — when non-null —
+///          `submit_mutex`, by contrast, are borrowed for the whole lifetime of
+///          the returned @ref Device and must outlive it.
 struct AdoptedDevice {
+  /// The instance `device` belongs to. Must be a Vulkan 1.1+ instance:
+  /// @ref Device::adopt queries the physical device with
+  /// `vkGetPhysicalDeviceFeatures2` (1.1 core) through it.
   VkInstance instance = VK_NULL_HANDLE;
+  /// The physical device `device` was created on.
   VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+  /// The logical device to borrow; @ref Device::adopt never destroys it.
   VkDevice device = VK_NULL_HANDLE;
 
   /// The graphics-capable queue assigned to the renderer, and its family.
   uint32_t graphics_family = 0;
   VkQueue graphics_queue = VK_NULL_HANDLE;
-  /// The present queue/family — required when `DeviceConfig::needs_present`.
+  /// The present queue/family — required when `DeviceConfig::needs_present`. A
+  /// non-null `present_queue` is required whenever `has_present` is set.
   bool has_present = false;
   uint32_t present_family = 0;
   VkQueue present_queue = VK_NULL_HANDLE;
   /// When non-null, the assigned queue is shared with another library; every
-  /// `vkQueueSubmit` on it must hold this mutex (Vulkan requires queue submits
-  /// be externally synchronized).
+  /// queue submit/present on it must hold this mutex (Vulkan requires queue
+  /// operations be externally synchronized). @ref Device::adopt routes its own
+  /// submits/presents through it (see @ref Device::queue_submit); it must
+  /// outlive the returned @ref Device.
   std::mutex* submit_mutex = nullptr;
 
   /// What the creator enabled on `device` (for `adopt`'s set-comparison
@@ -165,8 +189,10 @@ class VG_CORE_API Device {
   ///         `needs_present` config without a present queue; @ref
   ///         Status::Code::Unsupported when @p adopted is below Vulkan 1.3, its
   ///         assigned queue family lacks the required capabilities, or a
-  ///         required extension/feature was not enabled on it.
-  /// @pre The instance/device in @p adopted must outlive the returned `Device`.
+  ///         required extension/feature is not supported/enabled on it.
+  /// @pre @p adopted.instance (a Vulkan 1.1+ instance), `physical_device`,
+  ///      `device`, and — when non-null — `submit_mutex` must all outlive the
+  ///      returned `Device`.
   static Result<Device> adopt(const AdoptedDevice& adopted,
                               const DeviceConfig& config);
 
@@ -193,9 +219,10 @@ class VG_CORE_API Device {
   bool owns_device() const noexcept { return owns_device_; }
 
   /// @return The mutex guarding submits on a shared queue, or `nullptr` when
-  /// the
-  ///         queue is exclusively this device's. Submit sites that record on
-  ///         @ref graphics_queue must hold it when non-null.
+  ///         the queue is exclusively this device's. Prefer @ref queue_submit,
+  ///         @ref queue_present, or @ref wait_idle, which take it internally;
+  ///         code operating on the raw @ref graphics_queue / @ref present_queue
+  ///         must hold it when non-null.
   std::mutex* submit_mutex() const noexcept { return submit_mutex_; }
 
   /// @return Read-only capabilities of the physical device, captured at
@@ -267,6 +294,38 @@ class VG_CORE_API Device {
   ///         wait failure).
   /// @note Same external-synchronization caveat as @ref submit_single_time.
   Status submit_and_wait(VkCommandBuffer cmd) const;
+
+  /// @brief Submit to the graphics queue, holding @ref submit_mutex when the
+  ///        queue is shared with another library.
+  ///
+  /// Prefer this over a raw `vkQueueSubmit` on @ref graphics_queue: on a device
+  /// obtained through @ref adopt with a shared queue it keeps submissions
+  /// externally synchronized (a no-op lock otherwise).
+  /// @param submit_count  Number of entries in @p submits.
+  /// @param submits       The submit descriptors (recorded, ended buffers).
+  /// @param fence         Fence signalled on completion, or `VK_NULL_HANDLE`.
+  /// @return The `VkResult` of the underlying `vkQueueSubmit`.
+  VkResult queue_submit(uint32_t submit_count, const VkSubmitInfo* submits,
+                        VkFence fence) const;
+
+  /// @brief Present on the present queue, holding @ref submit_mutex when the
+  ///        present queue is the shared graphics queue.
+  /// @param present_info  The present descriptor.
+  /// @return The `VkResult` of the underlying `vkQueuePresentKHR`;
+  ///         `VK_SUBOPTIMAL_KHR` / `VK_ERROR_OUT_OF_DATE_KHR` flow back so the
+  ///         caller can recreate the swapchain.
+  /// @pre @ref has_present.
+  VkResult queue_present(const VkPresentInfoKHR& present_info) const;
+
+  /// @brief Wait until this device's own queues — graphics, and present when
+  ///        distinct — are idle, holding @ref submit_mutex.
+  ///
+  /// The shared-device-safe replacement for `vkDeviceWaitIdle`: that idles
+  /// *every* queue on the device (including a sibling library's on an adopted
+  /// device) and cannot be externally synchronized against @ref submit_mutex,
+  /// so the renderer waits only on the queues it was assigned.
+  /// @return OK once the queues drain, or a non-OK @ref Status on device loss.
+  Status wait_idle() const;
 
  private:
   Device() = default;

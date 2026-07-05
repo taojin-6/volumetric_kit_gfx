@@ -21,6 +21,70 @@ namespace {
 // directly.
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
+// True when every core feature bit set in @p requested is also set in @p
+// supported. VkPhysicalDeviceFeatures is a contiguous block of VkBool32, so it
+// compares as one — a new Vulkan core feature needs no edit here.
+bool core_features_supported(const VkPhysicalDeviceFeatures& requested,
+                             const VkPhysicalDeviceFeatures& supported) {
+  constexpr size_t kCount = sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+  const auto* req = reinterpret_cast<const VkBool32*>(&requested);
+  const auto* sup = reinterpret_cast<const VkBool32*>(&supported);
+  for (size_t i = 0; i < kCount; ++i) {
+    if (req[i] == VK_TRUE && sup[i] != VK_TRUE) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Query and require the core features the renderer depends on: the requested
+// 1.0 features (@p requested_core), timelineSemaphore (1.2 core), and
+// dynamicRendering (1.3 core). The last two are guaranteed by the 1.3 floor,
+// but checking keeps the requirement explicit and identical for create() and
+// adopt() (so neither drifts). @p timeline / @p dynamic are written through so
+// create() can go on to link them into its device-create chain (their sType is
+// set, and they carry the device's reported — here, required — bits).
+Status require_core_features(
+    VkPhysicalDevice physical, const VkPhysicalDeviceFeatures& requested_core,
+    VkPhysicalDeviceTimelineSemaphoreFeatures* timeline,
+    VkPhysicalDeviceDynamicRenderingFeatures* dynamic) {
+  *timeline = {};
+  timeline->sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  *dynamic = {};
+  dynamic->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+  timeline->pNext = dynamic;
+  VkPhysicalDeviceFeatures2 supported{};
+  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  supported.pNext = timeline;
+  vkGetPhysicalDeviceFeatures2(physical, &supported);
+  if (!timeline->timelineSemaphore) {
+    return Status::unsupported(
+        "device does not support timelineSemaphore (core in Vulkan 1.2)");
+  }
+  if (!dynamic->dynamicRendering) {
+    return Status::unsupported(
+        "device does not support dynamicRendering (core in Vulkan 1.3)");
+  }
+  if (!core_features_supported(requested_core, supported.features)) {
+    return Status::unsupported(
+        "device does not support a requested core feature "
+        "(DeviceConfig::features)");
+  }
+  return Status{};
+}
+
+// Create the graphics-family command pool this wrapper owns (RESET_COMMAND_
+// BUFFER_BIT), shared by create() and adopt() so the two stay identical.
+VkResult create_graphics_command_pool(VkDevice device, uint32_t family,
+                                      VkCommandPool* out) {
+  VkCommandPoolCreateInfo pool_info{};
+  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  pool_info.queueFamilyIndex = family;
+  return vkCreateCommandPool(device, &pool_info, nullptr, out);
+}
+
 }  // namespace
 
 Result<Device> Device::create([[maybe_unused]] VkInstance instance,
@@ -105,28 +169,16 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     extensions.push_back(kPortabilitySubset);
   }
 
-  // Timeline semaphores are core in Vulkan 1.2; we target the core feature (the
-  // TimelineSemaphore calls use the core entry points), so we only query and
-  // enable the feature here — no pre-1.2 VK_KHR_timeline_semaphore path, which
-  // would need the *KHR function variants the rest of the code does not call.
+  // Require the core features the renderer depends on: the caller's 1.0
+  // features, plus timelineSemaphore (1.2 core; the TimelineSemaphore calls use
+  // the core entry points) and dynamicRendering (1.3 core; RenderTarget records
+  // vkCmdBeginRendering). require_core_features fills the two feature structs
+  // so they can be linked into the create chain below with their (now-required)
+  // bits set — the same check adopt() runs.
   VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
-  timeline_features.sType =
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
-  // dynamicRendering is core (and required) in Vulkan 1.3; RenderTarget records
-  // vkCmdBeginRendering, so it is the renderer's only path to a draw. Query it
-  // alongside timelineSemaphore and enable it unconditionally below.
   VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features{};
-  dynamic_rendering_features.sType =
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
-  timeline_features.pNext = &dynamic_rendering_features;
-  VkPhysicalDeviceFeatures2 supported{};
-  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  supported.pNext = &timeline_features;
-  vkGetPhysicalDeviceFeatures2(physical, &supported);
-  if (!dynamic_rendering_features.dynamicRendering) {
-    return Status::unsupported(
-        "device does not support dynamicRendering (core in Vulkan 1.3)");
-  }
+  VG_TRY(require_core_features(physical, config.features, &timeline_features,
+                               &dynamic_rendering_features));
 
   const float priority = 1.0f;
   std::set<uint32_t> unique_families = {graphics_family};
@@ -242,12 +294,8 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     vkGetDeviceQueue(device.device_, *present, 0, &device.present_queue_);
   }
 
-  VkCommandPoolCreateInfo pool_info{};
-  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = graphics_family;
-  VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
-                                &device.command_pool_));
+  VG_VK_TRY(create_graphics_command_pool(device.device_, graphics_family,
+                                         &device.command_pool_));
 
   // Resolve the VK_EXT_debug_utils device entry points. The caller threads the
   // instance's debug_utils_enabled() in through config.enable_debug_utils (the
@@ -265,27 +313,36 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
 
 DeviceRequirements Device::requirements(const DeviceConfig& config) {
   // Mirror what create() enables, expressed as a mergeable descriptor. The
+  // 1.3 / graphics / timeline / dynamic-rendering floor is the
+  // DeviceRequirements default, so only config-derived fields are set here. The
   // spec-required VK_KHR_portability_subset is intentionally omitted: it is the
   // device *creator's* obligation when the device exposes it, not a caller
   // need.
   DeviceRequirements reqs;
-  reqs.api_version = VK_API_VERSION_1_3;
-  reqs.queue_flags = VK_QUEUE_GRAPHICS_BIT;
   reqs.needs_present = config.needs_present;
   reqs.features = config.features;
-  reqs.timeline_semaphore = true;  // 1.2 core
-  reqs.dynamic_rendering = true;   // 1.3 core, required by RenderTarget
+  reqs.feature_chain = config.feature_chain;
 
+  // De-duplicate exactly like create(): a name implied by a flag (e.g.
+  // VK_KHR_swapchain) that the caller also lists must appear once, or an
+  // embedder feeding device_extensions to vkCreateDevice trips the
+  // unique-extension-names VUID.
+  auto add = [&](const char* name) {
+    if (std::none_of(
+            reqs.device_extensions.begin(), reqs.device_extensions.end(),
+            [&](const char* e) { return std::strcmp(e, name) == 0; })) {
+      reqs.device_extensions.push_back(name);
+    }
+  };
   if (config.needs_present) {
-    reqs.device_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    add(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   }
   if (config.needs_external_memory) {
-    reqs.device_extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
-    reqs.device_extensions.push_back(
-        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+    add(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+    add(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
   }
   for (const char* name : config.extra_device_extensions) {
-    reqs.device_extensions.push_back(name);
+    add(name);
   }
   return reqs;
 }
@@ -300,15 +357,25 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
         "Device::adopt: instance, physical device, device, and graphics queue "
         "must all be non-null");
   }
-  if (config.needs_present &&
-      (!adopted.has_present || adopted.present_queue == VK_NULL_HANDLE)) {
+  // has_present must carry a real queue: create() sets present family+queue
+  // together, so reject the index-without-queue state adopt could otherwise
+  // reach (present_family() would then read a bogus-but-set index).
+  if (adopted.has_present && adopted.present_queue == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "Device::adopt: has_present set without a present queue");
+  }
+  if (config.needs_present && !adopted.has_present) {
     return Status::invalid_argument(
         "Device::adopt: needs_present requires a present queue in "
         "AdoptedDevice");
   }
 
+  // Verify against the renderer's own published requirements rather than
+  // re-deriving the constants here, so requirements() stays the single source.
+  const DeviceRequirements reqs = requirements(config);
+
   PhysicalDeviceInfo caps = PhysicalDeviceInfo::query(adopted.physical_device);
-  if (caps.properties().apiVersion < VK_API_VERSION_1_3) {
+  if (caps.properties().apiVersion < reqs.api_version) {
     return Status::unsupported("adopted device does not support Vulkan 1.3");
   }
 
@@ -322,62 +389,61 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
     return Status::invalid_argument(
         "Device::adopt: graphics_family out of range for the physical device");
   }
+  if (adopted.has_present && adopted.present_family >= family_count) {
+    return Status::invalid_argument(
+        "Device::adopt: present_family out of range for the physical device");
+  }
   std::vector<VkQueueFamilyProperties> families(family_count);
   vkGetPhysicalDeviceQueueFamilyProperties(adopted.physical_device,
                                            &family_count, families.data());
   const VkQueueFamilyProperties& gfx_family = families[adopted.graphics_family];
-  if ((gfx_family.queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+  if ((gfx_family.queueFlags & reqs.queue_flags) != reqs.queue_flags) {
     return Status::unsupported(
-        "Device::adopt: assigned queue family is not graphics-capable");
+        "Device::adopt: assigned queue family lacks the required capabilities");
   }
 
-  // Every extension the renderer needs must be in the creator's declared
-  // enabled set — Vulkan cannot be asked what a logical device enabled.
-  const DeviceRequirements reqs = requirements(config);
-  if (!reqs.device_extensions.empty()) {
-    if (adopted.enabled_device_extensions == nullptr) {
+  // Every extension the renderer needs must be supported by the physical device
+  // AND in the creator's declared enabled set — Vulkan cannot be asked what a
+  // logical device enabled, so the declaration stands in for that query while
+  // physical support stays authoritative (as create() checks it).
+  if (!reqs.device_extensions.empty() &&
+      adopted.enabled_device_extensions == nullptr) {
+    return Status::unsupported(
+        "Device::adopt: adopted device did not declare enabled extensions");
+  }
+  auto is_enabled = [&](const char* name) {
+    for (uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
+      const char* enabled = adopted.enabled_device_extensions[i];
+      if (enabled != nullptr && std::strcmp(enabled, name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const char* name : reqs.device_extensions) {
+    if (!caps.supports_device_extension(name)) {
       return Status::unsupported(
-          "Device::adopt: adopted device did not declare enabled extensions");
+          std::string("Device::adopt: required extension not supported by the "
+                      "adopted physical device: ") +
+          name);
     }
-    auto is_enabled = [&](const char* name) {
-      for (uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
-        if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
-          return true;
-        }
-      }
-      return false;
-    };
-    for (const char* name : reqs.device_extensions) {
-      if (!is_enabled(name)) {
-        return Status::unsupported(
-            std::string("Device::adopt: required extension not enabled on the "
-                        "adopted device: ") +
-            name);
-      }
+    if (!is_enabled(name)) {
+      return Status::unsupported(
+          std::string("Device::adopt: required extension not enabled on the "
+                      "adopted device: ") +
+          name);
     }
   }
 
-  // Necessary condition for the core features create() enables: the physical
-  // device must support them. Whether they were actually *enabled* on the
-  // logical device rests on the creator honoring requirements().
+  // Require the same core features create() enables (config.features,
+  // timelineSemaphore, dynamicRendering). On an adopted device this verifies
+  // physical-device *support*; that they were actually *enabled* on the logical
+  // device rests on the creator honoring requirements(). The filled feature
+  // structs are unused here (adopt creates no device).
   VkPhysicalDeviceTimelineSemaphoreFeatures timeline{};
-  timeline.sType =
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
   VkPhysicalDeviceDynamicRenderingFeatures dynamic{};
-  dynamic.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
-  timeline.pNext = &dynamic;
-  VkPhysicalDeviceFeatures2 supported{};
-  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-  supported.pNext = &timeline;
-  vkGetPhysicalDeviceFeatures2(adopted.physical_device, &supported);
-  if (reqs.timeline_semaphore && !timeline.timelineSemaphore) {
-    return Status::unsupported(
-        "adopted device does not support timelineSemaphore");
-  }
-  if (reqs.dynamic_rendering && !dynamic.dynamicRendering) {
-    return Status::unsupported(
-        "adopted device does not support dynamicRendering");
-  }
+  VG_TRY(require_core_features(adopted.physical_device, reqs.features,
+                               &timeline, &dynamic));
 
   Device device;
   device.owns_device_ = false;  // borrowed — the dtor must not destroy it
@@ -395,12 +461,8 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   // The command pool is this wrapper's own resource on the shared device — it
   // is created here (and destroyed in destroy()) even though the device is
   // borrowed.
-  VkCommandPoolCreateInfo pool_info{};
-  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = adopted.graphics_family;
-  VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
-                                &device.command_pool_));
+  VG_VK_TRY(create_graphics_command_pool(
+      device.device_, adopted.graphics_family, &device.command_pool_));
 
   device.debug_utils_ =
       DebugUtilsTable::load(device.device_, config.enable_debug_utils);
@@ -455,17 +517,9 @@ Status Device::submit_and_wait(VkCommandBuffer cmd) const {
   submit.pCommandBuffers = &cmd;
 
   Status status;
-  // Hold the shared-queue mutex across the submit when the queue is borrowed
-  // and shared with another library (no-op otherwise). Vulkan requires queue
-  // submits be externally synchronized.
-  VkResult submit_result;
-  {
-    std::unique_lock<std::mutex> lock;
-    if (submit_mutex_ != nullptr) {
-      lock = std::unique_lock<std::mutex>(*submit_mutex_);
-    }
-    submit_result = vkQueueSubmit(graphics_queue_, 1, &submit, fence);
-  }
+  // queue_submit holds the shared-queue mutex when the queue is borrowed and
+  // shared with another library (a no-op lock otherwise).
+  VkResult submit_result = queue_submit(1, &submit, fence);
   if (submit_result == VK_SUCCESS) {
     VkResult wait_result =
         vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
@@ -479,6 +533,46 @@ Status Device::submit_and_wait(VkCommandBuffer cmd) const {
   }
   vkDestroyFence(device_, fence, nullptr);
   return status;
+}
+
+VkResult Device::queue_submit(uint32_t submit_count,
+                              const VkSubmitInfo* submits,
+                              VkFence fence) const {
+  // Serialize submits on a shared queue (a device obtained through adopt with a
+  // non-null submit_mutex). Vulkan requires queue submits be externally
+  // synchronized; the lock is a no-op when the queue is exclusively ours.
+  std::unique_lock<std::mutex> lock;
+  if (submit_mutex_ != nullptr) {
+    lock = std::unique_lock<std::mutex>(*submit_mutex_);
+  }
+  return vkQueueSubmit(graphics_queue_, submit_count, submits, fence);
+}
+
+VkResult Device::queue_present(const VkPresentInfoKHR& present_info) const {
+  // The submit_mutex guards the shared (graphics) queue; hold it for a present
+  // only when the present queue IS that queue. A distinct present queue is a
+  // different queue outside this mutex's scope.
+  std::unique_lock<std::mutex> lock;
+  if (submit_mutex_ != nullptr && present_queue_ == graphics_queue_) {
+    lock = std::unique_lock<std::mutex>(*submit_mutex_);
+  }
+  return vkQueuePresentKHR(present_queue_, &present_info);
+}
+
+Status Device::wait_idle() const {
+  // Wait only on the queues the renderer was assigned, holding the shared-queue
+  // mutex — never vkDeviceWaitIdle, which would idle every queue on the device
+  // (a sibling library's included, on an adopted device) and cannot be
+  // externally synchronized against submit_mutex_.
+  std::unique_lock<std::mutex> lock;
+  if (submit_mutex_ != nullptr) {
+    lock = std::unique_lock<std::mutex>(*submit_mutex_);
+  }
+  VG_VK_TRY(vkQueueWaitIdle(graphics_queue_));
+  if (present_queue_ != VK_NULL_HANDLE && present_queue_ != graphics_queue_) {
+    VG_VK_TRY(vkQueueWaitIdle(present_queue_));
+  }
+  return Status{};
 }
 
 Device::Device(Device&& other) noexcept
