@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <utility>
@@ -262,6 +263,151 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   return device;
 }
 
+DeviceRequirements Device::requirements(const DeviceConfig& config) {
+  // Mirror what create() enables, expressed as a mergeable descriptor. The
+  // spec-required VK_KHR_portability_subset is intentionally omitted: it is the
+  // device *creator's* obligation when the device exposes it, not a caller
+  // need.
+  DeviceRequirements reqs;
+  reqs.api_version = VK_API_VERSION_1_3;
+  reqs.queue_flags = VK_QUEUE_GRAPHICS_BIT;
+  reqs.needs_present = config.needs_present;
+  reqs.features = config.features;
+  reqs.timeline_semaphore = true;  // 1.2 core
+  reqs.dynamic_rendering = true;   // 1.3 core, required by RenderTarget
+
+  if (config.needs_present) {
+    reqs.device_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+  }
+  if (config.needs_external_memory) {
+    reqs.device_extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+    reqs.device_extensions.push_back(
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+  }
+  for (const char* name : config.extra_device_extensions) {
+    reqs.device_extensions.push_back(name);
+  }
+  return reqs;
+}
+
+Result<Device> Device::adopt(const AdoptedDevice& adopted,
+                             const DeviceConfig& config) {
+  if (adopted.instance == VK_NULL_HANDLE ||
+      adopted.physical_device == VK_NULL_HANDLE ||
+      adopted.device == VK_NULL_HANDLE ||
+      adopted.graphics_queue == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "Device::adopt: instance, physical device, device, and graphics queue "
+        "must all be non-null");
+  }
+  if (config.needs_present &&
+      (!adopted.has_present || adopted.present_queue == VK_NULL_HANDLE)) {
+    return Status::invalid_argument(
+        "Device::adopt: needs_present requires a present queue in "
+        "AdoptedDevice");
+  }
+
+  PhysicalDeviceInfo caps = PhysicalDeviceInfo::query(adopted.physical_device);
+  if (caps.properties().apiVersion < VK_API_VERSION_1_3) {
+    return Status::unsupported("adopted device does not support Vulkan 1.3");
+  }
+
+  // The assigned queue family's capabilities are a physical-device query, so
+  // this stays authoritative even though a logical device's enabled state is
+  // not queryable.
+  uint32_t family_count = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(adopted.physical_device,
+                                           &family_count, nullptr);
+  if (adopted.graphics_family >= family_count) {
+    return Status::invalid_argument(
+        "Device::adopt: graphics_family out of range for the physical device");
+  }
+  std::vector<VkQueueFamilyProperties> families(family_count);
+  vkGetPhysicalDeviceQueueFamilyProperties(adopted.physical_device,
+                                           &family_count, families.data());
+  const VkQueueFamilyProperties& gfx_family = families[adopted.graphics_family];
+  if ((gfx_family.queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+    return Status::unsupported(
+        "Device::adopt: assigned queue family is not graphics-capable");
+  }
+
+  // Every extension the renderer needs must be in the creator's declared
+  // enabled set — Vulkan cannot be asked what a logical device enabled.
+  const DeviceRequirements reqs = requirements(config);
+  if (!reqs.device_extensions.empty()) {
+    if (adopted.enabled_device_extensions == nullptr) {
+      return Status::unsupported(
+          "Device::adopt: adopted device did not declare enabled extensions");
+    }
+    auto is_enabled = [&](const char* name) {
+      for (uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
+        if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const char* name : reqs.device_extensions) {
+      if (!is_enabled(name)) {
+        return Status::unsupported(
+            std::string("Device::adopt: required extension not enabled on the "
+                        "adopted device: ") +
+            name);
+      }
+    }
+  }
+
+  // Necessary condition for the core features create() enables: the physical
+  // device must support them. Whether they were actually *enabled* on the
+  // logical device rests on the creator honoring requirements().
+  VkPhysicalDeviceTimelineSemaphoreFeatures timeline{};
+  timeline.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+  VkPhysicalDeviceDynamicRenderingFeatures dynamic{};
+  dynamic.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+  timeline.pNext = &dynamic;
+  VkPhysicalDeviceFeatures2 supported{};
+  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  supported.pNext = &timeline;
+  vkGetPhysicalDeviceFeatures2(adopted.physical_device, &supported);
+  if (reqs.timeline_semaphore && !timeline.timelineSemaphore) {
+    return Status::unsupported(
+        "adopted device does not support timelineSemaphore");
+  }
+  if (reqs.dynamic_rendering && !dynamic.dynamicRendering) {
+    return Status::unsupported(
+        "adopted device does not support dynamicRendering");
+  }
+
+  Device device;
+  device.owns_device_ = false;  // borrowed — the dtor must not destroy it
+  device.physical_ = adopted.physical_device;
+  device.device_ = adopted.device;
+  device.graphics_family_ = adopted.graphics_family;
+  device.graphics_timestamp_valid_bits_ = gfx_family.timestampValidBits;
+  device.graphics_queue_ = adopted.graphics_queue;
+  device.submit_mutex_ = adopted.submit_mutex;
+  if (adopted.has_present) {
+    device.present_family_ = adopted.present_family;
+    device.present_queue_ = adopted.present_queue;
+  }
+
+  // The command pool is this wrapper's own resource on the shared device — it
+  // is created here (and destroyed in destroy()) even though the device is
+  // borrowed.
+  VkCommandPoolCreateInfo pool_info{};
+  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  pool_info.queueFamilyIndex = adopted.graphics_family;
+  VG_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
+                                &device.command_pool_));
+
+  device.debug_utils_ =
+      DebugUtilsTable::load(device.device_, config.enable_debug_utils);
+  device.caps_ = std::move(caps);
+  return device;
+}
+
 Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record) const {
   VkCommandBufferAllocateInfo alloc{};
@@ -309,7 +455,17 @@ Status Device::submit_and_wait(VkCommandBuffer cmd) const {
   submit.pCommandBuffers = &cmd;
 
   Status status;
-  VkResult submit_result = vkQueueSubmit(graphics_queue_, 1, &submit, fence);
+  // Hold the shared-queue mutex across the submit when the queue is borrowed
+  // and shared with another library (no-op otherwise). Vulkan requires queue
+  // submits be externally synchronized.
+  VkResult submit_result;
+  {
+    std::unique_lock<std::mutex> lock;
+    if (submit_mutex_ != nullptr) {
+      lock = std::unique_lock<std::mutex>(*submit_mutex_);
+    }
+    submit_result = vkQueueSubmit(graphics_queue_, 1, &submit, fence);
+  }
   if (submit_result == VK_SUCCESS) {
     VkResult wait_result =
         vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
@@ -329,6 +485,8 @@ Device::Device(Device&& other) noexcept
     : physical_(other.physical_),
       device_(other.device_),
       command_pool_(other.command_pool_),
+      owns_device_(other.owns_device_),
+      submit_mutex_(other.submit_mutex_),
       graphics_family_(other.graphics_family_),
       graphics_timestamp_valid_bits_(other.graphics_timestamp_valid_bits_),
       present_family_(other.present_family_),
@@ -339,6 +497,8 @@ Device::Device(Device&& other) noexcept
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
+  other.owns_device_ = true;
+  other.submit_mutex_ = nullptr;
   other.graphics_family_ = 0;
   other.graphics_timestamp_valid_bits_ = 0;
   other.present_family_ = 0;
@@ -354,6 +514,8 @@ Device& Device::operator=(Device&& other) noexcept {
     physical_ = other.physical_;
     device_ = other.device_;
     command_pool_ = other.command_pool_;
+    owns_device_ = other.owns_device_;
+    submit_mutex_ = other.submit_mutex_;
     graphics_family_ = other.graphics_family_;
     graphics_timestamp_valid_bits_ = other.graphics_timestamp_valid_bits_;
     present_family_ = other.present_family_;
@@ -364,6 +526,8 @@ Device& Device::operator=(Device&& other) noexcept {
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
+    other.owns_device_ = true;
+    other.submit_mutex_ = nullptr;
     other.graphics_family_ = 0;
     other.graphics_timestamp_valid_bits_ = 0;
     other.present_family_ = 0;
@@ -383,9 +547,15 @@ void Device::destroy() noexcept {
     command_pool_ = VK_NULL_HANDLE;
   }
   if (device_ != VK_NULL_HANDLE) {
-    vkDestroyDevice(device_, nullptr);
+    // Only destroy a device this wrapper created; an adopted one belongs to its
+    // owner (the shared bootstrap), which outlives us.
+    if (owns_device_) {
+      vkDestroyDevice(device_, nullptr);
+    }
     device_ = VK_NULL_HANDLE;
   }
+  owns_device_ = true;
+  submit_mutex_ = nullptr;
   physical_ = VK_NULL_HANDLE;
   graphics_family_ = 0;
   graphics_timestamp_valid_bits_ = 0;

@@ -392,3 +392,64 @@ TEST(InstanceDebugUtilsTest, SelfMoveKeepsDebugUtilsFlag) {
   instance = std::move(*p);
   EXPECT_EQ(instance.debug_utils_enabled(), had_debug_utils);
 }
+
+// --- Device::requirements / Device::adopt (shared-device interop) -----------
+
+TEST(DeviceRequirementsTest, ReflectConfig) {
+  // A headless default config needs graphics + the core timeline/dynamic
+  // features and no device extensions.
+  vg::DeviceRequirements reqs = vg::Device::requirements(vg::DeviceConfig{});
+  EXPECT_EQ(reqs.api_version, VK_API_VERSION_1_3);
+  EXPECT_TRUE((reqs.queue_flags & VK_QUEUE_GRAPHICS_BIT) != 0);
+  EXPECT_FALSE(reqs.needs_present);
+  EXPECT_TRUE(reqs.timeline_semaphore);
+  EXPECT_TRUE(reqs.dynamic_rendering);
+  EXPECT_TRUE(reqs.device_extensions.empty());
+
+  // needs_present pulls in VK_KHR_swapchain as a requirement.
+  vg::DeviceConfig present_config;
+  present_config.needs_present = true;
+  vg::DeviceRequirements present = vg::Device::requirements(present_config);
+  EXPECT_TRUE(present.needs_present);
+  ASSERT_EQ(present.device_extensions.size(), 1u);
+  EXPECT_STREQ(present.device_extensions.front(),
+               VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+}
+
+TEST(DeviceAdoptTest, RejectsNullHandles) {
+  auto adopted = vg::Device::adopt(vg::AdoptedDevice{}, vg::DeviceConfig{});
+  ASSERT_FALSE(adopted.ok());
+  EXPECT_EQ(adopted.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(DeviceTest, AdoptBorrowsSharedDeviceWithoutOwningIt) {
+  // Borrow the fixture's live device by its raw handles — the shared-VkDevice
+  // interop case. A default config needs no device extensions, so no
+  // enabled-extension declaration is required.
+  vg::AdoptedDevice adopted;
+  adopted.instance = instance_->handle();
+  adopted.physical_device = physical_;
+  adopted.device = device_->handle();
+  adopted.graphics_family = device_->graphics_family();
+  adopted.graphics_queue = device_->graphics_queue();
+
+  {
+    auto borrowed = vg::Device::adopt(adopted, vg::DeviceConfig{});
+    ASSERT_TRUE(borrowed.ok()) << borrowed.status().message();
+    EXPECT_FALSE(borrowed.value().owns_device());
+    EXPECT_EQ(borrowed.value().handle(), device_->handle());
+    // It owns its own command pool on the shared device, distinct from the
+    // owner's.
+    EXPECT_NE(borrowed.value().command_pool(), VK_NULL_HANDLE);
+    EXPECT_NE(borrowed.value().command_pool(), device_->command_pool());
+    // Fully usable: records + submits on the shared queue.
+    vg::Status s = borrowed.value().submit_single_time([](VkCommandBuffer) {});
+    EXPECT_TRUE(s.ok()) << s.message();
+  }  // borrowed destructs here — it must NOT destroy the underlying VkDevice.
+
+  // The owner's device is still valid: a second submit proves the adopted
+  // wrapper left it intact (a double-free trips the sanitizer job; a
+  // use-after-free would fail this submit).
+  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}

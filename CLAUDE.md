@@ -37,6 +37,17 @@ consumer/example.
   native-Metal iOS backend is a *fallback only*, gated on an iPad validation spike.
 - **Compute stays CUDA (desktop) + Metal (Apple)** — NOT unified to Vulkan compute. The renderer
   meets compute at a thin external-memory interop layer (`vg::interop::{Cuda,Metal}ExternalMemory`).
+- **A `VkDevice` may be created *or adopted*.** `core::Device` accepts a device the embedder
+  already created — non-owning `Device::adopt(AdoptedDevice, DeviceConfig)` alongside
+  `Device::create`, gated on a `DeviceRequirements` descriptor it verifies against the creator's
+  declared enabled state (Vulkan can't be queried for a *logical* device's enabled
+  features/extensions). This lets a sibling **Vulkan-compute** library (e.g. `volumetric_kit_recon`)
+  share one `VkDevice` with the renderer and hand over `VkBuffer`/`VkImage` **zero-copy** — the
+  same-API case that needs none of the CUDA/Metal external-memory machinery above. The embedding app
+  owns the shared instance/device and merges both libraries' requirements; gfx stays standalone
+  (`create` is unchanged). Still needed for a *live* mesh (not yet built): an indirect-draw path
+  (variable index count) in the mesh pipeline, and per-slot material/atlas ringing for a
+  live-updated texture.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.

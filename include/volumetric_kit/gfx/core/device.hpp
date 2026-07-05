@@ -8,6 +8,7 @@
 ///        command pool, and setup helpers.
 
 #include <functional>
+#include <mutex>
 #include <vector>
 
 #include "volumetric_kit/gfx/core/export.hpp"
@@ -60,9 +61,63 @@ struct DeviceConfig {
   const void* feature_chain = nullptr;
 };
 
-/// @brief Owns a `VkDevice`, its graphics (and optional present) queues, and a
-///        graphics command pool. Holds no surface/swapchain — that is the
-///        windowing tier.
+/// @brief What the renderer needs from a `VkDevice`, published so an embedder
+///        that shares one device across several libraries can merge everyone's
+///        requirements, create a device satisfying the union, and hand it to
+///        each library via @ref Device::adopt.
+///
+/// Derived from a @ref DeviceConfig by @ref Device::requirements. Expressed in
+/// raw Vulkan data so the bundle carries no type a sibling library must import.
+struct DeviceRequirements {
+  /// Minimum device Vulkan version (the renderer targets 1.3 core).
+  uint32_t api_version = VK_API_VERSION_1_3;
+  /// Queue capabilities at least one assigned queue must carry.
+  VkQueueFlags queue_flags = VK_QUEUE_GRAPHICS_BIT;
+  /// Also needs a present-capable queue (implies `VK_KHR_swapchain`).
+  bool needs_present = false;
+  /// Device extensions to enable (swapchain / external-memory / caller extras).
+  std::vector<const char*> device_extensions;
+  /// Core (1.0) features to enable.
+  VkPhysicalDeviceFeatures features = {};
+  /// `timelineSemaphore` (1.2 core) — the renderer's sync primitive.
+  bool timeline_semaphore = true;
+  /// `dynamicRendering` (1.3 core) — required by `RenderTarget`.
+  bool dynamic_rendering = true;
+};
+
+/// @brief A `VkDevice` the caller already created, plus a description of what
+///        the caller ENABLED on it, handed to @ref Device::adopt.
+///
+/// The `enabled_*` fields exist because Vulkan gives no way to query which
+/// extensions/features were enabled at device-creation time; the creator must
+/// declare them so @ref Device::adopt can verify by set-comparison. The arrays
+/// and structs it points to need only outlive the `adopt` call.
+struct AdoptedDevice {
+  VkInstance instance = VK_NULL_HANDLE;
+  VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+  VkDevice device = VK_NULL_HANDLE;
+
+  /// The graphics-capable queue assigned to the renderer, and its family.
+  uint32_t graphics_family = 0;
+  VkQueue graphics_queue = VK_NULL_HANDLE;
+  /// The present queue/family — required when `DeviceConfig::needs_present`.
+  bool has_present = false;
+  uint32_t present_family = 0;
+  VkQueue present_queue = VK_NULL_HANDLE;
+  /// When non-null, the assigned queue is shared with another library; every
+  /// `vkQueueSubmit` on it must hold this mutex (Vulkan requires queue submits
+  /// be externally synchronized).
+  std::mutex* submit_mutex = nullptr;
+
+  /// What the creator enabled on `device` (for `adopt`'s set-comparison
+  /// verify).
+  const char* const* enabled_device_extensions = nullptr;
+  uint32_t enabled_device_extension_count = 0;
+};
+
+/// @brief Owns *or borrows* a `VkDevice`, its graphics (and optional present)
+///        queues, and a graphics command pool. Holds no surface/swapchain —
+///        that is the windowing tier.
 ///
 /// @warning The @ref Instance the device is created on must outlive it (see
 ///          @ref create): the device stores only borrowed handles.
@@ -97,6 +152,31 @@ class VG_CORE_API Device {
                                const DeviceConfig& config,
                                VkSurfaceKHR surface = VK_NULL_HANDLE);
 
+  /// @brief Adopt a `VkDevice` an embedder already created, **without owning
+  ///        it** — the returned device's destructor leaves the `VkDevice`
+  ///        alone (it still creates and owns its own command pool). Use this to
+  ///        run the renderer on a device shared with a sibling library.
+  /// @param adopted  The existing handles, the queue assigned to the renderer,
+  ///                 and what the creator enabled on the device.
+  /// @param config   The same config the renderer would pass to @ref create;
+  ///                 its needs are validated against @p adopted.
+  /// @return The (non-owning) device, or a non-OK @ref Status:
+  ///         @ref Status::Code::InvalidArgument for null handles or a
+  ///         `needs_present` config without a present queue; @ref
+  ///         Status::Code::Unsupported when @p adopted is below Vulkan 1.3, its
+  ///         assigned queue family lacks the required capabilities, or a
+  ///         required extension/feature was not enabled on it.
+  /// @pre The instance/device in @p adopted must outlive the returned `Device`.
+  static Result<Device> adopt(const AdoptedDevice& adopted,
+                              const DeviceConfig& config);
+
+  /// @brief The device requirements implied by @p config — the set an embedder
+  ///        merges with other libraries' to build one shared device.
+  /// @param config  The renderer's device configuration.
+  /// @return The extensions, features, queue capabilities, and API version the
+  ///         renderer needs enabled.
+  static DeviceRequirements requirements(const DeviceConfig& config);
+
   ~Device();
   Device(Device&& other) noexcept;
   Device& operator=(Device&& other) noexcept;
@@ -107,6 +187,16 @@ class VG_CORE_API Device {
   VkDevice handle() const noexcept { return device_; }
   /// @return The physical device it was created on.
   VkPhysicalDevice physical_device() const noexcept { return physical_; }
+
+  /// @return Whether this wrapper owns (and will destroy) the `VkDevice`.
+  ///         `false` for a device obtained through @ref adopt.
+  bool owns_device() const noexcept { return owns_device_; }
+
+  /// @return The mutex guarding submits on a shared queue, or `nullptr` when
+  /// the
+  ///         queue is exclusively this device's. Submit sites that record on
+  ///         @ref graphics_queue must hold it when non-null.
+  std::mutex* submit_mutex() const noexcept { return submit_mutex_; }
 
   /// @return Read-only capabilities of the physical device, captured at
   ///         create() time (extensions/features/limits cached; format queries
@@ -185,6 +275,11 @@ class VG_CORE_API Device {
   VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   VkDevice device_ = VK_NULL_HANDLE;
   VkCommandPool command_pool_ = VK_NULL_HANDLE;
+  // False when the device was adopted (@ref adopt): destroy() then tears down
+  // only the command pool this wrapper made and leaves the VkDevice to its
+  // owner. Borrowed, not owned; nulled/reset on every ownership transfer.
+  bool owns_device_ = true;
+  std::mutex* submit_mutex_ = nullptr;
 
   uint32_t graphics_family_ = 0;
   uint32_t graphics_timestamp_valid_bits_ = 0;
