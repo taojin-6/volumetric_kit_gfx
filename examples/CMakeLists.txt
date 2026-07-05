@@ -49,9 +49,12 @@ target_include_directories(example_02_imgui SYSTEM
 target_link_libraries(
   example_02_imgui PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_app glfw
                            Vulkan::Vulkan)
-# Strict first-party warnings apply to the example's own main.cpp; the bundled
-# third-party ImGui TUs opt out (the source-level -w follows the target flags on
-# the command line, so it wins over -Werror).
+# Strict first-party warnings apply to each example's own main.cpp (via
+# vg_target_warnings); the bundled third-party ImGui TUs opt out through the
+# directory-scoped set_source_files_properties below -- the source-level -w
+# follows the target flags on the command line, so it wins over -Werror. Being
+# directory-scoped, that -w also covers example_03_model's imgui_impl_glfw.cpp,
+# so 03 does not repeat it.
 vg_target_warnings(example_02_imgui)
 set_source_files_properties(
   "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
@@ -79,10 +82,6 @@ target_link_libraries(
           glfw
           Vulkan::Vulkan)
 vg_target_warnings(example_03_model)
-# The bundled third-party imgui_impl_glfw TU opts out of the strict warnings.
-set_source_files_properties(
-  "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
-  PROPERTIES COMPILE_OPTIONS "-w")
 
 # The model technique now ships embedded in gfx_pipelines (PbrPipeline); the
 # example only compiles the skybox shaders it still loads from disk.
