@@ -166,9 +166,11 @@ class VG_APP_API WindowedApp {
   ///                  scope.
   void set_profiler(Profiler* profiler) noexcept;
 
-  /// @brief Block until the device is idle — the library-blessed teardown
-  ///        wait: call it after the render loop so resources created after
-  ///        the app (which destruct before it) are no longer GPU-referenced.
+  /// @brief Block until the renderer's queues are idle — the library-blessed
+  ///        teardown wait: call it after the render loop so resources created
+  ///        after the app (which destruct before it) are no longer
+  ///        GPU-referenced. Queue-scoped, not device-wide (see
+  ///        @ref Device::wait_idle), so it is safe on a shared adopted device.
   /// @return OK once idle; @ref Status::Code::InvalidArgument on an empty
   ///         app, or the failed `VkResult`.
   Status wait_idle() const;

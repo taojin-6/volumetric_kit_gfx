@@ -322,7 +322,8 @@ Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
   info.swapchainCount = 1;
   info.pSwapchains = &swapchain_;
   info.pImageIndices = &image_index;
-  const VkResult r = vkQueuePresentKHR(device_->present_queue(), &info);
+  // Route through the device so a shared present queue holds the submit mutex.
+  const VkResult r = device_->queue_present(info);
   if (r == VK_SUCCESS) {
     return Status{};
   }
@@ -345,9 +346,11 @@ Status Swapchain::recreate(VkExtent2D extent) {
     return Status::invalid_argument(
         "Swapchain::recreate: extent is zero (window minimized?)");
   }
-  // Drain the device before the rebuild retires the old images; surface a
-  // device-loss rather than destroying resources the GPU may still reference.
-  VG_VK_TRY(vkDeviceWaitIdle(device_->handle()));
+  // Drain the renderer's queues before the rebuild retires the old images;
+  // surface a device-loss rather than destroying resources the GPU may still
+  // reference. Queue-scoped (not device-wide) so a shared adopted device does
+  // not drain a sibling library's unrelated work.
+  VG_TRY(device_->wait_idle());
   return build(extent);
 }
 

@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+#include <mutex>
 #include <utility>
 
 // Internal helper header: the DebugUtils tests re-derive the expected
@@ -16,6 +18,20 @@ namespace {
 
 // The shared instance + physical-device + headless logical-device fixture.
 using DeviceTest = VulkanDeviceTest;
+
+// Build an AdoptedDevice that borrows a live device on its graphics queue — the
+// shared-VkDevice interop shape. A default config needs no device extensions,
+// so no enabled-extension declaration is required.
+vg::AdoptedDevice borrow_device(VkInstance instance, VkPhysicalDevice physical,
+                                const vg::Device& device) {
+  vg::AdoptedDevice adopted;
+  adopted.instance = instance;
+  adopted.physical_device = physical;
+  adopted.device = device.handle();
+  adopted.graphics_family = device.graphics_family();
+  adopted.graphics_queue = device.graphics_queue();
+  return adopted;
+}
 
 }  // namespace
 
@@ -391,4 +407,218 @@ TEST(InstanceDebugUtilsTest, SelfMoveKeepsDebugUtilsFlag) {
   vg::Instance* p = &instance;
   instance = std::move(*p);
   EXPECT_EQ(instance.debug_utils_enabled(), had_debug_utils);
+}
+
+// --- Device::requirements / Device::adopt (shared-device interop) -----------
+
+TEST(DeviceRequirementsTest, ReflectConfig) {
+  // A headless default config needs graphics + the core timeline/dynamic
+  // features and no device extensions.
+  vg::DeviceRequirements reqs = vg::Device::requirements(vg::DeviceConfig{});
+  EXPECT_EQ(reqs.api_version, VK_API_VERSION_1_3);
+  EXPECT_TRUE((reqs.queue_flags & VK_QUEUE_GRAPHICS_BIT) != 0);
+  EXPECT_FALSE(reqs.needs_present);
+  EXPECT_TRUE(reqs.timeline_semaphore);
+  EXPECT_TRUE(reqs.dynamic_rendering);
+  EXPECT_TRUE(reqs.device_extensions.empty());
+
+  // needs_present pulls in VK_KHR_swapchain as a requirement.
+  vg::DeviceConfig present_config;
+  present_config.needs_present = true;
+  vg::DeviceRequirements present = vg::Device::requirements(present_config);
+  EXPECT_TRUE(present.needs_present);
+  ASSERT_EQ(present.device_extensions.size(), 1u);
+  EXPECT_STREQ(present.device_extensions.front(),
+               VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+}
+
+TEST(DeviceAdoptTest, RejectsNullHandles) {
+  auto adopted = vg::Device::adopt(vg::AdoptedDevice{}, vg::DeviceConfig{});
+  ASSERT_FALSE(adopted.ok());
+  EXPECT_EQ(adopted.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(DeviceTest, AdoptBorrowsSharedDeviceWithoutOwningIt) {
+  // Borrow the fixture's live device by its raw handles — the shared-VkDevice
+  // interop case. A default config needs no device extensions, so no
+  // enabled-extension declaration is required.
+  vg::AdoptedDevice adopted;
+  adopted.instance = instance_->handle();
+  adopted.physical_device = physical_;
+  adopted.device = device_->handle();
+  adopted.graphics_family = device_->graphics_family();
+  adopted.graphics_queue = device_->graphics_queue();
+
+  {
+    auto borrowed = vg::Device::adopt(adopted, vg::DeviceConfig{});
+    ASSERT_TRUE(borrowed.ok()) << borrowed.status().message();
+    EXPECT_FALSE(borrowed.value().owns_device());
+    EXPECT_EQ(borrowed.value().handle(), device_->handle());
+    // It owns its own command pool on the shared device, distinct from the
+    // owner's.
+    EXPECT_NE(borrowed.value().command_pool(), VK_NULL_HANDLE);
+    EXPECT_NE(borrowed.value().command_pool(), device_->command_pool());
+    // Fully usable: records + submits on the shared queue.
+    vg::Status s = borrowed.value().submit_single_time([](VkCommandBuffer) {});
+    EXPECT_TRUE(s.ok()) << s.message();
+  }  // borrowed destructs here — it must NOT destroy the underlying VkDevice.
+
+  // The owner's device is still valid: a second submit proves the adopted
+  // wrapper left it intact (a double-free trips the sanitizer job; a
+  // use-after-free would fail this submit).
+  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}
+
+TEST(DeviceRequirementsTest, DedupsExtensionsAndPassesFeatureChain) {
+  // needs_external_memory implies the two fd extensions; a caller that ALSO
+  // lists one must not produce a duplicate (vkCreateDevice rejects duplicate
+  // extension names). features and feature_chain pass through for the embedder.
+  int chain_sentinel = 0;
+  vg::DeviceConfig config;
+  config.needs_external_memory = true;
+  config.extra_device_extensions = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+                                    "VK_KHR_shader_clock"};
+  config.features.samplerAnisotropy = VK_TRUE;
+  config.feature_chain = &chain_sentinel;
+
+  vg::DeviceRequirements reqs = vg::Device::requirements(config);
+  size_t fd_count = 0;
+  for (const char* name : reqs.device_extensions) {
+    if (std::strcmp(name, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) == 0) {
+      ++fd_count;
+    }
+  }
+  EXPECT_EQ(fd_count, 1u);  // implied once, the caller's duplicate dropped
+  EXPECT_EQ(reqs.features.samplerAnisotropy, VK_TRUE);
+  EXPECT_EQ(reqs.feature_chain, &chain_sentinel);
+}
+
+TEST_F(DeviceTest, AdoptRejectsNeedsPresentWithoutPresentQueue) {
+  vg::AdoptedDevice adopted =
+      borrow_device(instance_->handle(), physical_, *device_);
+  vg::DeviceConfig config;
+  config.needs_present = true;  // but adopted.has_present stays false
+  auto result = vg::Device::adopt(adopted, config);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(DeviceTest, AdoptRejectsHasPresentWithoutPresentQueue) {
+  vg::AdoptedDevice adopted =
+      borrow_device(instance_->handle(), physical_, *device_);
+  adopted.has_present = true;
+  adopted.present_queue = VK_NULL_HANDLE;  // inconsistent with has_present
+  auto result = vg::Device::adopt(adopted, vg::DeviceConfig{});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(DeviceTest, AdoptRejectsGraphicsFamilyOutOfRange) {
+  vg::AdoptedDevice adopted =
+      borrow_device(instance_->handle(), physical_, *device_);
+  adopted.graphics_family = 10000;  // past any real family count
+  auto result = vg::Device::adopt(adopted, vg::DeviceConfig{});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+TEST_F(DeviceTest, AdoptRejectsUndeclaredRequiredExtension) {
+  // needs_present requires VK_KHR_swapchain be declared enabled; a borrow that
+  // declares no enabled extensions is rejected before any device is touched.
+  vg::AdoptedDevice adopted =
+      borrow_device(instance_->handle(), physical_, *device_);
+  adopted.has_present = true;
+  // adopt cannot verify present-capability without a surface, so reuse the
+  // graphics queue/family as the present one for this rejection test.
+  adopted.present_queue = device_->graphics_queue();
+  adopted.present_family = device_->graphics_family();
+  vg::DeviceConfig config;
+  config.needs_present = true;
+  auto result = vg::Device::adopt(adopted, config);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::Unsupported);
+}
+
+TEST_F(DeviceTest, AdoptMoveConstructTransfersBorrowWithoutOwning) {
+  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
+  {
+    auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
+    ASSERT_TRUE(adopted.ok()) << adopted.status().message();
+    vg::Device src = std::move(adopted).value();
+    ASSERT_FALSE(src.owns_device());
+    const VkCommandPool src_pool = src.command_pool();
+
+    vg::Device moved(std::move(src));
+    EXPECT_FALSE(moved.owns_device());
+    EXPECT_EQ(moved.handle(), device_->handle());
+    EXPECT_EQ(moved.command_pool(), src_pool);  // pool ownership transferred
+    // The moved-from source is empty AND reset to the owns_device_ default, so
+    // its destructor is a no-op (the recurring "forgot a scalar" miss).
+    EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(src.owns_device());           // NOLINT(bugprone-use-after-move)
+  }  // moved (non-owning) frees only its pool; src is a no-op.
+  // The fixture device survived — the adopted wrapper never owned it.
+  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}
+
+TEST_F(DeviceTest, AdoptMoveAssignOverOwnedDeviceLeavesSourceEmpty) {
+  // Move an ADOPTED (borrowed) device over a live OWNED one: the owned VkDevice
+  // is destroyed, and the result is non-owning — it must not later destroy the
+  // borrowed fixture device (the destroy()-then-adopt path double-frees live).
+  auto owned =
+      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
+  ASSERT_TRUE(owned.ok()) << owned.status().message();
+  vg::Device dst = std::move(owned).value();
+
+  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
+  {
+    auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
+    ASSERT_TRUE(adopted.ok()) << adopted.status().message();
+    vg::Device src = std::move(adopted).value();
+
+    dst = std::move(src);  // frees dst's owned VkDevice, adopts src's borrow
+    EXPECT_FALSE(dst.owns_device());
+    EXPECT_EQ(dst.handle(), device_->handle());
+    EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(src.owns_device());           // NOLINT(bugprone-use-after-move)
+  }
+  // dst (non-owning) leaves the fixture device intact; prove it still submits.
+  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}
+
+TEST_F(DeviceTest, AdoptSelfMoveIsSafe) {
+  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
+  auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
+  ASSERT_TRUE(adopted.ok()) << adopted.status().message();
+  vg::Device device = std::move(adopted).value();
+
+  // Pointer-laundered so -Wself-move stays quiet under -Werror.
+  vg::Device* alias = &device;
+  device = std::move(*alias);
+  EXPECT_FALSE(device.owns_device());
+  EXPECT_EQ(device.handle(), device_->handle());
+  // Still fully usable (and still borrowing, not owning).
+  vg::Status s = device.submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(s.ok()) << s.message();
+}
+
+TEST_F(DeviceTest, AdoptSubmitsUnderSharedQueueMutex) {
+  // A shared-queue borrow: submits run under the provided mutex. Exercise the
+  // lock path (submit_single_time -> queue_submit) and the queue-scoped
+  // wait_idle path with a non-null submit_mutex.
+  std::mutex shared;
+  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
+  a.submit_mutex = &shared;
+  auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
+  ASSERT_TRUE(adopted.ok()) << adopted.status().message();
+  EXPECT_EQ(adopted.value().submit_mutex(), &shared);
+
+  vg::Status submitted =
+      adopted.value().submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(submitted.ok()) << submitted.message();
+  vg::Status idled = adopted.value().wait_idle();
+  EXPECT_TRUE(idled.ok()) << idled.message();
 }
