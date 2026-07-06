@@ -91,8 +91,14 @@ gtest_discover_tests(vg_camera_test)
 # load_gltf -> PbrModel::create path against the Box.glb fixture (defined below,
 # next to the fixture download).
 add_executable(
-  vg_pipelines_test gpu_mesh_test.cpp ibl_test.cpp pbr_material_test.cpp
-                    pbr_model_test.cpp pbr_pipeline_test.cpp pbr_scene_test.cpp)
+  vg_pipelines_test
+  gpu_mesh_test.cpp
+  hybrid_mesh_pipeline_test.cpp
+  ibl_test.cpp
+  pbr_material_test.cpp
+  pbr_model_test.cpp
+  pbr_pipeline_test.cpp
+  pbr_scene_test.cpp)
 target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)

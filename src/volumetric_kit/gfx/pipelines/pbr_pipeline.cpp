@@ -10,6 +10,7 @@
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/pipeline_util.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 
@@ -72,17 +73,7 @@ Result<PbrPipeline> PbrPipeline::create(VkDevice device,
 
 void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-
-  // Full-target viewport + scissor (both dynamic state).
-  VkViewport viewport{};
-  viewport.width = static_cast<float>(frame.extent.width);
-  viewport.height = static_cast<float>(frame.extent.height);
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(cmd, 0, 1, &viewport);
-  VkRect2D scissor{};
-  scissor.extent = frame.extent;
-  vkCmdSetScissor(cmd, 0, 1, &scissor);
+  set_full_viewport_scissor(cmd, frame.extent);
 
   // Set 0 (scene: camera + IBL) binds once for every draw, selecting the
   // frame's in-flight slot from the scene's UBO ring.

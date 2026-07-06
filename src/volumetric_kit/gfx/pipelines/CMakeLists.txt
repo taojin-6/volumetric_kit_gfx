@@ -18,6 +18,7 @@ add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 target_sources(
   gfx_pipelines
   PRIVATE gpu_mesh.cpp
+          hybrid_mesh_pipeline.cpp
           ibl.cpp
           owned_descriptor_set.cpp
           pbr_material.cpp
@@ -73,6 +74,14 @@ target_link_libraries(
 vg_embed_shaders(
   gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/model.vert"
   "${PROJECT_SOURCE_DIR}/shaders/model.frag")
+
+# --- Embedded reconstruction hybrid-mesh shaders ----------------------------
+# HybridMeshPipeline (the volumetric_kit_recon handoff) likewise embeds its
+# technique: hybrid_mesh.{vert,frag} -> SPIR-V compiled into the library
+# (hybrid_mesh_pipeline.cpp #includes hybrid_mesh_{vert,frag}.spv.hpp).
+vg_embed_shaders(
+  gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
 
 vg_target_warnings(gfx_pipelines)
 

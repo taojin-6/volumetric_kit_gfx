@@ -60,7 +60,11 @@ if(VG_INSTALL)
     # header includes it, so keep it out. The other impl/ headers ship because
     # public headers include them (impl/result.hpp, impl/retire_list.hpp,
     # impl/debug_utils_table.hpp, ...).
-    REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE)
+    REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE
+    # impl/pipeline_util.hpp is internal (command-recording helpers shared by
+    # the tier's submit() .cpp files); no public header includes it, so keep it
+    # out.
+    REGEX "volumetric_kit/gfx/pipelines/impl/pipeline_util\\.hpp$" EXCLUDE)
 
   install(
     EXPORT volumetric_kit_gfxTargets
