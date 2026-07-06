@@ -45,15 +45,21 @@ enum HybridMeshFlags : uint32_t {
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
 /// layout exposes **one** descriptor set -- **set 0, binding 0**: the atlas as
-/// a combined image sampler (bind a 1x1 image for a purely vertex-colored
-/// mesh). Per-frame constants (the view-projection, light direction, and flags)
-/// ride a push constant, so there is no per-frame UBO to manage. Record a
-/// frame's draws with @ref submit. A default-constructed pipeline is empty
-/// (`valid()` is false) and safe to move-assign into.
+/// a combined image sampler. The fragment shader samples it unconditionally, so
+/// a valid set is **always required** -- a purely vertex-colored mesh binds a
+/// 1x1 image (whose texels are simply never selected). Per-frame constants (the
+/// view-projection, light direction, and flags) ride a push constant, so there
+/// is no per-frame UBO to manage. Record a frame's draws with @ref submit. A
+/// default-constructed pipeline is empty (`valid()` is false) and safe to
+/// move-assign into.
 ///
 /// Vertices are consumed in world space -- the reconstruction mesh tier already
 /// emits world-space positions and normals -- so the pipeline applies only the
-/// camera's view-projection and carries no per-draw model matrix.
+/// camera's view-projection and carries no per-draw model matrix. That
+/// world-space contract is also what keeps the push block within the 128-byte
+/// guaranteed `maxPushConstantsSize`: a per-draw model plus a normal matrix,
+/// alongside the light, would not fit -- so instancing one mesh under several
+/// transforms is deliberately out of scope for this technique.
 ///
 /// @warning The @p device passed to @ref create must outlive the pipeline.
 ///
@@ -121,9 +127,11 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///               scope whose target matches the layout @ref create was given.
   /// @param frame  The atlas set, the draw list, the view-projection, and the
   ///               lighting (see @ref HybridMeshFrame).
-  /// @pre `valid()`; `frame.atlas` is a set built against
-  ///      @ref descriptor_set_layout `(0)`. Draws whose mesh is null/empty are
-  ///      skipped.
+  /// @pre `valid()`; `frame.atlas` is a non-null set built against
+  ///      @ref descriptor_set_layout `(0)` -- the shader samples it
+  ///      unconditionally. A `VK_NULL_HANDLE` atlas records **nothing** (the
+  ///      whole frame is dropped rather than draw against an unbound set).
+  ///      Draws whose mesh is null/empty are skipped.
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
@@ -146,13 +154,19 @@ struct HybridMeshDraw {
 /// The arrays/pointers are borrowed for the duration of the @ref
 /// HybridMeshPipeline::submit call.
 struct HybridMeshFrame {
-  VkExtent2D extent{};                     ///< Target size (dynamic viewport).
-  glm::mat4 view_proj{1.0f};               ///< projection * view (world-space).
-  glm::vec3 light_dir{0.5f, 0.8f, 0.6f};   ///< World-space light direction.
-  uint32_t flags = kHybridMeshLit;         ///< @ref HybridMeshFlags bitmask.
-  VkDescriptorSet atlas = VK_NULL_HANDLE;  ///< Set 0: atlas combined sampler.
-  const HybridMeshDraw* draws = nullptr;   ///< The draw list.
-  uint32_t draw_count = 0;                 ///< Number of @ref draws.
+  VkExtent2D extent{};        ///< Target size (dynamic viewport).
+  glm::mat4 view_proj{1.0f};  ///< projection * view (world-space).
+  /// World-space direction **to** the light (need not be unit -- @ref submit
+  /// normalizes it once per frame); the diffuse term is
+  /// `max(dot(normal, light_dir), 0)`.
+  glm::vec3 light_dir{0.5f, 0.8f, 0.6f};
+  uint32_t flags = kHybridMeshLit;  ///< @ref HybridMeshFlags bitmask.
+  /// Set 0: the atlas combined-image-sampler. Required -- a `VK_NULL_HANDLE`
+  /// records nothing (see @ref submit); a vertex-color-only mesh binds a 1x1
+  /// image.
+  VkDescriptorSet atlas = VK_NULL_HANDLE;
+  const HybridMeshDraw* draws = nullptr;  ///< The draw list.
+  uint32_t draw_count = 0;                ///< Number of @ref draws.
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

@@ -12,11 +12,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
+#include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -58,7 +60,10 @@ vg::RenderTargetLayout color_depth_layout() {
 // Two screen-covering quads: the left (x in [-1, 0]) samples the atlas at the
 // red texel; the right (x in [0, 1]) uses the (-1, -1) sentinel + a green
 // vertex color. view_proj is identity in the test, so positions are already
-// clip-space.
+// clip-space. The triangle winding is chosen so the quads are FRONT-facing
+// under the pipeline's counter-clockwise front-face convention (there is no
+// projection Y-flip here), so gl_FrontFacing is true and the lit path exercises
+// the front-facing normal (0, 0, 1) -- not the back-face fallback.
 assets::Mesh make_hybrid_mesh() {
   const glm::vec2 red_uv{0.25f, 0.25f};    // centre of texel (0,0) in a 2x2
   const glm::vec2 sentinel{-1.0f, -1.0f};  // "use the vertex color"
@@ -84,7 +89,8 @@ assets::Mesh make_hybrid_mesh() {
       vert(1.0f, 1.0f, sentinel, green),   // 6
       vert(0.0f, 1.0f, sentinel, green),   // 7
   };
-  mesh.indices = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+  // Front-facing winding (CCW in the framebuffer under identity view_proj).
+  mesh.indices = {0, 2, 1, 0, 3, 2, 4, 6, 5, 4, 7, 6};
   return mesh;
 }
 
@@ -300,20 +306,66 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   EXPECT_GT(right[1], 128);
   EXPECT_LT(right[2], 128);
 
-  // Lit: the directional term (normal (0,0,1) against the default light)
-  // darkens both halves but leaves them visible -- proving the lit path.
+  // Lit: the front-facing quads darken by a KNOWN factor --
+  //   ambient + (1 - ambient) * max(dot(n, l), 0),  n = (0,0,1), ambient =
+  //   0.25, l = normalize(the default light_dir).
+  // Asserting that specific value (not merely "dimmer than unlit") is what
+  // proves the directional term is applied: dropping it would leave the
+  // ambient-only ~0.25 * unlit (~64), which "dimmer than unlit" would still
+  // accept.
   const std::vector<uint8_t> lit =
       render(allocator.value(), pipeline.value(), mesh.value(),
              atlas_set.value().handle(), pipelines::kHybridMeshLit);
   ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
 
+  const glm::vec3 n{0.0f, 0.0f, 1.0f};
+  const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
+  const float factor = 0.25f + 0.75f * std::fmax(glm::dot(n, l), 0.0f);
+
   const uint8_t* lit_left = at(lit, kSize / 4, kSize / 2);
-  EXPECT_GT(lit_left[0], 0) << "lit red still visible";
+  EXPECT_NEAR(lit_left[0], std::lround(left[0] * factor), 4)
+      << "lit red = unlit red * directional factor (ambient-only would be ~64)";
   EXPECT_LT(lit_left[0], left[0]) << "lit red darker than unlit";
 
   const uint8_t* lit_right = at(lit, 3 * kSize / 4, kSize / 2);
-  EXPECT_GT(lit_right[1], 0) << "lit green still visible";
+  EXPECT_NEAR(lit_right[1], std::lround(right[1] * factor), 4)
+      << "lit green = unlit green * directional factor";
   EXPECT_LT(lit_right[1], right[1]) << "lit green darker than unlit";
+}
+
+// A null atlas is a violated precondition (the fragment shader samples set 0
+// unconditionally). submit() must record NOTHING rather than draw against an
+// unbound descriptor set -- which would be UB and, under the validation layer
+// this fixture runs with teeth, a VUID-vkCmdDraw-None-* error the fixture fails
+// the test on. So the readback stays the clear color everywhere.
+TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_hybrid_mesh();
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const std::vector<uint8_t> px =
+      render(allocator.value(), pipeline.value(), mesh.value(), VK_NULL_HANDLE,
+             pipelines::kHybridMeshLit);
+  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+  // Opaque-black clear (render() sets only alpha): nothing drawn -> all
+  // cleared.
+  const auto at = [&](uint32_t x, uint32_t y) {
+    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
+  };
+  for (uint32_t x : {kSize / 4, 3 * kSize / 4}) {
+    const uint8_t* p = at(x, kSize / 2);
+    EXPECT_EQ(p[0], 0) << "no draw -> cleared pixel at x=" << x;
+    EXPECT_EQ(p[1], 0) << "no draw -> cleared pixel at x=" << x;
+    EXPECT_EQ(p[2], 0) << "no draw -> cleared pixel at x=" << x;
+  }
 }
 
 }  // namespace
