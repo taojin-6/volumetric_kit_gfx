@@ -58,6 +58,19 @@ consumer/example.
   volk later (for iOS/Android loader portability or `volkLoadDevice` dispatch perf) is a non-breaking
   change to that one header + the link line — not a one-way door. VMA uses the linked Vulkan
   prototypes (`VMA_STATIC_VULKAN_FUNCTIONS`).
+- **2026-07-06 — Hybrid mesh pipeline (the `volumetric_kit_recon` color handoff).**
+  `pipelines::HybridMeshPipeline` — the "mesh pipeline" the device-adopt decision anticipated —
+  renders a world-space interleaved `assets::Vertex` mesh and chooses albedo *per fragment*: the
+  atlas texel (set 0, a combined-image-sampler, sampled at `uv0`) where a triangle won projective
+  texturing, else the per-vertex `color` where `uv0` is the `(-1,-1)` sentinel (recon's TSDF
+  vertex-color fallback); lit or unlit via a push-constant flag (`light.w`). Reuses `assets::Vertex`
+  + `GpuMesh` unchanged (binds position/normal/uv0/color, not tangent), one push constant carries the
+  view-projection + light (no per-frame UBO), and the sampler set is the pipeline's only descriptor
+  set. This is the *static* data-path (upload a mesh + atlas, draw); proven headless via an offscreen
+  draw + pixel readback under validation. The *live* zero-copy path still needs the indirect draw
+  (variable index count) + per-slot atlas ringing noted in the device-adopt decision. A vertex-color/
+  atlas mesh pipeline is a broadly-useful renderer feature, so the siblings stay independent — gfx
+  gains a capability, not a dependency on recon.
 
 ## Key gotchas (verified)
 
