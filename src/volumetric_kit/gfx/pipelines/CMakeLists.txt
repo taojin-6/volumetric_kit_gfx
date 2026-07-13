@@ -20,6 +20,7 @@ target_sources(
   PRIVATE gpu_mesh.cpp
           hybrid_mesh_pipeline.cpp
           ibl.cpp
+          live_mesh.cpp
           owned_descriptor_set.cpp
           pbr_material.cpp
           pbr_model.cpp

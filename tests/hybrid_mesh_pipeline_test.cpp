@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,7 @@
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -178,11 +180,12 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
  protected:
   bool wants_validation() const override { return true; }
 
-  // Renders `mesh` (bound with `atlas` as set 0) into a fresh offscreen target
-  // with the given flags, and returns a copy of the RGBA pixels.
+  // Renders `draw` (bound with `atlas` as set 0) into a fresh offscreen target
+  // with the given flags, and returns a copy of the RGBA pixels. `draw` names
+  // either a static GpuMesh or a live indirect mesh -- the harness is agnostic.
   std::vector<uint8_t> render(vg::Allocator& allocator,
                               const pipelines::HybridMeshPipeline& pipeline,
-                              const pipelines::GpuMesh& mesh,
+                              const pipelines::HybridMeshDraw& draw,
                               VkDescriptorSet atlas, uint32_t flags) {
     vg::OffscreenTargetDesc td;
     td.extent = {kSize, kSize};
@@ -215,7 +218,6 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
     const vg::RenderTarget rt = target.value().target();
     rt.begin(raw, begin_info);
 
-    const pipelines::HybridMeshDraw draw{&mesh};
     pipelines::HybridMeshFrame frame;
     frame.extent = {kSize, kSize};
     frame.view_proj = glm::mat4(1.0f);  // clip-space positions
@@ -288,9 +290,9 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
 
   // Unlit: albedo passes straight through, so the two halves show their raw
   // sources.
-  const std::vector<uint8_t> unlit =
-      render(allocator.value(), pipeline.value(), mesh.value(),
-             atlas_set.value().handle(), 0u);
+  const std::vector<uint8_t> unlit = render(
+      allocator.value(), pipeline.value(),
+      pipelines::HybridMeshDraw{&mesh.value()}, atlas_set.value().handle(), 0u);
   ASSERT_EQ(unlit.size(), static_cast<size_t>(kSize) * kSize * 4);
   const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) {
     return &px[(static_cast<size_t>(y) * kSize + x) * 4];
@@ -314,7 +316,8 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   // ambient-only ~0.25 * unlit (~64), which "dimmer than unlit" would still
   // accept.
   const std::vector<uint8_t> lit =
-      render(allocator.value(), pipeline.value(), mesh.value(),
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{&mesh.value()},
              atlas_set.value().handle(), pipelines::kHybridMeshLit);
   ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
 
@@ -351,7 +354,8 @@ TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const std::vector<uint8_t> px =
-      render(allocator.value(), pipeline.value(), mesh.value(), VK_NULL_HANDLE,
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{&mesh.value()}, VK_NULL_HANDLE,
              pipelines::kHybridMeshLit);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
 
@@ -366,6 +370,115 @@ TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
     EXPECT_EQ(p[1], 0) << "no draw -> cleared pixel at x=" << x;
     EXPECT_EQ(p[2], 0) << "no draw -> cleared pixel at x=" << x;
   }
+}
+
+// The indirect live-mesh draw must produce byte-identical pixels to the direct
+// static draw of the same geometry -- that equivalence is the whole point of
+// the indirect path (recon supplies the geometry plus a GPU-resident index
+// count; the renderer draws it with vkCmdDrawIndexedIndirect). Renders the same
+// mesh both ways into identical targets and compares the readbacks.
+//
+// Here the vertex/index buffers are uploaded (and fence-waited) and the
+// indirect command is written from the CPU before the draw submit, so the
+// writes are already visible with no explicit barrier. The real recon handoff
+// -- a compute pass writing these buffers in-frame -- must insert the
+// producer->draw barrier itself (see LiveMesh's synchronization warning); that
+// seam belongs to the streamed-app driver, not this pipeline.
+TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_hybrid_mesh();
+
+  // Direct path: the static GpuMesh (owns its buffers, fixed index count).
+  auto gpu = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(gpu.ok()) << gpu.status().message();
+
+  // Indirect path: upload the same vertices + indices into device-local buffers
+  // whose handles we keep, and fill a one-element indirect command with the
+  // index count -- exactly what recon would populate GPU-side.
+  auto batch = vg::UploadBatch::begin(*device_, allocator.value());
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+  vg::BufferUploadDesc vdesc;
+  vdesc.data = mesh_cpu.vertices.data();
+  vdesc.size = VkDeviceSize{mesh_cpu.vertices.size()} * sizeof(assets::Vertex);
+  vdesc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+  auto vbuf = batch.value().add_buffer(vdesc);
+  ASSERT_TRUE(vbuf.ok()) << vbuf.status().message();
+  vg::BufferUploadDesc idesc;
+  idesc.data = mesh_cpu.indices.data();
+  idesc.size = VkDeviceSize{mesh_cpu.indices.size()} * sizeof(uint32_t);
+  idesc.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+  auto ibuf = batch.value().add_buffer(idesc);
+  ASSERT_TRUE(ibuf.ok()) << ibuf.status().message();
+  ASSERT_TRUE(batch.value().finish().ok());
+
+  VkDrawIndexedIndirectCommand command{};
+  command.indexCount = static_cast<uint32_t>(mesh_cpu.indices.size());
+  command.instanceCount = 1;
+  vg::BufferDesc cmd_desc;
+  cmd_desc.size = sizeof(command);
+  cmd_desc.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+  cmd_desc.memory = vg::MemoryUsage::HostVisible;
+  cmd_desc.mapped = true;
+  auto indbuf = allocator.value().create_buffer(cmd_desc);
+  ASSERT_TRUE(indbuf.ok()) << indbuf.status().message();
+  std::memcpy(indbuf.value().mapped(), &command, sizeof(command));
+
+  pipelines::LiveMesh live;
+  live.vertices = vbuf.value().handle();
+  live.indices = ibuf.value().handle();
+  live.indirect = indbuf.value().handle();
+  ASSERT_TRUE(live.valid());
+
+  // A 1x1 white atlas: both paths sample the same set, so its content is
+  // irrelevant to the comparison -- it only satisfies submit()'s always-bound
+  // atlas precondition.
+  const uint8_t white_px[4] = {255, 255, 255, 255};
+  vg::ImageUploadDesc adesc;
+  adesc.extent = {1, 1};
+  adesc.format = kColorFormat;
+  adesc.pixels = white_px;
+  adesc.size = sizeof(white_px);
+  auto atlas_tex = vg::upload_texture(*device_, allocator.value(), adesc);
+  ASSERT_TRUE(atlas_tex.ok()) << atlas_tex.status().message();
+
+  vg::SamplerDesc sdesc;
+  sdesc.mag_filter = VK_FILTER_NEAREST;
+  sdesc.min_filter = VK_FILTER_NEAREST;
+  sdesc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  sdesc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sdesc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sdesc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  auto sampler = vg::Sampler::create(device(), sdesc);
+  ASSERT_TRUE(sampler.ok()) << sampler.status().message();
+
+  const VkDescriptorPoolSize pool_size{
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+  auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto atlas_set =
+      pool.value().allocate(pipeline.value().descriptor_set_layout(0));
+  ASSERT_TRUE(atlas_set.ok()) << atlas_set.status().message();
+  atlas_set.value().write_combined_image_sampler(
+      0, atlas_tex.value().view(), sampler.value().handle(),
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  const std::vector<uint8_t> direct = render(
+      allocator.value(), pipeline.value(),
+      pipelines::HybridMeshDraw{&gpu.value()}, atlas_set.value().handle(), 0u);
+  const std::vector<uint8_t> indirect =
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{live}, atlas_set.value().handle(), 0u);
+
+  ASSERT_EQ(direct.size(), static_cast<size_t>(kSize) * kSize * 4);
+  ASSERT_EQ(indirect.size(), direct.size());
+  // Same geometry, same pipeline, same viewport -> identical rasterization.
+  EXPECT_EQ(direct, indirect);
 }
 
 }  // namespace
