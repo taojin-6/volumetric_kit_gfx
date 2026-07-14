@@ -40,7 +40,11 @@ Three buffers, all borrowed (gfx never copies, never frees):
   the marching-cubes output.
 - **Sub-allocation**: pack many meshes into shared pools either way — byte
   offsets on `LiveMesh` (`vertex_offset`/`index_offset`/`indirect_offset`) at
-  bind time, or `firstIndex`/`vertexOffset` inside the command. Both honored.
+  bind time, or `firstIndex`/`vertexOffset` inside the command. The two compose
+  **additively** on the same buffer, so set at most one per axis (using both
+  double-counts and reads past the mesh). All three byte offsets must be
+  4-aligned — `index_offset`/`indirect_offset` per core Vulkan, `vertex_offset`
+  per MoltenVK/Metal.
 
 **Device features:** a single indirect draw (`drawCount = 1`) is core Vulkan
 1.0. **PR1 adds no new `DeviceRequirements`** — nothing new to merge into the

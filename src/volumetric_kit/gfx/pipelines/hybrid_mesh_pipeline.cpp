@@ -124,8 +124,7 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
     // mesh (borrowed buffers, GPU-driven count via an indirect command -- the
     // recon handoff). Skip an empty/moved-from source rather than record
     // against a stale binding; each source binds its own vertex/index buffers.
-    const std::variant<const GpuMesh*, LiveMesh>& geometry =
-        frame.draws[i].geometry;
+    const auto& geometry = frame.draws[i].geometry;
     if (const GpuMesh* const* mesh = std::get_if<const GpuMesh*>(&geometry)) {
       if (*mesh != nullptr && (*mesh)->valid()) {
         (*mesh)->record_draw(cmd);

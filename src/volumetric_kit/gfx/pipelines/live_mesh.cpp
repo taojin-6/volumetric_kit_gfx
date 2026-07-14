@@ -9,8 +9,9 @@ void LiveMesh::record_draw(VkCommandBuffer cmd) const {
   vkCmdBindVertexBuffers(cmd, 0, 1, &vertices, &vertex_offset);
   vkCmdBindIndexBuffer(cmd, indices, index_offset, VK_INDEX_TYPE_UINT32);
   // drawCount = 1: the index count rides the command, so it is read GPU-side
-  // and never crosses the CPU. stride is unused for a single draw but must name
-  // the command size.
+  // and never crosses the CPU. Vulkan ignores the stride for a single draw
+  // (only drawCount > 1 constrains it); pass the command size as the
+  // conventional value.
   vkCmdDrawIndexedIndirect(cmd, indirect, indirect_offset, 1,
                            sizeof(VkDrawIndexedIndirectCommand));
 }
