@@ -48,8 +48,17 @@ namespace volumetric_kit::gfx::pipelines {
 /// **Sub-allocation.** A producer packing many meshes into shared pools can
 /// offset either way: the byte-granular bind offsets on this struct (@ref
 /// vertex_offset and friends), or the element-granular `firstIndex` /
-/// `vertexOffset` inside the command. Both are honored; pick whichever suits
-/// the allocator.
+/// `vertexOffset` inside the command. The two compose **additively** on the
+/// same buffer -- the bind offset is added to `firstIndex * 4` (indices) and to
+/// `vertexOffset * stride` (vertices) -- so set at most one per axis; using
+/// both double-counts and fetches past the mesh.
+///
+/// **Offset alignment.** All three byte offsets must be 4-byte aligned: @ref
+/// index_offset and @ref indirect_offset per core Vulkan (the
+/// `VK_INDEX_TYPE_UINT32` index size, and the indirect-command offset rule),
+/// and @ref vertex_offset per MoltenVK/Metal (core Vulkan is laxer). @ref
+/// record_draw does not check this -- an unaligned offset is a validation
+/// error, and a Metal fault on Apple.
 ///
 /// @warning **Synchronization is the caller's.** @ref record_draw records only
 ///          the binds + the indirect draw; it inserts no barrier. The
@@ -64,9 +73,10 @@ namespace volumetric_kit::gfx::pipelines {
 /// @code
 /// // recon writes vertices, 32-bit indices, and a VkDrawIndexedIndirectCommand
 /// // into device buffers it owns, then hands the handles over -- no copy:
-/// pipelines::LiveMesh live{.vertices = recon_vertices,
-///                          .indices = recon_indices,
-///                          .indirect = recon_indirect};
+/// pipelines::LiveMesh live;
+/// live.vertices = recon_vertices;
+/// live.indices = recon_indices;
+/// live.indirect = recon_indirect;
 /// // ... after a barrier/semaphore makes those writes visible to the draw ...
 /// const pipelines::HybridMeshDraw draw{live};
 /// frame.draws = &draw;
@@ -76,15 +86,16 @@ namespace volumetric_kit::gfx::pipelines {
 struct VG_PIPELINES_API LiveMesh {
   /// Interleaved @ref assets::Vertex buffer (`VERTEX_BUFFER` usage).
   VkBuffer vertices = VK_NULL_HANDLE;
-  /// Byte offset of the first vertex within @ref vertices.
+  /// Byte offset of the first vertex within @ref vertices (4-byte aligned on
+  /// MoltenVK; see "Offset alignment").
   VkDeviceSize vertex_offset = 0;
   /// 32-bit index buffer (`INDEX_BUFFER` usage).
   VkBuffer indices = VK_NULL_HANDLE;
-  /// Byte offset of the first index within @ref indices.
+  /// Byte offset of the first index within @ref indices (a multiple of 4).
   VkDeviceSize index_offset = 0;
   /// One `VkDrawIndexedIndirectCommand` (`INDIRECT_BUFFER` usage).
   VkBuffer indirect = VK_NULL_HANDLE;
-  /// Byte offset of the command within @ref indirect.
+  /// Byte offset of the command within @ref indirect (a multiple of 4).
   VkDeviceSize indirect_offset = 0;
 
   /// @return `true` if all three buffers are bound (drawable).
