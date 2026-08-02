@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# vg_compile_shaders(<target> [OUTPUT_DIR <dir>] SHADERS <file>...)
+# vg_compile_shaders(<target> [OUTPUT_DIR <dir>] [OUT_TARGET <var>] SHADERS
+# <file>...)
 #
 # Compiles each GLSL shader to <dir>/<name>.spv (e.g. triangle.vert ->
 # triangle.vert.spv) and makes <target> depend on the results, so building
@@ -9,8 +10,13 @@
 # find_package(Vulkan) located -- glslc (shaderc) preferred, glslangValidator as
 # fallback -- and only errors when invoked, so a build compiling no shaders
 # needs no compiler installed. Safe to call more than once per target.
+#
+# OUT_TARGET sets <var> in the caller's scope to the custom target created to
+# produce the .spv. A caller that ALSO consumes those .spv through a second
+# custom target needs it to depend on that target -- see vg_embed_shaders, where
+# the edge is what keeps each .spv from being built twice.
 function(vg_compile_shaders target)
-  cmake_parse_arguments(ARG "" "OUTPUT_DIR" "SHADERS" ${ARGN})
+  cmake_parse_arguments(ARG "" "OUTPUT_DIR;OUT_TARGET" "SHADERS" ${ARGN})
   if(NOT ARG_SHADERS)
     message(FATAL_ERROR "vg_compile_shaders(${target}): no SHADERS given")
   endif()
@@ -121,4 +127,10 @@ function(vg_compile_shaders target)
 
   add_custom_target(${target}_shaders_${_seq} DEPENDS ${_spv_outputs})
   add_dependencies(${target} ${target}_shaders_${_seq})
+
+  if(ARG_OUT_TARGET)
+    set(${ARG_OUT_TARGET}
+        "${target}_shaders_${_seq}"
+        PARENT_SCOPE)
+  endif()
 endfunction()

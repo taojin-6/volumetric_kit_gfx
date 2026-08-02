@@ -186,6 +186,67 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
 
+      # gfx must stay generatable with -G Xcode -- that is the generator an iOS
+      # or macOS app bundle consumes. What regresses is the *generate*, not the
+      # build (e.g. a custom command reachable from two targets with no edge
+      # between them, which Xcode rejects outright), so generating is the whole
+      # check and no xcodebuild is needed. The Makefile legs above cannot see
+      # it. Xcode is multi-config, so one generate covers both build types --
+      # run it on the Debug leg only.
+      - name: Xcode generate check (macOS)
+        if: >-
+          steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+          && matrix.build_type == 'Debug'
+        run: |
+          shopt -s nullglob
+
+          # -G Xcode drives xcodebuild, which ships with full Xcode only -- the
+          # command line tools do not include it. Resolve a developer directory
+          # that has one: prefer whatever is active, but fall back to a
+          # discovered Xcode.app, since xcode-select can point at the command
+          # line tools on a machine that does have Xcode and re-pointing it is
+          # global and needs sudo. DEVELOPER_DIR is per-process, so this needs
+          # no privileges and changes nothing outside the step -- and dropping
+          # the inherited value first keeps the result independent of what the
+          # runner's launchd session happened to export.
+          unset DEVELOPER_DIR
+          DEVELOPER_DIR=$(xcode-select -p 2>/dev/null) || DEVELOPER_DIR=
+          if [ ! -x "${DEVELOPER_DIR}/usr/bin/xcodebuild" ]; then
+            for app in /Applications/Xcode*.app; do
+              if [ -x "${app}/Contents/Developer/usr/bin/xcodebuild" ]; then
+                DEVELOPER_DIR="${app}/Contents/Developer"
+                break
+              fi
+            done
+          fi
+          export DEVELOPER_DIR
+
+          # Probe xcodebuild rather than trusting the path: a missing Xcode, an
+          # unaccepted license and a pending first launch all fail here, and all
+          # three otherwise reach CMake as nothing more than "The CXX compiler
+          # identification is unknown".
+          if ! probe=$(xcodebuild -version 2>&1); then
+            echo "::error::-G Xcode needs a working full Xcode. Developer directory resolved to '${DEVELOPER_DIR:-none}'; xcodebuild said: ${probe}"
+            echo "On the runner: install Xcode, then sudo xcodebuild -license accept && sudo xcodebuild -runFirstLaunch"
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
+          echo "${probe}"
+
+          # Reuse the sources FetchContent already populated for `build`, so
+          # this costs one configure rather than a re-clone. Derived from the
+          # directory names instead of a hardcoded dep list, so adding a
+          # third_party dep needs no edit here; if the deps are missing the
+          # array is empty and FetchContent just fetches. A separate -B dir
+          # keeps `build/` -- and the deps cache uploaded from it -- untouched.
+          flags=()
+          for src in build/_deps/*-src; do
+            dep=$(basename "${src}" -src | tr '[:lower:]' '[:upper:]')
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${PWD}/${src}")
+          done
+          rm -rf build-xcode
+          cmake -S . -B build-xcode -G Xcode "${flags[@]}"
+
       # Runtime-validate the windowing tier through the real window -> surface ->
       # swapchain -> present path. lavapipe has no VK_EXT_headless_surface (so the
       # headless windowing test skips), but it supports the X11 WSI, so drive the
