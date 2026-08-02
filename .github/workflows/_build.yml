@@ -198,6 +198,22 @@ jobs:
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
           && matrix.build_type == 'Debug'
         run: |
+          # -G Xcode drives xcodebuild, which needs full Xcode -- the command
+          # line tools alone have no xcodebuild. DEVELOPER_DIR overrides
+          # xcode-select, so a stale one inherited from the launchd session
+          # makes xcodebuild refuse in milliseconds and CMake report only "The
+          # CXX compiler identification is unknown". Drop it, resolve the
+          # active developer dir ourselves, and say so plainly if it is not a
+          # full Xcode rather than leaving that error to be decoded.
+          unset DEVELOPER_DIR
+          DEVELOPER_DIR=$(xcode-select -p)
+          if [ ! -x "${DEVELOPER_DIR}/usr/bin/xcodebuild" ]; then
+            echo "::error::-G Xcode needs full Xcode; the active developer directory is '${DEVELOPER_DIR}'. Fix with: sudo xcode-select -s /Applications/Xcode.app"
+            exit 1
+          fi
+          export DEVELOPER_DIR
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
+
           # Reuse the sources FetchContent already populated for `build`, so
           # this costs one configure rather than a re-clone. Derived from the
           # directory names instead of a hardcoded dep list, so adding a
