@@ -150,6 +150,81 @@ class WindowedAppTest : public ::testing::Test {
   }
 };
 
+// WindowedApp::adopt runs the same chain on a VkDevice the caller created --
+// the shared-device interop case, windowed. Stands in for an embedder by
+// building instance + present-capable device the way another library would,
+// then handing over the raw handles.
+TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
+  vg::InstanceConfig icfg;
+  icfg.enable_validation = true;
+  icfg.extra_instance_extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
+                                    VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+  auto instance = vg::Instance::create(icfg);
+  ASSERT_TRUE(instance.ok()) << instance.status().message();
+  // Selection needs a surface; the app builds its own below, so this one only
+  // serves the embedder's device creation.
+  auto probe = win::Surface::headless(instance.value().handle());
+  ASSERT_TRUE(probe.ok()) << probe.status().message();
+  auto physical =
+      instance.value().select_physical_device(probe.value().handle());
+  ASSERT_TRUE(physical.ok()) << physical.status().message();
+  vg::DeviceConfig dcfg;
+  dcfg.needs_present = true;
+  auto owner = vg::Device::create(instance.value().handle(), physical.value(),
+                                  dcfg, probe.value().handle());
+  ASSERT_TRUE(owner.ok()) << owner.status().message();
+
+  // A present-capable device enables the swapchain extension; adopt verifies
+  // the declaration against what the renderer needs.
+  const char* const kEnabled[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  vg::AdoptedDevice adopted;
+  adopted.instance = instance.value().handle();
+  adopted.physical_device = physical.value();
+  adopted.device = owner.value().handle();
+  adopted.graphics_family = owner.value().graphics_family();
+  adopted.graphics_queue = owner.value().graphics_queue();
+  adopted.has_present = true;
+  adopted.present_family = owner.value().present_family();
+  adopted.present_queue = owner.value().present_queue();
+  adopted.enabled_device_extensions = kEnabled;
+  adopted.enabled_device_extension_count = 1;
+
+  {
+    auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
+                                           create_headless_surface);
+    ASSERT_TRUE(app.ok()) << app.status().message();
+    ASSERT_TRUE(app.value().valid());
+
+    // Borrowed, not built: the same VkDevice and the embedder's instance.
+    EXPECT_FALSE(app.value().device().owns_device());
+    EXPECT_EQ(app.value().device().handle(), owner.value().handle());
+    EXPECT_EQ(app.value().instance_handle(), instance.value().handle());
+
+    // Everything downstream of the device is still the app's own, and live:
+    // frames render end to end through the borrowed device's queues.
+    EXPECT_EQ(app.value().swapchain().extent().width, 256u);
+    vg::Status frames = run_frames(app.value(), 3);
+    EXPECT_TRUE(frames.ok()) << frames.message();
+  }  // the app destructs here -- it must NOT destroy the borrowed device
+
+  // The owner's device survived the app's teardown: a submit proves the
+  // adopted app left it intact (a double-free trips the sanitizer job).
+  vg::Status after = owner.value().submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}
+
+// A windowed app must present, so a compute-only share is refused up front
+// rather than failing deeper as a missing present queue.
+TEST_F(WindowedAppTest, AdoptRejectsShareWithoutPresentQueue) {
+  vg::AdoptedDevice adopted;
+  adopted.instance = reinterpret_cast<VkInstance>(0x1);  // never dereferenced
+  adopted.has_present = false;
+  auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
+                                         create_headless_surface);
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
 // One create() call yields the whole chain: every accessor hands back a live
 // object, and the begin/end passthroughs render real frames through it.
 TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {

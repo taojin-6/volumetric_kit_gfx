@@ -4,16 +4,58 @@
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace volumetric_kit::gfx::app {
 
+// Everything downstream of the device is identical on both bring-up paths, and
+// each step borrows the previous one by address, so it lives here once rather
+// than being written twice and drifting: surface (already in `state`) ->
+// allocator -> swapchain -> frame loop, all on whatever device `state` holds.
+Status WindowedApp::finish_bring_up(State& state,
+                                    const WindowedAppConfig& config) {
+  VG_ASSIGN(Allocator allocator,
+            Allocator::create(state.instance_handle, *state.device));
+  state.allocator.emplace(std::move(allocator));
+
+  // A depth-configured swapchain allocates its per-image depth attachments
+  // through the allocator; a color-only one takes none.
+  Allocator* depth_allocator =
+      config.swapchain.depth_format != VK_FORMAT_UNDEFINED ? &*state.allocator
+                                                           : nullptr;
+  VG_ASSIGN(windowing::Swapchain swapchain,
+            windowing::Swapchain::create(*state.device, state.surface.handle(),
+                                         config.swapchain, depth_allocator));
+  state.swapchain = std::move(swapchain);
+
+  VG_ASSIGN(windowing::FrameLoop frame_loop,
+            windowing::FrameLoop::create(*state.device, state.swapchain,
+                                         config.frames_in_flight));
+  state.frame_loop = std::move(frame_loop);
+  return {};
+}
+
+// Run the caller's factory and park the surface in `state`. Shared so both
+// paths reject a null factory and a VK_NULL_HANDLE result identically.
+Status WindowedApp::make_surface(State& state,
+                                 const SurfaceFactory& create_surface,
+                                 const char* who) {
+  if (!create_surface) {
+    return Status::invalid_argument(std::string(who) +
+                                    ": create_surface must be callable");
+  }
+  VG_ASSIGN(VkSurfaceKHR raw_surface, create_surface(state.instance_handle));
+  if (raw_surface == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        std::string(who) + ": the surface factory returned VK_NULL_HANDLE");
+  }
+  state.surface = windowing::Surface(state.instance_handle, raw_surface);
+  return {};
+}
+
 Result<WindowedApp> WindowedApp::create(const WindowedAppConfig& config,
                                         const SurfaceFactory& create_surface) {
-  if (!create_surface) {
-    return Status::invalid_argument(
-        "WindowedApp::create: create_surface must be callable");
-  }
   // Build into the final State up front: the later steps borrow the earlier
   // members by address (loop -> swapchain/device, swapchain -> device/
   // allocator), so each must be created at its resting place, never moved
@@ -27,14 +69,9 @@ Result<WindowedApp> WindowedApp::create(const WindowedAppConfig& config,
   instance_config.extra_instance_extensions = config.instance_extensions;
   VG_ASSIGN(Instance instance, Instance::create(instance_config));
   state->instance.emplace(std::move(instance));
+  state->instance_handle = state->instance->handle();
 
-  VG_ASSIGN(VkSurfaceKHR raw_surface,
-            create_surface(state->instance->handle()));
-  if (raw_surface == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
-        "WindowedApp::create: the surface factory returned VK_NULL_HANDLE");
-  }
-  state->surface = windowing::Surface(state->instance->handle(), raw_surface);
+  VG_TRY(make_surface(*state, create_surface, "WindowedApp::create"));
 
   // One surface threads through selection, DeviceConfig::needs_present, and
   // Device::create, so the three stay consistent by construction.
@@ -43,29 +80,48 @@ Result<WindowedApp> WindowedApp::create(const WindowedAppConfig& config,
   DeviceConfig device_config;
   device_config.needs_present = true;
   VG_ASSIGN(Device device,
-            Device::create(state->instance->handle(), physical, device_config,
+            Device::create(state->instance_handle, physical, device_config,
                            state->surface.handle()));
   state->device.emplace(std::move(device));
 
-  VG_ASSIGN(Allocator allocator,
-            Allocator::create(state->instance->handle(), *state->device));
-  state->allocator.emplace(std::move(allocator));
+  VG_TRY(finish_bring_up(*state, config));
 
-  // A depth-configured swapchain allocates its per-image depth attachments
-  // through the allocator; a color-only one takes none.
-  Allocator* depth_allocator =
-      config.swapchain.depth_format != VK_FORMAT_UNDEFINED ? &*state->allocator
-                                                           : nullptr;
-  VG_ASSIGN(
-      windowing::Swapchain swapchain,
-      windowing::Swapchain::create(*state->device, state->surface.handle(),
-                                   config.swapchain, depth_allocator));
-  state->swapchain = std::move(swapchain);
+  WindowedApp app;
+  app.state_ = std::move(state);
+  return app;
+}
 
-  VG_ASSIGN(windowing::FrameLoop frame_loop,
-            windowing::FrameLoop::create(*state->device, state->swapchain,
-                                         config.frames_in_flight));
-  state->frame_loop = std::move(frame_loop);
+Result<WindowedApp> WindowedApp::adopt(const AdoptedDevice& adopted,
+                                       const WindowedAppConfig& config,
+                                       const SurfaceFactory& create_surface) {
+  // A windowed app must present, so refuse a compute-only share here rather
+  // than let it fail deeper as a missing present queue. Device::adopt checks
+  // the rest (queues, extensions, features) against what the renderer needs.
+  if (!adopted.has_present || adopted.present_queue == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "WindowedApp::adopt: adopted device must carry a present queue "
+        "(set has_present and present_queue)");
+  }
+  if (adopted.instance == VK_NULL_HANDLE) {
+    return Status::invalid_argument("WindowedApp::adopt: instance is null");
+  }
+
+  auto state = std::make_unique<State>();
+  // The instance stays the embedder's: `state->instance` is left empty and
+  // nothing here destroys it. Only the handle is recorded, which is all the
+  // surface and the allocator need.
+  state->instance_handle = adopted.instance;
+
+  VG_TRY(make_surface(*state, create_surface, "WindowedApp::adopt"));
+
+  // No physical-device selection: the embedder already chose one, and the
+  // surface it must present to is the one just created from its instance.
+  DeviceConfig device_config;
+  device_config.needs_present = true;
+  VG_ASSIGN(Device device, Device::adopt(adopted, device_config));
+  state->device.emplace(std::move(device));
+
+  VG_TRY(finish_bring_up(*state, config));
 
   WindowedApp app;
   app.state_ = std::move(state);
