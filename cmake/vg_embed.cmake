@@ -28,6 +28,9 @@ function(vg_embed_shaders target)
   set(_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_spv")
   set(_inc_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_inc")
   vg_compile_shaders(${target} OUTPUT_DIR "${_spv_dir}" SHADERS ${ARG_SHADERS})
+  # The custom target vg_compile_shaders just created to produce the .spv files;
+  # captured so the embed target can be serialized after it (see below).
+  set(_compile_target "${_vg_compile_shaders_target}")
 
   set(_headers)
   foreach(_src IN LISTS ARG_SHADERS)
@@ -64,5 +67,25 @@ function(vg_embed_shaders target)
 
   add_custom_target(${target}_embedded_shaders_${_seq} DEPENDS ${_headers})
   add_dependencies(${target} ${target}_embedded_shaders_${_seq})
+
+  # Serialize the embed target after the compile target. Each .spv is an output
+  # of ${_compile_target} (a dependency of ${target}) AND a dependency of the
+  # embed headers above, so both custom targets can reach the same glslc rule.
+  # With no ordering between them:
+  #
+  # * the **Xcode** generator refuses to generate at all ("The custom command
+  #   generating <file> is attached to multiple targets ... but none of these is
+  #   a common dependency of the other(s)"), so gfx cannot be built with -G
+  #   Xcode -- which is what an iOS or macOS app bundle needs;
+  # * **Make** runs that glslc recipe from both targets' makefiles at once under
+  #   -j and truncates the .spv, after which spirv-val reports "Missing
+  #   OpFunctionEnd" and MoltenVK "Function was not terminated" at
+  #   MSL-conversion time.
+  #
+  # Building compile fully first makes each .spv appear exactly once and gives
+  # Xcode the common dependency it requires. (Ninja dedups on a global graph and
+  # was unaffected, which is why this went unnoticed.) Mirrors the identical
+  # serialization in volumetric_kit_recon's vr_embed_shaders.
+  add_dependencies(${target}_embedded_shaders_${_seq} ${_compile_target})
   target_include_directories(${target} PRIVATE "${_inc_dir}")
 endfunction()

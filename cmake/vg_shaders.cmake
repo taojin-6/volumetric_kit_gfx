@@ -121,4 +121,13 @@ function(vg_compile_shaders target)
 
   add_custom_target(${target}_shaders_${_seq} DEPENDS ${_spv_outputs})
   add_dependencies(${target} ${target}_shaders_${_seq})
+
+  # Expose the created target so a caller that ALSO consumes these .spv through
+  # a second custom target (vg_embed_shaders) can serialize against it. Without
+  # that ordering the same glslc rule is reachable from two unrelated targets,
+  # which the Xcode generator rejects outright and which Make runs twice
+  # concurrently. See the note in vg_embed_shaders.
+  set(_vg_compile_shaders_target
+      "${target}_shaders_${_seq}"
+      PARENT_SCOPE)
 endfunction()
