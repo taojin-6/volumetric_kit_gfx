@@ -186,6 +186,33 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
 
+      # gfx must stay generatable with -G Xcode -- that is the generator an iOS
+      # or macOS app bundle consumes. What regresses is the *generate*, not the
+      # build (e.g. a custom command reachable from two targets with no edge
+      # between them, which Xcode rejects outright), so generating is the whole
+      # check and no xcodebuild is needed. The Makefile legs above cannot see
+      # it. Xcode is multi-config, so one generate covers both build types --
+      # run it on the Debug leg only.
+      - name: Xcode generate check (macOS)
+        if: >-
+          steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+          && matrix.build_type == 'Debug'
+        run: |
+          # Reuse the sources FetchContent already populated for `build`, so
+          # this costs one configure rather than a re-clone. Derived from the
+          # directory names instead of a hardcoded dep list, so adding a
+          # third_party dep needs no edit here; if the deps are missing the
+          # array is empty and FetchContent just fetches. A separate -B dir
+          # keeps `build/` -- and the deps cache uploaded from it -- untouched.
+          shopt -s nullglob
+          flags=()
+          for src in build/_deps/*-src; do
+            dep=$(basename "${src}" -src | tr '[:lower:]' '[:upper:]')
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${PWD}/${src}")
+          done
+          rm -rf build-xcode
+          cmake -S . -B build-xcode -G Xcode "${flags[@]}"
+
       # Runtime-validate the windowing tier through the real window -> surface ->
       # swapchain -> present path. lavapipe has no VK_EXT_headless_surface (so the
       # headless windowing test skips), but it supports the X11 WSI, so drive the

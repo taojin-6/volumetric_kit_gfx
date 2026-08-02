@@ -27,10 +27,22 @@ function(vg_embed_shaders target)
   # into a header. Both dirs live in the build tree and are never installed.
   set(_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_spv")
   set(_inc_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_inc")
-  vg_compile_shaders(${target} OUTPUT_DIR "${_spv_dir}" SHADERS ${ARG_SHADERS})
-  # The custom target vg_compile_shaders just created to produce the .spv files;
-  # captured so the embed target can be serialized after it (see below).
-  set(_compile_target "${_vg_compile_shaders_target}")
+  # OUT_TARGET reports the custom target producing the .spv, which the embed
+  # target below must depend on. Assert it came back rather than silently
+  # forming the wrong edge if vg_compile_shaders ever stops reporting one.
+  vg_compile_shaders(
+    ${target}
+    OUTPUT_DIR
+    "${_spv_dir}"
+    OUT_TARGET
+    _compile_target
+    SHADERS
+    ${ARG_SHADERS})
+  if(NOT _compile_target)
+    message(
+      FATAL_ERROR
+        "vg_embed_shaders(${target}): vg_compile_shaders reported no target")
+  endif()
 
   set(_headers)
   foreach(_src IN LISTS ARG_SHADERS)
@@ -39,8 +51,9 @@ function(vg_embed_shaders target)
     set(_spv "${_spv_dir}/${_name}.spv")
     set(_header "${_inc_dir}/${_stem}.spv.hpp")
     # The .spv is an OUTPUT of the vg_compile_shaders custom command above (same
-    # directory scope), so this file-level DEPENDS orders compile before embed
-    # under both Make and Ninja.
+    # directory scope), so this file-level DEPENDS orders each header after its
+    # .spv -- and keeps an edited shader re-embedding. The target-level edge
+    # below is what stops that .spv from being built twice.
     add_custom_command(
       OUTPUT "${_header}"
       COMMAND ${CMAKE_COMMAND} -E make_directory "${_inc_dir}"
@@ -69,23 +82,16 @@ function(vg_embed_shaders target)
   add_dependencies(${target} ${target}_embedded_shaders_${_seq})
 
   # Serialize the embed target after the compile target. Each .spv is an output
-  # of ${_compile_target} (a dependency of ${target}) AND a dependency of the
-  # embed headers above, so both custom targets can reach the same glslc rule.
-  # With no ordering between them:
-  #
-  # * the **Xcode** generator refuses to generate at all ("The custom command
-  #   generating <file> is attached to multiple targets ... but none of these is
-  #   a common dependency of the other(s)"), so gfx cannot be built with -G
-  #   Xcode -- which is what an iOS or macOS app bundle needs;
-  # * **Make** runs that glslc recipe from both targets' makefiles at once under
-  #   -j and truncates the .spv, after which spirv-val reports "Missing
-  #   OpFunctionEnd" and MoltenVK "Function was not terminated" at
-  #   MSL-conversion time.
-  #
-  # Building compile fully first makes each .spv appear exactly once and gives
-  # Xcode the common dependency it requires. (Ninja dedups on a global graph and
-  # was unaffected, which is why this went unnoticed.) Mirrors the identical
-  # serialization in volumetric_kit_recon's vr_embed_shaders.
+  # of ${_compile_target} AND a dependency of the embed headers above, so both
+  # custom targets reach the same glslc rule; unordered, CMake emits that rule
+  # into both targets' makefiles. The Xcode generator rejects that outright
+  # ("attached to multiple targets ... but none of these is a common dependency
+  # of the other(s)"), blocking the -G Xcode generate an iOS or macOS app bundle
+  # needs, and `make -j` runs the two copies concurrently and truncates the .spv
+  # -- spirv-val then reports "Missing OpFunctionEnd" and MoltenVK "Function was
+  # not terminated" at MSL-conversion time. With the edge the rule is emitted
+  # once, under the compile target alone. (Ninja dedups on a global graph and is
+  # unaffected.) Mirrors volumetric_kit_recon's vr_embed_shaders.
   add_dependencies(${target}_embedded_shaders_${_seq} ${_compile_target})
   target_include_directories(${target} PRIVATE "${_inc_dir}")
 endfunction()
