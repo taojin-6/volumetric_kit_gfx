@@ -76,7 +76,19 @@ macOS can't be containerised (no macOS containers exist — Docker-on-Mac runs
 MoltenVK on the real GPU, so the Mac runs jobs **natively, no Docker**. On a
 **private** repo this also saves real money: hosted macOS minutes bill at 10×.
 
-Prereqs on the Mac: `xcode-select --install` + Homebrew. Then:
+Prereqs on the Mac: **full Xcode** (not just `xcode-select --install`) + Homebrew.
+The build itself only needs the command line tools, but the macOS leg also runs a
+`-G Xcode` generate check — the generator an iOS/macOS app bundle consumes — and
+that drives `xcodebuild`, which the command line tools do not ship. Install Xcode
+from the App Store and point the toolchain at it:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app
+sudo xcodebuild -license accept
+```
+
+`DEVELOPER_DIR` overrides `xcode-select`, so make sure the login session does not
+export a stale one — the runner is a LaunchAgent and inherits it. Then:
 
 ```bash
 bash .github/setup-mac-runner.sh        # registers 2 runners labelled `mac`
