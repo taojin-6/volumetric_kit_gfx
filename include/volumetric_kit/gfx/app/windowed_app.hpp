@@ -12,10 +12,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "volumetric_kit/gfx/app/export.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -129,6 +131,50 @@ class VG_APP_API WindowedApp {
   static Result<WindowedApp> create(const WindowedAppConfig& config,
                                     const SurfaceFactory& create_surface);
 
+  /// @brief Run the same bring-up chain on a `VkDevice` the embedder created,
+  ///        instead of building an instance and device of our own.
+  ///
+  /// The windowed counterpart to @ref Device::adopt. An embedder that runs the
+  /// renderer alongside another Vulkan library builds **one** device from the
+  /// union of both libraries' @ref Device::requirements and hands it to each;
+  /// this is how the renderer takes its share and still gets a swapchain and a
+  /// frame loop. Sharing one device is what lets the other library's
+  /// `VkBuffer`/`VkImage` be drawn directly, with no cross-device copy or
+  /// external-memory import.
+  ///
+  /// Everything before the surface is borrowed: the instance, physical device,
+  /// logical device, and queues in @p adopted are **not** owned and are never
+  /// destroyed here. Everything after is built and owned as in @ref create --
+  /// the surface (from @p create_surface), the allocator, the swapchain, and
+  /// the frame loop, all on the borrowed device.
+  ///
+  /// @param adopted  The embedder's device and queues. `has_present` must be
+  ///                 set with a valid `present_queue`: a windowed app must
+  ///                 present, so unlike @ref Device::adopt this cannot be a
+  ///                 compute-only share. Set `submit_mutex` when the queue is
+  ///                 shared with another library.
+  /// @param config   As @ref create, except `app_name`, `enable_validation`
+  ///                 and `instance_extensions` are ignored -- the embedder
+  ///                 already created the instance those configure.
+  /// @param create_surface  As @ref create; called with `adopted.instance`.
+  /// @return The app on success, or the first failing step's @ref Status:
+  ///         @ref Status::Code::InvalidArgument for a null @p create_surface,
+  ///         a factory returning `VK_NULL_HANDLE`, a zero
+  ///         `config.frames_in_flight`, a null handle in @p adopted, or an
+  ///         @p adopted without present; @ref Status::Code::Unsupported when
+  ///         `present_family` cannot actually present to the surface
+  ///         @p create_surface returned (@ref create chooses that family *for*
+  ///         its surface and so cannot hit this; a device built before any
+  ///         window existed picked it blind); otherwise the propagated failure
+  ///         (including @ref Device::adopt's verification that the device
+  ///         carries what the renderer needs).
+  ///
+  /// @warning `adopted.instance`, `physical_device`, `device`, its queues and
+  ///          `submit_mutex` must all outlive the returned app.
+  static Result<WindowedApp> adopt(const AdoptedDevice& adopted,
+                                   const WindowedAppConfig& config,
+                                   const SurfaceFactory& create_surface);
+
   ~WindowedApp() = default;
   WindowedApp(WindowedApp&& other) noexcept = default;
   WindowedApp& operator=(WindowedApp&& other) noexcept = default;
@@ -175,10 +221,31 @@ class VG_APP_API WindowedApp {
   ///         app, or the failed `VkResult`.
   Status wait_idle() const;
 
-  /// @return The owned instance. @pre @ref valid.
-  Instance& instance() noexcept { return *state_->instance; }
+  /// @return The owned instance. @pre @ref valid, **and** this app came from
+  ///         @ref create -- an app from @ref adopt borrows its instance and
+  ///         holds no @ref Instance object, so asking one for it is a
+  ///         programmer error and aborts (`VG_CHECK`) rather than handing back
+  ///         a reference to nothing. Use @ref instance_handle when the app may
+  ///         be either, or when only the handle is wanted.
+  Instance& instance() noexcept {
+    VG_CHECK(state_->instance.has_value(),
+             "WindowedApp::instance: this app was adopted and borrows its "
+             "instance; use instance_handle()");
+    return *state_->instance;
+  }
   /// @copydoc instance
-  const Instance& instance() const noexcept { return *state_->instance; }
+  const Instance& instance() const noexcept {
+    VG_CHECK(state_->instance.has_value(),
+             "WindowedApp::instance: this app was adopted and borrows its "
+             "instance; use instance_handle()");
+    return *state_->instance;
+  }
+  /// @return The `VkInstance` this app renders on, however it was obtained --
+  ///         the one it created, or the embedder's. Valid for both @ref create
+  ///         and @ref adopt. @pre @ref valid.
+  VkInstance instance_handle() const noexcept {
+    return state_->instance_handle;
+  }
   /// @return The owned device. @pre @ref valid.
   Device& device() noexcept { return *state_->device; }
   /// @copydoc device
@@ -205,6 +272,19 @@ class VG_APP_API WindowedApp {
   bool valid() const noexcept { return state_ != nullptr; }
 
  private:
+  struct State;
+
+  // Shared bring-up steps, so create() and adopt() cannot drift: make_surface
+  // binds the app to an instance and runs the caller's factory on it,
+  // finish_bring_up builds everything downstream of the device (allocator ->
+  // swapchain -> frame loop). The instance is a parameter rather than something
+  // make_surface reads back out of a half-built `state`, so there is no order
+  // in which a caller can reach it before it is set.
+  static Status make_surface(State& state, VkInstance instance,
+                             const SurfaceFactory& create_surface,
+                             std::string_view who);
+  static Status finish_bring_up(State& state, const WindowedAppConfig& config);
+
   // The chain lives behind one pointer because the later members borrow the
   // earlier ones by address (the loop points at the swapchain and device, the
   // swapchain at the device and allocator): a member-wise move would re-seat
@@ -214,7 +294,11 @@ class VG_APP_API WindowedApp {
   // instance dies last. std::optional stands in where a type has no public
   // default constructor.
   struct State {
+    // Set only on the create path; empty when the instance is the embedder's.
     std::optional<Instance> instance;
+    // The instance in use either way, so accessors and the surface work
+    // without branching on which path built this app.
+    VkInstance instance_handle = VK_NULL_HANDLE;
     windowing::Surface surface;
     std::optional<Device> device;
     std::optional<Allocator> allocator;

@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -76,6 +77,20 @@ vg::app::WindowedAppConfig windowed_config(
   config.swapchain.extent = {256, 256};
   config.swapchain.depth_format = depth_format;
   return config;
+}
+
+// A share whose handles are all non-null, so a test can knock out exactly one
+// and watch that check fire. Never dereferenced: every case built on this is
+// rejected on its arguments, before a handle reaches Vulkan.
+vg::AdoptedDevice placeholder_share() {
+  vg::AdoptedDevice adopted;
+  adopted.instance = reinterpret_cast<VkInstance>(0x1);
+  adopted.physical_device = reinterpret_cast<VkPhysicalDevice>(0x2);
+  adopted.device = reinterpret_cast<VkDevice>(0x3);
+  adopted.graphics_queue = reinterpret_cast<VkQueue>(0x4);
+  adopted.has_present = true;
+  adopted.present_queue = reinterpret_cast<VkQueue>(0x5);
+  return adopted;
 }
 
 vg::app::HeadlessAppConfig headless_config() {
@@ -149,6 +164,69 @@ class WindowedAppTest : public ::testing::Test {
     return {};
   }
 };
+
+// WindowedApp::adopt runs the same chain on a VkDevice the caller created --
+// the shared-device interop case, windowed. Stands in for an embedder by
+// building instance + present-capable device the way another library would,
+// then handing over the raw handles.
+TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
+  vg::InstanceConfig icfg;
+  icfg.enable_validation = true;
+  icfg.extra_instance_extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
+                                    VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+  auto instance = vg::Instance::create(icfg);
+  ASSERT_TRUE(instance.ok()) << instance.status().message();
+  // Selection needs a surface; the app builds its own below, so this one only
+  // serves the embedder's device creation.
+  auto probe = win::Surface::headless(instance.value().handle());
+  ASSERT_TRUE(probe.ok()) << probe.status().message();
+  auto physical =
+      instance.value().select_physical_device(probe.value().handle());
+  ASSERT_TRUE(physical.ok()) << physical.status().message();
+  vg::DeviceConfig dcfg;
+  dcfg.needs_present = true;
+  auto owner = vg::Device::create(instance.value().handle(), physical.value(),
+                                  dcfg, probe.value().handle());
+  ASSERT_TRUE(owner.ok()) << owner.status().message();
+
+  // A present-capable device enables the swapchain extension; adopt verifies
+  // the declaration against what the renderer needs.
+  const char* const kEnabled[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  vg::AdoptedDevice adopted;
+  adopted.instance = instance.value().handle();
+  adopted.physical_device = physical.value();
+  adopted.device = owner.value().handle();
+  adopted.graphics_family = owner.value().graphics_family();
+  adopted.graphics_queue = owner.value().graphics_queue();
+  adopted.has_present = true;
+  adopted.present_family = owner.value().present_family();
+  adopted.present_queue = owner.value().present_queue();
+  adopted.enabled_device_extensions = kEnabled;
+  adopted.enabled_device_extension_count = 1;
+
+  {
+    auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
+                                           create_headless_surface);
+    ASSERT_TRUE(app.ok()) << app.status().message();
+    ASSERT_TRUE(app.value().valid());
+
+    // Borrowed, not built: the same VkDevice and the embedder's instance.
+    EXPECT_FALSE(app.value().device().owns_device());
+    EXPECT_EQ(app.value().device().handle(), owner.value().handle());
+    EXPECT_EQ(app.value().instance_handle(), instance.value().handle());
+
+    // Everything downstream of the device is still the app's own, and live:
+    // frames render end to end through the borrowed device's queues.
+    EXPECT_EQ(app.value().swapchain().extent().width, 256u);
+    vg::Status frames = run_frames(app.value(), 3);
+    EXPECT_TRUE(frames.ok()) << frames.message();
+  }  // the app destructs here -- it must NOT destroy the borrowed device
+
+  // The owner's device survived the app's teardown: a submit proves the
+  // adopted app left it intact (a double-free trips the sanitizer job).
+  vg::Status after = owner.value().submit_single_time([](VkCommandBuffer) {});
+  EXPECT_TRUE(after.ok()) << after.message();
+}
 
 // One create() call yields the whole chain: every accessor hands back a live
 // object, and the begin/end passthroughs render real frames through it.
@@ -324,6 +402,82 @@ TEST(WindowedAppValidation, NullSurfaceFactoryIsRejected) {
       vg::app::WindowedAppConfig{}, vg::app::WindowedApp::SurfaceFactory{});
   ASSERT_FALSE(app.ok());
   EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+// adopt()'s argument checks all reject before a handle reaches Vulkan, so they
+// belong here rather than behind WindowedAppTest -- they need no device and no
+// headless surface, and so run on MoltenVK too.
+
+// A windowed app must present, so a compute-only share is refused up front
+// rather than failing deeper as a missing present queue.
+TEST(WindowedAppValidation, AdoptRejectsShareWithoutPresentQueue) {
+  vg::AdoptedDevice adopted = placeholder_share();
+  adopted.has_present = false;
+  adopted.present_queue = VK_NULL_HANDLE;
+  auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
+                                         create_headless_surface);
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+// Every handle is vetted before the factory runs: a share that was never going
+// to work must not first cost the embedder a created-then-destroyed surface
+// (a real window surface, in the non-headless case).
+TEST(WindowedAppValidation, AdoptRejectsNullHandlesWithoutRunningFactory) {
+  bool factory_ran = false;
+  auto factory = [&factory_ran](VkInstance) -> vg::Result<VkSurfaceKHR> {
+    factory_ran = true;
+    return vg::Status::unsupported("the factory must not run");
+  };
+  auto expect_rejected = [&factory](const vg::AdoptedDevice& adopted,
+                                    const char* which) {
+    auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(), factory);
+    ASSERT_FALSE(app.ok()) << which;
+    EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument)
+        << which;
+  };
+
+  vg::AdoptedDevice adopted = placeholder_share();
+  adopted.instance = VK_NULL_HANDLE;
+  expect_rejected(adopted, "null instance");
+
+  adopted = placeholder_share();
+  adopted.physical_device = VK_NULL_HANDLE;
+  expect_rejected(adopted, "null physical device");
+
+  adopted = placeholder_share();
+  adopted.device = VK_NULL_HANDLE;
+  expect_rejected(adopted, "null device");
+
+  adopted = placeholder_share();
+  adopted.graphics_queue = VK_NULL_HANDLE;
+  expect_rejected(adopted, "null graphics queue");
+
+  EXPECT_FALSE(factory_ran);
+}
+
+// The surface step is shared with create(), so it names the path that called
+// it -- an embedder is told which entry point rejected its factory.
+TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFactory) {
+  auto app =
+      vg::app::WindowedApp::adopt(placeholder_share(), windowed_config(),
+                                  vg::app::WindowedApp::SurfaceFactory{});
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_NE(app.status().message().find("WindowedApp::adopt"),
+            std::string::npos)
+      << app.status().message();
+}
+
+TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFromFactory) {
+  auto app = vg::app::WindowedApp::adopt(
+      placeholder_share(), windowed_config(),
+      [](VkInstance) -> vg::Result<VkSurfaceKHR> { return VK_NULL_HANDLE; });
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_NE(app.status().message().find("WindowedApp::adopt"),
+            std::string::npos)
+      << app.status().message();
 }
 
 // HeadlessApp needs no surface extension and no present queue, so this fixture
