@@ -1,12 +1,14 @@
 # Live mesh handoff — `volumetric_kit_recon` → `gfx` (PR1: indirect draw)
 
-**Status:** proposal for review by the reconstruction side. This is the first of
-the three slices that complete the live zero-copy path (indirect draw →
-per-slot atlas ringing → `app::StreamedApp` driver). PR1 lands **only the draw
-mechanics**; the synchronization and lifetime seams it depends on are called out
-below as open questions for recon to weigh in on before PR2/PR3.
+**Status:** the draw mechanics, with the seams it depends on now settled by the
+reconstruction side. This is the first of the three slices that complete the
+live zero-copy path (indirect draw → per-slot atlas ringing →
+`app::StreamedApp` driver).
 
-Recon agent: the questions in **§4** are the ones your feedback most changes.
+This lands **only the draw mechanics**. The synchronization and lifetime seams
+were left open here for recon to answer, and it has — see **§4**, which records
+the answers rather than the questions. Nothing in the contract below changed as
+a result: recon adopted the shape this was drafted against.
 
 ## 1. What PR1 adds
 
@@ -57,39 +59,54 @@ renderer adopted** (PR #85). gfx binds their handles directly — no external-me
 import, no staging copy. This is the same-API case the device-adopt decision
 anticipated (none of the CUDA/Metal interop machinery applies).
 
-## 4. Open questions for recon (please review)
+## 4. Answers from recon
 
-1. **Synchronization ownership.** gfx's `record_draw` inserts **no barrier** — it
-   assumes the producer's writes are already visible to
-   `VK_PIPELINE_STAGE_VERTEX_INPUT_BIT` (vertex+index) and
-   `VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT` (the command). Where should the
-   producer→draw dependency live?
-   - **Same queue** (recon compute + gfx graphics on one queue): a
-     `vkCmdPipelineBarrier` (`src = COMPUTE_SHADER`, `dst = VERTEX_INPUT |
-     DRAW_INDIRECT`; access `SHADER_WRITE → VERTEX_ATTRIBUTE_READ | INDEX_READ |
-     INDIRECT_COMMAND_READ`). Who records it — recon before handoff, or gfx at
-     the top of `submit()` given a producer-stage hint?
-   - **Separate queues**: a timeline semaphore. What signals it, and does recon
-     want gfx's `StreamedApp` (PR3) to own the wait value, or expose the seam?
+These were open when this was first written. recon has since settled all four,
+across `volumetric_kit_recon` #47 (buffer sharing + barrier visibility), #48
+(the arena slot ring) and #49 (the indirect command). Recorded here because the
+contract below only makes sense alongside them.
 
-   **This is the decision that shapes PR3.** My default: `StreamedApp` owns a
-   timeline-semaphore handshake and the barrier, and `LiveMesh` stays a pure
-   recorder. Does that fit recon's submission model?
+1. **Synchronization ownership: the application, gating on the host.**
+   `record_draw` stays a pure recorder and inserts no barrier, as drafted -- but
+   the producer→draw dependency is *not* a semaphore the draw waits on. It
+   cannot be: on the shared-queue arrangement a command buffer waiting on a
+   value the sibling has not signalled deadlocks against a swapchain rebuild,
+   which drains the queue while holding the submit mutex. The application polls
+   readiness on the host and skips a not-ready frame instead, which is what it
+   already does for the host-mesh path.
 
-2. **Buffer lifetime / double-buffering.** recon must keep each frame's buffers
-   alive until gfx's frame retires (its fence signals). PR2 adds per-slot
-   ringing (double-buffer + `VkFence`-completion token via `RetireQueue`) so
-   recon can write slot B while gfx reads slot A — **and deliberately does NOT
-   use `MTLSharedEvent`** (MoltenVK's export is buggy; see CLAUDE.md). How many
-   in-flight geometry slots does recon want to ring (2 minimum)?
+   Visibility is still a barrier, and recon now emits it: its shared `dispatch()`
+   widened its destination scope to `VERTEX_INPUT | DRAW_INDIRECT` with
+   `VERTEX_ATTRIBUTE_READ | INDEX_READ | INDIRECT_COMMAND_READ` -- gated on the
+   recording family actually supporting graphics, since naming `VERTEX_INPUT` on
+   a compute-only family is invalid usage. Where recon lands on such a family the
+   handoff needs a semaphore regardless, and a semaphore's signal/wait carries
+   the visibility itself.
 
-3. **Who fills the command?** PR1 assumes recon writes the whole
-   `VkDrawIndexedIndirectCommand` GPU-side (marching cubes emits `indexCount`).
-   If recon would rather hand over just a count buffer, say so — gfx can adapt
-   the seam.
+   Cross-family access needs the buffers created `VK_SHARING_MODE_CONCURRENT`,
+   which recon's `BufferDesc` now takes queue families for. This matters on
+   Apple, where the bootstrap hands recon and gfx queues from *different*
+   families.
 
-4. **Index width.** Fixed at `UINT32` (matches `GpuMesh` and recon's current
-   output). If 16-bit is ever wanted it's a one-field add — flag it now if so.
+2. **Buffer lifetime: recon rings, the consumer reports completion.**
+   `MarchingCubesConfig::slot_count` gives each outstanding extract its own
+   arena, index run and command. The consumer calls
+   `MarchingCubes::release_through(generation)` as its frames retire, and an
+   extract only ever writes, grows or frees a released slot -- so no fence queue
+   is needed inside recon and no `MTLSharedEvent` anywhere.
+
+   Depth: **frames in flight + 1**. Extracting with every slot outstanding is
+   reported as an error rather than overwriting a live draw.
+
+3. **Who fills the command: recon, GPU-side, in full.** Its marching-cubes
+   kernel counts *indices* rather than triangles, so the atomic it already had
+   *is* `indexCount` -- the command is written by the extraction rather than
+   assembled from a count afterwards. `instanceCount = 1` and the three offsets
+   are host-written once per extract, matching this contract exactly. No count
+   buffer variant is needed.
+
+4. **Index width: `UINT32`.** Confirmed -- marching cubes emits it and there is
+   no 16-bit case.
 
 ## 5. Proof (this PR)
 
