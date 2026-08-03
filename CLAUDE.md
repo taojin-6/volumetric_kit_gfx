@@ -45,9 +45,9 @@ consumer/example.
   share one `VkDevice` with the renderer and hand over `VkBuffer`/`VkImage` **zero-copy** — the
   same-API case that needs none of the CUDA/Metal external-memory machinery above. The embedding app
   owns the shared instance/device and merges both libraries' requirements; gfx stays standalone
-  (`create` is unchanged). Still needed for a *live* mesh (not yet built): an indirect-draw path
-  (variable index count) in the mesh pipeline, and per-slot material/atlas ringing for a
-  live-updated texture.
+  (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
+  (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
+  what remains.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.
@@ -67,10 +67,18 @@ consumer/example.
   + `GpuMesh` unchanged (binds position/normal/uv0/color, not tangent), one push constant carries the
   view-projection + light (no per-frame UBO), and the sampler set is the pipeline's only descriptor
   set. This is the *static* data-path (upload a mesh + atlas, draw); proven headless via an offscreen
-  draw + pixel readback under validation. The *live* zero-copy path still needs the indirect draw
-  (variable index count) + per-slot atlas ringing noted in the device-adopt decision. A vertex-color/
-  atlas mesh pipeline is a broadly-useful renderer feature, so the siblings stay independent — gfx
-  gains a capability, not a dependency on recon.
+  draw + pixel readback under validation. A vertex-color/atlas mesh pipeline is a broadly-useful
+  renderer feature, so the siblings stay independent — gfx gains a capability, not a dependency on
+  recon.
+- **2026-08-03 — `pipelines::LiveMesh`, the indirect-draw half of the live zero-copy path.**
+  A borrowed vertex/index/indirect buffer triple drawn with `vkCmdDrawIndexedIndirect`, so a mesh
+  whose index count changes per frame draws with no CPU round trip. `HybridMeshDraw::geometry` is a
+  `std::variant<const GpuMesh*, LiveMesh>` — one frame mixes static and live meshes, and `submit()`
+  dispatches per draw via a visitor (a new alternative is a compile error, not a silently dropped
+  draw). gfx owns only the *recording*: synchronization, buffer lifetime, and the command's contents
+  are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
+  contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
+  for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
 
 ## Key gotchas (verified)
 

@@ -9,6 +9,7 @@
 ///        and from per-vertex color otherwise, shaders embedded.
 
 #include <cstdint>
+#include <variant>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -18,6 +19,7 @@
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -131,20 +133,36 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///      @ref descriptor_set_layout `(0)` -- the shader samples it
   ///      unconditionally. A `VK_NULL_HANDLE` atlas records **nothing** (the
   ///      whole frame is dropped rather than draw against an unbound set).
-  ///      Draws whose mesh is null/empty are skipped.
+  ///      Draws whose geometry is empty -- a null static @ref GpuMesh, or a
+  ///      live @ref LiveMesh with any of its three handles unbound -- are
+  ///      skipped. A *bound* @ref LiveMesh is always drawn: its index count
+  ///      lives in the producer's indirect command, which this pipeline never
+  ///      reads (see @ref LiveMesh on saying "nothing this frame").
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
   GraphicsPipeline pipeline_;
 };
 
-/// @brief One thing to draw: a @ref GpuMesh (world-space interleaved vertices).
+/// @brief One thing to draw: either a static @ref GpuMesh or a live @ref
+///        LiveMesh (world-space interleaved vertices, either way).
 ///
-/// The mesh is borrowed (it outlives the @ref HybridMeshFrame that names it).
-/// There is no per-draw transform -- reconstruction geometry is already in
-/// world space.
+/// The geometry is a `std::variant`, so exactly one source is named -- a static
+/// @ref GpuMesh (borrowed by pointer; owns device-local buffers with a fixed
+/// index count) or a @ref LiveMesh (a value that borrows the producer's buffers
+/// and draws them indirectly with a GPU-driven count -- the recon handoff).
+/// The draw *list* is borrowed for the duration of the @ref
+/// HybridMeshPipeline::submit call, but the geometry it names must outlive the
+/// recorded **frame**: `submit` only records, and the GPU reads the buffers
+/// when that frame executes (see @ref LiveMesh's lifetime `@warning` -- for a
+/// live mesh this is what keeps a producer from recycling a slot that is still
+/// in flight). A default-constructed draw holds a null @ref GpuMesh pointer and
+/// records nothing. There is no per-draw transform -- reconstruction geometry
+/// is already in world space.
 struct HybridMeshDraw {
-  const GpuMesh* mesh = nullptr;  ///< The world-space geometry to draw.
+  /// The geometry source. Aggregate-initializes from either alternative:
+  /// `HybridMeshDraw{&gpu_mesh}` or `HybridMeshDraw{live_mesh}`.
+  std::variant<const GpuMesh*, LiveMesh> geometry;
 };
 
 /// @brief Everything @ref HybridMeshPipeline::submit records for one frame: the
