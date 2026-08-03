@@ -97,6 +97,37 @@ assets::Mesh make_hybrid_mesh() {
   return mesh;
 }
 
+// A quad over NDC [-0.5, 0.5]^2, NEARER the camera than make_hybrid_mesh()'s
+// z = 0.5, carrying the sentinel uv + a blue vertex color. Drawn after the
+// full-screen mesh it wins the LESS depth test over the middle of the frame and
+// covers nothing else -- so a frame containing it is distinguishable from one
+// that does not. Drawing the *same* geometry twice would not be: identical
+// opaque geometry is rejected by the depth test and writes no color, which
+// would make a mixed-draw test pass with the live branch deleted.
+assets::Mesh make_center_quad() {
+  // Blue: neither the atlas red nor the full-screen mesh's green, so a pixel it
+  // covers is unambiguously this draw's.
+  const glm::vec4 blue{0.0f, 0.0f, 1.0f, 1.0f};
+  auto vert = [&](float x, float y) {
+    assets::Vertex v;
+    v.position = {x, y, 0.25f};  // nearer than the full-screen mesh
+    v.normal = {0.0f, 0.0f, 1.0f};
+    v.uv0 = {-1.0f, -1.0f};  // sentinel -> per-vertex color
+    v.color = blue;
+    return v;
+  };
+
+  assets::Mesh mesh;
+  mesh.vertices = {
+      vert(-0.5f, -0.5f),
+      vert(0.5f, -0.5f),
+      vert(0.5f, 0.5f),
+      vert(-0.5f, 0.5f),
+  };
+  mesh.indices = {0, 2, 1, 0, 3, 2};  // same front-facing winding
+  return mesh;
+}
+
 // True if any pixel departs from the opaque-black clear -- i.e. the mesh
 // actually rasterized. Guards the direct-vs-indirect equivalence tests against
 // a shared regression that clears BOTH paths and so compares equal but empty.
@@ -150,20 +181,27 @@ struct LiveBuffers {
   vg::Buffer indirect;
 };
 
-// Builds a LiveMesh that draws `mesh`, backed by three host-visible buffers
-// each carrying `pad` leading bytes -- a non-zero `pad` (a multiple of 4)
-// exercises the vertex/index/indirect bind offsets. The owning buffers land in
-// `out`, which must outlive the draw.
+// The well-formed command for `mesh`: its whole index run, one instance, no
+// element offsets -- what the handoff contract requires a producer to write.
+VkDrawIndexedIndirectCommand draw_command(const assets::Mesh& mesh) {
+  VkDrawIndexedIndirectCommand command{};
+  command.indexCount = static_cast<uint32_t>(mesh.indices.size());
+  command.instanceCount = 1;
+  return command;
+}
+
+// Builds a LiveMesh that draws `mesh` under `command`, backed by three
+// host-visible buffers each carrying `pad` leading bytes -- a non-zero `pad` (a
+// multiple of 4) exercises the vertex/index/indirect bind offsets. The owning
+// buffers land in `out`, which must outlive the draw.
 pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
                                    const assets::Mesh& mesh, VkDeviceSize pad,
+                                   const VkDrawIndexedIndirectCommand& command,
                                    LiveBuffers& out) {
   const VkDeviceSize vbytes =
       VkDeviceSize{mesh.vertices.size()} * sizeof(assets::Vertex);
   const VkDeviceSize ibytes =
       VkDeviceSize{mesh.indices.size()} * sizeof(uint32_t);
-  VkDrawIndexedIndirectCommand command{};
-  command.indexCount = static_cast<uint32_t>(mesh.indices.size());
-  command.instanceCount = 1;
 
   out.vertices = host_buffer_at(allocator, mesh.vertices.data(), vbytes,
                                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, pad);
@@ -180,6 +218,13 @@ pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
   live.indirect = out.indirect.handle();
   live.indirect_offset = pad;
   return live;
+}
+
+// Same, under the contract's well-formed command -- the common case.
+pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
+                                   const assets::Mesh& mesh, VkDeviceSize pad,
+                                   LiveBuffers& out) {
+  return make_live_mesh(allocator, mesh, pad, draw_command(mesh), out);
 }
 
 // A set-0 combined-image-sampler plus the objects it points at (texture,
@@ -426,6 +471,7 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   const VkDescriptorSet atlas =
       make_atlas(allocator.value(), pipeline.value(), atlas_px, {2, 2},
                  sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   // Unlit: albedo passes straight through, so the two halves show their raw
   // sources.
@@ -582,6 +628,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
   const VkDescriptorSet atlas =
       make_atlas(allocator.value(), pipeline.value(), white_px, {1, 1},
                  sizeof(white_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   const std::vector<uint8_t> direct =
       render(allocator.value(), pipeline.value(),
@@ -663,6 +710,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
   const VkDescriptorSet atlas =
       make_atlas(allocator.value(), pipeline.value(), white_px, {1, 1},
                  sizeof(white_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   const std::vector<uint8_t> direct =
       render(allocator.value(), pipeline.value(),
@@ -677,11 +725,14 @@ TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
 }
 
 // One frame can carry both a static GpuMesh and a live LiveMesh; submit()
-// dispatches per draw. Render a two-draw list -- the static mesh, then the same
-// geometry as a live mesh -- and require it to match the single static draw:
-// depth-tested identical opaque geometry drawn twice is idempotent (the second
-// draw fails the LESS depth test), so equality proves both variant branches ran
-// in order with no binding state leaking between them.
+// dispatches per draw. The two draws must be distinguishable in the readback
+// for that to be provable, so the live mesh is a *different* mesh -- a blue
+// centre quad nearer the camera -- rather than a second copy of the static one
+// (which the LESS depth test would reject, leaving a frame identical to the
+// static draw alone and a test that passes with the live branch deleted).
+// Render the static mesh alone, then both, and require each draw to own its
+// region: blue in the centre only when the live draw ran, and the static mesh's
+// own shading unchanged outside it.
 TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
   auto allocator = vg::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
@@ -694,9 +745,10 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
   auto gpu = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
   ASSERT_TRUE(gpu.ok()) << gpu.status().message();
 
+  const assets::Mesh quad_cpu = make_center_quad();
   LiveBuffers buffers;
   const pipelines::LiveMesh live =
-      make_live_mesh(allocator.value(), mesh_cpu, /*pad=*/0, buffers);
+      make_live_mesh(allocator.value(), quad_cpu, /*pad=*/0, buffers);
   ASSERT_TRUE(live.valid());
 
   const uint8_t white_px[4] = {255, 255, 255, 255};
@@ -704,6 +756,7 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
   const VkDescriptorSet atlas =
       make_atlas(allocator.value(), pipeline.value(), white_px, {1, 1},
                  sizeof(white_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   const std::vector<uint8_t> single =
       render(allocator.value(), pipeline.value(),
@@ -715,10 +768,71 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
   const std::vector<uint8_t> both =
       render(allocator.value(), pipeline.value(), mixed, atlas, 0u);
 
-  ASSERT_EQ(single.size(), both.size());
-  EXPECT_EQ(single, both) << "a static + live draw of the same geometry must "
-                             "match drawing it once";
-  EXPECT_TRUE(any_pixel_drawn(both));
+  ASSERT_EQ(single.size(), static_cast<size_t>(kSize) * kSize * 4);
+  ASSERT_EQ(both.size(), single.size());
+  const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) {
+    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
+  };
+
+  // The live quad's own region: it alone is blue, and only when it drew.
+  const uint8_t* both_centre = at(both, kSize / 2, kSize / 2);
+  EXPECT_GT(both_centre[2], 128) << "the live draw must cover the centre";
+  EXPECT_LT(both_centre[0], 128);
+  EXPECT_LT(both_centre[1], 128);
+  EXPECT_LT(at(single, kSize / 2, kSize / 2)[2], 128)
+      << "without the live draw nothing is blue";
+
+  // Outside it, the static mesh alone shades the frame -- unchanged by the
+  // extra draw (no binding state leaked) and not the clear color, which is what
+  // makes dropping the static branch fail here rather than pass silently.
+  for (const uint32_t x : {kSize / 8, 7 * kSize / 8}) {
+    const uint8_t* s = at(single, x, kSize / 8);
+    const uint8_t* b = at(both, x, kSize / 8);
+    EXPECT_TRUE(s[0] != 0 || s[1] != 0 || s[2] != 0)
+        << "the static mesh must shade x=" << x;
+    for (int c = 0; c < 4; ++c) {
+      EXPECT_EQ(s[c], b[c])
+          << "the live draw must not disturb x=" << x << " channel " << c;
+    }
+  }
+}
+
+// The indirect command's fields belong to the producer, and this pipeline never
+// reads them -- so no gfx test can fail because recon wrote `instanceCount = 0`
+// or a non-zero `firstInstance`; that assertion belongs on the side that writes
+// the command. What gfx owns is the consequence, pinned here: a command that
+// violates the contract's `instanceCount = 1` draws nothing at all, which is
+// why the contract fixes it.
+TEST_F(HybridMeshRenderTest, ZeroInstanceCountCommandDrawsNothing) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_hybrid_mesh();
+  VkDrawIndexedIndirectCommand command = draw_command(mesh_cpu);
+  command.instanceCount = 0;  // the one field changed from the well-formed case
+
+  LiveBuffers buffers;
+  const pipelines::LiveMesh live =
+      make_live_mesh(allocator.value(), mesh_cpu, /*pad=*/0, command, buffers);
+  ASSERT_TRUE(live.valid()) << "bound buffers -- submit() must reach the draw";
+
+  const uint8_t white_px[4] = {255, 255, 255, 255};
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), white_px, {1, 1},
+                 sizeof(white_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const std::vector<uint8_t> px =
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{live}, atlas, 0u);
+  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+  EXPECT_TRUE(all_pixels_cleared(px))
+      << "instanceCount = 0 draws no instances -- the frame stays cleared";
 }
 
 }  // namespace

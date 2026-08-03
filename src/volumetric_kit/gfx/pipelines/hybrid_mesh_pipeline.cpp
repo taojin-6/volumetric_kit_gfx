@@ -40,6 +40,45 @@ static_assert(sizeof(PushConstants) == 80,
 static_assert(offsetof(PushConstants, light) == 64,
               "PushConstants layout drift");
 
+// The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
+// process* (the reconstruction library, in its own repo) against these exact
+// bytes, so reordering or resizing assets::Vertex is a silent wire break in
+// both directions: a producer packing a different layout renders garbage, and
+// an already-shipped producer breaks the moment this struct moves. Neither
+// shows up as a validation error -- the stride still matches -- so the drift is
+// caught here, at compile time.
+static_assert(sizeof(assets::Vertex) == 64, "assets::Vertex stride drift");
+static_assert(offsetof(assets::Vertex, position) == 0, "vertex layout drift");
+static_assert(offsetof(assets::Vertex, normal) == 12, "vertex layout drift");
+static_assert(offsetof(assets::Vertex, tangent) == 24, "vertex layout drift");
+static_assert(offsetof(assets::Vertex, uv0) == 40, "vertex layout drift");
+static_assert(offsetof(assets::Vertex, color) == 48, "vertex layout drift");
+
+// Records one draw's geometry. A visitor rather than a get_if chain: std::visit
+// requires every alternative to be handled, so adding a geometry source to
+// HybridMeshDraw is a compile error here instead of a draw that silently
+// records nothing.
+struct RecordGeometry {
+  VkCommandBuffer cmd;
+
+  // Static mesh: owns its buffers, index count fixed at upload. Skip an empty
+  // or moved-from one rather than record against a stale binding.
+  void operator()(const GpuMesh* mesh) const {
+    if (mesh != nullptr && mesh->valid()) {
+      mesh->record_draw(cmd);
+    }
+  }
+
+  // Live mesh: borrowed buffers, GPU-driven count via an indirect command --
+  // the recon handoff. Skip an unbound one; a bound one always draws (its
+  // count lives in the producer's command, which this tier cannot inspect).
+  void operator()(const LiveMesh& live) const {
+    if (live.valid()) {
+      live.record_draw(cmd);
+    }
+  }
+};
+
 }  // namespace
 
 Result<HybridMeshPipeline> HybridMeshPipeline::create(
@@ -119,21 +158,10 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                      0, sizeof(pc), &pc);
 
+  // Each geometry source binds its own vertex/index buffers, so the draws are
+  // independent; RecordGeometry decides what a given source records.
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
-    // Either a static GpuMesh (owns its buffers, fixed index count) or a live
-    // mesh (borrowed buffers, GPU-driven count via an indirect command -- the
-    // recon handoff). Skip an empty/moved-from source rather than record
-    // against a stale binding; each source binds its own vertex/index buffers.
-    const auto& geometry = frame.draws[i].geometry;
-    if (const GpuMesh* const* mesh = std::get_if<const GpuMesh*>(&geometry)) {
-      if (*mesh != nullptr && (*mesh)->valid()) {
-        (*mesh)->record_draw(cmd);
-      }
-    } else if (const LiveMesh* live = std::get_if<LiveMesh>(&geometry)) {
-      if (live->valid()) {
-        live->record_draw(cmd);
-      }
-    }
+    std::visit(RecordGeometry{cmd}, frame.draws[i].geometry);
   }
 }
 

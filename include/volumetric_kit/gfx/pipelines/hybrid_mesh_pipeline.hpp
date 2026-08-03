@@ -133,8 +133,11 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///      @ref descriptor_set_layout `(0)` -- the shader samples it
   ///      unconditionally. A `VK_NULL_HANDLE` atlas records **nothing** (the
   ///      whole frame is dropped rather than draw against an unbound set).
-  ///      Draws whose geometry is empty -- a null static @ref GpuMesh or an
-  ///      unbound live @ref LiveMesh -- are skipped.
+  ///      Draws whose geometry is empty -- a null static @ref GpuMesh, or a
+  ///      live @ref LiveMesh with any of its three handles unbound -- are
+  ///      skipped. A *bound* @ref LiveMesh is always drawn: its index count
+  ///      lives in the producer's indirect command, which this pipeline never
+  ///      reads (see @ref LiveMesh on saying "nothing this frame").
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
@@ -148,8 +151,12 @@ class VG_PIPELINES_API HybridMeshPipeline {
 /// @ref GpuMesh (borrowed by pointer; owns device-local buffers with a fixed
 /// index count) or a @ref LiveMesh (a value that borrows the producer's buffers
 /// and draws them indirectly with a GPU-driven count -- the recon handoff).
-/// Both are borrowed for the duration of the @ref HybridMeshPipeline::submit
-/// call. A default-constructed draw holds a null @ref GpuMesh pointer and
+/// The draw *list* is borrowed for the duration of the @ref
+/// HybridMeshPipeline::submit call, but the geometry it names must outlive the
+/// recorded **frame**: `submit` only records, and the GPU reads the buffers
+/// when that frame executes (see @ref LiveMesh's lifetime `@warning` -- for a
+/// live mesh this is what keeps a producer from recycling a slot that is still
+/// in flight). A default-constructed draw holds a null @ref GpuMesh pointer and
 /// records nothing. There is no per-draw transform -- reconstruction geometry
 /// is already in world space.
 struct HybridMeshDraw {
