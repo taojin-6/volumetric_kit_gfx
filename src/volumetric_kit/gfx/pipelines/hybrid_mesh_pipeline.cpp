@@ -127,9 +127,10 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
                                 const HybridMeshFrame& frame) const {
   // The fragment shader statically samples the atlas (set 0), so a valid set
   // must be bound for any draw to be legal -- a purely vertex-colored mesh
-  // binds a 1x1 image (see the class doc). With no atlas there is nothing safe
+  // binds a 1x1 image (see the class doc). With no atlas -- or no pipeline at
+  // all, on a default-constructed or moved-from object -- there is nothing safe
   // to record, so drop the frame rather than draw against an unbound set.
-  if (frame.atlas == VK_NULL_HANDLE) {
+  if (!valid() || frame.atlas == VK_NULL_HANDLE) {
     return;
   }
 
@@ -159,7 +160,12 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
                      0, sizeof(pc), &pc);
 
   // Each geometry source binds its own vertex/index buffers, so the draws are
-  // independent; RecordGeometry decides what a given source records.
+  // independent; RecordGeometry decides what a given source records. The
+  // push constant above is still worth recording without a draw list, so this
+  // guards only the loop.
+  if (frame.draws == nullptr) {
+    return;
+  }
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
     std::visit(RecordGeometry{cmd}, frame.draws[i].geometry);
   }

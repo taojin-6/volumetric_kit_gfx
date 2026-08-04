@@ -21,7 +21,9 @@ using DeviceTest = VulkanDeviceTest;
 
 // Build an AdoptedDevice that borrows a live device on its graphics queue — the
 // shared-VkDevice interop shape. A default config needs no device extensions,
-// so no enabled-extension declaration is required.
+// so no enabled-extension declaration is required; the two version-core feature
+// bits are declared because Device::create enables both and adopt verifies the
+// declaration rather than mere physical-device support.
 vg::AdoptedDevice borrow_device(VkInstance instance, VkPhysicalDevice physical,
                                 const vg::Device& device) {
   vg::AdoptedDevice adopted;
@@ -30,6 +32,8 @@ vg::AdoptedDevice borrow_device(VkInstance instance, VkPhysicalDevice physical,
   adopted.device = device.handle();
   adopted.graphics_family = device.graphics_family();
   adopted.graphics_queue = device.graphics_queue();
+  adopted.enabled_timeline_semaphore = true;
+  adopted.enabled_dynamic_rendering = true;
   return adopted;
 }
 
@@ -438,16 +442,62 @@ TEST(DeviceAdoptTest, RejectsNullHandles) {
   EXPECT_EQ(adopted.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+// A physical device that *supports* a feature says nothing about whether the
+// creator *enabled* it on the logical device, and Vulkan offers no query for
+// the latter. Every Vulkan 1.3 device supports dynamicRendering, so verifying
+// against support alone would let a compute-focused embedder (one that left
+// VkPhysicalDeviceVulkan13Features zeroed) adopt cleanly and then hit
+// VUID-vkCmdBeginRendering-dynamicRendering-06446 on every frame. adopt must
+// reject the undeclared case instead.
+TEST_F(DeviceTest, AdoptRejectsUndeclaredCoreFeatures) {
+  vg::AdoptedDevice base =
+      borrow_device(instance_->handle(), physical_, *device_);
+
+  vg::AdoptedDevice no_timeline = base;
+  no_timeline.enabled_timeline_semaphore = false;
+  auto without_timeline = vg::Device::adopt(no_timeline, vg::DeviceConfig{});
+  ASSERT_FALSE(without_timeline.ok());
+  EXPECT_EQ(without_timeline.status().domain(), vg::Status::Code::Unsupported);
+
+  vg::AdoptedDevice no_dynamic = base;
+  no_dynamic.enabled_dynamic_rendering = false;
+  auto without_dynamic = vg::Device::adopt(no_dynamic, vg::DeviceConfig{});
+  ASSERT_FALSE(without_dynamic.ok());
+  EXPECT_EQ(without_dynamic.status().domain(), vg::Status::Code::Unsupported);
+
+  // Core 1.0 features are declaration-checked the same way: request one the
+  // creator did not declare as enabled and adopt refuses, even though the
+  // physical device supports it.
+  VkPhysicalDeviceFeatures supported{};
+  vkGetPhysicalDeviceFeatures(physical_, &supported);
+  if (supported.fillModeNonSolid == VK_TRUE) {
+    vg::DeviceConfig config;
+    config.features.fillModeNonSolid = VK_TRUE;
+    auto undeclared = vg::Device::adopt(base, config);  // enabled_features = {}
+    ASSERT_FALSE(undeclared.ok());
+    EXPECT_EQ(undeclared.status().domain(), vg::Status::Code::Unsupported);
+
+    // Declared: the same config now adopts.
+    vg::AdoptedDevice declared = base;
+    declared.enabled_features.fillModeNonSolid = VK_TRUE;
+    auto ok = vg::Device::adopt(declared, config);
+    EXPECT_TRUE(ok.ok()) << ok.status().message();
+  }
+}
+
 TEST_F(DeviceTest, AdoptBorrowsSharedDeviceWithoutOwningIt) {
   // Borrow the fixture's live device by its raw handles — the shared-VkDevice
   // interop case. A default config needs no device extensions, so no
-  // enabled-extension declaration is required.
+  // enabled-extension declaration is required; the two version-core feature
+  // bits must still be declared (Device::create enabled both).
   vg::AdoptedDevice adopted;
   adopted.instance = instance_->handle();
   adopted.physical_device = physical_;
   adopted.device = device_->handle();
   adopted.graphics_family = device_->graphics_family();
   adopted.graphics_queue = device_->graphics_queue();
+  adopted.enabled_timeline_semaphore = true;
+  adopted.enabled_dynamic_rendering = true;
 
   {
     auto borrowed = vg::Device::adopt(adopted, vg::DeviceConfig{});

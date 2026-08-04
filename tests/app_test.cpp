@@ -203,6 +203,10 @@ TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
   adopted.present_queue = owner.value().present_queue();
   adopted.enabled_device_extensions = kEnabled;
   adopted.enabled_device_extension_count = 1;
+  // Device::create enabled both version-core bits on `owner`; adopt verifies
+  // this declaration rather than mere physical-device support.
+  adopted.enabled_timeline_semaphore = true;
+  adopted.enabled_dynamic_rendering = true;
 
   {
     auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
@@ -502,6 +506,40 @@ TEST_F(HeadlessAppTest, CreateBuildsInstanceDeviceAllocator) {
   EXPECT_NE(app_.device().handle(), VK_NULL_HANDLE);
   EXPECT_FALSE(app_.device().has_present());  // headless: no present queue
   EXPECT_GE(app_.allocator().memory_stats().heap_count, 1u);
+}
+
+// The same wiring invariant debug_label_test asserts for a hand-built device:
+// the device's debug-utils table is active iff the instance enabled
+// VK_EXT_debug_utils. The app tier builds both, so it is the tier's job to
+// connect them -- and until it did, every label and object name recorded
+// through an app-tier device was a silent no-op (a capture of a
+// validation-enabled app showed no pass markers, with no diagnostic saying
+// why).
+TEST_F(HeadlessAppTest, DeviceDebugUtilsTableMatchesInstanceFlag) {
+  ASSERT_TRUE(app_.valid());
+  EXPECT_EQ(app_.device().debug_utils().active(),
+            app_.instance().debug_utils_enabled());
+}
+
+// The DeviceConfig passthrough reaches Device::create: without it the facade
+// could not enable a device feature at all (GraphicsPipeline tells consumers to
+// turn on fillModeNonSolid "via DeviceConfig", which had no app-tier route).
+TEST(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
+  auto probe = vg::app::HeadlessApp::create(headless_config());
+  if (!probe.ok()) {
+    GTEST_SKIP() << "no Vulkan device: " << probe.status().message();
+  }
+  VkPhysicalDeviceFeatures supported{};
+  vkGetPhysicalDeviceFeatures(probe.value().device().physical_device(),
+                              &supported);
+  if (supported.fillModeNonSolid != VK_TRUE) {
+    GTEST_SKIP() << "device does not support fillModeNonSolid";
+  }
+
+  vg::app::HeadlessAppConfig config = headless_config();
+  config.device.features.fillModeNonSolid = VK_TRUE;
+  auto app = vg::app::HeadlessApp::create(config);
+  EXPECT_TRUE(app.ok()) << app.status().message();
 }
 
 TEST_F(HeadlessAppTest, MoveLeavesSourceEmpty) {

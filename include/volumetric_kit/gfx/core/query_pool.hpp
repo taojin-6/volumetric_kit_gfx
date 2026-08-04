@@ -82,6 +82,10 @@ class VG_CORE_API QueryPool {
   /// @param count  How many queries to reset.
   /// @pre A query must be reset (outside a render pass) before it is written;
   ///      reading or writing a query that was never reset is undefined.
+  /// @note Records nothing when this pool is empty (moved-from), @p cmd is
+  ///       null, or `[first, first + count)` leaves the pool — a moved-from
+  ///       pool would otherwise hand the loader a null device *and* a null
+  ///       pool handle.
   void cmd_reset(VkCommandBuffer cmd, uint32_t first,
                  uint32_t count) const noexcept;
 
@@ -90,6 +94,8 @@ class VG_CORE_API QueryPool {
   /// @param cmd    The command buffer to record into (in the recording state).
   /// @param stage  The pipeline stage whose completion the timestamp captures.
   /// @param index  The query index to write (must be `< query_count()`).
+  /// @note Records nothing when this pool is empty (moved-from), @p cmd is
+  ///       null, or @p index is out of range.
   void cmd_write_timestamp(VkCommandBuffer cmd, VkPipelineStageFlagBits stage,
                            uint32_t index) const noexcept;
 
@@ -101,7 +107,10 @@ class VG_CORE_API QueryPool {
   /// @return OK once every requested result is available; a non-OK @ref Status
   ///         carrying `VK_NOT_READY` if any is not yet — this does not wait
   ///         (no `VK_QUERY_RESULT_WAIT_BIT`), so call it only after the
-  ///         submission that wrote the timestamps has retired.
+  ///         submission that wrote the timestamps has retired; @ref
+  ///         Status::Code::InvalidArgument when this pool is empty
+  ///         (moved-from), @p out is null, or `[first, first + count)` leaves
+  ///         the pool.
   Status read_results(uint32_t first, uint32_t count, uint64_t* out) const;
 
  private:

@@ -99,4 +99,28 @@ constexpr double ticks_to_ms(uint64_t tick_delta,
          static_cast<double>(timestamp_period_ns) * 1e-6;
 }
 
+/// @brief Elapsed ticks between two timestamp queries, correct across a
+///        counter wrap.
+/// @param begin       The earlier query's raw tick value.
+/// @param end         The later query's raw tick value.
+/// @param valid_bits  `VkQueueFamilyProperties::timestampValidBits` for the
+///                    queue the queries were written on (0 yields 0; >= 64
+///                    means the full 64-bit counter).
+/// @return `(end - begin)` reduced modulo `2^valid_bits`.
+///
+/// Only the low @p valid_bits of each tick are meaningful, so the counter is an
+/// N-bit ring and the true span is `(end - begin) mod 2^N`. Because `2^N`
+/// divides `2^64`, the wrapped 64-bit subtraction is already congruent and a
+/// single mask recovers the answer. Masking the two endpoints *before*
+/// subtracting instead leaves the result modulo `2^64`, which reports
+/// `2^64 - (begin - end)` whenever the counter wrapped between the queries.
+constexpr uint64_t timestamp_delta(uint64_t begin, uint64_t end,
+                                   uint32_t valid_bits) noexcept {
+  if (valid_bits == 0) return 0;
+  const uint64_t mask = valid_bits >= 64
+                            ? ~uint64_t{0}
+                            : (uint64_t{1} << valid_bits) - uint64_t{1};
+  return (end - begin) & mask;
+}
+
 }  // namespace volumetric_kit::gfx

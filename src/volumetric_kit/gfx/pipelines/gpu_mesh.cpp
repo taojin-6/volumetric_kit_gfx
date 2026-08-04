@@ -33,6 +33,11 @@ GpuMesh& GpuMesh::operator=(GpuMesh&& other) noexcept {
 }
 
 void GpuMesh::record_draw(VkCommandBuffer cmd) const {
+  // Documented @pre valid(); enforced rather than assumed, so a moved-from or
+  // default-constructed mesh records nothing instead of binding null buffers.
+  if (!valid()) {
+    return;
+  }
   const VkDeviceSize offset = 0;
   const VkBuffer vertex_buffer = vertices_.handle();
   vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer, &offset);

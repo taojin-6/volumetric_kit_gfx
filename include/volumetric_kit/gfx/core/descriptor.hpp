@@ -8,6 +8,7 @@
 ///        buffers, textures) are described, allocated, and bound.
 
 #include <cstdint>
+#include <utility>
 
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -114,8 +115,24 @@ class VG_CORE_API DescriptorPool {
                                        uint32_t size_count, uint32_t max_sets);
 
   ~DescriptorPool() = default;
-  DescriptorPool(DescriptorPool&&) noexcept = default;
-  DescriptorPool& operator=(DescriptorPool&&) noexcept = default;
+
+  // Hand-written so the borrowed device_ is cleared on the source too: a
+  // defaulted move copies the scalar and leaves the moved-from object naming a
+  // device it no longer has a pool on, so its state contradicts valid().
+  DescriptorPool(DescriptorPool&& other) noexcept
+      : device_(other.device_), pool_(std::move(other.pool_)) {
+    other.device_ = VK_NULL_HANDLE;
+  }
+
+  DescriptorPool& operator=(DescriptorPool&& other) noexcept {
+    if (this != &other) {
+      device_ = other.device_;
+      pool_ = std::move(other.pool_);  // frees this pool's current handle
+      other.device_ = VK_NULL_HANDLE;
+    }
+    return *this;
+  }
+
   DescriptorPool(const DescriptorPool&) = delete;
   DescriptorPool& operator=(const DescriptorPool&) = delete;
 

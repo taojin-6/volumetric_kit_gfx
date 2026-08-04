@@ -68,15 +68,21 @@ jobs:
 
       - uses: actions/checkout@v7
 
+      # Every build/test step below is gated on this, so a false here means the
+      # job compiles nothing, runs no tests, and still reports success — which
+      # `ci / required` would then treat as a passing build. There is no state
+      # of this repo in which a missing top-level CMakeLists.txt is acceptable
+      # (a rename, a moved workdir, or a path-filtered checkout would all
+      # produce one), so fail loudly instead of annotating and skipping.
       - name: Detect build system
         id: detect
         run: |
-          if [ -f CMakeLists.txt ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No CMakeLists.txt found — skipping build and test."
-            echo "present=false" >> "$GITHUB_OUTPUT"
+          if [ ! -f CMakeLists.txt ]; then
+            echo "::error::No top-level CMakeLists.txt in $(pwd) — refusing to report success for a job that would build and test nothing."
+            ls -la
+            exit 1
           fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies (Linux)
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
@@ -118,8 +124,12 @@ jobs:
           # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
           ok=0
           for attempt in 1 2 3; do
+            # spirv-tools provides spirv-val: vg_compile_shaders runs it only
+            # when present, so without it this leg compiles SPIR-V it never
+            # validates and the check exists on Linux alone.
             if brew install cmake molten-vk glfw glm \
-                vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross; then
+                vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross \
+                spirv-tools; then
               ok=1
               break
             fi
@@ -174,8 +184,11 @@ jobs:
         with:
           path: build/_deps
           key: deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt') }}
-          restore-keys: |
-            deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-
+          # No restore-keys: a prefix fallback drops the third_party/CMakeLists.txt
+          # hash, so flipping a dependency's version or build options would restore
+          # and relink the archives built from the *previous* pin — a stale-object
+          # failure that looks like a source bug. A pin change should be a clean
+          # cache miss (a full dependency rebuild) rather than a silent reuse.
 
       # A self-hosted runner keeps its _work tree between jobs, so a build/ left
       # by a previous checkout survives a runner relocation with the old absolute
@@ -232,6 +245,62 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
+
+      # Nothing above compiles the *installed* tree, so an install-list mistake
+      # -- shipping a header whose own #include was excluded -- reaches
+      # consumers with CI green. Two cheap checks close that:
+      #   1. include closure: every "volumetric_kit/..." include in an installed
+      #      header must itself be installed. This is what catches an EXCLUDE
+      #      that orphans a dependent header.
+      #   2. a real downstream build: find_package the installed package and
+      #      compile every public header (impl/ headers are documented as
+      #      "included from" their parent, never standalone, so they are not
+      #      included directly here -- check 1 is what covers them).
+      - name: Install and consume the installed package
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          prefix="${{ runner.temp }}/vg_install"
+          consumer="${{ runner.temp }}/vg_consumer"
+          rm -rf "$prefix" "$consumer"
+          cmake --install build --prefix "$prefix"
+
+          python3 - "$prefix/include" <<'EOF'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          pat = re.compile(r'^\s*#\s*include\s*"(volumetric_kit/[^"]+)"', re.M)
+          headers = sorted(root.rglob("*.hpp"))
+          missing = [(str(h.relative_to(root)), inc)
+                     for h in headers
+                     for inc in pat.findall(h.read_text())
+                     if not (root / inc).exists()]
+          for h, inc in missing:
+              print(f"::error::installed header {h} includes {inc}, which is NOT installed")
+          print(f"include closure: {len(headers)} headers, {len(missing)} broken include(s)")
+          sys.exit(1 if missing else 0)
+          EOF
+
+          mkdir -p "$consumer"
+          cat > "$consumer/CMakeLists.txt" <<'EOF'
+          cmake_minimum_required(VERSION 3.21)
+          project(vg_consumer CXX)
+          find_package(volumetric_kit_gfx CONFIG REQUIRED)
+          add_executable(consumer main.cpp)
+          target_link_libraries(consumer PRIVATE volumetric_kit::gfx)
+          EOF
+          python3 - "$prefix/include" "$consumer/main.cpp" <<'EOF'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          hdrs = sorted(str(p.relative_to(root)) for p in root.rglob("*.hpp")
+                        if "/impl/" not in str(p))
+          pathlib.Path(sys.argv[2]).write_text(
+              "".join(f'#include "{h}"\n' for h in hdrs) + "int main() { return 0; }\n")
+          print(f"consumer includes {len(hdrs)} public headers")
+          EOF
+          cmake -S "$consumer" -B "$consumer/build" \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build "$consumer/build" --parallel
 
       # gfx must stay generatable with -G Xcode -- that is the generator an iOS
       # or macOS app bundle consumes. What regresses is the *generate*, not the

@@ -649,6 +649,19 @@ TEST(SwapchainEmpty, OperationsFailCleanly) {
   EXPECT_EQ(recreated.domain(), vg::Status::Code::InvalidArgument);
 }
 
+// end_frame on an empty loop (default-constructed or moved-from) fails with
+// InvalidArgument instead of dereferencing a null swapchain and indexing empty
+// vectors. Frame is a public aggregate with every member defaulted, so this is
+// reachable without any Vulkan object at all -- and needs no instance/device,
+// so it runs everywhere.
+TEST(FrameLoopEmpty, EndFrameFailsCleanly) {
+  win::FrameLoop loop;
+  ASSERT_FALSE(loop.valid());
+  const vg::Status ended = loop.end_frame(win::Frame{});
+  ASSERT_FALSE(ended.ok());
+  EXPECT_EQ(ended.domain(), vg::Status::Code::InvalidArgument);
+}
+
 TEST_F(WindowingTest, SwapchainMoveLeavesSourceEmpty) {
   win::Swapchain src = make_swapchain();
   ASSERT_TRUE(src.valid());

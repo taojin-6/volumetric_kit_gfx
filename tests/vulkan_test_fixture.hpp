@@ -88,6 +88,18 @@ class VulkanDeviceTest : public ::testing::Test {
     }
   }
 
+  // True when the base SetUp did not finish, so device_/instance_ must not be
+  // touched. A derived SetUp has to check BOTH conditions: ASSERT_ returns only
+  // from the function it fires in, so when Device::create fails above, the base
+  // SetUp aborts before device_.emplace and control comes straight back here
+  // with IsSkipped() false -- a derived fixture guarding on the skip alone
+  // would then dereference a disengaged std::optional and segfault, turning a
+  // reportable failure into a crash that takes the rest of the suite's output
+  // with it.
+  bool base_setup_incomplete() const {
+    return IsSkipped() || HasFatalFailure();
+  }
+
   VkDevice device() const { return device_->handle(); }
 
   // Submits `cmd` on the graphics queue gated by a throwaway fence and blocks

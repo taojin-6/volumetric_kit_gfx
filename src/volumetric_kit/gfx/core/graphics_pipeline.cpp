@@ -81,13 +81,22 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   // gets an empty layout so set numbering stays contiguous. Shaders that bind
   // nothing yield an empty layout, exactly like the procedural path before.
   std::vector<std::vector<VkDescriptorSetLayoutBinding>> bindings_per_set;
-  const auto add_resource = [&bindings_per_set](const ReflectedResource& r) {
+  bool binding_conflict = false;
+  const auto add_resource = [&bindings_per_set,
+                             &binding_conflict](const ReflectedResource& r) {
     if (r.set >= bindings_per_set.size()) {
       bindings_per_set.resize(r.set + 1);
     }
     for (VkDescriptorSetLayoutBinding& b : bindings_per_set[r.set]) {
       if (b.binding == r.binding) {
-        b.stageFlags |= r.stages;  // same binding declared in the other stage
+        // Same (set, binding) in both stages: only the stage mask merges. If
+        // the two stages disagree on the type or array size, the first one
+        // seen would silently win and the other stage would then read the
+        // binding as something it is not -- record it and fail below instead.
+        if (b.descriptorType != r.type || b.descriptorCount != r.count) {
+          binding_conflict = true;
+        }
+        b.stageFlags |= r.stages;
         return;
       }
     }
@@ -103,6 +112,11 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   }
   for (const ReflectedResource& r : desc.fragment_shader->resources()) {
     add_resource(r);
+  }
+  if (binding_conflict) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: the vertex and fragment shaders declare the "
+        "same (set, binding) with different descriptor types or array sizes");
   }
 
   std::vector<DescriptorSetLayout> set_layouts;

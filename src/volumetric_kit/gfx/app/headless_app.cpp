@@ -24,8 +24,12 @@ Result<HeadlessApp> HeadlessApp::create(const HeadlessAppConfig& config) {
   // queue family and the device enables no swapchain extension.
   VG_ASSIGN(VkPhysicalDevice physical,
             state->instance->select_physical_device());
-  VG_ASSIGN(Device device, Device::create(state->instance->handle(), physical,
-                                          DeviceConfig{}));
+  DeviceConfig device_config = config.device;
+  // Only the instance knows whether VK_EXT_debug_utils was enabled; without
+  // this the device's table stays inactive and every label is a no-op.
+  device_config.enable_debug_utils = state->instance->debug_utils_enabled();
+  VG_ASSIGN(Device device,
+            Device::create(state->instance->handle(), physical, device_config));
   state->device.emplace(std::move(device));
 
   VG_ASSIGN(Allocator allocator,

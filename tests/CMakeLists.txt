@@ -3,11 +3,33 @@
 
 include(GoogleTest)
 
+# ctest cannot see a GTEST_SKIP() on its own: the binary still exits 0, so a
+# skipped case reports "Passed" unless a SKIP_REGULAR_EXPRESSION matches gtest's
+# skip banner. That matters because most of this suite skips wholesale when no
+# Vulkan device is present -- so a GPU leg that quietly lost its device (a
+# reconfigured container runtime, a driver upgrade, a changed
+# NVIDIA_DRIVER_CAPABILITIES) would validate nothing while `ci / required`
+# stayed green, indefinitely and invisibly. sanitizers.yml already takes the
+# stricter line for its own leg (hard-fail when no device comes up); this is the
+# reporting half of the same policy.
+#
+# CMake >= 3.26's GoogleTest module sets the property itself, and passing it
+# again there emits a malformed duplicate -- so supply it only below that, which
+# the project's 3.21 floor still allows.
+function(vg_discover_tests target)
+  if(CMAKE_VERSION VERSION_LESS 3.26)
+    gtest_discover_tests(${target} ${ARGN} PROPERTIES SKIP_REGULAR_EXPRESSION
+                                                      "\\[  SKIPPED \\]")
+  else()
+    gtest_discover_tests(${target} ${ARGN})
+  endif()
+endfunction()
+
 add_executable(vg_version_test version_test.cpp)
 target_link_libraries(vg_version_test PRIVATE volumetric_kit::gfx_core
                                               GTest::gtest_main)
 vg_target_warnings(vg_version_test)
-gtest_discover_tests(vg_version_test)
+vg_discover_tests(vg_version_test)
 
 # core tier: Result/Status + FrameMetrics (CPU-only) + Instance/Device (GPU;
 # skips when no device).
@@ -55,7 +77,7 @@ vg_compile_shaders(
 target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 
-gtest_discover_tests(vg_core_test)
+vg_discover_tests(vg_core_test)
 
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface). Skips wholesale where that surface or a
@@ -64,7 +86,7 @@ add_executable(vg_windowing_test windowing_test.cpp)
 target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
                                                 GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
-gtest_discover_tests(vg_windowing_test)
+vg_discover_tests(vg_windowing_test)
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and
@@ -74,7 +96,7 @@ add_executable(vg_app_test app_test.cpp)
 target_link_libraries(vg_app_test PRIVATE volumetric_kit::gfx_app
                                           GTest::gtest_main)
 vg_target_warnings(vg_app_test)
-gtest_discover_tests(vg_app_test TEST_PREFIX "app.")
+vg_discover_tests(vg_app_test TEST_PREFIX "app.")
 
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device
@@ -83,7 +105,7 @@ add_executable(vg_camera_test camera_test.cpp camera_rig_test.cpp)
 target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
                                              GTest::gtest_main)
 vg_target_warnings(vg_camera_test)
-gtest_discover_tests(vg_camera_test)
+vg_discover_tests(vg_camera_test)
 
 # pipelines tier: GPU mesh upload + the PBR building blocks, driven through the
 # shared device fixture (skips when no device). Links gfx_pipelines, which
@@ -104,7 +126,7 @@ target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
-gtest_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
+vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
 
 # assets tier: the format-neutral model is header-only, so its test (PointCloud)
 # links gfx_assets alone -- no loader, no parser, no fixture -- which proves the
@@ -115,7 +137,7 @@ target_link_libraries(vg_assets_test PRIVATE volumetric_kit::gfx_assets
 vg_target_warnings(vg_assets_test)
 # Prefix the ctest names ("assets.PointCloud.*") so this CPU-only tier is
 # selectable as a group with `ctest -R assets`.
-gtest_discover_tests(vg_assets_test TEST_PREFIX "assets.")
+vg_discover_tests(vg_assets_test TEST_PREFIX "assets.")
 
 # io tier: the glTF loader test loads the Khronos Box.glb sample (CC0). Fetch it
 # at configure time so CI does not need it committed; the download is
@@ -172,7 +194,7 @@ if(EXISTS "${_vg_box_glb}")
 endif()
 # Prefix the ctest names ("io.GltfLoader.*") so this CPU-only tier is selectable
 # as a group with `ctest -R io`.
-gtest_discover_tests(vg_io_test TEST_PREFIX "io.")
+vg_discover_tests(vg_io_test TEST_PREFIX "io.")
 
 # ui tier: ImGuiOverlay driven headlessly -- create + new_frame + render into an
 # offscreen target (dynamic rendering), the move-only lifecycle, and argument
@@ -188,4 +210,4 @@ target_link_libraries(vg_ui_test PRIVATE volumetric_kit::gfx_ui
 vg_target_warnings(vg_ui_test)
 set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")
-gtest_discover_tests(vg_ui_test TEST_PREFIX "ui.")
+vg_discover_tests(vg_ui_test TEST_PREFIX "ui.")

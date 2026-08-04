@@ -30,8 +30,8 @@ class ImageBarrierTest : public VulkanDeviceTest {
 
   void SetUp() override {
     VulkanDeviceTest::SetUp();
-    if (IsSkipped()) {
-      return;  // no Vulkan device; the base already skipped
+    if (base_setup_incomplete()) {
+      return;  // no device, or the base SetUp failed fatally
     }
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();

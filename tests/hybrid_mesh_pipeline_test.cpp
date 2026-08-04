@@ -308,12 +308,20 @@ TEST_F(HybridMeshPipelineDeviceTest, SelfMoveAssignStaysValid) {
   ASSERT_TRUE(created.ok()) << created.status().message();
   pipelines::HybridMeshPipeline pipeline = std::move(created).value();
   const VkPipeline before = pipeline.handle();
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);  // set 0, the atlas sampler
+  const VkDescriptorSetLayout layout_before = pipeline.descriptor_set_layout(0);
+  ASSERT_NE(layout_before, VK_NULL_HANDLE);
 
   // Launder through a pointer so -Wself-move does not fire under -Werror.
   pipelines::HybridMeshPipeline* alias = &pipeline;
   pipeline = std::move(*alias);
   EXPECT_TRUE(pipeline.valid());
   EXPECT_EQ(pipeline.handle(), before);
+
+  // The embedded GraphicsPipeline also owns the reflected set layout, and an
+  // unguarded move-assign would free it while handle()/valid() stayed intact.
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);
+  EXPECT_EQ(pipeline.descriptor_set_layout(0), layout_before);
 }
 
 // --- End-to-end offscreen draw: validation-with-teeth ------------------------
@@ -374,6 +382,13 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
     target.value().record_readback(raw);
     EXPECT_TRUE(cmd.value().end().ok());
     submit_and_wait(raw);
+    // This helper returns a value, so ASSERT_NO_FATAL_FAILURE (which expands to
+    // a bare `return`) cannot be used; check explicitly instead. A failed
+    // submit or fence wait leaves the GPU potentially still reading `target`,
+    // so bail out rather than read back and then destroy it underneath.
+    if (HasFatalFailure()) {
+      return {};
+    }
 
     const auto* px = static_cast<const uint8_t*>(target.value().pixels());
     EXPECT_NE(px, nullptr);

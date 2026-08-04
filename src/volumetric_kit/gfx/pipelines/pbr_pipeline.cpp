@@ -72,15 +72,36 @@ Result<PbrPipeline> PbrPipeline::create(VkDevice device,
 }
 
 void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
+  // model.frag reads set 0 (camera position + the three IBL maps) in main()
+  // with no branch, so a *valid* scene set must be bound for any draw to be
+  // legal. Drop the whole frame when there is none rather than recording draws
+  // against an unbound or VK_NULL_HANDLE set -- matching HybridMeshPipeline's
+  // missing-atlas handling above. Three ways to get here:
+  //   - no pipeline (default-constructed or moved-from);
+  //   - no scene at all;
+  //   - a slot past the scene's UBO ring. PbrScene::create defaults
+  //     frames_in_flight to 1 while FrameLoop::create and WindowedAppConfig
+  //     default to 2, so the documented `pbr_frame.slot = f.slot` wiring hands
+  //     us slot 1 on alternate frames unless the scene was sized to match.
+  if (!valid() || frame.scene == nullptr ||
+      frame.slot >= frame.scene->frames_in_flight()) {
+    return;
+  }
+  const VkDescriptorSet scene = frame.scene->descriptor_set(frame.slot);
+  if (scene == VK_NULL_HANDLE) {
+    return;
+  }
+
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
   set_full_viewport_scissor(cmd, frame.extent);
 
   // Set 0 (scene: camera + IBL) binds once for every draw, selecting the
   // frame's in-flight slot from the scene's UBO ring.
-  if (frame.scene != nullptr) {
-    const VkDescriptorSet scene = frame.scene->descriptor_set(frame.slot);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_.layout(), 0, 1, &scene, 0, nullptr);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline_.layout(), 0, 1, &scene, 0, nullptr);
+
+  if (frame.draws == nullptr) {
+    return;
   }
 
   // Set 1 is rebound only when the material changes from the previous draw, so

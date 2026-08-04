@@ -81,8 +81,13 @@ Result<WindowedApp> WindowedApp::create(const WindowedAppConfig& config,
   // Device::create, so the three stay consistent by construction.
   VG_ASSIGN(VkPhysicalDevice physical,
             state->instance->select_physical_device(state->surface.handle()));
-  DeviceConfig device_config;
+  DeviceConfig device_config = config.device;
   device_config.needs_present = true;
+  // The device-level debug-utils table can only be loaded when the *instance*
+  // enabled VK_EXT_debug_utils; without this every label and object name on the
+  // resulting device is a silent no-op, so a capture of a validation-enabled
+  // app would show no pass markers at all.
+  device_config.enable_debug_utils = state->instance->debug_utils_enabled();
   VG_ASSIGN(Device device,
             Device::create(state->instance_handle, physical, device_config,
                            state->surface.handle()));
@@ -128,8 +133,11 @@ Result<WindowedApp> WindowedApp::adopt(const AdoptedDevice& adopted,
                       "WindowedApp::adopt"));
 
   // No physical-device selection: the embedder already chose one.
-  DeviceConfig device_config;
+  DeviceConfig device_config = config.device;
   device_config.needs_present = true;
+  // The instance is the embedder's, so its debug-utils state cannot be queried
+  // here -- it is declared on the share instead.
+  device_config.enable_debug_utils = adopted.enabled_debug_utils;
   VG_ASSIGN(Device device, Device::adopt(adopted, device_config));
   state->device.emplace(std::move(device));
 

@@ -39,8 +39,20 @@ function(vg_compile_shaders target)
   endif()
 
   # spirv-val (SPIRV-Tools) is an optional post-compile validation pass, run
-  # only when found on PATH so a toolchain without it still builds.
+  # only when found on PATH so a toolchain without it still builds. Say so once
+  # when it is missing: silently skipping it looks exactly like validating and
+  # passing, which is how the macOS CI leg went without SPIR-V validation
+  # entirely (spirv-tools was absent from its brew list).
   find_program(VG_SPIRV_VAL NAMES spirv-val)
+  if(NOT VG_SPIRV_VAL AND NOT _vg_spirv_val_warned)
+    set(_vg_spirv_val_warned
+        TRUE
+        CACHE INTERNAL "")
+    message(
+      STATUS
+        "spirv-val not found: SPIR-V output will be compiled but NOT validated "
+        "(install SPIRV-Tools -- macOS: `brew install spirv-tools`)")
+  endif()
 
   set(_spv_outputs)
   set(_seen_names)

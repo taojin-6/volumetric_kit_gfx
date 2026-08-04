@@ -54,6 +54,7 @@ set(VG_SANITIZE
     CACHE STRING "Sanitizers to enable, e.g. address;undefined (empty = off)")
 
 include(vg_warnings)
+include(vg_glm)
 include(vg_sanitizers)
 include(vg_shaders)
 include(vg_embed)

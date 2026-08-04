@@ -95,6 +95,52 @@ TEST_F(QueryPoolTest, SelfMoveAssignIsSafe) {
   EXPECT_EQ(pool.query_count(), 2u);
 }
 
+// A moved-from pool holds a null VkQueryPool AND a null VkDevice (the default
+// constructor is private, so that is the only way a consumer reaches this
+// state), so every entry point must refuse rather than hand those to the
+// loader.
+TEST_F(QueryPoolTest, MovedFromPoolOperationsFailCleanly) {
+  vg::QueryPool source = make_pool(device(), /*count=*/2);
+  vg::QueryPool sink(std::move(source));
+  ASSERT_TRUE(sink.valid());
+
+  vg::QueryPool& pool = source;  // NOLINT(bugprone-use-after-move)
+  ASSERT_FALSE(pool.valid());
+  ASSERT_EQ(pool.query_count(), 0u);
+
+  // The recording calls return void; "does not crash" is the whole assertion.
+  pool.cmd_reset(VK_NULL_HANDLE, 0, 1);
+  pool.cmd_write_timestamp(VK_NULL_HANDLE, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           0);
+
+  uint64_t ticks[2] = {0, 0};
+  const vg::Status read = pool.read_results(0, 2, ticks);
+  ASSERT_FALSE(read.ok());
+  EXPECT_EQ(read.domain(), vg::Status::Code::InvalidArgument);
+}
+
+// Ranges outside the pool are rejected rather than passed through to Vulkan --
+// including count > query_count(), where a naive `first > query_count_ - count`
+// bound would underflow and let everything through.
+TEST_F(QueryPoolTest, RejectsOutOfRangeRequests) {
+  vg::QueryPool pool = make_pool(device(), /*count=*/2);
+  uint64_t ticks[4] = {};
+
+  auto rejected = [&](uint32_t first, uint32_t count) {
+    const vg::Status s = pool.read_results(first, count, ticks);
+    EXPECT_FALSE(s.ok()) << "first=" << first << " count=" << count;
+    EXPECT_EQ(s.domain(), vg::Status::Code::InvalidArgument);
+  };
+  rejected(0, 3);  // count past the end
+  rejected(2, 1);  // first past the end
+  rejected(1, 2);  // straddles the end
+  rejected(0, 0);  // empty request
+
+  const vg::Status null_out = pool.read_results(0, 2, nullptr);
+  EXPECT_FALSE(null_out.ok());
+  EXPECT_EQ(null_out.domain(), vg::Status::Code::InvalidArgument);
+}
+
 // --- End-to-end: reset + two timestamps, submit, read back ------------------
 
 TEST_F(QueryPoolTest, ResetWriteSubmitReadBack) {
@@ -127,7 +173,7 @@ TEST_F(QueryPoolTest, ResetWriteSubmitReadBack) {
                            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, /*index=*/1);
   ASSERT_TRUE(cmd.value().end().ok());
 
-  submit_and_wait(cmd.value().handle());
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(cmd.value().handle()));
 
   uint64_t ticks[2] = {0, 0};
   vg::Status read = pool.read_results(/*first=*/0, /*count=*/2, ticks);

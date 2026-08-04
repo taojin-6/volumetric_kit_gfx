@@ -130,11 +130,6 @@ struct Profiler::Impl {
           query_pool->read_results(f.query_base, f.gpu_count * 2, ticks.data())
               .ok();
     }
-    // Only the low `valid_bits` of each tick are meaningful; mask before
-    // subtracting so high-bit noise never corrupts the delta.
-    const uint64_t mask = valid_bits >= 64
-                              ? ~uint64_t{0}
-                              : (uint64_t{1} << valid_bits) - uint64_t{1};
 
     m.sections.reserve(f.sections.size());
     for (const Section& s : f.sections) {
@@ -143,9 +138,9 @@ struct Profiler::Impl {
       out.cpu_ms = s.cpu_ms;
       if (s.has_gpu && gpu_ok) {
         const uint32_t local = s.begin_query - f.query_base;
-        const uint64_t begin = ticks[local] & mask;
-        const uint64_t end = ticks[local + 1] & mask;
-        out.gpu_ms = ticks_to_ms(end - begin, ts_period_ns);
+        out.gpu_ms = ticks_to_ms(
+            timestamp_delta(ticks[local], ticks[local + 1], valid_bits),
+            ts_period_ns);
         out.has_gpu = true;
       }
       m.sections.push_back(out);

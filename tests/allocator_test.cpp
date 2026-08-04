@@ -20,8 +20,8 @@ class AllocatorTest : public VulkanDeviceTest {
  protected:
   void SetUp() override {
     VulkanDeviceTest::SetUp();
-    if (IsSkipped()) {
-      return;  // no Vulkan device; the base already skipped
+    if (base_setup_incomplete()) {
+      return;  // no device, or the base SetUp failed fatally
     }
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
@@ -344,6 +344,28 @@ TEST_F(AllocatorTest, ZeroExtentImageIsRejected) {
   auto texture = allocator_->create_image(desc);
   ASSERT_FALSE(texture.ok());
   EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+}
+
+// VUID-VkImageCreateInfo-imageType-00956: a 1D image must have height 1. The
+// counterpart of the depth > 1 check, and the one case the validator missed --
+// so a 1D image with a stray height reached VMA and came back as an opaque
+// VkResult (or, unvalidated, undefined behavior) instead of a domain error.
+TEST_F(AllocatorTest, OneDimensionalImageWithHeightIsRejected) {
+  vg::TextureDesc desc;
+  desc.type = VK_IMAGE_TYPE_1D;
+  desc.extent = {16, 16};  // height must be 1 for a 1D image
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
+
+  // The same desc with height 1 is accepted, so the check is specific to the
+  // mismatch rather than rejecting 1D images outright.
+  desc.extent = {16, 1};
+  auto ok = allocator_->create_image(desc);
+  EXPECT_TRUE(ok.ok()) << ok.status().message();
 }
 
 TEST_F(AllocatorTest, ZeroUsageImageIsRejected) {

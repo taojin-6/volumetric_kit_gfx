@@ -15,8 +15,10 @@ jobs:
     timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
     env:
       # Absolute path: ctest changes cwd per test, so a relative suppressions
-      # path would silently fail to load.
-      LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=0
+      # path would silently fail to load. print_suppressions=1 prints a match
+      # count per entry at exit, so an over-broad rule (one quietly absorbing
+      # first-party leaks) shows up in the log instead of staying invisible.
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=1
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:

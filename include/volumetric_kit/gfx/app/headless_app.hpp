@@ -32,6 +32,12 @@ struct HeadlessAppConfig {
   /// InstanceConfig::extra_instance_extensions). None are needed for plain
   /// offscreen rendering.
   std::vector<const char*> instance_extensions;
+  /// Device features / extra extensions / feature chain to enable — the escape
+  /// hatch for anything the facade does not surface directly.
+  /// @note @ref HeadlessApp::create overwrites `enable_debug_utils`, deriving
+  ///       it from the instance it just built (the only correct source);
+  ///       `needs_present` stays false, as a headless app has no surface.
+  DeviceConfig device{};
 };
 
 /// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,

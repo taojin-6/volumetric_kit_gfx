@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,6 +72,23 @@ bool range_in_buffer(const tinygltf::Buffer& buffer, std::size_t offset,
   return offset <= buffer.data.size() && span <= buffer.data.size() - offset;
 }
 
+// Checked std::size_t arithmetic: write the result and return true, or return
+// false when the operation would wrap. Every input below is file-supplied and
+// unbounded -- tinygltf caps byteStride but never accessor.count -- so a
+// wrapped product would present a small, in-bounds-looking span to
+// range_in_buffer while the read loops still run the full count.
+bool checked_add(std::size_t a, std::size_t b, std::size_t& out) {
+  if (a > std::numeric_limits<std::size_t>::max() - b) return false;
+  out = a + b;
+  return true;
+}
+
+bool checked_mul(std::size_t a, std::size_t b, std::size_t& out) {
+  if (a != 0 && b > std::numeric_limits<std::size_t>::max() / a) return false;
+  out = a * b;
+  return true;
+}
+
 // Resolve an accessor's backing bytes, validating every file-supplied index and
 // offset so a malformed glTF cannot drive an out-of-bounds read: the bufferView
 // index, the buffer index (which defaults to -1), and the full strided extent
@@ -93,10 +111,19 @@ bool resolve_accessor(const tinygltf::Model& gltf,
       gltf.buffers[static_cast<std::size_t>(view.buffer)];
   stride = view.byteStride != 0 ? static_cast<std::size_t>(view.byteStride)
                                 : element_size;
-  const std::size_t start = view.byteOffset + acc.byteOffset;
+  std::size_t start = 0;
+  if (!checked_add(view.byteOffset, acc.byteOffset, start)) return false;
+  // Bound the offset even for an empty accessor: forming a pointer past the
+  // end of the buffer is undefined on its own, and the count > 0 arm below
+  // would not run to catch it.
+  if (start > buffer.data.size()) return false;
   if (acc.count > 0) {
-    // Highest byte touched = start + (count-1)*stride + element_size.
-    const std::size_t span = (acc.count - 1) * stride + element_size;
+    // Highest byte touched = start + (count-1)*stride + element_size, built
+    // with checked arithmetic so a forged count cannot wrap the product into
+    // a span that range_in_buffer accepts.
+    std::size_t span = 0;
+    if (!checked_mul(acc.count - 1, stride, span)) return false;
+    if (!checked_add(span, element_size, span)) return false;
     if (!range_in_buffer(buffer, start, span)) return false;
   }
   base = buffer.data.data() + start;

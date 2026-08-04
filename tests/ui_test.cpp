@@ -220,7 +220,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   target.record_readback(raw);  // copy the rendered image into the host buffer
 
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
 
   // The white background rect fills the viewport, so the center texel must be
   // opaque white -- proof ImGui drew (validation-clean recording alone would

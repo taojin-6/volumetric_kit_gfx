@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <utility>
+#include <vector>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
@@ -24,6 +27,26 @@ vg::RenderTargetLayout color_depth_layout() {
 }
 
 }  // namespace
+
+// This target links gfx_pipelines WITHOUT gfx_camera -- the same link shape the
+// volumetric_kit_recon handoff uses -- and PbrFrame/HybridMeshFrame hand the
+// consumer a clip-space glm::mat4 to fill. So the Vulkan depth convention has
+// to arrive through gfx_pipelines' usage requirements, not through gfx_camera:
+// a [-1, 1] projection against the [0, 1] depth attachment these pipelines are
+// built for silently clips the near half of the frustum, with no compile error
+// and no VUID. Needs no device, so it runs everywhere.
+TEST(PipelinesGlmConvention, ProjectionUsesVulkanDepthRange) {
+  const glm::mat4 proj =
+      glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f);
+  // A point exactly on the near plane maps to z/w == 0 under Vulkan's [0, 1]
+  // range; GL's [-1, 1] would put it at -1.
+  const glm::vec4 near_point = proj * glm::vec4(0.0f, 0.0f, -0.1f, 1.0f);
+  EXPECT_NEAR(near_point.z / near_point.w, 0.0f, 1e-5f);
+  // ...and the far plane at 1, not +1 either way -- pinning both ends rules out
+  // a reversed-Z mix-up as well.
+  const glm::vec4 far_point = proj * glm::vec4(0.0f, 0.0f, -100.0f, 1.0f);
+  EXPECT_NEAR(far_point.z / far_point.w, 1.0f, 1e-5f);
+}
 
 TEST_F(PbrPipelineTest, CreatesWithReflectedSets) {
   auto pbr = pipelines::PbrPipeline::create(device(), color_depth_layout());
@@ -79,6 +102,12 @@ TEST_F(PbrPipelineTest, SelfMoveAssignStaysValid) {
   ASSERT_TRUE(created.ok()) << created.status().message();
   pipelines::PbrPipeline pbr = std::move(created).value();
   const VkPipeline before = pbr.handle();
+  const uint32_t sets_before = pbr.descriptor_set_count();
+  ASSERT_EQ(sets_before, 2u);  // set 0 scene, set 1 material
+  std::vector<VkDescriptorSetLayout> layouts_before;
+  for (uint32_t i = 0; i < sets_before; ++i) {
+    layouts_before.push_back(pbr.descriptor_set_layout(i));
+  }
 
   // Launder through a pointer so -Wself-move doesn't fire under -Werror; the
   // guarded move-assign must leave the owned pipeline intact, not free it.
@@ -86,4 +115,11 @@ TEST_F(PbrPipelineTest, SelfMoveAssignStaysValid) {
   pbr = std::move(*p);
   EXPECT_TRUE(pbr.valid());
   EXPECT_EQ(pbr.handle(), before);
+
+  // The embedded GraphicsPipeline also owns the reflected set layouts, and an
+  // unguarded move-assign would free them while handle()/valid() stayed intact.
+  ASSERT_EQ(pbr.descriptor_set_count(), sets_before);
+  for (uint32_t i = 0; i < sets_before; ++i) {
+    EXPECT_EQ(pbr.descriptor_set_layout(i), layouts_before[i]) << "set " << i;
+  }
 }

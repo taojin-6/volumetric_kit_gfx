@@ -9,11 +9,16 @@
 
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/command_buffer.hpp"
+#include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
+#include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -29,8 +34,8 @@ class PbrSceneTest : public VulkanDeviceTest {
  protected:
   void SetUp() override {
     VulkanDeviceTest::SetUp();
-    if (IsSkipped()) {
-      return;
+    if (base_setup_incomplete()) {
+      return;  // no device, or the base SetUp failed fatally
     }
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
@@ -80,6 +85,48 @@ class PbrSceneTest : public VulkanDeviceTest {
   std::optional<vg::Texture> tex_;
 };
 
+// The same fixture under validation-with-teeth: the base TearDown fails the
+// test on any captured VUID, which is what gives the submit() guards below
+// something to assert against.
+class PbrSubmitTest : public PbrSceneTest {
+ protected:
+  bool wants_validation() const override { return true; }
+
+  // A minimal two-triangle quad (4 default vertices, 6 indices).
+  static volumetric_kit::gfx::assets::Mesh quad() {
+    volumetric_kit::gfx::assets::Mesh mesh;
+    mesh.vertices.resize(4);
+    mesh.indices = {0, 1, 2, 0, 2, 3};
+    return mesh;
+  }
+
+  // The set-1 counterpart of full_desc(): the same 1x1 view in every slot.
+  pipelines::PbrMaterialDesc material_desc() const {
+    pipelines::PbrMaterialDesc d;
+    d.base_color = tex_->view();
+    d.metallic_roughness = tex_->view();
+    d.normal = tex_->view();
+    d.occlusion = tex_->view();
+    d.emissive = tex_->view();
+    d.sampler = sampler_->handle();
+    return d;
+  }
+
+  // Records `frame` through the fixture's pipeline into a throwaway primary
+  // command buffer, outside any render pass -- enough for the set-0 bind under
+  // test, and legal on its own when submit() correctly records nothing.
+  void record_submit(const pipelines::PbrFrame& frame) {
+    auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+    ASSERT_TRUE(pool.ok()) << pool.status().message();
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(
+        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+    pipeline_->submit(cmd.value().handle(), frame);
+    ASSERT_TRUE(cmd.value().end().ok());
+  }
+};
+
 }  // namespace
 
 TEST_F(PbrSceneTest, CreatesSet0) {
@@ -113,6 +160,54 @@ TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
   scene.value().set_camera(1, glm::vec3(0.0f, 1.0f, 0.0f), 4.0f);
   // Out-of-range slot: guarded no-op, not a write through a bad pointer.
   scene.value().set_camera(2, glm::vec3(0.0f), 4.0f);
+}
+
+// PbrScene::create defaults frames_in_flight to 1 while FrameLoop::create and
+// WindowedAppConfig default to 2, so the documented `pbr_frame.slot = f.slot`
+// wiring hands submit() a slot the scene's UBO ring does not have.
+// descriptor_set(1) is then VK_NULL_HANDLE, and binding that trips
+// VUID-vkCmdBindDescriptorSets-pDescriptorSets-parameter -- so the frame must
+// be dropped whole rather than half-bound.
+TEST_F(PbrSubmitTest, DropsFrameWhoseSlotOutrunsTheSceneRing) {
+  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+                                           scene_layout(), full_desc());
+  ASSERT_TRUE(scene.ok()) << scene.status().message();
+  ASSERT_EQ(scene.value().frames_in_flight(), 1u);
+  ASSERT_EQ(scene.value().descriptor_set(1), VK_NULL_HANDLE);
+
+  pipelines::PbrFrame frame;
+  frame.scene = &scene.value();
+  frame.slot = 1;  // one past the ring: the frame loop's second slot
+  frame.extent = {64, 64};
+  ASSERT_NO_FATAL_FAILURE(record_submit(frame));
+}
+
+// The same guard from the other side: no scene at all. model.frag reads set 0
+// unconditionally, so recording draws against an unbound set is invalid usage;
+// submit() must record nothing instead of skipping only the bind.
+//
+// The draw list is what makes this observable: with zero draws both the fixed
+// and unfixed paths record only legal commands. One real draw separates them --
+// recording it here, outside any render pass, is itself a VUID, so the captured
+// error proves the draw was recorded rather than dropped.
+TEST_F(PbrSubmitTest, DropsFrameWithNoScene) {
+  auto mesh = pipelines::upload_mesh(*device_, *allocator_, quad());
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  auto material = pipelines::PbrMaterial::create(
+      device(), *allocator_, pipeline_->descriptor_set_layout(1),
+      material_desc());
+  ASSERT_TRUE(material.ok()) << material.status().message();
+
+  pipelines::PbrDraw draw;
+  draw.mesh = &mesh.value();
+  draw.material = &material.value();
+
+  pipelines::PbrFrame frame;
+  frame.scene = nullptr;
+  frame.extent = {64, 64};
+  frame.draws = &draw;
+  frame.draw_count = 1;
+  ASSERT_NO_FATAL_FAILURE(record_submit(frame));
 }
 
 TEST_F(PbrSceneTest, RejectsZeroFramesInFlight) {

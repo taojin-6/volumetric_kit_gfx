@@ -47,19 +47,40 @@ QueryPool& QueryPool::operator=(QueryPool&& other) noexcept {
   return *this;
 }
 
+// A moved-from or default-constructed pool holds a null VkQueryPool *and* a
+// null VkDevice, so passing its handles to the loader is undefined rather than
+// merely useless; the range checks catch the ordinary off-by-one against
+// query_count_ (which is 0 when empty, so one test covers both).
 void QueryPool::cmd_reset(VkCommandBuffer cmd, uint32_t first,
                           uint32_t count) const noexcept {
+  if (!valid() || cmd == VK_NULL_HANDLE || count == 0 || count > query_count_ ||
+      first > query_count_ - count) {
+    return;
+  }
   vkCmdResetQueryPool(cmd, handle_.get(), first, count);
 }
 
 void QueryPool::cmd_write_timestamp(VkCommandBuffer cmd,
                                     VkPipelineStageFlagBits stage,
                                     uint32_t index) const noexcept {
+  if (!valid() || cmd == VK_NULL_HANDLE || index >= query_count_) {
+    return;
+  }
   vkCmdWriteTimestamp(cmd, stage, handle_.get(), index);
 }
 
 Status QueryPool::read_results(uint32_t first, uint32_t count,
                                uint64_t* out) const {
+  if (!valid()) {
+    return Status::invalid_argument(
+        "QueryPool::read_results on an empty pool (moved-from)");
+  }
+  if (out == nullptr || count == 0 || count > query_count_ ||
+      first > query_count_ - count) {
+    return Status::invalid_argument(
+        "QueryPool::read_results: null destination, or [first, first + count) "
+        "is outside the pool");
+  }
   // No VK_QUERY_RESULT_WAIT_BIT: read after the submission has retired so an
   // unavailable result is a caller error, surfaced as VK_NOT_READY rather than
   // a blocking wait. VK_QUERY_RESULT_64_BIT matches the uint64_t destination.
