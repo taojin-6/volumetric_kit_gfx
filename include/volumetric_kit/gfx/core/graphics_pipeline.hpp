@@ -8,6 +8,7 @@
 ///        vertex + fragment stage for a render-target layout.
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "volumetric_kit/gfx/core/descriptor.hpp"
@@ -130,7 +131,30 @@ class VG_CORE_API GraphicsPipeline {
 
   ~GraphicsPipeline() = default;
   GraphicsPipeline(GraphicsPipeline&&) noexcept = default;
-  GraphicsPipeline& operator=(GraphicsPipeline&&) noexcept = default;
+
+  // Hand-written (not defaulted) for the self-move guard. A defaulted
+  // move-assign forwards to std::vector's, which frees set_layouts_' elements
+  // before adopting the source -- so `p = std::move(p)` would destroy the live
+  // VkDescriptorSetLayouts while the two UniqueHandle members (which do guard
+  // themselves) kept valid() true and the handles intact. Nothing catches that
+  // downstream: the free is premature but well-formed, so the sanitizers see
+  // nothing, and destroying a set layout already consumed by a pipeline layout
+  // is legal, so the validation layers stay silent too.
+  GraphicsPipeline& operator=(GraphicsPipeline&& other) noexcept {
+    if (this != &other) {
+      // Release in reverse declaration order -- the pipeline, then its layout,
+      // then the set layouts both were built from -- before adopting other's.
+      pipeline_ = {};
+      layout_ = {};
+      set_layouts_.clear();
+
+      set_layouts_ = std::move(other.set_layouts_);
+      layout_ = std::move(other.layout_);
+      pipeline_ = std::move(other.pipeline_);
+    }
+    return *this;
+  }
+
   GraphicsPipeline(const GraphicsPipeline&) = delete;
   GraphicsPipeline& operator=(const GraphicsPipeline&) = delete;
 

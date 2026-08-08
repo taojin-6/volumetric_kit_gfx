@@ -154,7 +154,9 @@ class VG_WINDOWING_API FrameLoop {
   /// @return OK on success; a non-OK @ref Status carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
-  ///         rebuilds automatically) or another failed `VkResult`.
+  ///         rebuilds automatically) or another failed `VkResult`; @ref
+  ///         Status::Code::InvalidArgument when this loop is empty or @p frame
+  ///         did not come from its @ref begin_frame.
   /// @note On a failure *before* the submit reaches the queue, the slot's sync
   ///       state is restored (a brief blocking submit) so the *slot* stays
   ///       reusable — but the image this frame acquired was never presented,

@@ -52,16 +52,13 @@ target_include_directories(
 target_link_libraries(gfx_camera PUBLIC glm::glm)
 
 # Pin glm's clip-space depth convention as a PUBLIC compile definition, not just
-# in a header. GLM_FORCE_DEPTH_ZERO_TO_ONE selects Vulkan's [0, 1] depth (vs
-# GL's [-1, 1]); because glm is header-only it changes the *definition* of
-# glm::perspective/ortho, so it must be identical in every TU that instantiates
-# them -- the library's own and every consumer's. PUBLIC puts it on the command
-# line of anything linking gfx_camera (build tree and, via the install
-# interface, installed consumers), so the guarantee no longer depends on a
-# consumer including camera.hpp before any <glm/...>. impl/glm_config.hpp
-# mirrors the define at the include site; this is the authoritative,
-# order-independent half.
-target_compile_definitions(gfx_camera PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
+# in a header: PUBLIC puts it on the command line of anything linking gfx_camera
+# (build tree and, via the install interface, installed consumers), so the
+# guarantee no longer depends on a consumer including camera.hpp before any
+# <glm/...>. impl/glm_config.hpp mirrors the define at the include site; this is
+# the authoritative, order-independent half. See cmake/vg_glm.cmake for why
+# every glm-exposing tier -- not just this one -- has to carry it.
+vg_glm_conventions(gfx_camera PUBLIC)
 
 vg_target_warnings(gfx_camera)
 

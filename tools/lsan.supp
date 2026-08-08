@@ -5,6 +5,17 @@
 # fix. Each entry is scoped to a library/symbol substring so FIRST-PARTY leaks are
 # still reported: never add a `vg::` / `volumetric_kit::` frame here. If a real
 # first-party leak appears, fix it — do not suppress it.
+#
+# IMPORTANT — scope entries to the *allocating* code, never to a module every
+# call transits. LSan's GetSuppressionForStack walks the whole allocation stack
+# and returns on the first match, so an entry naming a pass-through module
+# absorbs first-party leaks that merely called through it. `leak:libvulkan.so`
+# used to sit below and did exactly that: the loader trampoline is in the stack
+# of EVERY Vulkan call, so a VkImage the RetireQueue failed to destroy, a
+# VkPipeline leaked on an error path, or a leaked VMA allocation were all
+# silently swallowed — neutering the job CLAUDE.md relies on for the
+# leak/double-free class. Prefer function-name substrings (`loader_…`, `lvp_…`)
+# that only the third-party allocator itself can match.
 
 # Mesa / lavapipe — the software Vulkan ICD used on the GPU-less CI runner.
 leak:libvulkan_lvp
@@ -14,8 +25,10 @@ leak:swrast
 leak:util_queue
 leak:libLLVM
 
-# Vulkan loader trampoline + ICD discovery.
-leak:libvulkan.so
+# Vulkan loader: ICD/layer discovery state that persists to exit. Scoped to the
+# loader's own `loader_*` allocation helpers — a function-name substring no
+# first-party frame can match — and deliberately NOT to the libvulkan.so module
+# (see the note above).
 leak:loader_
 
 # Khronos validation layer (enabled via the Debug build) internal state.

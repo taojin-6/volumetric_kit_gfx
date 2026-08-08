@@ -57,13 +57,19 @@ Status FrameLoop::ensure_image_sync() {
   // retires the old images, and a failed present (OUT_OF_DATE) can leave a
   // render-finished semaphore signaled, so reusing it would double-signal on
   // the next submit. recreate() idles the device first, so the old per-image
-  // objects are drained and safe to replace. A no-op (one handle comparison)
-  // on the common path.
+  // objects are drained and safe to replace. A no-op (two comparisons) on the
+  // common path.
+  //
+  // The handle alone is not a sufficient key: a retired VkSwapchainKHR value
+  // can be recycled by the driver, so the array sizes are checked too. That
+  // makes a stale-sync mismatch impossible regardless of driver behavior, since
+  // the image count is recomputed from live surface caps on every build.
   const VkSwapchainKHR current = swapchain_->handle();
-  if (current == last_swapchain_) {
+  const uint32_t image_count = swapchain_->image_count();
+  if (current == last_swapchain_ && render_finished_.size() == image_count &&
+      images_in_flight_.size() == image_count) {
     return Status{};
   }
-  const uint32_t image_count = swapchain_->image_count();
   render_finished_.clear();
   render_finished_.reserve(image_count);
   for (uint32_t i = 0; i < image_count; ++i) {
@@ -107,8 +113,19 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
           // the old chain is intact, so skip this tick and retry later.
           return std::optional<Frame>{};
         }
+        // Any other failure destroyed the chain (recreate passes oldSwapchain,
+        // which retires it even when creation fails); drop the sync cache key
+        // with it.
+        last_swapchain_ = VK_NULL_HANDLE;
         return rebuilt;
       }
+      // The previous chain was retired and its handle value freed back to the
+      // driver, which is free to hand the same value out again. Drop the cache
+      // key so ensure_image_sync cannot mistake a recycled handle for the chain
+      // it last sized against -- including when the hook below fails and a
+      // later retry builds a *third* chain before ensure_image_sync ever
+      // observes this one.
+      last_swapchain_ = VK_NULL_HANDLE;
       rebuilt_this_call = true;
       // Run the consumer hook *before* clearing needs_recreate_, so a failed
       // resource rebuild leaves the loop armed rather than falsely "in sync".
@@ -215,7 +232,22 @@ Result<Frame> FrameLoop::begin_frame() {
 }
 
 Status FrameLoop::end_frame(const Frame& frame) {
+  // Frame is a public aggregate with every member defaulted and FrameLoop is
+  // default-constructible, so a hand-built Frame -- or one from a loop that has
+  // since been moved from -- reaches here with indices addressing nothing.
+  // Reject it rather than dereferencing a null swapchain and indexing empty
+  // vectors, matching the guards on both begin_frame overloads.
+  if (swapchain_ == nullptr || !valid()) {
+    return Status::invalid_argument("FrameLoop::end_frame on an empty loop");
+  }
   const uint32_t slot = frame.slot;
+  if (slot >= command_buffers_.size() ||
+      frame.image_index >= render_finished_.size() ||
+      frame.cmd == VK_NULL_HANDLE) {
+    return Status::invalid_argument(
+        "FrameLoop::end_frame: frame did not come from this loop's "
+        "begin_frame (slot / image index out of range, or no command buffer)");
+  }
 
   // Close the profiler's frame (no-op when none is attached): the caller's
   // scopes have finalized into this command buffer, so the per-frame CPU/memory
@@ -332,6 +364,16 @@ Status FrameLoop::recover_slot(uint32_t slot) {
   // when the queue is already broken, where the next frame errors out anyway.
   VG_ASSIGN(Fence resignaled,
             Fence::create(device_->handle(), /*signaled=*/true));
+  // images_in_flight_ caches this slot's fence *by raw handle* -- in as many
+  // entries as the slot has been acquired for -- and does not own it. Scrub
+  // those entries before the assignment below destroys the old fence, or the
+  // next begin_frame to re-acquire one of those images waits on freed memory
+  // (which, if the driver recycles the address, silently blocks on an
+  // unrelated fence rather than crashing).
+  const VkFence retired = in_flight_[slot].handle();
+  for (VkFence& tracked : images_in_flight_) {
+    if (tracked == retired) tracked = VK_NULL_HANDLE;
+  }
   in_flight_[slot] = std::move(resignaled);
   return status;
 }

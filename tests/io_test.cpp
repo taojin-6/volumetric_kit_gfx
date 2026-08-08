@@ -166,6 +166,42 @@ TEST(GltfLoader, RejectsOutOfBoundsAccessor) {
       << warnings.front();
 }
 
+// The same rejection must hold when the claimed element count is large enough
+// that the accessor's byte span *wraps* std::size_t. Here count is 2^62 + 1
+// over a VEC4<float> at byteStride 16, so the naive span
+// (count - 1) * stride + element_size is 2^66 + 16, which truncates to 16 --
+// small enough to look in-bounds for the 16-byte buffer, while the read loop
+// still runs 2^62 iterations. The destination resize wraps the same way
+// ((2^62 + 1) * 4 == 4), so before the checked arithmetic in resolve_accessor
+// this reproduced as a heap-buffer-overflow write under ASan.
+TEST(GltfLoader, RejectsAccessorWhoseByteSpanOverflows) {
+  const std::string gltf = R"({
+    "asset": {"version": "2.0"},
+    "buffers": [{"byteLength": 16, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAA=="}],
+    "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 16, "byteStride": 16}],
+    "accessors": [{"bufferView": 0, "componentType": 5126, "count": 4611686018427387905, "type": "VEC4"}],
+    "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "mode": 4}]}],
+    "nodes": [{"mesh": 0}],
+    "scenes": [{"nodes": [0]}],
+    "scene": 0
+  })";
+  const std::string path = std::string(testing::TempDir()) + "vg_overflow.gltf";
+  {
+    std::ofstream(path) << gltf;
+  }
+
+  std::string err;
+  std::vector<std::string> warnings;
+  std::optional<assets::Model> model = io::load_gltf(path, &err, &warnings);
+  std::remove(path.c_str());
+
+  ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
+  EXPECT_TRUE(model->meshes.empty());
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings.front().find("primitive 0"), std::string::npos)
+      << warnings.front();
+}
+
 // An accessor may omit bufferView entirely (spec-valid: the data is then all
 // zeros, typically overlaid by a sparse substitution). The loader does not
 // support that yet -- see the @note on load_gltf -- so the primitive is

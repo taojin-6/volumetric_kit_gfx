@@ -123,8 +123,8 @@ class PbrModelTest : public VulkanDeviceTest {
 
   void SetUp() override {
     VulkanDeviceTest::SetUp();
-    if (IsSkipped()) {
-      return;
+    if (base_setup_incomplete()) {
+      return;  // no device, or the base SetUp failed fatally
     }
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();

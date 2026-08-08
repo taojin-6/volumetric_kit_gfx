@@ -49,6 +49,16 @@ struct WindowedAppConfig {
   /// CPU-ahead depth of the frame loop (>= 1; see @ref
   /// windowing::FrameLoop::create).
   uint32_t frames_in_flight = 2;
+  /// Device features / extra extensions / feature chain to enable — the escape
+  /// hatch for anything the facade does not surface directly (e.g.
+  /// `features.fillModeNonSolid` for a wireframe @ref GraphicsPipeline).
+  /// @note @ref WindowedApp::create overwrites two fields: `needs_present` (a
+  ///       windowed app always presents) and `enable_debug_utils` (derived from
+  ///       the instance it just built, which is the only correct source). The
+  ///       @ref WindowedApp::adopt path takes `enable_debug_utils` from
+  ///       @ref AdoptedDevice::enabled_debug_utils instead, since the instance
+  ///       there is the embedder's.
+  DeviceConfig device{};
 };
 
 /// @brief Owns the whole windowed bring-up chain — @ref Instance,

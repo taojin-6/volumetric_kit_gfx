@@ -89,12 +89,37 @@ descriptors.
 1.0. **PR1 adds no new `DeviceRequirements`** — nothing new to merge into the
 shared/adopted device's feature set.
 
+**Clip space:** `HybridMeshFrame::view_proj` is a *caller-built* matrix, so the
+projection convention is part of this contract. gfx targets Vulkan's clip space:
+depth in `[0, 1]` and a Y-down framebuffer. Consumers that build the matrix with
+glm must compile with `GLM_FORCE_DEPTH_ZERO_TO_ONE` — linking any gfx target
+that exports glm (`gfx_assets`, and so `gfx_pipelines`; or `gfx_camera`) applies
+it automatically as a usage requirement, so this only needs thought if the
+matrix is built somewhere that does not link gfx. Getting it wrong produces a
+`[-1, 1]` projection against a `[0, 1]` depth attachment: Vulkan clips at
+`0 <= z <= w`, so the near half of the frustum silently disappears — no compile
+error, no validation message. If the matrix comes from a non-glm math library,
+apply the same two conventions there (and flip Y, as `camera.cpp` does, or the
+image renders upside down).
+
 ## 3. Zero-copy via `Device::adopt`
 
 The three buffers may be VMA-allocated by recon on the **same `VkDevice` the
 renderer adopted** (PR #85). gfx binds their handles directly — no external-memory
 import, no staging copy. This is the same-API case the device-adopt decision
 anticipated (none of the CUDA/Metal interop machinery applies).
+
+**The embedder must declare what it enabled.** `AdoptedDevice` carries an
+`enabled_*` block — extensions, `enabled_features`, `enabled_timeline_semaphore`,
+`enabled_dynamic_rendering` — and `Device::adopt` verifies the renderer's
+requirements against *that declaration*, not against physical-device support.
+Support is not evidence of enablement: every Vulkan 1.3 physical device reports
+`dynamicRendering` whether or not the logical device turned it on, so a
+compute-focused bootstrap that leaves `VkPhysicalDeviceVulkan13Features` zeroed
+would otherwise adopt cleanly and then hit
+`VUID-vkCmdBeginRendering-dynamicRendering-06446` on every frame. The fields
+default to "not enabled", so an embedder that declares nothing fails `adopt`
+loudly at startup instead.
 
 ## 4. Answers from recon
 

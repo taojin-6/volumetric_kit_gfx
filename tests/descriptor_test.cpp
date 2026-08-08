@@ -47,8 +47,8 @@ class DescriptorImageTest : public VulkanDeviceTest {
  protected:
   void SetUp() override {
     VulkanDeviceTest::SetUp();
-    if (IsSkipped()) {
-      return;
+    if (base_setup_incomplete()) {
+      return;  // no device, or the base SetUp failed fatally
     }
     auto allocator = vg::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
@@ -144,6 +144,10 @@ TEST_F(DescriptorDeviceTest, PoolCreateAllocateAndMove) {
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(pool.valid());  // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(pool.handle(), VK_NULL_HANDLE);
+  // The borrowed device_ is cleared alongside the handle so a moved-from pool
+  // is fully empty (CLAUDE.md's RAII rule). There is no behavioral assertion
+  // for it: allocate() is the only reader, and its VG_CHECK(valid()) aborts
+  // before device_ is ever touched.
 
   auto other = vg::DescriptorPool::create(device(), &size, 1, 2);
   ASSERT_TRUE(other.ok());

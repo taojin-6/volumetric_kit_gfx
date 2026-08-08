@@ -87,7 +87,7 @@ TEST_F(CommandTest, RecordFillSubmitReadback) {
                   VK_WHOLE_SIZE, 0xABABABABu);
   ASSERT_TRUE(cmd.value().end().ok());
 
-  submit_and_wait(cmd.value().handle());
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(cmd.value().handle()));
 
   const auto* bytes =
       static_cast<const unsigned char*>(buffer.value().mapped());

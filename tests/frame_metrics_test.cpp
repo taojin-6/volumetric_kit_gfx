@@ -30,6 +30,38 @@ vg::FrameMetrics::Section make_section(const char* name, double cpu_ms,
 
 }  // namespace
 
+TEST(TimestampDelta, PlainSpanIsEndMinusBegin) {
+  EXPECT_EQ(vg::timestamp_delta(1000, 3000, 64), 2000u);
+  EXPECT_EQ(vg::timestamp_delta(1000, 3000, 36), 2000u);
+  EXPECT_EQ(vg::timestamp_delta(7, 7, 36), 0u);
+}
+
+// The counter is an N-bit ring, so a section straddling a wrap must report the
+// short way round -- not 2^64 minus it. 36 valid bits is what Mesa's Intel
+// driver reports, where the counter wraps every ~69 s at 1 ns/tick.
+TEST(TimestampDelta, WrapsWithinValidBits) {
+  constexpr uint32_t kBits = 36;
+  constexpr uint64_t kPeriod = uint64_t{1} << kBits;
+
+  // begin near the top of the ring, end just past the wrap: 100 ticks elapsed.
+  EXPECT_EQ(vg::timestamp_delta(kPeriod - 50, 50, kBits), 100u);
+  // One full lap reads as zero elapsed, not 2^36.
+  EXPECT_EQ(vg::timestamp_delta(0, kPeriod, kBits), 0u);
+  // High garbage above the valid bits is discarded either way.
+  EXPECT_EQ(vg::timestamp_delta(~uint64_t{0} - 9, ~uint64_t{0}, kBits), 9u);
+
+  // Masking the endpoints *before* subtracting -- the bug this replaced --
+  // would have produced an astronomically large delta for the wrap case.
+  const uint64_t mask = kPeriod - 1;
+  const uint64_t wrong = ((50u & mask) - ((kPeriod - 50) & mask));
+  EXPECT_NE(wrong, 100u);
+  EXPECT_GT(vg::ticks_to_ms(wrong, 1.0f), 1e9);
+}
+
+TEST(TimestampDelta, ZeroValidBitsHasNoUsableTiming) {
+  EXPECT_EQ(vg::timestamp_delta(1000, 3000, 0), 0u);
+}
+
 TEST(TicksToMs, OneMillionTicksAtOneNsPeriodIsOneMillisecond) {
   // 1e6 ticks * 1 ns/tick = 1e6 ns = 1.0 ms.
   EXPECT_DOUBLE_EQ(vg::ticks_to_ms(1'000'000, 1.0f), 1.0);

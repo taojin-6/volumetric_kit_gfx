@@ -207,14 +207,15 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   // subsumes one — a version aggregate (VkPhysicalDeviceVulkan1{2,3}Features)
   // or the standalone feature struct — raise the bit there instead of linking
   // our own: a chain holding both the aggregate and the individual struct
-  // violates VUID-VkDeviceCreateInfo-pNext-02830. The const_cast is safe
-  // (vkCreateDevice treats the chain as input-only); each bit is only raised
-  // toward what the device reported as supported.
+  // violates VUID-VkDeviceCreateInfo-pNext-02830. Each bit is only raised
+  // toward what the device reported as supported. These are host-side stores
+  // into the caller's memory, which is why feature_chain is `void*` and
+  // documented as requiring mutable storage.
   bool caller_carries_timeline = false;
   bool caller_carries_dynamic_rendering = false;
   if (config.feature_chain != nullptr) {
-    for (auto* node = reinterpret_cast<VkBaseOutStructure*>(
-             const_cast<void*>(config.feature_chain));
+    for (auto* node =
+             reinterpret_cast<VkBaseOutStructure*>(config.feature_chain);
          node != nullptr; node = node->pNext) {
       if (node->sType ==
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
@@ -268,8 +269,8 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
     link_owned(&dynamic_rendering_features);
   }
   if (config.feature_chain != nullptr) {
-    features_tail->pNext = reinterpret_cast<VkBaseOutStructure*>(
-        const_cast<void*>(config.feature_chain));
+    features_tail->pNext =
+        reinterpret_cast<VkBaseOutStructure*>(config.feature_chain);
   }
 
   VkDeviceCreateInfo create_info{};
@@ -436,14 +437,35 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   }
 
   // Require the same core features create() enables (config.features,
-  // timelineSemaphore, dynamicRendering). On an adopted device this verifies
-  // physical-device *support*; that they were actually *enabled* on the logical
-  // device rests on the creator honoring requirements(). The filled feature
-  // structs are unused here (adopt creates no device).
+  // timelineSemaphore, dynamicRendering). The filled feature structs are unused
+  // here (adopt creates no device).
   VkPhysicalDeviceTimelineSemaphoreFeatures timeline{};
   VkPhysicalDeviceDynamicRenderingFeatures dynamic{};
   VG_TRY(require_core_features(adopted.physical_device, reqs.features,
                                &timeline, &dynamic));
+
+  // Physical-device *support* is necessary but not sufficient: every Vulkan 1.3
+  // device supports dynamicRendering whether or not the creator enabled it on
+  // the logical device, and using an unenabled feature is invalid usage the
+  // driver need not diagnose (blank frames or a hang, visible only under
+  // validation). Vulkan cannot be asked what a logical device enabled, so — as
+  // with extensions above — the creator's declaration is the authority.
+  if (reqs.timeline_semaphore && !adopted.enabled_timeline_semaphore) {
+    return Status::unsupported(
+        "Device::adopt: adopted device did not declare timelineSemaphore as "
+        "enabled (AdoptedDevice::enabled_timeline_semaphore)");
+  }
+  if (reqs.dynamic_rendering && !adopted.enabled_dynamic_rendering) {
+    return Status::unsupported(
+        "Device::adopt: adopted device did not declare dynamicRendering as "
+        "enabled (AdoptedDevice::enabled_dynamic_rendering)");
+  }
+  if (!core_features_supported(reqs.features, adopted.enabled_features)) {
+    return Status::unsupported(
+        "Device::adopt: a required core feature (DeviceConfig::features) is "
+        "not declared enabled on the adopted device "
+        "(AdoptedDevice::enabled_features)");
+  }
 
   Device device;
   device.owns_device_ = false;  // borrowed — the dtor must not destroy it

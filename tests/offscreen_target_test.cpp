@@ -197,7 +197,7 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
 
   target.record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
 
   const auto* px = static_cast<const uint8_t*>(target.pixels());
   ASSERT_NE(px, nullptr);
@@ -240,7 +240,7 @@ TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
 
   target.record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
 
   const auto* px = static_cast<const uint8_t*>(target.pixels());
   ASSERT_NE(px, nullptr);

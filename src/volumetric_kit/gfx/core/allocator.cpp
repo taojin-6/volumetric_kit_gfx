@@ -227,6 +227,11 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     return Status::invalid_argument(
         "image depth > 1 requires VK_IMAGE_TYPE_3D");
   }
+  if (desc.type == VK_IMAGE_TYPE_1D && desc.extent.height != 1) {
+    // VUID-VkImageCreateInfo-imageType-00956: a 1D image must have height 1.
+    // The counterpart of the depth check above, and the one hole left in it.
+    return Status::invalid_argument("1D images must have extent.height == 1");
+  }
   if (desc.type == VK_IMAGE_TYPE_3D && desc.array_layers != 1) {
     return Status::invalid_argument("3D images cannot be arrayed");
   }

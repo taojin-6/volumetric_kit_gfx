@@ -52,13 +52,21 @@ struct DeviceConfig {
   /// @ref PhysicalDeviceInfo and request only features the device reports, or
   /// device creation fails. Each struct must set its `sType`; the pointed-to
   /// structs must outlive the @ref create call (they are consumed
-  /// synchronously, not stored). If the chain includes a
-  /// `VkPhysicalDeviceVulkan12Features` (or a standalone
-  /// `VkPhysicalDeviceTimelineSemaphoreFeatures`), @ref create enables
-  /// `timelineSemaphore` within it rather than linking its own struct, so the
-  /// chain never holds both the 1.2 aggregate and the individual struct (which
-  /// Vulkan forbids).
-  const void* feature_chain = nullptr;
+  /// synchronously, not stored).
+  ///
+  /// @warning Non-const because @ref create *writes* to these structs. Vulkan
+  ///          forbids a chain holding both a version aggregate and the
+  ///          individual struct it subsumes
+  ///          (VUID-VkDeviceCreateInfo-pNext-02830), so when the chain already
+  ///          carries a `VkPhysicalDeviceVulkan12Features` / standalone
+  ///          `VkPhysicalDeviceTimelineSemaphoreFeatures`, or a
+  ///          `VkPhysicalDeviceVulkan13Features` / standalone
+  ///          `VkPhysicalDeviceDynamicRenderingFeatures`, @ref create raises
+  ///          `timelineSemaphore` / `dynamicRendering` *within the caller's
+  ///          struct* instead of linking its own. Pass mutable storage: a
+  ///          `static const` aggregate would land in read-only memory and the
+  ///          store would fault.
+  void* feature_chain = nullptr;
 };
 
 /// @brief What the renderer needs from a `VkDevice`, published so an embedder
@@ -137,6 +145,26 @@ struct AdoptedDevice {
   /// verify).
   const char* const* enabled_device_extensions = nullptr;
   uint32_t enabled_device_extension_count = 0;
+
+  /// The core (1.0) features the creator passed in
+  /// `VkPhysicalDeviceFeatures2::features` (or `pEnabledFeatures`) at device
+  /// creation. @ref Device::adopt requires every bit in
+  /// `DeviceRequirements::features` to be set here.
+  VkPhysicalDeviceFeatures enabled_features = {};
+  /// Whether the creator enabled `timelineSemaphore` (1.2 core) and
+  /// `dynamicRendering` (1.3 core) — via the version aggregate, the standalone
+  /// feature struct, or either extension. Both default to `false` so an
+  /// embedder that declares nothing fails @ref Device::adopt loudly rather than
+  /// passing and then hitting invalid usage on every frame: a 1.3 physical
+  /// device *supports* both regardless of what the logical device enabled, so
+  /// support is not evidence of enablement.
+  bool enabled_timeline_semaphore = false;
+  bool enabled_dynamic_rendering = false;
+  /// Whether the embedder's *instance* enabled `VK_EXT_debug_utils`. Adopting
+  /// code cannot query it (the instance is the embedder's), so it is declared
+  /// here and fed to @ref DeviceConfig::enable_debug_utils — leave it false and
+  /// every debug label / object name on this device is a silent no-op.
+  bool enabled_debug_utils = false;
 };
 
 /// @brief Owns *or borrows* a `VkDevice`, its graphics (and optional present)

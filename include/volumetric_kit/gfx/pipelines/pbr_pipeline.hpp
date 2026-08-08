@@ -109,6 +109,13 @@ class VG_PIPELINES_API PbrPipeline {
   /// @pre `valid()`; `frame.scene` and each `frame.draws[i].mesh` / `.material`
   ///      are non-null and built against this pipeline's reflected layouts.
   ///      Draws whose mesh is null/empty or whose material is null are skipped.
+  /// @note The whole frame is dropped (nothing is recorded) when no valid set 0
+  ///       can be bound — `!valid()`, a null `frame.scene`, or a `frame.slot`
+  ///       at or beyond @ref PbrScene::frames_in_flight — because the fragment
+  ///       shader reads set 0 unconditionally. Size the scene's ring to the
+  ///       frame loop's depth: @ref PbrScene::create defaults to 1 slot while
+  ///       the loop defaults to 2, and the extra slots are what `frame.slot`
+  ///       indexes.
   void submit(VkCommandBuffer cmd, const PbrFrame& frame) const;
 
  private:

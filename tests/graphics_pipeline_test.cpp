@@ -158,7 +158,7 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
     rt.end(raw);
     target.record_readback(raw);
     ASSERT_TRUE(cmd.value().end().ok());
-    submit_and_wait(raw);
+    ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
   }
 };
 
@@ -253,17 +253,7 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
   EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
 }
 
-TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
-  vg::GraphicsPipeline pipeline = build_pipeline(color_layout(), vert, frag);
-
-  // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
-  // per-member this != &other guard must keep the pipeline intact.
-  vg::GraphicsPipeline* alias = &pipeline;
-  pipeline = std::move(*alias);
-  EXPECT_TRUE(pipeline.valid());
-}
+// (SelfMoveAssignIsSafe lives further down, with the mesh helpers it needs.)
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   constexpr uint32_t kSize = 32;
@@ -329,7 +319,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
 
   target.value().record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);
@@ -414,6 +404,46 @@ vg::GraphicsPipeline build_mesh_pipeline(
   auto pipeline = vg::GraphicsPipeline::create(device, desc);
   EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
   return std::move(pipeline).value();
+}
+
+// Built from the shader pair that reflects a descriptor set (mesh_mvp.vert
+// declares set 0, a uniform buffer) rather than the set-less triangle pair,
+// because the owned std::vector<DescriptorSetLayout> is the member a defaulted
+// move-assign would clear on self-move -- while the two self-guarded
+// UniqueHandle members kept valid() and handle() intact, hiding it.
+TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  const VkVertexInputBindingDescription binding = mesh_binding();
+  const auto attrs = mesh_attributes();
+  vg::GraphicsPipeline pipeline = build_mesh_pipeline(
+      device(), color_layout(), vert, frag, &binding, 1, attrs.data(),
+      static_cast<uint32_t>(attrs.size()), false);
+  ASSERT_TRUE(pipeline.valid());
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);
+  const VkPipeline handle_before = pipeline.handle();
+  const VkDescriptorSetLayout layout_before = pipeline.descriptor_set_layout(0);
+  ASSERT_NE(layout_before, VK_NULL_HANDLE);
+
+  // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
+  // this != &other guard must keep the pipeline intact.
+  vg::GraphicsPipeline* alias = &pipeline;
+  pipeline = std::move(*alias);
+  EXPECT_TRUE(pipeline.valid());
+  EXPECT_EQ(pipeline.handle(), handle_before);
+
+  // The reflected set layouts must survive too, not just the pipeline handle.
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);
+  EXPECT_EQ(pipeline.descriptor_set_layout(0), layout_before);
+
+  // ...and still be live objects: allocating a set from the layout would be a
+  // use-after-free if the self-move had destroyed it.
+  const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+  auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
+  ASSERT_TRUE(set.ok()) << set.status().message();
+  EXPECT_TRUE(set.value().valid());
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DepthTestWithoutDepthFormatRejected) {
@@ -637,7 +667,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   rt.end(raw);
   target.value().record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  submit_and_wait(raw);
+  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);
