@@ -40,9 +40,12 @@ enum HybridMeshFlags : uint32_t {
 /// This is the renderer side of the `volumetric_kit_recon` handoff (gfx's
 /// "hybrid mesh pipeline" milestone). Albedo is chosen per fragment: where a
 /// triangle carries a valid atlas coordinate in `uv0` (projective texturing won
-/// it a camera) the atlas texel is sampled; where `uv0` is the `(-1, -1)`
-/// sentinel the interpolated per-vertex `color` is used (the TSDF vertex-color
-/// fallback). Lighting is toggled by @ref kHybridMeshLit.
+/// it a camera) the atlas texel is sampled; where `uv0` is **negative** the
+/// interpolated per-vertex `color` is used (the TSDF vertex-color fallback).
+/// The test is the sign, not the exact `(-1, -1)`, and a negative `uv0` still
+/// carries a usable coordinate -- decoded as `-uv0 - 1`, of which `(-1, -1)`
+/// is the `(0, 0)` case. See @ref LiveMesh. Lighting is toggled by
+/// @ref kHybridMeshLit.
 ///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
