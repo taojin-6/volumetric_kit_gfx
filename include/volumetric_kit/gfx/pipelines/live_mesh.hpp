@@ -62,10 +62,24 @@ namespace volumetric_kit::gfx::pipelines {
 /// vertex's** class. The test is `uv0.x < 0` -- recon's `(-1, -1)` sentinel is
 /// one such value, but so is any other negative x, including an atlas
 /// coordinate that lands marginally outside the map and was meant to clamp. So
-/// the producer must keep the two classes triangle-aligned (a triangle
-/// straddling a coverage boundary samples a meaningless uv for its whole area)
-/// and must never emit a negative atlas coordinate it expects the sampler's
-/// clamp to absorb.
+/// the producer must never emit a negative atlas coordinate it expects the
+/// sampler's clamp to absorb.
+///
+/// **A negative `uv0` may CARRY a coordinate.** The vertex stage decodes a
+/// negative `uv0` as `-uv0 - 1` rather than substituting `(0, 0)`, so a
+/// producer that has a real atlas coordinate for a vertex it is nonetheless
+/// classing as vertex-color can pass it through. The bare `(-1, -1)` sentinel
+/// decodes to `(0, 0)`, which is exactly the old substitution, so a producer
+/// that knows nothing of this sees no change.
+///
+/// That is what makes a triangle straddling a coverage boundary survivable
+/// rather than merely discouraged. Such a triangle still takes one class for
+/// its whole face, but when that class is "atlas" the uv now interpolates
+/// toward its neighbours' real coordinates instead of being dragged to the
+/// atlas origin -- bounded bleed past the boundary rather than a smear of the
+/// image's corner across the face. Keeping the classes triangle-aligned is
+/// still the better shape where a producer can; recon's projective texturer
+/// deliberately cannot, since it decides visibility per vertex.
 ///
 /// **Sub-allocation.** A producer packing many meshes into shared pools can
 /// offset either way: the byte-granular bind offsets on this struct (@ref

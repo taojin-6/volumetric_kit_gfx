@@ -42,11 +42,28 @@ void main() {
   gl_Position = pc.view_proj * vec4(in_position, 1.0);
   frag_normal = in_normal;
 
-  // Negative x is the (-1, -1) "no atlas coordinate" sentinel -> vertex color.
+  // Negative x means "no atlas for this vertex" -> vertex color.
   bool use_vertex_color = in_uv0.x < 0.0;
   frag_use_vertex_color = use_vertex_color ? 1u : 0u;
-  // Keep the forwarded uv in range so seam quads never sample from a negative
-  // coordinate; the atlas result is discarded on the vertex-color path anyway.
-  frag_uv = use_vertex_color ? vec2(0.0) : in_uv0;
+  // A negative uv0 CARRIES its atlas coordinate as -uv - 1, so decode rather
+  // than substitute. Both forms are handled by the one expression: the classic
+  // (-1, -1) sentinel decodes to (0, 0), which is exactly the stand-in this
+  // used to substitute unconditionally, so a producer that emits it sees no
+  // change at all.
+  //
+  // It matters on a triangle whose vertices disagree about class, which is what
+  // a producer emits along the edge of a textured region once visibility is
+  // decided per vertex (recon's projective texturer, on a shared-vertex mesh).
+  // Such a triangle takes its provoking vertex's class for its whole face, so
+  // when that class is "atlas" the uv still interpolates toward the other two
+  // vertices -- and substituting (0, 0) for them dragged the interpolation to
+  // the atlas origin, smearing the corner of the image across the face. With
+  // the real coordinate carried through, the same triangle samples the
+  // neighbourhood it actually covers and the error is bounded to texture
+  // bleeding about one triangle past the silhouette.
+  //
+  // Still in range for the LOD derivative reason the substitution existed for:
+  // a decoded uv is a real atlas coordinate, not the out-of-range sentinel.
+  frag_uv = use_vertex_color ? (-in_uv0 - 1.0) : in_uv0;
   frag_color = in_color;
 }

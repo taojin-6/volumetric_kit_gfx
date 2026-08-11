@@ -54,13 +54,24 @@ descriptors.
   the kind `CLAMP_TO_EDGE` would otherwise absorb — silently drops that triangle
   to flat vertex color. Clamp atlas coordinates to `[0, 1]` before emitting
   them.
+- **A negative `uv0` may carry a coordinate: it is decoded as `-uv0 - 1`.** The
+  vertex stage recovers a real atlas coordinate from a negative `uv0` rather
+  than substituting `(0, 0)`, so a producer holding a genuine coordinate for a
+  vertex it is nonetheless classing as vertex-color can pass it through. The
+  bare `(-1, -1)` decodes to `(0, 0)` — exactly the old substitution — so a
+  producer that knows nothing of this is unaffected. Note the consequence for
+  anything *outside* this seam: `-uv0 - 1` is an internal encoding, and an
+  exporter writing `uv0` to glTF must decode it or ship nonsense UVs.
 - **The albedo class is per triangle.** The choice is resolved per vertex and
   forwarded `flat`, so a triangle is shaded entirely under its **provoking
   vertex's** class (`hybrid_mesh.vert`). A triangle straddling a camera-coverage
-  boundary — some vertices sentinel, some not — is therefore not split: it
-  either samples the atlas at a uv interpolated toward a sentinel vertex's
-  stand-in `(0, 0)`, or drops the real uvs entirely. Keep the two classes
-  triangle-aligned.
+  boundary — some vertices sentinel, some not — is therefore not split: it takes
+  one class for its whole face. With the decoding above, when that class is
+  "atlas" the uv interpolates toward its neighbours' real coordinates, so the
+  error is bounded to bleed of about one triangle past the boundary rather than
+  a smear of the atlas corner across the face. Keep the classes triangle-aligned
+  where you can; recon's projective texturer deliberately cannot, since it
+  decides visibility per vertex.
 - **The command**: set `instanceCount = 1` and `firstInstance = 0`
   (`firstInstance != 0` would need the `drawIndirectFirstInstance` feature).
   `indexCount`, `firstIndex`, `vertexOffset` are yours — write them GPU-side from
