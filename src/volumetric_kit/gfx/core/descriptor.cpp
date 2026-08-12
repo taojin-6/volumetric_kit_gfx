@@ -134,4 +134,26 @@ void DescriptorSet::write_combined_image_sampler(uint32_t binding,
   vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
+void DescriptorSet::write_storage_buffer(uint32_t binding, VkBuffer buffer,
+                                         VkDeviceSize offset,
+                                         VkDeviceSize range) const {
+  VG_CHECK(valid(), "DescriptorSet::write_storage_buffer on an empty set");
+
+  VkDescriptorBufferInfo buffer_info{};
+  buffer_info.buffer = buffer;
+  buffer_info.offset = offset;
+  buffer_info.range = range;
+
+  VkWriteDescriptorSet write{};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.dstSet = set_;
+  write.dstBinding = binding;
+  write.dstArrayElement = 0;
+  write.descriptorCount = 1;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  write.pBufferInfo = &buffer_info;
+
+  vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
 }  // namespace volumetric_kit::gfx

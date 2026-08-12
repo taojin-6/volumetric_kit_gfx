@@ -210,6 +210,24 @@ class VG_CORE_API DescriptorSet {
                                     VkSampler sampler,
                                     VkImageLayout layout) const;
 
+  /// @brief Point @p binding at a storage buffer (a `buffer` block in GLSL):
+  ///        bulk data a shader reads or writes directly.
+  ///
+  /// The counterpart to @ref write_combined_image_sampler for geometry and
+  /// atlases a producer already holds in device memory -- what a consumer at
+  /// the zero-copy seam binds instead of uploading a copy.
+  ///
+  /// @param binding  The binding index within the set.
+  /// @param buffer   The buffer to bind.
+  /// @param offset   Byte offset into @p buffer where the block starts.
+  /// @param range    Bytes visible to the shader, or `VK_WHOLE_SIZE` for the
+  ///                 rest of the buffer from @p offset.
+  /// @pre `valid()`; @p buffer outlives the draws reading it, and was created
+  ///      with `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT`. Neither is checked here --
+  ///      a missing usage bit is a validation-layer-only diagnostic.
+  void write_storage_buffer(uint32_t binding, VkBuffer buffer,
+                            VkDeviceSize offset, VkDeviceSize range) const;
+
   /// @return The underlying `VkDescriptorSet` (`VK_NULL_HANDLE` when empty).
   VkDescriptorSet handle() const noexcept { return set_; }
 
