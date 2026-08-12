@@ -22,6 +22,7 @@ target_sources(
           ibl.cpp
           live_mesh.cpp
           owned_descriptor_set.cpp
+          patch_mesh_pipeline.cpp
           pbr_material.cpp
           pbr_model.cpp
           pbr_pipeline.cpp
@@ -80,9 +81,15 @@ vg_embed_shaders(
 # HybridMeshPipeline (the volumetric_kit_recon handoff) likewise embeds its
 # technique: hybrid_mesh.{vert,frag} -> SPIR-V compiled into the library
 # (hybrid_mesh_pipeline.cpp #includes hybrid_mesh_{vert,frag}.spv.hpp).
+# PatchMeshPipeline's technique rides the same list: it draws the same handoff
+# shaded from a per-triangle patch atlas instead of a per-vertex uv.
 vg_embed_shaders(
-  gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
-  "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
+  gfx_pipelines
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/patch_mesh.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/patch_mesh.frag")
 
 vg_target_warnings(gfx_pipelines)
 

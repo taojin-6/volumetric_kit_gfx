@@ -118,6 +118,7 @@ add_executable(
   hybrid_mesh_pipeline_test.cpp
   ibl_test.cpp
   live_mesh_test.cpp
+  patch_mesh_pipeline_test.cpp
   pbr_material_test.cpp
   pbr_model_test.cpp
   pbr_pipeline_test.cpp

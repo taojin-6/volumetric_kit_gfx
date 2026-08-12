@@ -70,6 +70,24 @@ consumer/example.
   draw + pixel readback under validation. A vertex-color/atlas mesh pipeline is a broadly-useful
   renderer feature, so the siblings stay independent — gfx gains a capability, not a dependency on
   recon.
+- **2026-08-12 — Patch mesh pipeline (per-PRIMITIVE atlas addressing).**
+  `pipelines::PatchMeshPipeline` draws the same handoff shaded from a progressive **per-triangle
+  patch atlas**, which `HybridMeshPipeline` structurally cannot: a patch belongs to a triangle, so
+  its three corners need three distinct coordinates, and a vertex shared between up to six triangles
+  has one `uv0` slot to put them in. The atlas offset is `gl_PrimitiveID` — under an indexed indirect
+  draw with `firstIndex == 0` that is exactly the producer's arena triangle slot, so no side table
+  maps one to the other — and the position within a patch comes from the fragment's barycentric
+  coordinate, **recovered** from the interpolated world position and the triangle's three corners
+  rather than read from `VK_KHR_fragment_shader_barycentric`: that extension is supported on the
+  Apple targets but is a *device feature*, and taking it would thread a requirement through every
+  embedder's device creation (including the neutral two-library bootstrap) to save a 2×2 solve.
+  Set 0 is three storage buffers — atlas, index run, vertices — declared as flat scalar arrays so no
+  `scalarBlockLayout` is needed either. A texel no frame observed falls back to the per-vertex colour
+  **per fragment** on the stored weight, so a partially observed surface fades along real patch
+  boundaries instead of switching whole triangles. The atlas is decoded from canonical encoded 8-bit
+  in the shader, since a storage buffer has no `_SRGB` format to do it in hardware — that, plus
+  filtering and mips, is what a buffer atlas gives up against an image. `HybridMeshPipeline` is
+  untouched.
 - **2026-08-03 — `pipelines::LiveMesh`, the indirect-draw half of the live zero-copy path.**
   A borrowed vertex/index/indirect buffer triple drawn with `vkCmdDrawIndexedIndirect`, so a mesh
   whose index count changes per frame draws with no CPU round trip. `HybridMeshDraw::geometry` is a
