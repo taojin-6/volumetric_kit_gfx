@@ -27,7 +27,7 @@ FetchContent_Declare(
   VulkanMemoryAllocator
   GIT_REPOSITORY
     https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-  GIT_TAG v3.3.0
+  GIT_TAG v3.4.0
   GIT_SHALLOW TRUE)
 
 # --- Vulkan-Headers + Vulkan-Utility-Libraries (authoritative VkFormat info) --
@@ -43,13 +43,13 @@ FetchContent_Declare(
 FetchContent_Declare(
   VulkanHeaders
   GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 FetchContent_Declare(
   VulkanUtilityLibraries
   GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Utility-Libraries.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
@@ -103,7 +103,7 @@ FetchContent_Declare(
 FetchContent_Declare(
   imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG v1.92.8
+  GIT_TAG v1.92.9
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
@@ -159,7 +159,7 @@ endif()
 FetchContent_Declare(
   spirv-cross
   GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE)
 
 # VMA + the vendored Vulkan headers + tinygltf + spirv-cross + ImGui are all
@@ -206,7 +206,7 @@ if(VG_BUILD_TESTS)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.17.0
+    GIT_TAG v1.18.0
     GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(googletest)
 endif()
