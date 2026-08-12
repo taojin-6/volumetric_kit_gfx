@@ -43,13 +43,13 @@ FetchContent_Declare(
 FetchContent_Declare(
   VulkanHeaders
   GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 FetchContent_Declare(
   VulkanUtilityLibraries
   GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Utility-Libraries.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR _headers_only_)
 
@@ -159,7 +159,7 @@ endif()
 FetchContent_Declare(
   spirv-cross
   GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-  GIT_TAG vulkan-sdk-1.4.350.0
+  GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE)
 
 # VMA + the vendored Vulkan headers + tinygltf + spirv-cross + ImGui are all
