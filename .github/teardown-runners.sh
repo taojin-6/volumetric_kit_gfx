@@ -3,17 +3,22 @@
 # (REPO below), leaving any runners it hosts for OTHER repos untouched.
 # Use when decommissioning or migrating a runner host (e.g. switching Macs, or
 # rebuilding the Linux box). Works on macOS and Linux. Run as the user that owns
-# ~/actions-runner-*.  Best-effort: keeps going if a single step fails.
+# the runner dirs.  Best-effort: keeps going if a single step fails.
 set -o pipefail
 
 REPO="taojin-6/volumetric_kit_gfx"
 # Linux runs the runner as a systemd service (root); macOS as a per-user LaunchAgent.
 if [ "$(uname -s)" = "Linux" ]; then SUDO=(sudo); else SUDO=(); fi
 
+# Runners live in ~/ci-runners/<repo>/runner-<i>. Hosts set up before that layout
+# still have them flat in ~/actions-runner-<i>, so sweep both: a host that was
+# never migrated has to tear down cleanly rather than silently find nothing and
+# leave its runners registered.
 shopt -s nullglob
-dirs=("$HOME"/actions-runner-*/)
+dirs=("$HOME"/ci-runners/"${REPO#*/}"/runner-*/ "$HOME"/actions-runner-*/)
 if [ "${#dirs[@]}" -eq 0 ]; then
-  echo "No ~/actions-runner-* runner dirs on this machine — nothing to remove."
+  echo "No runner dirs on this machine (looked in ~/ci-runners/${REPO#*/}/ and"
+  echo "~/actions-runner-*) — nothing to remove."
   exit 0
 fi
 
@@ -21,7 +26,8 @@ for dir in "${dirs[@]}"; do
   [ -f "${dir}config.sh" ] || continue
   # Only touch runners registered to THIS repo. One machine can host runners for
   # several repos — each dir's .runner records its gitHubUrl — so without this
-  # guard the actions-runner-* glob would stop and delete the others' runners too.
+  # guard the legacy ~/actions-runner-* glob, which matches every repo's flat
+  # dirs, would stop and delete the others' runners too.
   # The trailing quote pins the match to the full repo name (no prefix collision).
   if ! grep -qsF "github.com/${REPO}\"" "${dir}.runner"; then
     echo "==> Skipping ${dir} — not registered to ${REPO}"
