@@ -11,7 +11,8 @@ set -euo pipefail
 REPO="taojin-6/volumetric_kit_gfx"
 LABEL="mac"
 N=2                                  # Debug + Release in parallel
-BASE="$HOME"
+BASE="$HOME/ci-runners"              # every repo's runners under one dir
+RUNNER_ROOT="${BASE}/${REPO#*/}"     # ...this repo's under its own name
 
 case "$(uname -m)" in
   arm64)  PKG_ARCH="arm64" ;;        # Apple Silicon
@@ -32,12 +33,13 @@ else
 fi
 
 CORES="$(sysctl -n hw.ncpu)"; THREADS=$(( CORES / N )); [ "$THREADS" -lt 1 ] && THREADS=1
+mkdir -p "$RUNNER_ROOT"
 TAR="${BASE}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
 [ -f "$TAR" ] || curl -fsSL -o "$TAR" \
   "https://github.com/actions/runner/releases/download/v${VER}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
 
 for i in $(seq 1 "$N"); do
-  dir="${BASE}/actions-runner-${i}"
+  dir="${RUNNER_ROOT}/runner-${i}"
   echo "==> [${i}/${N}] ${dir}"
   mkdir -p "$dir"; tar xzf "$TAR" -C "$dir"
   # Loaded into every job -> caps cmake/ctest fan-out so the parallel legs share

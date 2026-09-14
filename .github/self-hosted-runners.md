@@ -37,6 +37,11 @@ The registration token and the exact tarball URL come from the repo →
 **Settings → Actions → Runners → New self-hosted runner (Linux x64)**. One token
 registers all N (valid ~1h).
 
+Runners live under `~/ci-runners/<repo>/runner-<i>` — one directory per repo, so
+several repos' runners share a machine without colliding. Hosts set up before
+this layout have them flat in `~/actions-runner-<i>`; `teardown-runners.sh`
+handles both.
+
 ```bash
 TOKEN="<REGISTRATION_TOKEN>"
 RUNNER_VERSION="2.330.0"          # whatever the runner page shows
@@ -44,12 +49,13 @@ URL="https://github.com/taojin-6/volumetric_kit_gfx"
 N=6                                # one per Linux build leg (3 OS x Debug/Release)
 THREADS=4                          # N*THREADS ~= core count -> no oversubscription
 
-curl -o ~/actions-runner.tar.gz -L \
+mkdir -p ~/ci-runners
+curl -o ~/ci-runners/actions-runner.tar.gz -L \
   "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 
 for i in $(seq 1 "$N"); do
-  dir=~/actions-runner-$i
-  mkdir -p "$dir" && tar xzf ~/actions-runner.tar.gz -C "$dir"
+  dir=~/ci-runners/volumetric_kit_gfx/runner-$i
+  mkdir -p "$dir" && tar xzf ~/ci-runners/actions-runner.tar.gz -C "$dir"
   ( cd "$dir"
     # Loaded into every job on this runner -> caps cmake/ctest fan-out so the
     # parallel legs share the cores instead of each grabbing all of them.
@@ -109,7 +115,7 @@ change**: bring the new host up, then tear the old one down.
 
 - **Pause** (go offline, stay registered) — drop `sudo` on macOS:
   ```bash
-  for d in ~/actions-runner-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
+  for d in ~/ci-runners/volumetric_kit_gfx/runner-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
   ```
   Resume with `./svc.sh start`.
 - **Fully remove** (decommission, or before handing the machine on):
