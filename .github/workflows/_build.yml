@@ -93,7 +93,17 @@ jobs:
           # images but NOT in a bare ubuntu:* container, so add build-essential there.
           pkgs="cmake libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools libglfw3-dev libglm-dev xvfb vulkan-tools"
           if [ "$IN_CONTAINER" = "true" ]; then
-            pkgs="$pkgs build-essential"
+            # A bare image also lacks the two client libraries the NVIDIA
+            # Vulkan ICD needs before it will hand the loader a
+            # vkCreateInstance: libGLX_nvidia.so.0 links libXext.so.6 and
+            # dlopens libEGL.so.1 while initialising. Without them the ICD the
+            # toolkit mounts is found and then discarded ("Found no drivers!"),
+            # and every GPU test skips itself on the one leg that exists for
+            # the GPU. libglfw3-dev happens to pull both in today; they are
+            # named here so the ICD's requirement survives a change to that
+            # list (recon, which has no glfw, lost a month of GPU coverage to
+            # exactly this).
+            pkgs="$pkgs build-essential libxext6 libegl1"
           else
             # GPU-less hosted runner: lavapipe (software Vulkan) gives the
             # GPU-dependent tests a device to run against.
@@ -104,9 +114,9 @@ jobs:
           # On a hosted runner, point the loader at lavapipe for the rest of the
           # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
           # the container toolkit (--gpus all + NVIDIA_DRIVER_CAPABILITIES=all) is
-          # then the only ICD, so the GPU-dependent tests run on the real 5090 —
-          # and if it is absent, vulkaninfo finds no device and the GPU steps skip
-          # themselves rather than fail.
+          # then the only ICD, so the GPU-dependent tests run on the real GPU —
+          # and if it is absent, the GPU diagnostic below fails the leg rather
+          # than letting every GPU test skip.
           # TODO: bake these deps into a prebuilt image to drop ~30-60s/run.
           if [ "$IN_CONTAINER" != "true" ]; then
             echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
