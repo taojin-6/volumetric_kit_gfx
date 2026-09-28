@@ -47,6 +47,8 @@ struct PbrFrame;
 /// scene.set_camera(f.slot, eye, prefilter_max_lod);
 /// pbr.value().submit(cmd, frame);  // frame names the scene, slot, and draws
 /// @endcode
+// TODO: a normal-as-color debug view like HybridMeshPipeline's
+// kHybridMeshNormals (for 03_model).
 class VG_PIPELINES_API PbrPipeline {
  public:
   /// @brief Construct an empty pipeline (owns nothing; `valid()` is false).

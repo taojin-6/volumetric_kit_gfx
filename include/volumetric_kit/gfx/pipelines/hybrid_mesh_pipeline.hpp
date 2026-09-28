@@ -27,6 +27,10 @@ class GpuMesh;
 struct HybridMeshFrame;
 
 /// @brief Shading flags for @ref HybridMeshFrame::flags.
+///
+/// Bits not named here are reserved: leave them clear. The shader tests only
+/// the named bits, so a reserved bit has no effect today, but a later flag may
+/// claim it.
 enum HybridMeshFlags : uint32_t {
   /// Apply single-directional-light diffuse + a constant ambient term. Clear
   /// for flat, unlit albedo (the raw projected/vertex color).
@@ -35,11 +39,19 @@ enum HybridMeshFlags : uint32_t {
   /// `normalize(n) * 0.5 + 0.5` (+X red, +Y green, +Z blue), in place of the
   /// albedo. Takes precedence over @ref kHybridMeshLit, which it ignores. The
   /// normal is the mesh's own -- *not* flipped on back faces the way lit
-  /// shading flips it -- so an inverted or inconsistently wound region shows
-  /// as a color jump rather than being hidden. A zero normal shows mid-grey.
-  /// The encoded value is written as-is, so it reads back exactly from a UNORM
-  /// target; an sRGB target encodes it on write like any other color.
+  /// shading flips it -- so a region whose normals point the wrong way shows
+  /// as a color jump. Winding does not reach this view: a region wound the
+  /// wrong way but carrying correct normals looks like its neighbours. Lit
+  /// shading, which flips the normal on back faces, is what exposes that --
+  /// and it hides the case where normal and winding are both inverted, which
+  /// this view shows. A zero normal shows mid-grey. The stored color is the
+  /// encoding itself (to 8-bit rounding: 0.5 lands on 127 or 128) on UNORM and
+  /// sRGB targets alike -- for an sRGB target the shader writes the linear
+  /// value the hardware encodes back to it -- so it matches other normal-map
+  /// tools on the default swapchain too.
   kHybridMeshNormals = 1u << 1,
+  // TODO: an on-screen toggle for kHybridMeshNormals once an example draws
+  // with HybridMeshPipeline.
 };
 
 /// @brief The reconstruction hybrid-mesh pipeline: an interleaved

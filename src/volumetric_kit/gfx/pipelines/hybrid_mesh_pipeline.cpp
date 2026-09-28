@@ -10,7 +10,6 @@
 
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
 
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
@@ -28,23 +27,50 @@ namespace volumetric_kit::gfx::pipelines {
 namespace {
 
 // Per-frame constants for hybrid_mesh.{vert,frag}, shared by both stages. The
-// shading flags ride `light.w` rather than a trailing `uint`, so the block
-// stays a clean 16-byte multiple (80 B) whatever glm's alignment -- a trailing
-// scalar could pad the host struct past the reflected push range. They travel
-// as the bitmask's integer value in a float, which is exact for the handful of
-// low bits kShaderFlags admits; the fragment stage converts back with uint().
+// light direction is a plain float[3] rather than a glm::vec3, so no glm
+// alignment setting can pad it: `flags` then lands in the vec3's trailing four
+// bytes, exactly where the shaders' std430 push block puts it, and the block
+// stays 80 B.
 struct PushConstants {
   glm::mat4 view_proj;  // projection * view (vertices are already world-space)
-  glm::vec4 light;      // xyz = world-space light direction, w = shading flags
+  float light_dir[3];   // world-space direction to the light (unit)
+  uint32_t flags;       // HybridMeshFlags, passed through as the caller set it
 };
 static_assert(sizeof(PushConstants) == 80,
-              "PushConstants must match the shader push block (mat4 + vec4)");
-static_assert(offsetof(PushConstants, light) == 64,
+              "PushConstants must match the shader push block "
+              "(mat4 + vec3 + uint)");
+static_assert(offsetof(PushConstants, light_dir) == 64,
+              "PushConstants layout drift");
+static_assert(offsetof(PushConstants, flags) == 76,
               "PushConstants layout drift");
 
-// The HybridMeshFlags bits hybrid_mesh.frag decodes from `light.w`; anything
-// else a caller sets is dropped before it reaches the float.
-constexpr uint32_t kShaderFlags = kHybridMeshLit | kHybridMeshNormals;
+// hybrid_mesh.frag's specialization constants, constant_ids 0..2 in order. The
+// flag bits it tests come from HybridMeshFlags here, so the enum is their one
+// definition (the shader's defaults are 0, which switches a mode off); the
+// sRGB bit tells the normal view to pre-decode its encoding so that a target
+// which encodes on write stores the encoding itself.
+struct FragmentSpecialization {
+  uint32_t flag_lit;
+  uint32_t flag_normals;
+  VkBool32 srgb_target;
+};
+
+// Whether a color-attachment format encodes sRGB on write. Only the 8-bit
+// formats can be color attachments; the compressed sRGB formats cannot.
+bool is_srgb(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_R8_SRGB:
+    case VK_FORMAT_R8G8_SRGB:
+    case VK_FORMAT_R8G8B8_SRGB:
+    case VK_FORMAT_B8G8R8_SRGB:
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+    case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
 // process* (the reconstruction library, in its own repo) against these exact
@@ -112,6 +138,19 @@ Result<HybridMeshPipeline> HybridMeshPipeline::create(
       {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(assets::Vertex, color)},
   };
 
+  // The fragment stage writes color attachment 0 only, so its format alone
+  // decides the sRGB path.
+  const FragmentSpecialization spec_data{
+      kHybridMeshLit, kHybridMeshNormals,
+      is_srgb(layout.color_formats[0]) ? VK_TRUE : VK_FALSE};
+  const VkSpecializationMapEntry spec_entries[3] = {
+      {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
+      {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},
+      {2, offsetof(FragmentSpecialization, srgb_target), sizeof(VkBool32)},
+  };
+  const VkSpecializationInfo spec{3, spec_entries, sizeof(spec_data),
+                                  &spec_data};
+
   GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
@@ -122,6 +161,7 @@ Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.vertex_attribute_count = 4;
   desc.depth_test = true;
   desc.depth_write = true;
+  desc.fragment_specialization = &spec;
   VG_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
 
   HybridMeshPipeline hybrid;
@@ -159,8 +199,10 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
 
   PushConstants pc;
   pc.view_proj = frame.view_proj;
-  pc.light =
-      glm::vec4(light_dir, static_cast<float>(frame.flags & kShaderFlags));
+  pc.light_dir[0] = light_dir.x;
+  pc.light_dir[1] = light_dir.y;
+  pc.light_dir[2] = light_dir.z;
+  pc.flags = frame.flags;
   vkCmdPushConstants(cmd, pipeline_.layout(),
                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                      0, sizeof(pc), &pc);

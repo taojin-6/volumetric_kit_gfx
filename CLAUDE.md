@@ -63,7 +63,7 @@ consumer/example.
   renders a world-space interleaved `assets::Vertex` mesh and chooses albedo *per fragment*: the
   atlas texel (set 0, a combined-image-sampler, sampled at `uv0`) where a triangle won projective
   texturing, else the per-vertex `color` where `uv0` is the `(-1,-1)` sentinel (recon's TSDF
-  vertex-color fallback); lit or unlit via a push-constant flag (`light.w`). Reuses `assets::Vertex`
+  vertex-color fallback); lit or unlit via a push-constant `flags` word. Reuses `assets::Vertex`
   + `GpuMesh` unchanged (binds position/normal/uv0/color, not tangent), one push constant carries the
   view-projection + light (no per-frame UBO), and the sampler set is the pipeline's only descriptor
   set. This is the *static* data-path (upload a mesh + atlas, draw); proven headless via an offscreen
