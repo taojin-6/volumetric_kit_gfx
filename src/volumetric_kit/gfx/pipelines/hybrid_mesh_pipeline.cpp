@@ -28,17 +28,23 @@ namespace volumetric_kit::gfx::pipelines {
 namespace {
 
 // Per-frame constants for hybrid_mesh.{vert,frag}, shared by both stages. The
-// lit flag rides `light.w` (> 0.5 = lit) rather than a trailing `uint`, so the
-// block stays a clean 16-byte multiple (80 B) whatever glm's alignment -- a
-// trailing scalar could pad the host struct past the reflected push range.
+// shading flags ride `light.w` rather than a trailing `uint`, so the block
+// stays a clean 16-byte multiple (80 B) whatever glm's alignment -- a trailing
+// scalar could pad the host struct past the reflected push range. They travel
+// as the bitmask's integer value in a float, which is exact for the handful of
+// low bits kShaderFlags admits; the fragment stage converts back with uint().
 struct PushConstants {
   glm::mat4 view_proj;  // projection * view (vertices are already world-space)
-  glm::vec4 light;      // xyz = world-space light direction, w = lit flag
+  glm::vec4 light;      // xyz = world-space light direction, w = shading flags
 };
 static_assert(sizeof(PushConstants) == 80,
               "PushConstants must match the shader push block (mat4 + vec4)");
 static_assert(offsetof(PushConstants, light) == 64,
               "PushConstants layout drift");
+
+// The HybridMeshFlags bits hybrid_mesh.frag decodes from `light.w`; anything
+// else a caller sets is dropped before it reaches the float.
+constexpr uint32_t kShaderFlags = kHybridMeshLit | kHybridMeshNormals;
 
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
 // process* (the reconstruction library, in its own repo) against these exact
@@ -154,7 +160,7 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   PushConstants pc;
   pc.view_proj = frame.view_proj;
   pc.light =
-      glm::vec4(light_dir, (frame.flags & kHybridMeshLit) != 0u ? 1.0f : 0.0f);
+      glm::vec4(light_dir, static_cast<float>(frame.flags & kShaderFlags));
   vkCmdPushConstants(cmd, pipeline_.layout(),
                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                      0, sizeof(pc), &pc);

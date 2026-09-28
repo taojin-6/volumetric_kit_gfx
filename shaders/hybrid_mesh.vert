@@ -29,7 +29,7 @@ layout(location = 3) in vec4 in_color;     // per-vertex color (TSDF fallback)
 
 layout(push_constant) uniform Push {
   mat4 view_proj;  // projection * view (vertices are already world-space)
-  vec4 light;      // xyz world-space direction TO the light; w > 0.5 = shade
+  vec4 light;      // xyz world-space direction TO the light; w = flags
 }
 pc;
 

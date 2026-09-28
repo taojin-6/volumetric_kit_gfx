@@ -7,7 +7,8 @@
 // texture whose first texel is red) and whose right half carries the (-1, -1)
 // "use vertex color" sentinel with a green per-vertex color -- proving both
 // shading paths route correctly in one draw -- then re-renders lit to prove the
-// directional term darkens the albedo. Runs under the validation layer with
+// directional term darkens the albedo, and in the normal debug view to prove it
+// encodes the stored normal instead. Runs under the validation layer with
 // teeth. Skips when the runner exposes no Vulkan device.
 
 #include <gtest/gtest.h>
@@ -534,6 +535,82 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   EXPECT_NEAR(lit_right[1], std::lround(right[1] * factor), 4)
       << "lit green = unlit green * directional factor";
   EXPECT_LT(lit_right[1], right[1]) << "lit green darker than unlit";
+}
+
+// kHybridMeshNormals shows each fragment's world-space normal as
+// normalize(n) * 0.5 + 0.5 in place of its albedo. make_hybrid_mesh() is
+// re-normaled so each half pins a different channel to its axis: the left
+// (atlas) quad stores a NON-unit +X normal -- red saturates only if the view
+// normalizes -- and the right (vertex-color) quad stores -Y and is re-wound to
+// face AWAY from the camera, so green reads 0 only if the view shows the stored
+// normal rather than the back-face flip lit shading applies. Both halves
+// encoding their normal (not red/green albedo) proves the albedo is bypassed.
+TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  assets::Mesh mesh_cpu = make_hybrid_mesh();
+  for (size_t i = 0; i < 4; ++i) {
+    mesh_cpu.vertices[i].normal = {2.0f, 0.0f, 0.0f};  // left: +X, non-unit
+  }
+  for (size_t i = 4; i < 8; ++i) {
+    mesh_cpu.vertices[i].normal = {0.0f, -1.0f, 0.0f};  // right: -Y
+  }
+  // The right quad's winding reversed from make_hybrid_mesh(): back-facing.
+  mesh_cpu.indices = {0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7};
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) {
+    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
+  };
+
+  // Guard against a vacuous pass: lit shading flips the right quad's -Y to +Y
+  // only if it really is back-facing, and +Y then catches the default light's
+  // directional term. Front-facing, -Y would face away and leave ambient only.
+  const std::vector<uint8_t> lit =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshLit);
+  ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
+  const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
+  EXPECT_NEAR(at(lit, 3 * kSize / 4, kSize / 2)[1],
+              std::lround(255.0f * (0.25f + 0.75f * l.y)), 4)
+      << "the right quad must be back-facing for the no-flip check to bite";
+
+  const std::vector<uint8_t> normals =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshNormals);
+  ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+  // 0.5 lands on 127 or 128 depending on the implementation's rounding.
+  const uint8_t* left = at(normals, kSize / 4, kSize / 2);  // +X, normalized
+  EXPECT_EQ(left[0], 255) << "+X normalizes to full red";
+  EXPECT_NEAR(left[1], 128, 1);
+  EXPECT_NEAR(left[2], 128, 1);
+
+  const uint8_t* right = at(normals, 3 * kSize / 4, kSize / 2);  // -Y, back
+  EXPECT_NEAR(right[0], 128, 1);
+  EXPECT_EQ(right[1], 0) << "back face shows its stored -Y, not the flip";
+  EXPECT_NEAR(right[2], 128, 1);
+
+  // The view takes precedence over the lit flag: adding it changes nothing.
+  const std::vector<uint8_t> normals_lit =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshNormals | pipelines::kHybridMeshLit);
+  EXPECT_EQ(normals_lit, normals)
+      << "kHybridMeshNormals ignores kHybridMeshLit";
 }
 
 // A null atlas is a violated precondition (the fragment shader samples set 0

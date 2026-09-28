@@ -10,9 +10,10 @@
 // sampled unconditionally -- in uniform control flow, so its implicit-LOD screen
 // derivatives are always well defined -- and the unused result is simply not
 // selected. Optionally lit by a single world-space directional light plus a
-// constant ambient term (light.w > 0.5, i.e. the kHybridMeshLit flag); unlit
-// passes the albedo straight through. Two-sided: the normal is flipped for back
-// faces since the pipeline does not cull.
+// constant ambient term (the kHybridMeshLit flag); unlit passes the albedo
+// straight through. Two-sided: the normal is flipped for back faces since the
+// pipeline does not cull. The kHybridMeshNormals debug view replaces all of that
+// with the world-space normal encoded as a color.
 
 layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
@@ -23,11 +24,22 @@ layout(set = 0, binding = 0) uniform sampler2D atlas_tex;
 
 layout(push_constant) uniform Push {
   mat4 view_proj;
-  vec4 light;  // xyz world-space direction TO the light (unit); w > 0.5 = shade
+  vec4 light;  // xyz world-space direction TO the light (unit); w = flags
 }
 pc;
 
+// HybridMeshFlags bits, as the host packs them into light.w (an integer-valued
+// float, so uint() recovers the bitmask exactly).
+const uint kFlagLit = 1u << 0;      // kHybridMeshLit
+const uint kFlagNormals = 1u << 1;  // kHybridMeshNormals
+
 layout(location = 0) out vec4 out_color;
+
+// normalize() that maps a zero/degenerate vector to 0 instead of the NaN it
+// would otherwise yield (which max() does not reliably clamp).
+vec3 safe_normalize(vec3 v) {
+  return dot(v, v) > 0.0 ? normalize(v) : vec3(0.0);
+}
 
 void main() {
   // Sample the atlas unconditionally (uniform control flow keeps the LOD
@@ -35,13 +47,21 @@ void main() {
   vec3 atlas_albedo = texture(atlas_tex, frag_uv).rgb;
   vec3 albedo = frag_use_vertex_color != 0u ? frag_color.rgb : atlas_albedo;
 
-  // light.w > 0.5 requests lit shading; otherwise pass the albedo through flat.
-  if (pc.light.w > 0.5) {
-    vec3 raw = gl_FrontFacing ? frag_normal : -frag_normal;
-    // Guard the normalize: a zero/degenerate interpolated normal would yield a
-    // NaN that max() does not reliably clamp. Fall back to pure ambient (n = 0
-    // makes the diffuse term vanish).
-    vec3 n = dot(raw, raw) > 0.0 ? normalize(raw) : vec3(0.0);
+  const uint flags = uint(pc.light.w);
+
+  // Normal debug view: the mesh's own normal, deliberately NOT flipped for back
+  // faces, so a wrongly oriented region reads as a color jump instead of being
+  // masked the way lit shading masks it. A zero normal encodes to mid-grey.
+  if ((flags & kFlagNormals) != 0u) {
+    out_color = vec4(safe_normalize(frag_normal) * 0.5 + 0.5, 1.0);
+    return;
+  }
+
+  // The lit flag requests lit shading; otherwise pass the albedo through flat.
+  if ((flags & kFlagLit) != 0u) {
+    // A degenerate normal falls back to pure ambient (n = 0 makes the diffuse
+    // term vanish).
+    vec3 n = safe_normalize(gl_FrontFacing ? frag_normal : -frag_normal);
     // pc.light.xyz is the pre-normalized world-space direction to the light.
     const float ambient = 0.25;
     albedo *= ambient + (1.0 - ambient) * max(dot(n, pc.light.xyz), 0.0);

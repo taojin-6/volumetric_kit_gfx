@@ -31,6 +31,15 @@ enum HybridMeshFlags : uint32_t {
   /// Apply single-directional-light diffuse + a constant ambient term. Clear
   /// for flat, unlit albedo (the raw projected/vertex color).
   kHybridMeshLit = 1u << 0,
+  /// Debug view: color each fragment by its world-space normal,
+  /// `normalize(n) * 0.5 + 0.5` (+X red, +Y green, +Z blue), in place of the
+  /// albedo. Takes precedence over @ref kHybridMeshLit, which it ignores. The
+  /// normal is the mesh's own -- *not* flipped on back faces the way lit
+  /// shading flips it -- so an inverted or inconsistently wound region shows
+  /// as a color jump rather than being hidden. A zero normal shows mid-grey.
+  /// The encoded value is written as-is, so it reads back exactly from a UNORM
+  /// target; an sRGB target encodes it on write like any other color.
+  kHybridMeshNormals = 1u << 1,
 };
 
 /// @brief The reconstruction hybrid-mesh pipeline: an interleaved
@@ -45,7 +54,8 @@ enum HybridMeshFlags : uint32_t {
 /// The test is the sign, not the exact `(-1, -1)`, and a negative `uv0` still
 /// carries a usable coordinate -- decoded as `-uv0 - 1`, of which `(-1, -1)`
 /// is the `(0, 0)` case. See @ref LiveMesh. Lighting is toggled by
-/// @ref kHybridMeshLit.
+/// @ref kHybridMeshLit; @ref kHybridMeshNormals swaps the albedo for a
+/// normal-as-color debug view.
 ///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
