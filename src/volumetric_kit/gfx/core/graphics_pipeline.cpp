@@ -13,6 +13,32 @@ namespace volumetric_kit::gfx {
 // here we only validate, assemble the create-info, build the layout + pipeline,
 // and hand them over.
 
+namespace {
+
+// Whether `info` is absent or well-formed: non-null pointers behind non-zero
+// counts, and every map entry's bytes inside the data block (the rules of
+// VUID-VkSpecializationInfo-offset-00773 / -pMapEntries-00774, checked here
+// because validation off is the shipping default).
+bool specialization_valid(const VkSpecializationInfo* info) {
+  if (info == nullptr) {
+    return true;
+  }
+  if ((info->mapEntryCount > 0 && info->pMapEntries == nullptr) ||
+      (info->dataSize > 0 && info->pData == nullptr)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < info->mapEntryCount; ++i) {
+    const VkSpecializationMapEntry& entry = info->pMapEntries[i];
+    if (entry.offset >= info->dataSize ||
+        entry.size > info->dataSize - entry.offset) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
 Result<GraphicsPipeline> GraphicsPipeline::create(
     VkDevice device, const GraphicsPipelineDesc& desc) {
   // Validate before touching Vulkan, so misuse yields a clean Status instead of
@@ -68,6 +94,11 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
     return Status::invalid_argument(
         "GraphicsPipeline::create: depth_test requires layout to carry a depth "
         "format");
+  }
+  if (!specialization_valid(desc.fragment_specialization)) {
+    return Status::invalid_argument(
+        "GraphicsPipeline::create: fragment_specialization needs non-null "
+        "pointers for its non-zero counts and every map entry within dataSize");
   }
   if (device == VK_NULL_HANDLE) {
     return Status::invalid_argument(
@@ -172,6 +203,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
   stages[1].module = desc.fragment_shader->handle();
   stages[1].pName = desc.entry_point;
+  stages[1].pSpecializationInfo = desc.fragment_specialization;
 
   // Empty bindings/attributes (counts 0) drive the procedural path where the
   // vertex shader computes positions from gl_VertexIndex; a non-zero count

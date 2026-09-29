@@ -7,7 +7,8 @@
 // texture whose first texel is red) and whose right half carries the (-1, -1)
 // "use vertex color" sentinel with a green per-vertex color -- proving both
 // shading paths route correctly in one draw -- then re-renders lit to prove the
-// directional term darkens the albedo. Runs under the validation layer with
+// directional term darkens the albedo, and in the normal debug view to prove it
+// encodes the stored normal instead. Runs under the validation layer with
 // teeth. Skips when the runner exposes no Vulkan device.
 
 #include <gtest/gtest.h>
@@ -51,10 +52,10 @@ constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr uint32_t kSize = 64;
 
 // The signature the depth-tested pipeline is built for (and every offscreen
-// target the draw renders into).
-vg::RenderTargetLayout color_depth_layout() {
+// target the draw renders into). `color` is UNORM unless a test needs sRGB.
+vg::RenderTargetLayout color_depth_layout(VkFormat color = kColorFormat) {
   vg::RenderTargetLayout layout;
-  layout.color_formats[0] = kColorFormat;
+  layout.color_formats[0] = color;
   layout.color_count = 1;
   layout.depth_format = kDepthFormat;
   return layout;
@@ -94,6 +95,28 @@ assets::Mesh make_hybrid_mesh() {
   };
   // Front-facing winding (CCW in the framebuffer under identity view_proj).
   mesh.indices = {0, 2, 1, 0, 3, 2, 4, 6, 5, 4, 7, 6};
+  return mesh;
+}
+
+// make_hybrid_mesh() re-normaled for the normal debug view, so each half pins
+// a different channel to its axis: the left (atlas) quad stores a NON-unit +X
+// normal -- red saturates only if the view normalizes -- and the right
+// (vertex-color) quad stores -Y and is re-wound to face AWAY from the camera,
+// so green reads 0 only if the view shows the stored normal rather than the
+// back-face flip lit shading applies.
+assets::Mesh make_normals_mesh() {
+  assets::Mesh mesh = make_hybrid_mesh();
+  for (size_t i = 0; i < 4; ++i) {
+    mesh.vertices[i].normal = {2.0f, 0.0f, 0.0f};  // left: +X, non-unit
+  }
+  for (size_t i = 4; i < 8; ++i) {
+    mesh.vertices[i].normal = {0.0f, -1.0f, 0.0f};  // right: -Y
+  }
+  // The right quad is the last two triangles; swapping each one's last two
+  // indices reverses its winding, so it turns back-facing.
+  for (size_t t = 6; t < mesh.indices.size(); t += 3) {
+    std::swap(mesh.indices[t + 1], mesh.indices[t + 2]);
+  }
   return mesh;
 }
 
@@ -138,6 +161,12 @@ bool any_pixel_drawn(const std::vector<uint8_t>& px) {
     }
   }
   return false;
+}
+
+// The RGBA pixel at (x, y) of a kSize x kSize readback.
+const uint8_t* pixel_at(const std::vector<uint8_t>& px, uint32_t x,
+                        uint32_t y) {
+  return &px[(static_cast<size_t>(y) * kSize + x) * 4];
 }
 
 // True if every pixel is exactly the opaque-black clear -- i.e. nothing drew.
@@ -334,13 +363,15 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
   // with the given flags, and returns a copy of the RGBA pixels. Each draw
   // names either a static GpuMesh or a live indirect mesh -- the harness is
   // agnostic, and a draw_count > 1 list exercises submit()'s per-draw dispatch.
+  // `color_format` must match the layout `pipeline` was created for.
   std::vector<uint8_t> render(
       vg::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
       const std::vector<pipelines::HybridMeshDraw>& draws,
-      VkDescriptorSet atlas, uint32_t flags) {
+      VkDescriptorSet atlas, uint32_t flags,
+      VkFormat color_format = kColorFormat) {
     vg::OffscreenTargetDesc td;
     td.extent = {kSize, kSize};
-    td.color_format = kColorFormat;
+    td.color_format = color_format;
     td.depth_format = kDepthFormat;
     auto target = vg::OffscreenTarget::create(allocator, td);
     EXPECT_TRUE(target.ok()) << target.status().message();
@@ -403,9 +434,11 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
   std::vector<uint8_t> render(vg::Allocator& allocator,
                               const pipelines::HybridMeshPipeline& pipeline,
                               const pipelines::HybridMeshDraw& draw,
-                              VkDescriptorSet atlas, uint32_t flags) {
+                              VkDescriptorSet atlas, uint32_t flags,
+                              VkFormat color_format = kColorFormat) {
     return render(allocator, pipeline,
-                  std::vector<pipelines::HybridMeshDraw>{draw}, atlas, flags);
+                  std::vector<pipelines::HybridMeshDraw>{draw}, atlas, flags,
+                  color_format);
   }
 
   // Uploads `pixels` (`extent`, kColorFormat, `size` bytes) as a NEAREST atlas
@@ -494,16 +527,15 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
       render(allocator.value(), pipeline.value(),
              pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
   ASSERT_EQ(unlit.size(), static_cast<size_t>(kSize) * kSize * 4);
-  const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) {
-    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
-  };
 
-  const uint8_t* left = at(unlit, kSize / 4, kSize / 2);  // NDC x = -0.5: atlas
+  const uint8_t* left =
+      pixel_at(unlit, kSize / 4, kSize / 2);  // NDC x = -0.5: atlas
   EXPECT_GT(left[0], 128) << "left half should sample the red atlas texel";
   EXPECT_LT(left[1], 128);
   EXPECT_LT(left[2], 128);
 
-  const uint8_t* right = at(unlit, 3 * kSize / 4, kSize / 2);  // NDC +0.5: vtx
+  const uint8_t* right =
+      pixel_at(unlit, 3 * kSize / 4, kSize / 2);  // NDC +0.5: vtx
   EXPECT_LT(right[0], 128) << "right half should use the green vertex color";
   EXPECT_GT(right[1], 128);
   EXPECT_LT(right[2], 128);
@@ -525,15 +557,193 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
   const float factor = 0.25f + 0.75f * std::fmax(glm::dot(n, l), 0.0f);
 
-  const uint8_t* lit_left = at(lit, kSize / 4, kSize / 2);
+  const uint8_t* lit_left = pixel_at(lit, kSize / 4, kSize / 2);
   EXPECT_NEAR(lit_left[0], std::lround(left[0] * factor), 4)
       << "lit red = unlit red * directional factor (ambient-only would be ~64)";
   EXPECT_LT(lit_left[0], left[0]) << "lit red darker than unlit";
 
-  const uint8_t* lit_right = at(lit, 3 * kSize / 4, kSize / 2);
+  const uint8_t* lit_right = pixel_at(lit, 3 * kSize / 4, kSize / 2);
   EXPECT_NEAR(lit_right[1], std::lround(right[1] * factor), 4)
       << "lit green = unlit green * directional factor";
   EXPECT_LT(lit_right[1], right[1]) << "lit green darker than unlit";
+}
+
+// kHybridMeshNormals shows each fragment's world-space normal as
+// normalize(n) * 0.5 + 0.5 in place of its albedo, on make_normals_mesh()
+// (see there for what each half pins). Both halves encoding their normal (not
+// red/green albedo) proves the albedo is bypassed, and the back-facing right
+// quad reading exactly what a front-facing -Y would is the documented
+// winding-blindness.
+TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_normals_mesh();
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+
+  // Guard against a vacuous pass: lit shading flips the right quad's -Y to +Y
+  // only if it really is back-facing, and +Y then catches the default light's
+  // directional term. Front-facing, -Y would face away and leave ambient only.
+  const std::vector<uint8_t> lit =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshLit);
+  ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
+  const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
+  EXPECT_NEAR(pixel_at(lit, 3 * kSize / 4, kSize / 2)[1],
+              std::lround(255.0f * (0.25f + 0.75f * l.y)), 4)
+      << "the right quad must be back-facing for the no-flip check to bite";
+
+  const std::vector<uint8_t> normals =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshNormals);
+  ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+  // 0.5 lands on 127 or 128 depending on the implementation's rounding.
+  const uint8_t* left =
+      pixel_at(normals, kSize / 4, kSize / 2);  // +X, normalized
+  EXPECT_EQ(left[0], 255) << "+X normalizes to full red";
+  EXPECT_NEAR(left[1], 128, 1);
+  EXPECT_NEAR(left[2], 128, 1);
+
+  const uint8_t* right =
+      pixel_at(normals, 3 * kSize / 4, kSize / 2);  // -Y, back
+  EXPECT_NEAR(right[0], 128, 1);
+  EXPECT_EQ(right[1], 0) << "back face shows its stored -Y, not the flip";
+  EXPECT_NEAR(right[2], 128, 1);
+
+  // The view takes precedence over the lit flag: adding it changes nothing.
+  const std::vector<uint8_t> normals_lit =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshNormals | pipelines::kHybridMeshLit);
+  EXPECT_EQ(normals_lit, normals)
+      << "kHybridMeshNormals ignores kHybridMeshLit";
+}
+
+// A zero normal has no direction to encode: safe_normalize() maps it to 0, so
+// the view shows mid-grey rather than the NaN a bare normalize() would write.
+TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  assets::Mesh mesh_cpu = make_hybrid_mesh();
+  for (assets::Vertex& v : mesh_cpu.vertices) {
+    v.normal = {0.0f, 0.0f, 0.0f};
+  }
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const std::vector<uint8_t> normals =
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{&mesh.value()}, atlas,
+             pipelines::kHybridMeshNormals);
+  ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
+  for (uint32_t x : {kSize / 4, 3 * kSize / 4}) {
+    const uint8_t* p = pixel_at(normals, x, kSize / 2);
+    for (int c = 0; c < 3; ++c) {
+      EXPECT_NEAR(p[c], 128, 1)
+          << "zero normal -> mid-grey at x=" << x << ", channel " << c;
+    }
+  }
+}
+
+// On an sRGB target the view pre-decodes its encoding, so the byte stored is
+// still normalize(n) * 0.5 + 0.5 -- what other normal-map tools show. Written
+// as-is, the hardware's encode would lift 0.5 to ~188, so the 128s below are
+// what bite.
+TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
+  constexpr VkFormat kSrgb = VK_FORMAT_R8G8B8A8_SRGB;
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline = pipelines::HybridMeshPipeline::create(
+      device(), color_depth_layout(kSrgb));
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_normals_mesh();
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const std::vector<uint8_t> normals =
+      render(allocator.value(), pipeline.value(),
+             pipelines::HybridMeshDraw{&mesh.value()}, atlas,
+             pipelines::kHybridMeshNormals, kSrgb);
+  ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+  const uint8_t* left = pixel_at(normals, kSize / 4, kSize / 2);  // +X
+  EXPECT_EQ(left[0], 255);
+  EXPECT_NEAR(left[1], 128, 1) << "0.5 stored as-is, not sRGB-lifted";
+  EXPECT_NEAR(left[2], 128, 1);
+
+  const uint8_t* right = pixel_at(normals, 3 * kSize / 4, kSize / 2);  // -Y
+  EXPECT_NEAR(right[0], 128, 1);
+  EXPECT_EQ(right[1], 0);
+  EXPECT_NEAR(right[2], 128, 1);
+}
+
+// Bits HybridMeshFlags does not name are reserved, and the shader tests only
+// the named ones, so setting every reserved bit changes no pixel.
+TEST_F(HybridMeshRenderTest, ReservedFlagBitsAreIgnored) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto pipeline =
+      pipelines::HybridMeshPipeline::create(device(), color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const assets::Mesh mesh_cpu = make_hybrid_mesh();
+  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  const uint8_t atlas_px[4] = {255, 0, 0, 255};
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  constexpr uint32_t kReserved =
+      ~uint32_t{pipelines::kHybridMeshLit | pipelines::kHybridMeshNormals};
+  const std::vector<uint8_t> lit =
+      render(allocator.value(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshLit);
+  ASSERT_TRUE(any_pixel_drawn(lit));
+  EXPECT_EQ(render(allocator.value(), pipeline.value(), draw, atlas,
+                   pipelines::kHybridMeshLit | kReserved),
+            lit)
+      << "a reserved bit must not switch the shading mode";
 }
 
 // A null atlas is a violated precondition (the fragment shader samples set 0
@@ -561,11 +771,8 @@ TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
 
   // Opaque-black clear (render() sets only alpha): nothing drawn -> all
   // cleared.
-  const auto at = [&](uint32_t x, uint32_t y) {
-    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
-  };
   for (uint32_t x : {kSize / 4, 3 * kSize / 4}) {
-    const uint8_t* p = at(x, kSize / 2);
+    const uint8_t* p = pixel_at(px, x, kSize / 2);
     EXPECT_EQ(p[0], 0) << "no draw -> cleared pixel at x=" << x;
     EXPECT_EQ(p[1], 0) << "no draw -> cleared pixel at x=" << x;
     EXPECT_EQ(p[2], 0) << "no draw -> cleared pixel at x=" << x;
@@ -785,24 +992,21 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
 
   ASSERT_EQ(single.size(), static_cast<size_t>(kSize) * kSize * 4);
   ASSERT_EQ(both.size(), single.size());
-  const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) {
-    return &px[(static_cast<size_t>(y) * kSize + x) * 4];
-  };
 
   // The live quad's own region: it alone is blue, and only when it drew.
-  const uint8_t* both_centre = at(both, kSize / 2, kSize / 2);
+  const uint8_t* both_centre = pixel_at(both, kSize / 2, kSize / 2);
   EXPECT_GT(both_centre[2], 128) << "the live draw must cover the centre";
   EXPECT_LT(both_centre[0], 128);
   EXPECT_LT(both_centre[1], 128);
-  EXPECT_LT(at(single, kSize / 2, kSize / 2)[2], 128)
+  EXPECT_LT(pixel_at(single, kSize / 2, kSize / 2)[2], 128)
       << "without the live draw nothing is blue";
 
   // Outside it, the static mesh alone shades the frame -- unchanged by the
   // extra draw (no binding state leaked) and not the clear color, which is what
   // makes dropping the static branch fail here rather than pass silently.
   for (const uint32_t x : {kSize / 8, 7 * kSize / 8}) {
-    const uint8_t* s = at(single, x, kSize / 8);
-    const uint8_t* b = at(both, x, kSize / 8);
+    const uint8_t* s = pixel_at(single, x, kSize / 8);
+    const uint8_t* b = pixel_at(both, x, kSize / 8);
     EXPECT_TRUE(s[0] != 0 || s[1] != 0 || s[2] != 0)
         << "the static mesh must shade x=" << x;
     for (int c = 0; c < 4; ++c) {

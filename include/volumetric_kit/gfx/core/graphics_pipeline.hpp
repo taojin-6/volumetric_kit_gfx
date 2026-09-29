@@ -82,6 +82,14 @@ struct GraphicsPipelineDesc {
   VkCompareOp depth_compare = VK_COMPARE_OP_LESS;
   /// Entry-point name used for both stages. Must be non-null.
   const char* entry_point = "main";
+  /// Specialization-constant values for the fragment stage, or `nullptr` to
+  /// keep the shader's defaults. Borrowed for the duration of @ref
+  /// GraphicsPipeline::create. Every map entry must lie within `dataSize`, and
+  /// the pointers must be non-null when their counts are non-zero. Reflection
+  /// reads the module's *default* values, so a constant that sizes a
+  /// descriptor array must keep its default here.
+  // TODO: a vertex_specialization twin once a vertex stage needs one.
+  const VkSpecializationInfo* fragment_specialization = nullptr;
 };
 
 /// @brief Owns a graphics `VkPipeline` and the `VkPipelineLayout` it was built

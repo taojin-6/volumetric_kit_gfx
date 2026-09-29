@@ -73,7 +73,8 @@ vg_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/mesh.frag"
   "${PROJECT_SOURCE_DIR}/shaders/mesh_mvp.vert"
   "${PROJECT_SOURCE_DIR}/shaders/reflect_probe.frag"
-  "${PROJECT_SOURCE_DIR}/shaders/reflect_storage.comp")
+  "${PROJECT_SOURCE_DIR}/shaders/reflect_storage.comp"
+  "${PROJECT_SOURCE_DIR}/shaders/spec_probe.frag")
 target_compile_definitions(
   vg_core_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 

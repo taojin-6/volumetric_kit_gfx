@@ -762,4 +762,109 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
   EXPECT_NE(center_drawn(ccw), center_drawn(cw));
 }
 
+// --- Fragment-stage specialization -------------------------------------------
+
+// spec_probe.frag outputs red = its constant_id 0 (default 0.0). Drawing it
+// once without a specialization and once with kRed = 1.0 proves the desc's
+// fragment_specialization reaches the stage: unwired, both would stay black.
+TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
+  constexpr uint32_t kSize = 32;
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "spec_probe.frag.spv");
+  const VkVertexInputBindingDescription binding = mesh_binding();
+  const auto attrs = mesh_attributes();
+  const MeshVertex tri[3] = {
+      {{-0.8f, -0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
+      {{0.8f, -0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
+      {{0.0f, 0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
+  };
+  vg::Buffer vbuf = make_host_buffer(allocator.value(), tri, sizeof(tri),
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+  // Renders the triangle under `spec`; returns the red at the image center.
+  auto center_red = [&](const VkSpecializationInfo* spec) -> int {
+    vg::OffscreenTargetDesc td;
+    td.extent = {kSize, kSize};
+    td.color_format = kFormat;
+    auto target = vg::OffscreenTarget::create(allocator.value(), td);
+    EXPECT_TRUE(target.ok()) << target.status().message();
+    if (!target.ok()) {
+      return -1;
+    }
+
+    vg::GraphicsPipelineDesc desc;
+    desc.vertex_shader = &vert;
+    desc.fragment_shader = &frag;
+    desc.layout = target.value().layout();
+    desc.vertex_bindings = &binding;
+    desc.vertex_binding_count = 1;
+    desc.vertex_attributes = attrs.data();
+    desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
+    desc.fragment_specialization = spec;
+    auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+    EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
+    if (!pipeline.ok()) {
+      return -1;
+    }
+
+    render_mesh(target.value(), pipeline.value(), vbuf.handle(), VK_NULL_HANDLE,
+                3);
+    const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+    EXPECT_NE(px, nullptr);
+    if (px == nullptr) {
+      return -1;
+    }
+    return px[(static_cast<size_t>(kSize / 2) * kSize + kSize / 2) * 4];
+  };
+
+  EXPECT_EQ(center_red(nullptr), 0) << "no specialization keeps the default";
+
+  const float red = 1.0f;
+  const VkSpecializationMapEntry entry{0, 0, sizeof(red)};
+  const VkSpecializationInfo spec{1, &entry, sizeof(red), &red};
+  EXPECT_EQ(center_red(&spec), 255) << "the specialized kRed reaches the draw";
+}
+
+// A malformed specialization is rejected with a Status before Vulkan sees it:
+// a null pointer behind a non-zero count, or a map entry reaching past
+// dataSize.
+TEST_F(GraphicsPipelineDeviceTest, MalformedFragmentSpecializationRejected) {
+  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
+  vg::ShaderModule frag = vg_test::load_module(device(), "spec_probe.frag.spv");
+  const VkVertexInputBindingDescription binding = mesh_binding();
+  const auto attrs = mesh_attributes();
+
+  auto create_with = [&](const VkSpecializationInfo& spec) {
+    vg::GraphicsPipelineDesc desc;
+    desc.vertex_shader = &vert;
+    desc.fragment_shader = &frag;
+    desc.layout = color_layout();
+    desc.vertex_bindings = &binding;
+    desc.vertex_binding_count = 1;
+    desc.vertex_attributes = attrs.data();
+    desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
+    desc.fragment_specialization = &spec;
+    return vg::GraphicsPipeline::create(device(), desc);
+  };
+
+  const float red = 1.0f;
+  const VkSpecializationMapEntry entry{0, 0, sizeof(red)};
+  const VkSpecializationMapEntry past_end{0, 2, sizeof(red)};
+
+  const VkSpecializationInfo cases[] = {
+      {1, nullptr, sizeof(red), &red},    // entries missing
+      {1, &entry, sizeof(red), nullptr},  // data missing
+      {1, &past_end, sizeof(red), &red},  // entry overruns dataSize
+      {1, &entry, 0, nullptr},            // entry in an empty block
+  };
+  for (const VkSpecializationInfo& spec : cases) {
+    auto pipeline = create_with(spec);
+    ASSERT_FALSE(pipeline.ok());
+    EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  }
+}
+
 }  // namespace
