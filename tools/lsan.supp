@@ -13,7 +13,7 @@
 # used to sit below and did exactly that: the loader trampoline is in the stack
 # of EVERY Vulkan call, so a VkImage the RetireQueue failed to destroy, a
 # VkPipeline leaked on an error path, or a leaked VMA allocation were all
-# silently swallowed — neutering the job CLAUDE.md relies on for the
+# silently swallowed — neutering the job AGENTS.md relies on for the
 # leak/double-free class. Prefer function-name substrings (`loader_…`, `lvp_…`)
 # that only the third-party allocator itself can match.
 

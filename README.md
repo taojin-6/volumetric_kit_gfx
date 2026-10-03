@@ -6,23 +6,18 @@ A standalone, reusable **Vulkan** renderer library (MoltenVK on Apple) for volum
 workloads.
 
 One Vulkan path serves Linux / Android in addition to macOS / iOS, with a single
-GLSL → SPIR-V shader set. See [`CLAUDE.md`](./CLAUDE.md) for naming conventions and locked
-design decisions.
-
-> **Status:** Early development. The `core` tier — instance/device bring-up, VMA
-> allocator + RAII buffer/texture, sync primitives (fence, binary + timeline semaphore),
-> deferred-destruction retire queue, shader modules, and the `Status`/`Result`/logging
-> foundation — is implemented and tested (GoogleTest suite, run under ASan/UBSan/LSan in
-> CI). The windowing/swapchain, `passes`/`pipelines`/`app` tiers, and CUDA/Metal interop
-> are not yet implemented. See [`CHANGELOG.md`](./CHANGELOG.md) for what has landed and
-> [`DESIGN.md`](./DESIGN.md) for the tier roadmap.
+GLSL → SPIR-V shader set. [AGENTS.md](AGENTS.md) is the shared working guide
+for Codex and Claude Code; `CLAUDE.md` imports it. [DECISIONS.md](DECISIONS.md)
+records the locked choices, and [CHANGELOG.md](CHANGELOG.md) records what has
+landed. The detailed `DESIGN.md` is intentionally local and gitignored.
 
 ## Architecture (tiered)
 
-`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `camera`).
+`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`, `ui`).
 Simple consumers link `volumetric_kit::gfx_app`; advanced consumers compose passes on
 `volumetric_kit::gfx_core`. The dependency rule is strict: a tier may only depend on tiers
-to its left.
+to its left, with `core` and `assets` as foundational roots. See
+[AGENTS.md](AGENTS.md#architecture) for the dependency boundaries.
 
 ## Prerequisites (macOS / Apple Silicon)
 
@@ -43,8 +38,8 @@ vulkaninfo --summary   # expect GPU0 ... driverID = DRIVER_ID_MOLTENVK
 ## Use it in your project
 
 The library is consumable both via `FetchContent` and an installed
-`find_package`. Link the component target you need (today only `gfx_core` is
-built); the umbrella alias `volumetric_kit::gfx` pulls in whatever tiers exist.
+`find_package`. Link the component target you need; the umbrella alias
+`volumetric_kit::gfx` pulls in the available tiers.
 
 ```cmake
 # Option A — FetchContent (pin GIT_TAG to a release tag or commit SHA):

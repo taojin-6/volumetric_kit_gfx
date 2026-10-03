@@ -144,7 +144,7 @@ TEST_F(PbrSceneTest, CreatesSet0) {
 // handles are the observable proxy for the ring's anti-race property: each set
 // comes from its own OwnedDescriptorSet -- hence its own UBO buffer -- so
 // writing one slot cannot touch another's. (PbrScene exposes no UBO read-back
-// to assert that directly; CLAUDE.md prefers behavior tests over private-state
+// to assert that directly; AGENTS.md prefers behavior tests over private-state
 // backdoors.) Both slots accept a write; an out-of-range slot is a no-op.
 TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
   auto scene = pipelines::PbrScene::create(device(), *allocator_,

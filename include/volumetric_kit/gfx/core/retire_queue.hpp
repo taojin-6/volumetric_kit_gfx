@@ -23,7 +23,7 @@ namespace volumetric_kit::gfx {
 /// signaled when that work finishes, then call @ref poll each frame to release
 /// the entries whose fence has signaled. This realizes the locked
 /// "double-buffer + release via a `VkFence`-completion CPU token" rule (see
-/// `CLAUDE.md`) without any cross-API GPU event. Fences are observed, not
+/// `AGENTS.md`) without any cross-API GPU event. Fences are observed, not
 /// owned. The GPU-independent bookkeeping lives in @ref RetireList.
 ///
 /// @warning The producers a queued deleter frees through -- the @ref Device,
