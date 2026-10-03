@@ -3,7 +3,7 @@
 /cmake-build-*/
 /out/
 
-# Local git worktrees (one per in-flight change; see CLAUDE.md)
+# Local git worktrees (one per in-flight change; see AGENTS.md)
 /.worktrees/
 
 # Generated runtime env helper (configured by CMake)

@@ -1,5 +1,9 @@
 # Contributing
 
+[AGENTS.md](AGENTS.md) is the canonical shared guide for contributors, Codex,
+and Claude Code. It owns the working rules, validation commands, and task map;
+`CLAUDE.md` imports it. [DECISIONS.md](DECISIONS.md) keeps the recorded choices.
+
 ## One-time setup
 
 Install [`pre-commit`](https://pre-commit.com) (`pipx install pre-commit`, or
@@ -20,9 +24,10 @@ lives in `.git/` and is **not** tracked, so each clone must run this once.
 Out-of-source CMake build:
 
 ```sh
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build
+gfx_root="$(git rev-parse --show-toplevel)"
+cmake -S "$gfx_root" -B "$gfx_root/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$gfx_root/build" --parallel
+ctest --test-dir "$gfx_root/build" --output-on-failure
 ```
 
 GPU-backed tests skip automatically when no Vulkan device is present, so the
