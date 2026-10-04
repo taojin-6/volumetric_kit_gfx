@@ -4,24 +4,25 @@
 #pragma once
 
 /// @file result.hpp
-/// @brief Exception-free error handling for the public API.
+/// @brief gfx's error handling: volumetric_kit_core's `Status` and `Result`,
+///        named in this namespace, and the bridge from a failed `VkResult`.
 ///
-/// No exceptions cross the library boundary: mobile (iOS/Android) consumers
-/// frequently build with `-fno-exceptions`, where a throwing API is unusable.
-/// Fallible calls therefore report failure by value:
+/// gfx defines no error types of its own. It uses the family's shared ones,
+/// from volumetric_kit_core's base tier (DECISIONS.md, 2026-10-04, "Error
+/// handling comes from volumetric_kit_core"), so a `Status` from gfx is the
+/// same type as one from recon or calib and passes between them unchanged. The
+/// using-declarations below let gfx and its consumers keep writing `Status` and
+/// `Result<T>` in this namespace.
 ///
-/// - @ref Status    -- success, or an error domain (@ref Status::Code) with an
-///                     optional `VkResult` detail and a context message.
-/// - @ref Result    -- a `T` on success, or a `Status` on failure.
-///
-/// Two macros remove the check-and-propagate boilerplate: @ref VG_TRY (for a
-/// `Status` expression) and @ref VG_VK_TRY (for a raw `VkResult`). Both
-/// early-return on failure, so they appear only inside functions that
-/// themselves return `Status` or `Result<T>`.
-///
-/// Misuse -- reading the value of an error `Result` -- is a programmer error,
-/// not a runtime one: it fails fast via `VG_CHECK` (see check.hpp) rather than
-/// throwing.
+/// No exceptions cross the API boundary: mobile consumers build with
+/// `-fno-exceptions`. Fallible calls return `Status` or `Result<T>`, both
+/// `[[nodiscard]]`. `Status` is backend-neutral: a failed Vulkan call is a
+/// backend status, `Status::Code::Backend` with the `VkResult` as its
+/// `detail()`, made by @ref vk_error or @ref VG_VK_TRY and read back by
+/// @ref vk_result. Name a domain with the core's `to_string`, unqualified:
+/// `to_string(status.domain())`. Reading the value of an error `Result` is a
+/// programmer error and aborts. The full contract is in the core's
+/// `volumetric_kit/core/base/result.hpp`.
 ///
 /// @code
 /// Result<Device> r = Device::create(instance, physical, config);
@@ -29,204 +30,97 @@
 /// Device& device = r.value();  // safe: guarded by the !r check above
 /// @endcode
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
-/// @brief Success, or an error: a domain (@ref Code), an optional `VkResult`
-///        detail, and a human-readable message.
-///
-/// A default-constructed `Status` is success. Build a failure with a domain
-/// factory (@ref invalid_argument, @ref not_found, @ref unsupported,
-/// @ref out_of_memory, @ref io_error) or, for a failed Vulkan call, @ref error
-/// or @ref vk_error (which set @ref domain to @ref Code::Vulkan and carry the
-/// `VkResult`). Convertible to `bool` (true == success) for terse checks.
-///
-/// @code
-/// Status s = upload();
-/// if (!s) {
-///   std::string detail(to_string(s.domain()));
-///   if (s.domain() == Status::Code::Vulkan) {
-///     detail += '/';
-///     detail += to_string(s.code());  // recover the specific VkResult
-///   }
-///   log_message(LogLevel::Error, detail + ": " + s.message());
-///   return s;
-/// }
-/// @endcode
-class Status {
- public:
-  /// @brief The kind of failure a non-OK `Status` reports.
-  ///
-  /// This is the primary discriminator. @ref code carries a meaningful
-  /// `VkResult` only when the domain is @ref Code::Vulkan; for every other
-  /// domain it is `VK_SUCCESS`.
-  enum class Code {
-    Ok,               ///< Success.
-    InvalidArgument,  ///< A malformed or contradictory argument value.
-    NotFound,         ///< A named resource or file does not exist.
-    Unsupported,      ///< A valid request the device or build cannot satisfy.
-    OutOfMemory,      ///< A host or device allocation failed.
-    IoError,          ///< A read/write/decode/encode operation failed.
-    Vulkan,           ///< A Vulkan call failed; @ref code holds the `VkResult`.
-  };
+using core::Result;
+using core::Status;
+// Not `using core::to_string`: where the core's vulkan tier is included first,
+// that would also name its to_string(VkResult), which clashes with gfx's below.
+// An unqualified call still finds to_string(Status::Code) by argument-dependent
+// lookup.
 
-  /// Construct a success status.
-  Status() = default;
+// TODO: take vk_error, vk_result, to_string(VkResult) and VG_VK_TRY from the
+// core's vulkan tier (volumetric_kit/core/vulkan/vk_result.hpp, the same
+// names) once gfx adopts that tier; until then gfx keeps them, as the core's
+// base tier includes no GPU API. The core's vk_result needs this one's range
+// check first.
 
-  /// @brief Build a Vulkan failure status (domain @ref Code::Vulkan).
-  /// @param code     Vulkan result code; must not be `VK_SUCCESS`.
-  /// @param message  Human-readable context (e.g. the failing call site).
-  /// @return A non-OK `Status` carrying @p code and @p message.
-  static Status error(VkResult code, std::string message) {
-    VG_CHECK(code != VK_SUCCESS, "Status::error needs a failed VkResult");
-    return Status{Code::Vulkan, code, std::move(message)};
-  }
-
-  /// @brief Build a non-Vulkan failure status in the named domain.
-  /// @param message  Human-readable context.
-  /// @return A non-OK `Status` whose @ref domain is the factory's domain and
-  ///         whose @ref code is `VK_SUCCESS` (no Vulkan call was involved).
-  static Status invalid_argument(std::string message) {
-    return Status{Code::InvalidArgument, std::move(message)};
-  }
-  /// @copydoc invalid_argument
-  static Status not_found(std::string message) {
-    // TODO: emitted by the assets tier (named resource / file lookup); no core
-    // producer yet.
-    return Status{Code::NotFound, std::move(message)};
-  }
-  /// @copydoc invalid_argument
-  static Status unsupported(std::string message) {
-    return Status{Code::Unsupported, std::move(message)};
-  }
-  /// @copydoc invalid_argument
-  static Status out_of_memory(std::string message) {
-    // TODO: map genuine VMA/Vulkan OOM (VK_ERROR_OUT_OF_*_MEMORY) into this
-    // domain in the allocator/interop tier; today such failures stay
-    // Code::Vulkan with the VkResult in code(), so this factory has no core
-    // producer yet.
-    return Status{Code::OutOfMemory, std::move(message)};
-  }
-  /// @copydoc invalid_argument
-  static Status io_error(std::string message) {
-    // TODO: emitted by the assets tier (read/write/decode/encode); no core
-    // producer yet.
-    return Status{Code::IoError, std::move(message)};
-  }
-
-  /// @return `true` if this is a success status.
-  bool ok() const noexcept { return domain_ == Code::Ok; }
-  /// @return `true` on success (same as @ref ok).
-  explicit operator bool() const noexcept { return ok(); }
-
-  /// @return The error domain; @ref Code::Ok exactly when @ref ok.
-  Code domain() const noexcept { return domain_; }
-  /// @return The Vulkan result code. Meaningful only when @ref domain is
-  ///         @ref Code::Vulkan; `VK_SUCCESS` otherwise.
-  VkResult code() const noexcept { return code_; }
-  /// @return The failure context message; empty when @ref ok.
-  const std::string& message() const noexcept { return message_; }
-
- private:
-  // Non-Vulkan domains carry no VkResult; this overload fixes code_ to
-  // VK_SUCCESS so a domain factory cannot pair a real VkResult with a
-  // non-Vulkan domain. Only error() takes an explicit VkResult.
-  Status(Code domain, std::string message)
-      : domain_(domain), message_(std::move(message)) {}
-  Status(Code domain, VkResult code, std::string message)
-      : domain_(domain), code_(code), message_(std::move(message)) {}
-
-  Code domain_ = Code::Ok;
-  VkResult code_ = VK_SUCCESS;
-  std::string message_;
-};
-
-/// @brief Build an error @ref Status from a failed code and a `string_view`.
-/// @param code  A failed `VkResult` (not `VK_SUCCESS`).
-/// @param what  Short context string, copied into the Status message.
-/// @return A non-OK `Status`.
-inline Status vk_error(VkResult code, std::string_view what) {
-  return Status::error(code, std::string(what));
+/// @brief Wrap a failed `VkResult` as a backend @ref Status.
+/// @param result  What the failed Vulkan call returned.
+/// @param what    Context for the message, e.g. the failing call.
+/// @pre @p result is not `VK_SUCCESS`: a success code is no failure, and
+///      `Status::backend_error` aborts on one.
+/// @return A non-OK `Status`, domain `Status::Code::Backend`, whose
+///         `detail()` is @p result.
+inline Status vk_error(VkResult result, std::string_view what) {
+  return Status::backend_error(static_cast<std::int64_t>(result),
+                               std::string(what));
 }
 
-/// @brief Human-readable name for a @ref Status::Code (e.g. "InvalidArgument").
-/// @param code  A domain value.
-/// @return A static, never-empty `string_view`.
-VG_CORE_API std::string_view to_string(Status::Code code) noexcept;
+/// @brief The `VkResult` a backend @ref Status carries.
+/// @param status  Any status.
+/// @return Its `detail()` as a `VkResult` when its domain is
+///         `Status::Code::Backend` and the detail fits in 32 bits; empty
+///         otherwise, success included.
+///
+/// The domain does not say *which* backend failed: recon's CUDA failures are
+/// backend statuses too, whose `cudaError_t` detail this reads as an unrelated
+/// `VkResult` (`cudaErrorMemoryAllocation`, 2, as `VK_TIMEOUT`). Ask it only of
+/// a status from a Vulkan call, as every backend status gfx returns is.
+///
+/// Where the core's vulkan tier is included too, argument-dependent lookup on
+/// the `Status` also finds the core's `vk_result`, so an unqualified call is
+/// ambiguous: qualify it, as below.
+///
+/// @code
+/// const Status s = swapchain.present(queue);
+/// if (gfx::vk_result(s) == VK_ERROR_OUT_OF_DATE_KHR) recreate();
+/// @endcode
+inline std::optional<VkResult> vk_result(const Status& status) noexcept {
+  // TODO: return empty for a CUDA status once the core's Status records which
+  // backend failed; the core's own vk_result has the same gap.
+  const std::int64_t detail = status.detail();
+  // A detail wider than VkResult's 32 bits is no VkResult, and converting it to
+  // the enum would be undefined.
+  if (status.domain() != Status::Code::Backend ||
+      detail < std::numeric_limits<std::int32_t>::min() ||
+      detail > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<VkResult>(detail);
+}
 
 /// @brief Human-readable name for a `VkResult` (e.g. "VK_ERROR_DEVICE_LOST").
 /// @param result  Any `VkResult`.
 /// @return A static `string_view`; unrecognized codes yield
-/// "VK_RESULT_UNKNOWN".
+///         "VK_RESULT_UNKNOWN".
 VG_CORE_API std::string_view to_string(VkResult result) noexcept;
-
-/// @brief A value of type `T` on success, or a non-OK @ref Status on failure.
-/// @tparam T  The success value type (must be movable).
-///
-/// Constructs implicitly from either a `T` (success) or a `Status` (failure),
-/// so a function can `return value;` or `return some_error;` directly. Always
-/// check @ref ok (or the `bool` conversion) before reading @ref value.
-///
-/// @code
-/// Result<Buffer> make_buffer(std::size_t bytes) {
-///   if (bytes == 0) return Status::invalid_argument("empty");
-///   return Buffer{bytes};   // implicit success
-/// }
-/// @endcode
-template <class T>
-class Result {
- public:
-  /// Construct a success Result holding @p value.
-  Result(T value);  // NOLINT(google-explicit-constructor) — ergonomic success
-                    // return
-  /// Construct a failure Result; @p err must be non-OK (checked by VG_CHECK).
-  Result(Status err);  // NOLINT(google-explicit-constructor) — ergonomic error
-                       // return
-
-  /// @return `true` if this holds a value rather than an error.
-  bool ok() const noexcept { return status_.ok(); }
-  /// @return `true` if this holds a value (same as @ref ok).
-  explicit operator bool() const noexcept { return ok(); }
-  /// @return The status; non-OK exactly when this is an error Result.
-  const Status& status() const noexcept { return status_; }
-
-  /// @brief Access the held value.
-  /// @pre @ref ok is true. Calling this on an error Result is a programmer
-  ///      error: it aborts via `VG_CHECK` (it never throws), so guard with
-  ///      @ref ok first.
-  /// @return Reference to the held value.
-  T& value() &;
-  const T& value() const&;
-  T&& value() &&;
-
-  /// @brief Pointer/reference access to the held value.
-  /// @pre @ref ok is true; otherwise aborts, as in @ref value.
-  T* operator->();
-  const T* operator->() const;
-  T& operator*() &;
-  const T& operator*() const&;
-  T&& operator*() &&;
-
- private:
-  Status status_;
-  std::optional<T> value_;
-};
 
 }  // namespace volumetric_kit::gfx
 
-/// @brief Evaluate a `Status` expression and early-return it if not OK.
-/// @param expr  An expression yielding a `Status`.
+// TODO: rename VG_TRY / VG_ASSIGN (and VG_CHECK, check.hpp) to the core's
+// VKC_TRY / VKC_ASSIGN / VKC_CHECK across gfx once its open branches have
+// landed, then delete these aliases, as recon plans for its VR_* names. Until
+// then the old names keep those branches merging cleanly, and new code uses
+// them too.
+
+/// @brief gfx's name for the core's `VKC_TRY`, used as `VG_TRY(expr)`:
+///        evaluate an expression yielding a `Status` and early-return it if
+///        not OK.
 ///
-/// Usable only inside a function returning `Status` or `Result<T>` -- the early
-/// `return` carries the failure outward.
+/// Usable only inside a function returning `Status` or `Result<T>`. It and
+/// @ref VG_ASSIGN are object-like aliases, as @ref VG_CHECK is (check.hpp).
 ///
 /// @code
 /// Status init() {
@@ -234,13 +128,26 @@ class Result {
 ///   return {};                   // success
 /// }
 /// @endcode
-#define VG_TRY(expr)                                   \
-  do {                                                 \
-    ::volumetric_kit::gfx::Status _vg_status = (expr); \
-    if (!_vg_status.ok()) return _vg_status;           \
-  } while (0)
+#define VG_TRY VKC_TRY
 
-/// @brief Evaluate a raw `VkResult` and early-return a `Status` on failure.
+/// @brief gfx's name for the core's `VKC_ASSIGN`, used as
+///        `VG_ASSIGN(decl, expr)`: unwrap the `Result<T>` that `expr` yields
+///        into the variable declaration `decl`, or early-return its `Status`.
+///
+/// It declares `decl` in the enclosing scope, so it is a statement sequence:
+/// never the unbraced body of an `if`/`for`/`while`. A type with a top-level
+/// comma needs an alias first.
+///
+/// @code
+/// Result<Pipeline> build(VkDevice device) {
+///   VG_ASSIGN(ShaderModule vert, ShaderModule::create(device, code, bytes));
+///   return assemble(vert);
+/// }
+/// @endcode
+#define VG_ASSIGN VKC_ASSIGN
+
+/// @brief Evaluate a raw `VkResult` and early-return a backend `Status` on
+///        failure.
 /// @param expr  An expression yielding a `VkResult`. The expression text is
 ///              stringified (via `#expr`) as the error context, so the failing
 ///              call names itself -- no separate message argument.
@@ -257,40 +164,8 @@ class Result {
 /// @endcode
 #define VG_VK_TRY(expr)                                      \
   do {                                                       \
-    VkResult _vg_vk = (expr);                                \
-    if (_vg_vk != VK_SUCCESS)                                \
+    const VkResult _vg_vk = (expr);                          \
+    if (_vg_vk != VK_SUCCESS) {                              \
       return ::volumetric_kit::gfx::vk_error(_vg_vk, #expr); \
+    }                                                        \
   } while (0)
-
-/// @brief Evaluate a `Result<T>` expression, early-return its `Status` on
-///        failure, otherwise move the value into @p decl.
-/// @param decl  A variable declaration (e.g. `Device device`) bound to the
-///              unwrapped value on success.
-/// @param expr  An expression yielding a `Result<T>`.
-///
-/// The `Result<T>` analogue of @ref VG_TRY: it removes the check-status-then-
-/// move-value boilerplate that fallible-value call sites otherwise repeat.
-/// Usable only inside a function returning `Status` or `Result<U>`. Because it
-/// declares @p decl in the enclosing scope, it expands to a statement sequence
-/// (not a `do { } while`), so it is not a single statement -- never use it as
-/// the unbraced body of an `if`/`for`/`while`. The hidden temporary is keyed on
-/// `__COUNTER__` (not `__LINE__`), so multiple `VG_ASSIGN`s in one scope never
-/// collide -- even two on the same source line. @p decl is a single macro
-/// argument, so a type written with a top-level comma needs an alias first
-/// (e.g. `using Pair = std::pair<int, int>;` then `VG_ASSIGN(Pair p, expr)`).
-///
-/// @code
-/// Result<Pipeline> build(VkDevice device) {
-///   VG_ASSIGN(ShaderModule vert, ShaderModule::create(device, code, bytes));
-///   // `vert` holds the value here; a failure already returned its Status.
-///   return assemble(vert);
-/// }
-/// @endcode
-#define VG_ASSIGN(decl, expr) VG_ASSIGN_(decl, expr, __COUNTER__)
-#define VG_ASSIGN_(decl, expr, id) VG_ASSIGN_IMPL_(decl, expr, id)
-#define VG_ASSIGN_IMPL_(decl, expr, id)                       \
-  auto _vg_result_##id = (expr);                              \
-  if (!_vg_result_##id.ok()) return _vg_result_##id.status(); \
-  decl = std::move(_vg_result_##id).value()
-
-#include "volumetric_kit/gfx/core/impl/result.hpp"

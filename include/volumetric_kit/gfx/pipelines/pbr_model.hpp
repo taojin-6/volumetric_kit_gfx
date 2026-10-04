@@ -136,7 +136,7 @@ class VG_PIPELINES_API PbrModel {
   /// @pre @p device holds a live `VkDevice` and @p pipeline is `valid()` --
   ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
   ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The model on success, or a non-OK @ref Status (a Vulkan-domain
+  /// @return The model on success, or a non-OK @ref Status (a backend
   ///         Status from the upload, sampler, or material step).
   static Result<PbrModel> create(const Device& device, Allocator& allocator,
                                  const PbrPipeline& pipeline,

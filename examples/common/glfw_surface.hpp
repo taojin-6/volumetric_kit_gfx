@@ -22,7 +22,7 @@ namespace example {
 ///        creates the `VkSurfaceKHR` for @p window via
 ///        `glfwCreateWindowSurface` on the app's instance.
 /// @param window  The GLFW window to present into; must outlive the app.
-/// @return A factory returning the surface, or a Vulkan-domain @ref
+/// @return A factory returning the surface, or a backend @ref
 ///         volumetric_kit::gfx::Status when GLFW fails to create one.
 inline volumetric_kit::gfx::app::WindowedApp::SurfaceFactory
 glfw_surface_factory(GLFWwindow* window) {

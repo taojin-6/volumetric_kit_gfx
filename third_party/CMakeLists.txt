@@ -17,9 +17,9 @@
 
 include(FetchContent)
 
-# Public deps (Vulkan) are resolved at the top level so their imported targets
-# are visible across sibling subdirectories. This file owns only the vendored
-# deps.
+# Public deps (Vulkan, glm's preference, volumetric_kit_core) are resolved at
+# the top level so their imported targets are visible across sibling
+# subdirectories. This file owns only the vendored deps.
 
 # --- VMA: Vulkan Memory Allocator (header-only; implemented in one gfx_core TU)
 # ----

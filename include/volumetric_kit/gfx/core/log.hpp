@@ -4,29 +4,46 @@
 #pragma once
 
 /// @file log.hpp
-/// @brief A pluggable logging seam — a caller-installable diagnostic handler.
+/// @brief gfx's side of the family's one log sink.
 ///
-/// A pluggable logging seam. The library imposes no logging framework on
-/// consumers: it emits through a handler they can install, defaulting to stderr
-/// for warnings and errors. The Vulkan debug messenger routes here too.
+/// The sink is volumetric_kit_core's: one process-wide handler for calib,
+/// recon and gfx alike, defaulting to stderr for warnings and errors. The
+/// library imposes no logging framework on consumers; an application installs
+/// its own handler with @ref set_log_handler (the core's, named here) and
+/// receives each message with its level and source. gfx's messages carry the
+/// source @ref kLogSource, so the default sink keeps printing `[vg <level>]`.
+/// Contract failures are the exception: a failed @ref VG_CHECK, or reading the
+/// value of an error `Result`, is reported by the core with source `"core"`
+/// (`[core error] contract check failed: ...`), so a handler that routes by
+/// source sees gfx's contract failures under `"core"`.
+///
+/// @code
+/// set_log_handler([](LogLevel level, std::string_view source,
+///                    std::string_view message) {
+///   if (level >= LogLevel::Warning) forward(source, message);
+/// });
+/// @endcode
 
-#include <functional>
 #include <string_view>
 
-#include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 
 namespace volumetric_kit::gfx {
 
-enum class LogLevel { Debug, Info, Warning, Error };
+using core::LogHandler;
+using core::LogLevel;
+using core::set_log_handler;
 
-using LogHandler = std::function<void(LogLevel, std::string_view)>;
+/// @brief The source gfx's diagnostics carry, contract failures aside; the
+///        default sink prints `[vg <level>]`.
+inline constexpr std::string_view kLogSource = "vg";
 
-/// Install the diagnostic sink. Pass a default-constructed (empty) handler to
-/// restore the built-in default (warnings + errors to stderr). Thread-safe.
-VG_CORE_API void set_log_handler(LogHandler handler);
-
-/// Emit a diagnostic through the current handler (or the default sink).
-/// Thread-safe.
-VG_CORE_API void log_message(LogLevel level, std::string_view message);
+/// @brief Emit a gfx diagnostic through the family's sink, with source
+///        @ref kLogSource. Thread-safe.
+/// @param level    The message's severity.
+/// @param message  The message; it need not be NUL-terminated.
+inline void log_message(LogLevel level, std::string_view message) {
+  core::log_message(level, kLogSource, message);
+}
 
 }  // namespace volumetric_kit::gfx

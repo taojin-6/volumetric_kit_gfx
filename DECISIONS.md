@@ -28,6 +28,9 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — Error handling comes from `volumetric_kit_core`.** `Status`, `Result`,
+  `VG_CHECK` and the log sink are the family's shared core's base tier; see the dated entry
+  below for the `VkResult` bridge and the stages still to come.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.
@@ -59,6 +62,59 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-04 — Error handling comes from volumetric_kit_core
+
+gfx's `Status`, `Result`, `VG_CHECK` and log sink are volumetric_kit_core's
+base tier, fetched pinned by commit (`third_party/CMakeLists.txt`), linked
+PUBLIC by `gfx_core`, and re-found by the installed package at the minor it
+was built against. This is the first stage of gfx's move onto the family's
+shared core (the core's DECISIONS.md, "Tiers"), following recon's.
+
+- **One error type across the family.** `vg::Status` and `vg::Result` are
+  using-declarations of the core's, so a status passes between gfx, recon and
+  calib unchanged, and one `set_log_handler` routes all three; gfx's messages
+  carry source `"vg"`, so the default sink still prints `[vg <level>]`.
+  Contract failures (`VG_CHECK`, reading an error `Result`) are the core's,
+  with source `"core"`.
+- **The `VkResult` bridge stays in gfx for now.** The core's base tier
+  includes no GPU API: a failed Vulkan call is `Status::Code::Backend` with
+  the `VkResult` as its `detail()`. gfx keeps `vk_error`, `VG_VK_TRY`,
+  `to_string(VkResult)` and adds `vk_result(status)`, with the core's vulkan
+  tier's names, so adopting that tier replaces them with using-declarations.
+  `Status::Code::Vulkan`, `Status::error` and `Status::code()` are gone.
+- **The bridge compiles beside the core's vulkan tier**, which an application
+  using the core's compute tier includes too. gfx therefore names no
+  `to_string` of the core's (that would take the tier's `to_string(VkResult)`,
+  clashing with gfx's; argument-dependent lookup finds `to_string(Status::Code)`),
+  and gfx's own calls qualify `vk_result`, which the tier also defines.
+  `tests/core_vulkan_tier_test.cpp` includes the tier's header first.
+- **`vk_result` cannot tell Vulkan from CUDA.** recon's CUDA failures share
+  `Code::Backend`, so it reads a `cudaError_t` as an unrelated `VkResult`; gfx
+  asks it only of its own statuses. It does return empty for a detail wider
+  than 32 bits, which would be undefined to convert. Recording the backend in
+  `Status` is the core's to decide, and its own `vk_result` has both gaps.
+- **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
+  the core's `VKC_*` macros, so open branches merge cleanly and a check
+  reports its condition unexpanded; a `TODO:` marks the rename, as recon has
+  for its `VR_*` names.
+- **The core is resolved at the top level**, like gfx's other PUBLIC
+  dependencies, so a core FetchContent finds installed is visible to `src/`.
+  `VG_INSTALL` turns the core's install rules on, never off: a sibling that
+  installs (recon) needs them whichever project populates the core first.
+- **gfx's own build fetches only the base tier**, so the core's system Vulkan
+  headers never meet gfx's pinned Vulkan-Headers there. As a subproject, gfx
+  leaves the vulkan tier to a parent that turned it on for another sibling.
+
+Still open, for the next stages: whether gfx adopts the system Vulkan headers
+or the core vendors gfx's pin (the core's "Vulkan headers for gfx" question);
+moving `gfx_core`'s instance, device, allocator, buffers, images, descriptors,
+command pools, sync and query pool onto the core's vulkan tier, with gfx's
+graphics-only parts (swapchain, render targets, graphics pipelines, samplers,
+the frames-in-flight profiler) staying here; `Texture` becoming the core's
+`Image`; and re-measuring frame times, as the core's allocator places memory
+differently (`DeviceOnly` never falls back to host memory, and per-frame
+uniforms become `DeviceMapped` or batch-uploaded `DeviceOnly`).
 
 ## 2026-10-02 — Shared agent guidance
 

@@ -2,10 +2,12 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- gfx_core: Tier 1 -------------------------------------------------------
-# Foundation tier: version API, logging, contract checks, Vulkan instance/device
-# setup, sync primitives, and GPU memory allocation (buffers/images via VMA).
-# Every other tier depends on this; it depends only on Vulkan + VMA +
-# spirv-cross (a private impl detail backing SPIR-V reflection in shader.cpp).
+# Foundation tier: version API, gfx's names for volumetric_kit_core's
+# Status/Result error handling, log sink and contract checks, Vulkan
+# instance/device setup, sync primitives, and GPU memory allocation
+# (buffers/images via VMA). Every other tier depends on this; it depends only on
+# volumetric_kit_core's base tier + Vulkan + VMA + spirv-cross (a private impl
+# detail backing SPIR-V reflection in shader.cpp).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -18,8 +20,6 @@ target_sources(
   gfx_core
   PRIVATE version.cpp
           vma_impl.cpp
-          log.cpp
-          check.cpp
           result.cpp
           instance.cpp
           physical_device_info.cpp
@@ -98,14 +98,16 @@ target_include_directories(
   gfx_core SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
                                  "${VG_VULKAN_UTILITY_INCLUDE}")
 
-# Public deps (header packages) are independently re-findable, so the installed
-# package's find_dependency() calls stay simple. The Vulkan loader is PRIVATE:
-# our implementation (VMA) links it, but it never surfaces in the public API.
-# glm is intentionally absent: no public gfx_core header names a glm type (see
-# the rationale at the top-level find_package site in CMakeLists.txt).
+# Public deps are independently re-findable, so the installed package's
+# find_dependency() calls stay simple: volumetric_kit_core's base tier (Status /
+# Result / the log sink in every tier's signatures) and the Vulkan headers. The
+# Vulkan loader is PRIVATE: our implementation (VMA) links it, but it never
+# surfaces in the public API. glm is intentionally absent: no public gfx_core
+# header names a glm type (see the rationale at the top-level find_package site
+# in CMakeLists.txt).
 target_link_libraries(
   gfx_core
-  PUBLIC Vulkan::Headers
+  PUBLIC volumetric_kit::core_base Vulkan::Headers
   PRIVATE Vulkan::Vulkan)
 
 # spirv-cross: SPIR-V reflection for descriptor-set layouts, used privately in

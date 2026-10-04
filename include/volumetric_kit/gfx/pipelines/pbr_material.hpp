@@ -85,7 +85,7 @@ class VG_PIPELINES_API PbrMaterial {
   ///      view in @p desc plus @p desc.sampler is non-`VK_NULL_HANDLE` —
   ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
   ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The material on success, or a non-OK @ref Status (a Vulkan-domain
+  /// @return The material on success, or a non-OK @ref Status (a backend
   ///         Status from buffer / pool / set allocation).
   static Result<PbrMaterial> create(VkDevice device, Allocator& allocator,
                                     VkDescriptorSetLayout material_layout,

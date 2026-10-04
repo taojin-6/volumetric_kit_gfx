@@ -35,7 +35,7 @@ Status Fence::wait(uint64_t timeout_ns) const {
       vkWaitForFences(handle_.device(), 1, &fence, VK_TRUE, timeout_ns);
   if (result != VK_SUCCESS) {
     // VK_TIMEOUT lands here too: surfaced as a non-OK Status the caller can
-    // distinguish via status.code(), not treated as a hard failure.
+    // distinguish via vk_result(status), not treated as a hard failure.
     return vk_error(result, "vkWaitForFences");
   }
   return Status{};
@@ -134,7 +134,8 @@ Status TimelineSemaphore::wait(uint64_t value, uint64_t timeout_ns) const {
 
   VkResult result = vkWaitSemaphores(handle_.device(), &info, timeout_ns);
   if (result != VK_SUCCESS) {
-    // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via code().
+    // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via
+    // vk_result(status).
     return vk_error(result, "vkWaitSemaphores");
   }
   return Status{};

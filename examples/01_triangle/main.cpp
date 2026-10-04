@@ -170,7 +170,10 @@ int run(GLFWwindow* window, int max_frames) {
   // it — while its frame loop may still have frames in flight that reference
   // them (including after an error break above). Idle the device first so their
   // destruction is safe.
-  app.wait_idle();
+  if (const vg::Status idle = app.wait_idle(); !idle) {
+    std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
+    exit_code = 1;
+  }
   std::printf("01_triangle: rendered %d frame(s)\n", rendered);
   return exit_code;
 }

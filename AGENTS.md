@@ -101,11 +101,13 @@ leak/double-free detectors — a green normal build is necessary but not suffici
 
 ## Conventions
 
-- C++17, with no compiler extensions; fallible APIs use `Status` / `Result<T>`.
+- C++17, with no compiler extensions; fallible APIs use `Status` / `Result<T>`,
+  volumetric_kit_core's types (`core/result.hpp`); a failed Vulkan call is
+  `vk_error` / `VG_VK_TRY`, read back with `vk_result`.
 - Prefer plain behavior-level tests over private-state backdoors.
 - Mark deferred work inline with greppable `TODO:` comments.
 - Full Doxygen on public classes/functions, matching
-  `include/volumetric_kit/gfx/core/result.hpp`: `@file`/`@brief` on headers,
+  `include/volumetric_kit/gfx/core/sync.hpp`: `@file`/`@brief` on headers,
   `@brief` and a `@code` example per class, and `@brief`/`@param`/`@return`
   (`@pre` where needed) on methods. An accessor may use just `/// @return`.
 - Deleted copy/defaulted move declarations convey ownership; do not repeat

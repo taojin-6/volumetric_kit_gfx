@@ -4,38 +4,29 @@
 #pragma once
 
 /// @file check.hpp
-/// @brief Fail-fast contract checks (`VG_CHECK`) for programmer errors.
+/// @brief gfx's name for the core's fail-fast contract check.
 ///
-/// Fail-fast contract checks for *programmer errors* (precondition violations),
-/// as distinct from Vulkan runtime errors -- those flow through `Status` /
-/// `Result`. On failure `VG_CHECK` logs at Error through the diagnostic sink,
-/// then calls `std::abort()`. Active in every build (not just debug).
+/// `VG_CHECK` is volumetric_kit_core's `VKC_CHECK`: for *programmer errors*
+/// (precondition violations), as distinct from recoverable runtime failures,
+/// which flow through `Status` / `Result`. On failure it logs at Error through
+/// the family's log sink (source `"core"`), then calls `std::abort()`, in every
+/// build. Abort rather than `throw`, because mobile consumers build with
+/// `-fno-exceptions` and crash reporters capture SIGABRT.
 ///
-/// The library is built and consumed with `-fno-exceptions` on mobile, so abort
-/// -- not `throw` -- is the portable way to terminate on a bug: it raises
-/// SIGABRT, which crash reporters (Crashlytics, os_log, Android tombstones)
-/// capture, and it never leaves the empty-`optional` / use-after-error UB that
-/// a silently-skipped check would.
+/// @code
+/// VG_CHECK(index < size, "index past the end");
+/// @endcode
 
-#include <string_view>
+#include "volumetric_kit/core/base/check.hpp"
 
-#include "volumetric_kit/gfx/core/export.hpp"
+// TODO: rename to VKC_CHECK with VG_TRY / VG_ASSIGN (result.hpp), then delete
+// this alias.
 
-namespace volumetric_kit::gfx::detail {
-
-/// Report a failed `VG_CHECK` (log + abort). Never returns.
-[[noreturn]] VG_CORE_API void check_failed(const char* file, int line,
-                                           const char* expr,
-                                           std::string_view msg);
-
-}  // namespace volumetric_kit::gfx::detail
-
-/// Abort (after logging) unless `cond` holds. For programmer errors only --
-/// recoverable runtime failures must use `Status` / `Result` instead.
-#define VG_CHECK(cond, msg)                                                  \
-  do {                                                                       \
-    if (!(cond)) {                                                           \
-      ::volumetric_kit::gfx::detail::check_failed(__FILE__, __LINE__, #cond, \
-                                                  (msg));                    \
-    }                                                                        \
-  } while (0)
+/// @brief The core's `VKC_CHECK` under gfx's name, used as
+///        `VG_CHECK(cond, msg)`: abort, after logging, unless the precondition
+///        `cond` holds; `msg` describes the contract.
+///
+/// An object-like alias rather than a function-like forward, which would expand
+/// macros in `cond` before `VKC_CHECK` stringizes it, so a failure would report
+/// `n <= 16U` for `n <= VK_UUID_SIZE`.
+#define VG_CHECK VKC_CHECK

@@ -7,26 +7,6 @@
 
 namespace volumetric_kit::gfx {
 
-std::string_view to_string(Status::Code code) noexcept {
-  switch (code) {
-    case Status::Code::Ok:
-      return "Ok";
-    case Status::Code::InvalidArgument:
-      return "InvalidArgument";
-    case Status::Code::NotFound:
-      return "NotFound";
-    case Status::Code::Unsupported:
-      return "Unsupported";
-    case Status::Code::OutOfMemory:
-      return "OutOfMemory";
-    case Status::Code::IoError:
-      return "IoError";
-    case Status::Code::Vulkan:
-      return "Vulkan";
-  }
-  return "Unknown";
-}
-
 std::string_view to_string(VkResult result) noexcept {
   // TODO: this hand-maintained table covers the codes the core tier can
   // currently produce plus the common ones. When wider coverage is needed

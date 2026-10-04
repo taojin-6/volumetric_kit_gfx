@@ -210,7 +210,7 @@ VG_PIPELINES_API Result<Texture> bake_brdf_lut(const Device& device,
 ///      Vulkan is touched, otherwise a non-OK @ref Status with domain
 ///      @ref Status::Code::InvalidArgument.
 /// @return The baked maps (with @ref IblMaps::prefilter_max_lod filled) on
-///         success, or a non-OK @ref Status (a Vulkan-domain Status from the
+///         success, or a non-OK @ref Status (a backend Status from the
 ///         sampler, upload, or submit step).
 VG_PIPELINES_API Result<IblMaps> bake_ibl(const Device& device,
                                           Allocator& allocator,

@@ -68,7 +68,7 @@ class VG_CORE_API Sampler {
   ///                + REPEAT; see @ref SamplerDesc).
   /// @return The sampler on success, or a non-OK @ref Status: @ref
   ///         Status::Code::InvalidArgument for a null @p device or a
-  ///         `desc.max_lod < desc.min_lod`; otherwise a Vulkan-domain Status
+  ///         `desc.max_lod < desc.min_lod`; otherwise a backend Status
   ///         carrying the `VkResult` if `vkCreateSampler` fails.
   static Result<Sampler> create(VkDevice device, const SamplerDesc& desc = {});
 
