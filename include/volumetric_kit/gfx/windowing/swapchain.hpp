@@ -64,7 +64,9 @@ struct SwapchainConfig {
 ///                @ref Swapchain::present, or the @ref FrameLoop frame calls.
 /// @return `true` when the right response is to recreate and continue.
 inline bool swapchain_stale(const Status& status) noexcept {
-  const std::optional<VkResult> result = vk_result(status);
+  // Qualified: where the core's vulkan tier is included too, argument-dependent
+  // lookup on the Status would also find the core's vk_result.
+  const std::optional<VkResult> result = gfx::vk_result(status);
   return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
 }
 

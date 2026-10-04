@@ -101,7 +101,8 @@ class VG_UI_API ImGuiOverlay {
   ///         @p device, a @ref RenderTargetLayout with no color attachment or a
   ///         zero sample count, a @ref ImGuiOverlayConfig::min_image_count
   ///         below 2, or an @ref ImGuiOverlayConfig::image_count below it; a
-  ///         Vulkan-domain @ref Status if backend initialization fails.
+  ///         backend @ref Status carrying the `VkResult` if ImGui's Vulkan
+  ///         backend fails to initialize.
   static Result<ImGuiOverlay> create(const Device& device, VkInstance instance,
                                      const ImGuiOverlayConfig& config);
 

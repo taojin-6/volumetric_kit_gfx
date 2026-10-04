@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -20,10 +22,12 @@ namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 
 // A Status from gfx passes to recon or calib unchanged: it is the core's type.
+// gfx does not name the core's to_string(Status::Code); an unqualified call
+// finds it by argument-dependent lookup.
 TEST(Status, IsTheCoresType) {
   static_assert(std::is_same_v<vg::Status, vkc::Status>);
   static_assert(std::is_same_v<vg::Result<int>, vkc::Result<int>>);
-  EXPECT_EQ(vg::to_string(vg::Status::Code::Backend), "Backend");
+  EXPECT_EQ(to_string(vg::Status::Code::Backend), "Backend");
 }
 
 TEST(Status, VkErrorBuildsABackendStatus) {
@@ -44,10 +48,22 @@ TEST(Status, VkResultReadsTheVkResultBack) {
   EXPECT_EQ(vg::vk_result(vg::Status::invalid_argument("bad")), std::nullopt);
 }
 
+// A backend detail wider than 32 bits is no VkResult; converting it to the
+// enum would be undefined (UBSan's enum check).
+TEST(Status, VkResultRejectsADetailWiderThan32Bits) {
+  EXPECT_EQ(vg::vk_result(vg::Status::backend_error(std::int64_t{1} << 40, "")),
+            std::nullopt);
+  EXPECT_EQ(vg::vk_result(vg::Status::backend_error(
+                std::numeric_limits<std::int64_t>::min(), "")),
+            std::nullopt);
+  EXPECT_EQ(vg::vk_result(vg::Status::backend_error(
+                std::numeric_limits<std::int32_t>::min(), "")),
+            static_cast<VkResult>(std::numeric_limits<std::int32_t>::min()));
+}
+
 TEST(Status, ToStringNamesAreStable) {
-  EXPECT_EQ(vg::to_string(vg::Status::Code::Ok), "Ok");
-  EXPECT_EQ(vg::to_string(vg::Status::Code::InvalidArgument),
-            "InvalidArgument");
+  EXPECT_EQ(to_string(vg::Status::Code::Ok), "Ok");
+  EXPECT_EQ(to_string(vg::Status::Code::InvalidArgument), "InvalidArgument");
   EXPECT_EQ(vg::to_string(VK_ERROR_DEVICE_LOST), "VK_ERROR_DEVICE_LOST");
   EXPECT_EQ(vg::to_string(VK_SUCCESS), "VK_SUCCESS");
   // A non-core code still in the table resolves to its real name.

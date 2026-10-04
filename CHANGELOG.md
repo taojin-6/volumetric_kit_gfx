@@ -33,6 +33,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
     that is empty for other domains, instead of `status.code()`; build one with
     `vg::vk_error(result, what)` instead of `Status::error`. An exhaustive `switch`
     over the codes also needs `Status::Code::Numerical`.
+  - `vg::to_string(Status::Code)` is gone: call `to_string(status.domain())`
+    unqualified, which finds the core's by argument-dependent lookup.
+    `vg::to_string(VkResult)` is unchanged.
+  - recon's CUDA failures are `Status::Code::Backend` too, and `vk_result` reads
+    their `cudaError_t` as an unrelated `VkResult`: ask it only of a status from
+    a Vulkan call. Where the core's vulkan tier is also included, qualify it as
+    `vg::vk_result`, as the core's `vk_result` is found too.
   - A log handler takes `(level, source, message)`; gfx's messages carry source
     `"vg"`, and `vg::log_message(level, message)` is unchanged.
   - `Status` and `Result` are `[[nodiscard]]`; handle or `(void)` a dropped one
@@ -45,4 +52,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - `set_log_handler` returns only once no other thread is still in the previous
     handler, so a handler must not wait for a thread that may call it.
   - `VG_TRY` / `VG_ASSIGN` / `VG_CHECK` are the core's `VKC_*` macros under gfx's
-    names; a failed `VG_CHECK` logs with source `"core"`.
+    names. A failed `VG_CHECK`, or reading the value of an error `Result`, logs
+    with source `"core"` (`[core error] contract check failed: …`, formerly
+    `[vg error]`), so a handler that keeps only `"vg"` misses them.

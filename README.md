@@ -62,7 +62,9 @@ tier, fetched pinned by commit and linked PUBLIC, so a `Status` passes between
 gfx, recon and calib unchanged and one `set_log_handler` routes all three. An
 installed gfx carries the core beside it and re-finds it; an application that
 also fetches recon declares `volumetric_kit_core` first to pick one pin for
-both. Build against a local core checkout with
+both. gfx builds only the core's base tier unless the application turns on its
+vulkan tier (`VKC_WITH_VULKAN`) for another library, and gfx's headers compile
+beside it. Build against a local core checkout with
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
 Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, and `VG_INSTALL` default

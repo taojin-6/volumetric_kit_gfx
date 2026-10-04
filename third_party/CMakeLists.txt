@@ -17,34 +17,9 @@
 
 include(FetchContent)
 
-# Public deps (Vulkan) are resolved at the top level so their imported targets
-# are visible across sibling subdirectories. This file owns only the vendored
-# deps.
-
-# --- volumetric_kit_core: the family's shared foundation ---------------------
-# gfx's Status / Result / VG_CHECK / log sink come from its base tier
-# (DECISIONS.md, 2026-10-04), so they are the same types recon and calib use.
-# Unlike the header-only vendored libraries below, it is a compiled library and
-# a PUBLIC dependency of gfx_core. Pinned by commit, never main; an application
-# that also fetches recon declares the core first, and FetchContent keeps the
-# first declaration of a name, so this pin then yields to the application's.
-# Work on both checkouts at once with
-# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. Only the base
-# tier is built: the core leaves its vulkan tier off in a subproject, which
-# keeps the core's system Vulkan headers out of this build until gfx adopts that
-# tier. The core's tests and -Werror stay off in a subproject. Its install rules
-# follow VG_INSTALL: gfx's install must carry the core its exported targets
-# link, and an application that embeds gfx without installing it gets none.
-#
-# The pin is main after core PR #10.
-#
-# TODO: pin a release tag once the core tags one (v0.1.0).
-FetchContent_Declare(
-  volumetric_kit_core
-  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 5292b63cce465b1d951af6eefcc7f43fb8d6da83)
-set(VKC_INSTALL ${VG_INSTALL})
-FetchContent_MakeAvailable(volumetric_kit_core)
+# Public deps (Vulkan, glm's preference, volumetric_kit_core) are resolved at
+# the top level so their imported targets are visible across sibling
+# subdirectories. This file owns only the vendored deps.
 
 # --- VMA: Vulkan Memory Allocator (header-only; implemented in one gfx_core TU)
 # ----

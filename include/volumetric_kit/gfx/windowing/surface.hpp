@@ -50,8 +50,8 @@ class VG_WINDOWING_API Surface {
   /// @param instance  An instance created with `VK_EXT_headless_surface`
   ///                  enabled.
   /// @return The surface on success; @ref Status::Code::Unsupported when the
-  ///         extension is unavailable (e.g. MoltenVK), or a Vulkan-domain
-  ///         error.
+  ///         extension is unavailable (e.g. MoltenVK), or a backend
+  ///         @ref Status carrying the `VkResult`.
   static Result<Surface> headless(VkInstance instance);
 
   /// @return The owned `VkSurfaceKHR` (`VK_NULL_HANDLE` when empty).

@@ -75,19 +75,36 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   using-declarations of the core's, so a status passes between gfx, recon and
   calib unchanged, and one `set_log_handler` routes all three; gfx's messages
   carry source `"vg"`, so the default sink still prints `[vg <level>]`.
+  Contract failures (`VG_CHECK`, reading an error `Result`) are the core's,
+  with source `"core"`.
 - **The `VkResult` bridge stays in gfx for now.** The core's base tier
   includes no GPU API: a failed Vulkan call is `Status::Code::Backend` with
   the `VkResult` as its `detail()`. gfx keeps `vk_error`, `VG_VK_TRY`,
-  `to_string(VkResult)` and adds `vk_result(status)`, with the same names and
-  contracts as the core's vulkan tier, so adopting that tier replaces them
-  with using-declarations. `Status::Code::Vulkan`, `Status::error` and
-  `Status::code()` are gone.
-- **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as the core's `VKC_*`
-  macros under gfx's names, so open branches merge cleanly; a `TODO:` marks
-  the rename, as recon has for its `VR_*` names.
-- **Only the base tier is fetched.** The core builds its vulkan tier only at
-  the top level, so its system Vulkan headers never meet gfx's pinned
-  Vulkan-Headers in this build.
+  `to_string(VkResult)` and adds `vk_result(status)`, with the core's vulkan
+  tier's names, so adopting that tier replaces them with using-declarations.
+  `Status::Code::Vulkan`, `Status::error` and `Status::code()` are gone.
+- **The bridge compiles beside the core's vulkan tier**, which an application
+  using the core's compute tier includes too. gfx therefore names no
+  `to_string` of the core's (that would take the tier's `to_string(VkResult)`,
+  clashing with gfx's; argument-dependent lookup finds `to_string(Status::Code)`),
+  and gfx's own calls qualify `vk_result`, which the tier also defines.
+  `tests/core_vulkan_tier_test.cpp` includes the tier's header first.
+- **`vk_result` cannot tell Vulkan from CUDA.** recon's CUDA failures share
+  `Code::Backend`, so it reads a `cudaError_t` as an unrelated `VkResult`; gfx
+  asks it only of its own statuses. It does return empty for a detail wider
+  than 32 bits, which would be undefined to convert. Recording the backend in
+  `Status` is the core's to decide, and its own `vk_result` has both gaps.
+- **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
+  the core's `VKC_*` macros, so open branches merge cleanly and a check
+  reports its condition unexpanded; a `TODO:` marks the rename, as recon has
+  for its `VR_*` names.
+- **The core is resolved at the top level**, like gfx's other PUBLIC
+  dependencies, so a core FetchContent finds installed is visible to `src/`.
+  `VG_INSTALL` turns the core's install rules on, never off: a sibling that
+  installs (recon) needs them whichever project populates the core first.
+- **gfx's own build fetches only the base tier**, so the core's system Vulkan
+  headers never meet gfx's pinned Vulkan-Headers there. As a subproject, gfx
+  leaves the vulkan tier to a parent that turned it on for another sibling.
 
 Still open, for the next stages: whether gfx adopts the system Vulkan headers
 or the core vendors gfx's pin (the core's "Vulkan headers for gfx" question);

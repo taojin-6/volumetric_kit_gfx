@@ -22,18 +22,11 @@
 // TODO: rename to VKC_CHECK with VG_TRY / VG_ASSIGN (result.hpp), then delete
 // this alias.
 
-/// @brief Abort, after logging, unless @p cond holds; the core's `VKC_CHECK`
-///        under gfx's name.
-/// @param cond  A precondition expression that must hold.
-/// @param msg   A description of the contract.
+/// @brief The core's `VKC_CHECK` under gfx's name, used as
+///        `VG_CHECK(cond, msg)`: abort, after logging, unless the precondition
+///        `cond` holds; `msg` describes the contract.
 ///
-/// Spelled out rather than forwarded to `VKC_CHECK`: forwarding would expand
-/// macros in @p cond before `#cond` stringizes it, so a failure would report
+/// An object-like alias rather than a function-like forward, which would expand
+/// macros in `cond` before `VKC_CHECK` stringizes it, so a failure would report
 /// `n <= 16U` for `n <= VK_UUID_SIZE`.
-#define VG_CHECK(cond, msg)                                                   \
-  do {                                                                        \
-    if (!(cond)) {                                                            \
-      ::volumetric_kit::core::detail::check_failed(__FILE__, __LINE__, #cond, \
-                                                   (msg));                    \
-    }                                                                         \
-  } while (0)
+#define VG_CHECK VKC_CHECK

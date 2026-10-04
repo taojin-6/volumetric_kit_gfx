@@ -81,8 +81,9 @@ if(VG_INSTALL)
 
   # The installed package re-finds the core at the MAJOR.MINOR this build used:
   # the core's version file accepts only the same minor before 1.0. A core built
-  # here carries its version on core_base; an installed one that a parent
-  # project found carries none, but find_package set its version.
+  # here carries its version on core_base; an installed one carries none, but
+  # find_package set its version -- in the top-level CMakeLists.txt
+  # (FetchContent redirected to find_package) or in a parent project.
   get_target_property(_vg_vkc_version volumetric_kit::core_base VERSION)
   if(NOT _vg_vkc_version)
     set(_vg_vkc_version "${volumetric_kit_core_VERSION}")

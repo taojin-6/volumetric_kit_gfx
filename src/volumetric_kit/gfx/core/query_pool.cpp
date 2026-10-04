@@ -90,7 +90,7 @@ Status QueryPool::read_results(uint32_t first, uint32_t count,
                             sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
   if (result != VK_SUCCESS) {
     // VK_NOT_READY surfaces here as a non-OK Status, distinguishable via
-    // code(), not treated as a hard failure.
+    // vk_result(status), not treated as a hard failure.
     return vk_error(result, "vkGetQueryPoolResults");
   }
   return Status{};

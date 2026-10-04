@@ -16,11 +16,13 @@
 ///
 /// No exceptions cross the API boundary: mobile consumers build with
 /// `-fno-exceptions`. Fallible calls return `Status` or `Result<T>`, both
-/// `[[nodiscard]]`. `Status` is backend-neutral: a failed Vulkan call is
-/// `Status::Code::Backend` with the `VkResult` as its `detail()`, made by
-/// @ref vk_error or @ref VG_VK_TRY and read back by @ref vk_result. Reading the
-/// value of an error `Result` is a programmer error and aborts. The full
-/// contract is in the core's `volumetric_kit/core/base/result.hpp`.
+/// `[[nodiscard]]`. `Status` is backend-neutral: a failed Vulkan call is a
+/// backend status, `Status::Code::Backend` with the `VkResult` as its
+/// `detail()`, made by @ref vk_error or @ref VG_VK_TRY and read back by
+/// @ref vk_result. Name a domain with the core's `to_string`, unqualified:
+/// `to_string(status.domain())`. Reading the value of an error `Result` is a
+/// programmer error and aborts. The full contract is in the core's
+/// `volumetric_kit/core/base/result.hpp`.
 ///
 /// @code
 /// Result<Device> r = Device::create(instance, physical, config);
@@ -29,6 +31,7 @@
 /// @endcode
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,12 +45,16 @@ namespace volumetric_kit::gfx {
 
 using core::Result;
 using core::Status;
-using core::to_string;
+// Not `using core::to_string`: where the core's vulkan tier is included first,
+// that would also name its to_string(VkResult), which clashes with gfx's below.
+// An unqualified call still finds to_string(Status::Code) by argument-dependent
+// lookup.
 
 // TODO: take vk_error, vk_result, to_string(VkResult) and VG_VK_TRY from the
 // core's vulkan tier (volumetric_kit/core/vulkan/vk_result.hpp, the same
-// names and contracts) once gfx adopts that tier; until then gfx keeps them, as
-// the core's base tier includes no GPU API.
+// names) once gfx adopts that tier; until then gfx keeps them, as the core's
+// base tier includes no GPU API. The core's vk_result needs this one's range
+// check first.
 
 /// @brief Wrap a failed `VkResult` as a backend @ref Status.
 /// @param result  What the failed Vulkan call returned.
@@ -64,16 +71,34 @@ inline Status vk_error(VkResult result, std::string_view what) {
 /// @brief The `VkResult` a backend @ref Status carries.
 /// @param status  Any status.
 /// @return Its `detail()` as a `VkResult` when its domain is
-///         `Status::Code::Backend`; empty for any other domain, success
-///         included.
+///         `Status::Code::Backend` and the detail fits in 32 bits; empty
+///         otherwise, success included.
+///
+/// The domain does not say *which* backend failed: recon's CUDA failures are
+/// backend statuses too, whose `cudaError_t` detail this reads as an unrelated
+/// `VkResult` (`cudaErrorMemoryAllocation`, 2, as `VK_TIMEOUT`). Ask it only of
+/// a status from a Vulkan call, as every backend status gfx returns is.
+///
+/// Where the core's vulkan tier is included too, argument-dependent lookup on
+/// the `Status` also finds the core's `vk_result`, so an unqualified call is
+/// ambiguous: qualify it, as below.
 ///
 /// @code
 /// const Status s = swapchain.present(queue);
-/// if (vk_result(s) == VK_ERROR_OUT_OF_DATE_KHR) recreate();
+/// if (gfx::vk_result(s) == VK_ERROR_OUT_OF_DATE_KHR) recreate();
 /// @endcode
 inline std::optional<VkResult> vk_result(const Status& status) noexcept {
-  if (status.domain() != Status::Code::Backend) return std::nullopt;
-  return static_cast<VkResult>(status.detail());
+  // TODO: return empty for a CUDA status once the core's Status records which
+  // backend failed; the core's own vk_result has the same gap.
+  const std::int64_t detail = status.detail();
+  // A detail wider than VkResult's 32 bits is no VkResult, and converting it to
+  // the enum would be undefined.
+  if (status.domain() != Status::Code::Backend ||
+      detail < std::numeric_limits<std::int32_t>::min() ||
+      detail > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<VkResult>(detail);
 }
 
 /// @brief Human-readable name for a `VkResult` (e.g. "VK_ERROR_DEVICE_LOST").
@@ -90,11 +115,12 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 // then the old names keep those branches merging cleanly, and new code uses
 // them too.
 
-/// @brief gfx's name for the core's `VKC_TRY`: evaluate a `Status` expression
-///        and early-return it if not OK.
-/// @param expr  An expression yielding a `Status`.
+/// @brief gfx's name for the core's `VKC_TRY`, used as `VG_TRY(expr)`:
+///        evaluate an expression yielding a `Status` and early-return it if
+///        not OK.
 ///
-/// Usable only inside a function returning `Status` or `Result<T>`.
+/// Usable only inside a function returning `Status` or `Result<T>`. It and
+/// @ref VG_ASSIGN are object-like aliases, as @ref VG_CHECK is (check.hpp).
 ///
 /// @code
 /// Status init() {
@@ -102,14 +128,13 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 ///   return {};                   // success
 /// }
 /// @endcode
-#define VG_TRY(expr) VKC_TRY(expr)
+#define VG_TRY VKC_TRY
 
-/// @brief gfx's name for the core's `VKC_ASSIGN`: unwrap a `Result<T>` into
-///        @p decl, or early-return its `Status`.
-/// @param decl  A variable declaration bound to the unwrapped value.
-/// @param expr  An expression yielding a `Result<T>`.
+/// @brief gfx's name for the core's `VKC_ASSIGN`, used as
+///        `VG_ASSIGN(decl, expr)`: unwrap the `Result<T>` that `expr` yields
+///        into the variable declaration `decl`, or early-return its `Status`.
 ///
-/// It declares @p decl in the enclosing scope, so it is a statement sequence:
+/// It declares `decl` in the enclosing scope, so it is a statement sequence:
 /// never the unbraced body of an `if`/`for`/`while`. A type with a top-level
 /// comma needs an alias first.
 ///
@@ -119,7 +144,7 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 ///   return assemble(vert);
 /// }
 /// @endcode
-#define VG_ASSIGN(decl, expr) VKC_ASSIGN(decl, expr)
+#define VG_ASSIGN VKC_ASSIGN
 
 /// @brief Evaluate a raw `VkResult` and early-return a backend `Status` on
 ///        failure.

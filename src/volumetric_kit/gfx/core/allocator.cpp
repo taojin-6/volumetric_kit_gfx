@@ -181,6 +181,9 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation allocation = VK_NULL_HANDLE;
   VmaAllocationInfo result_info{};
+  // TODO: map a genuine VMA/Vulkan OOM (VK_ERROR_OUT_OF_*_MEMORY) here and in
+  // create_image to Status::out_of_memory; today it stays a backend status
+  // with the VkResult as its detail, so gfx produces no OutOfMemory status.
   VG_VK_TRY(vmaCreateBuffer(impl_->allocator, &buffer_info, &alloc_info,
                             &buffer, &allocation, &result_info));
 

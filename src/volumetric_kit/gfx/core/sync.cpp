@@ -134,7 +134,8 @@ Status TimelineSemaphore::wait(uint64_t value, uint64_t timeout_ns) const {
 
   VkResult result = vkWaitSemaphores(handle_.device(), &info, timeout_ns);
   if (result != VK_SUCCESS) {
-    // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via code().
+    // VK_TIMEOUT surfaces here as a non-OK Status, distinguishable via
+    // vk_result(status).
     return vk_error(result, "vkWaitSemaphores");
   }
   return Status{};

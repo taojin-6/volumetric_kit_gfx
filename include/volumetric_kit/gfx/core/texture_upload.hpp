@@ -119,7 +119,7 @@ class VG_CORE_API UploadBatch {
   /// @param allocator  Allocates each add's staging buffer and destination
   ///                   resource; must outlive the batch and everything it
   ///                   returned.
-  /// @return The open batch, or a Vulkan-domain @ref Status if the command
+  /// @return The open batch, or a backend @ref Status if the command
   ///         buffer could not be allocated or begun.
   /// @note Not internally synchronized: like @ref Device::submit_single_time,
   ///       the batch records on the device's shared graphics pool and submits
@@ -163,7 +163,7 @@ class VG_CORE_API UploadBatch {
   ///         returns OK -- or a non-OK @ref Status: @ref
   ///         Status::Code::InvalidArgument when the batch is empty (not begun,
   ///         moved-from, or already finished), `desc.data` is null, `desc.size`
-  ///         is zero, or `desc.usage` names no usage; otherwise a Vulkan-domain
+  ///         is zero, or `desc.usage` names no usage; otherwise a backend
   ///         Status from buffer allocation.
   /// @warning Keep the returned buffer alive at least until @ref finish
   ///          returns: the recorded copy writes into it, so destroying it
@@ -179,7 +179,7 @@ class VG_CORE_API UploadBatch {
   /// contents).
   /// @return OK once every added texture is sampled-ready and every added
   ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
-  ///         batch is empty or @ref poison ed, or a Vulkan-domain @ref Status
+  ///         batch is empty or @ref poison ed, or a backend @ref Status
   ///         from the end/submit/wait step.
   Status finish();
 
@@ -242,7 +242,7 @@ class VG_CORE_API UploadBatch {
 ///         for cubes), more layers than `maxImageArrayLayers`, a
 ///         compressed/multi-planar/depth-stencil format, a format that cannot
 ///         be sampled with optimal tiling, or `generate_mips` on a format that
-///         cannot be linear-blitted; otherwise a Vulkan-domain Status from the
+///         cannot be linear-blitted; otherwise a backend Status from the
 ///         staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).
@@ -267,7 +267,7 @@ VG_CORE_API Result<Texture> upload_texture(const Device& device,
 /// @return The buffer -- device-local, holding @p desc.size bytes of
 ///         @p desc.data -- or a non-OK @ref Status: @ref
 ///         Status::Code::InvalidArgument for null `data`, zero `size`, or a
-///         `usage` that names no usage; otherwise a Vulkan-domain Status from
+///         `usage` that names no usage; otherwise a backend Status from
 ///         the staging-buffer, destination, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).

@@ -181,7 +181,7 @@ class VG_CORE_API Allocator {
   ///         - `desc.external != None` returns @ref Status::Code::Unsupported
   ///           (the CUDA-interop export wiring is added by the interop tier);
   ///         - a failed allocation, or a chosen memory that cannot satisfy
-  ///           `desc.mapped`, returns a Vulkan-domain @ref Status carrying the
+  ///           `desc.mapped`, returns a backend @ref Status carrying the
   ///           `VkResult` (e.g. `VK_ERROR_MEMORY_MAP_FAILED`).
   ///         On success, a buffer created with `desc.mapped` has a non-null
   ///         @ref Buffer::mapped backed by host-coherent memory, so writes
@@ -204,7 +204,7 @@ class VG_CORE_API Allocator {
   ///           readback) return domain @ref Status::Code::InvalidArgument;
   ///         - `desc.external != None` returns @ref Status::Code::Unsupported;
   ///         - a failed image, allocation, or view creation returns a
-  ///           Vulkan-domain @ref Status carrying the `VkResult`.
+  ///           backend @ref Status carrying the `VkResult`.
   ///         The full `extent` × `depth` is recoverable from the returned
   ///         @ref Texture (`extent()` + `depth()`). When `desc.with_view`, the
   ///         default view spans all mips/layers; its type follows `desc.type`

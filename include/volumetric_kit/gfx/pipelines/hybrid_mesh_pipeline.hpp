@@ -112,7 +112,7 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///      and at least one color attachment with a defined format.
   /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
   ///         Status::Code::InvalidArgument when @p layout has no depth format,
-  ///         or a Vulkan-domain Status from shader-module / pipeline creation).
+  ///         or a backend Status from shader-module / pipeline creation).
   static Result<HybridMeshPipeline> create(VkDevice device,
                                            const RenderTargetLayout& layout);
 

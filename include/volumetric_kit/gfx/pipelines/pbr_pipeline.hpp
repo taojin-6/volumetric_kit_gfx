@@ -64,7 +64,7 @@ class VG_PIPELINES_API PbrPipeline {
   ///      @ref Status with domain @ref Status::Code::InvalidArgument.
   /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
   ///         Status::Code::InvalidArgument when @p layout has no depth format,
-  ///         or a Vulkan-domain Status from shader-module / pipeline creation).
+  ///         or a backend Status from shader-module / pipeline creation).
   static Result<PbrPipeline> create(VkDevice device,
                                     const RenderTargetLayout& layout);
 
