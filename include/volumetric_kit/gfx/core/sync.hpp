@@ -33,7 +33,7 @@ namespace volumetric_kit::gfx {
 /// Result<Fence> fence = Fence::create(device);
 /// if (!fence) return fence.status();
 /// // ... submit work that signals fence.value().handle() ...
-/// fence.value().wait();
+/// VG_TRY(fence.value().wait());
 /// @endcode
 class VG_CORE_API Fence {
  public:
@@ -134,8 +134,8 @@ class VG_CORE_API Semaphore {
 /// @code
 /// Result<TimelineSemaphore> timeline = TimelineSemaphore::create(device);
 /// if (!timeline) return timeline.status();
-/// timeline.value().signal(1);    // host raises the counter
-/// timeline.value().wait(1);      // returns once the counter reaches >= 1
+/// VG_TRY(timeline.value().signal(1));  // host raises the counter
+/// VG_TRY(timeline.value().wait(1));    // returns once the counter is >= 1
 /// @endcode
 class VG_CORE_API TimelineSemaphore {
  public:

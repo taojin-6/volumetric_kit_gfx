@@ -190,9 +190,9 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
     // chosen memory isn't host-visible). Don't return an ok() buffer whose
     // mapped() is null — free it and report the failure.
     vmaDestroyBuffer(impl_->allocator, buffer, allocation);
-    return Status::error(VK_ERROR_MEMORY_MAP_FAILED,
-                         "requested a persistent mapping but the allocation is "
-                         "not host-visible");
+    return vk_error(VK_ERROR_MEMORY_MAP_FAILED,
+                    "requested a persistent mapping but the allocation is "
+                    "not host-visible");
   }
 
   // The deleter captures the (opaque to callers) VMA handles, keeping VMA out

@@ -66,7 +66,7 @@ if(VG_INSTALL)
     REGEX "volumetric_kit/gfx/core/impl/depth_attachment\\.hpp$" EXCLUDE
     # impl/vk_query.hpp is internal too ("Not a public header."); no installed
     # header includes it, so keep it out. The other impl/ headers ship because
-    # public headers include them (impl/result.hpp, impl/retire_list.hpp,
+    # public headers include them (impl/retire_list.hpp,
     # impl/debug_utils_table.hpp, ...).
     REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE
     # impl/pipeline_util.hpp is internal (command-recording helpers shared by
@@ -78,6 +78,19 @@ if(VG_INSTALL)
     EXPORT volumetric_kit_gfxTargets
     NAMESPACE volumetric_kit::
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_gfx")
+
+  # The installed package re-finds the core at the MAJOR.MINOR this build used:
+  # the core's version file accepts only the same minor before 1.0. A core built
+  # here carries its version on core_base; an installed one that a parent
+  # project found carries none, but find_package set its version.
+  get_target_property(_vg_vkc_version volumetric_kit::core_base VERSION)
+  if(NOT _vg_vkc_version)
+    set(_vg_vkc_version "${volumetric_kit_core_VERSION}")
+  endif()
+  string(REGEX MATCH "^[0-9]+\\.[0-9]+" VG_VKC_MAJOR_MINOR "${_vg_vkc_version}")
+  if(NOT VG_VKC_MAJOR_MINOR)
+    message(FATAL_ERROR "volumetric_kit_core's version is unknown")
+  endif()
 
   include(CMakePackageConfigHelpers)
   configure_package_config_file(

@@ -965,7 +965,10 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // loop may still have frames in flight referencing it (including after an
   // error break above). Idle the device first so that teardown is safe, and
   // detach the borrowed profiler from the loop before it goes out of scope.
-  app.wait_idle();
+  if (const vg::Status idle = app.wait_idle(); !idle) {
+    std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
+    exit_code = 1;
+  }
   app.set_profiler(nullptr);
   // Tear the platform backend down while the ImGui context is still alive; the
   // overlay's destructor then shuts the renderer backend down and destroys it.

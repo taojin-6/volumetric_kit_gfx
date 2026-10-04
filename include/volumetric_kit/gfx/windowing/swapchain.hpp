@@ -7,6 +7,7 @@
 /// @brief A `VkSwapchainKHR` plus a @ref RenderTarget per image — the
 ///        window-backed producer of render targets.
 
+#include <optional>
 #include <vector>
 
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -63,9 +64,8 @@ struct SwapchainConfig {
 ///                @ref Swapchain::present, or the @ref FrameLoop frame calls.
 /// @return `true` when the right response is to recreate and continue.
 inline bool swapchain_stale(const Status& status) noexcept {
-  return status.domain() == Status::Code::Vulkan &&
-         (status.code() == VK_ERROR_OUT_OF_DATE_KHR ||
-          status.code() == VK_SUBOPTIMAL_KHR);
+  const std::optional<VkResult> result = vk_result(status);
+  return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
 }
 
 /// @brief Owns a `VkSwapchainKHR`, an image view per swapchain image, an

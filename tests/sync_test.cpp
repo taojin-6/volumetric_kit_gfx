@@ -23,7 +23,7 @@ TEST_F(SyncTest, FenceStartsUnsignaledAndWaitTimesOut) {
   // non-OK Status carrying that code.
   vg::Status waited = fence.value().wait(/*timeout_ns=*/0);
   EXPECT_FALSE(waited.ok());
-  EXPECT_EQ(waited.code(), VK_TIMEOUT);
+  EXPECT_EQ(vg::vk_result(waited), VK_TIMEOUT);
 }
 
 TEST_F(SyncTest, SignaledFenceWaitsImmediatelyThenResets) {
@@ -151,7 +151,7 @@ TEST_F(SyncTest, TimelineWaitTimesOutBeforeSignal) {
   // Counter is 0; waiting for 1 with a zero timeout reports VK_TIMEOUT.
   vg::Status waited = timeline.value().wait(/*value=*/1, /*timeout_ns=*/0);
   EXPECT_FALSE(waited.ok());
-  EXPECT_EQ(waited.code(), VK_TIMEOUT);
+  EXPECT_EQ(vg::vk_result(waited), VK_TIMEOUT);
 }
 
 TEST_F(SyncTest, TimelineMoveLeavesSourceEmpty) {

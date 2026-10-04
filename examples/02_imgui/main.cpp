@@ -187,7 +187,10 @@ int run(GLFWwindow* window, int max_frames) {
   // them (including after an error break above). Idle the device first so their
   // destruction is safe, and detach the borrowed profiler from the loop before
   // it goes out of scope.
-  app.wait_idle();
+  if (const vg::Status idle = app.wait_idle(); !idle) {
+    std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
+    exit_code = 1;
+  }
   app.set_profiler(nullptr);
 
   // Tear the platform backend down while the ImGui context is still alive; the

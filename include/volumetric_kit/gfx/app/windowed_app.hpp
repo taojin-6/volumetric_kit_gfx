@@ -110,7 +110,7 @@ struct WindowedAppConfig {
 ///   Status end = app.value().end_frame(f);
 ///   if (!end.ok() && !windowing::swapchain_stale(end)) return fail(end);
 /// }
-/// app.value().wait_idle();  // locals created after the app die before it
+/// VG_TRY(app.value().wait_idle());  // locals made after the app die first
 /// @endcode
 class VG_APP_API WindowedApp {
  public:

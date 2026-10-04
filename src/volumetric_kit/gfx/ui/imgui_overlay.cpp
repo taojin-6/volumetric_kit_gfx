@@ -108,8 +108,8 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
 
   if (!ImGui_ImplVulkan_Init(&init)) {
     ImGui::DestroyContext(context);
-    return Status::error(VK_ERROR_INITIALIZATION_FAILED,
-                         "ImGui_ImplVulkan_Init failed");
+    return vk_error(VK_ERROR_INITIALIZATION_FAILED,
+                    "ImGui_ImplVulkan_Init failed");
   }
 
   ImGuiOverlay overlay;

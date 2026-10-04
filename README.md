@@ -56,6 +56,15 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
+gfx's `Status`, `Result`, `VG_CHECK` and log sink are
+[volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s base
+tier, fetched pinned by commit and linked PUBLIC, so a `Status` passes between
+gfx, recon and calib unchanged and one `set_log_handler` routes all three. An
+installed gfx carries the core beside it and re-finds it; an application that
+also fetches recon declares `volumetric_kit_core` first to pick one pin for
+both. Build against a local core checkout with
+`-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
+
 Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, and `VG_INSTALL` default
 ON only when `volumetric_kit_gfx` is the top-level project (OFF when it is
 consumed via FetchContent / `add_subdirectory`). `VG_WITH_GLFW` and
