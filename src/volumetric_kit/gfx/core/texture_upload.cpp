@@ -5,13 +5,14 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
-#include "volumetric_kit/gfx/core/log.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -110,16 +111,16 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
   return scope;
 }
 
-// A host-visible, mapped staging buffer holding @p size bytes copied from
-// @p src, written once front-to-back -- the single recipe both add() (pixels)
-// and add_buffer() (bytes) stage their source through.
+// A staging buffer -- host memory, mapped -- holding @p size bytes copied from
+// @p src, written once front-to-back (write-combined where the device has it)
+// -- the single recipe both add() (pixels) and add_buffer() (bytes) stage their
+// source through.
 Result<Buffer> make_staging(Allocator& allocator, const void* src,
                             VkDeviceSize size) {
   BufferDesc desc;
   desc.size = size;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = MemoryUsage::HostVisible;
-  desc.mapped = true;
+  desc.memory = MemoryUsage::Staging;
   desc.host_access = HostAccess::SequentialWrite;
   VG_ASSIGN(Buffer staging, allocator.create_buffer(desc));
   std::memcpy(staging.mapped(), src, size);
@@ -363,27 +364,6 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
   cmd_image_barrier(cmd, to_read);
 }
 
-// After a failed wait the device may still be reading `staging`. Its command
-// buffer is the device's, which keeps it until the device is destroyed; the
-// staging buffers cannot go with it (Device::submit_single_time's keep_alive),
-// as their deleters free through the allocator, which is gone by then. So free
-// them once the queue drains, and leak them if it never does (a lost device)
-// rather than free memory the GPU may still read.
-// TODO: hand them to the device as keep_alive once buffers are the core's
-// (stage 2b), which keep their allocator alive.
-void release_after_failed_wait(const Device& device,
-                               std::vector<Buffer> staging) {
-  if (device.wait_idle().ok()) {
-    return;  // the work is done: `staging` is freed on return
-  }
-  log_message(LogLevel::Error,
-              "UploadBatch::finish: the queue did not drain after a failed "
-              "wait; leaking the batch's staging buffers rather than freeing "
-              "memory the device may still read");
-  // Deliberately never deleted.
-  static_cast<void>(new std::vector<Buffer>(std::move(staging)));
-}
-
 }  // namespace
 
 Result<UploadBatch> UploadBatch::begin(const Device& device,
@@ -433,7 +413,7 @@ UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   return *this;
 }
 
-Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
+Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
   if (!valid()) {
     return Status::invalid_argument(
         "UploadBatch::add on an empty batch (begin one first; a batch is "
@@ -450,7 +430,7 @@ Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
   // the finished texture stays copyable/blittable (readback, screenshots,
   // re-upload) rather than that capability hinging on whether mips were asked
   // for.
-  TextureDesc image_desc;
+  ImageDesc image_desc;
   image_desc.extent = desc.extent;
   image_desc.format = desc.format;
   image_desc.mip_levels = plan.image_mips;
@@ -459,12 +439,15 @@ Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
   image_desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  VG_ASSIGN(Texture texture, allocator_->create_image(image_desc));
+  VG_ASSIGN(Image texture, allocator_->create_image(image_desc));
+  // The layout finish() leaves every level in; the image is unusable until
+  // then, as the batch's resources are.
+  texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   // Everything that can fail has, so a failed add above leaves the batch
   // unchanged and usable. The handles and the desc's shape are copied: the
   // pixels are already staged, and the caller keeps the texture alive.
-  records_.emplace_back([image = texture.image(), src = staging.handle(), desc,
+  records_.emplace_back([image = texture.handle(), src = staging.handle(), desc,
                          plan](VkCommandBuffer cmd) {
     record_upload(cmd, image, src, desc, plan);
   });
@@ -491,12 +474,12 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
 
   VG_ASSIGN(Buffer staging, make_staging(*allocator_, desc.data, desc.size));
 
-  // Destination: device-local, TRANSFER_DST for the staging copy plus the
-  // caller's usage.
+  // Destination: device-only memory, TRANSFER_DST for the staging copy plus
+  // the caller's usage.
   BufferDesc dst_desc;
   dst_desc.size = desc.size;
   dst_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | desc.usage;
-  dst_desc.memory = MemoryUsage::DeviceLocal;
+  dst_desc.memory = MemoryUsage::DeviceOnly;
   VG_ASSIGN(Buffer buffer, allocator_->create_buffer(dst_desc));
 
   // Everything that can fail has, so a failed add above leaves the batch
@@ -552,40 +535,37 @@ Status UploadBatch::finish() {
         "a new batch");
   }
   // Move the owned state into locals first: whatever happens below, the batch
-  // ends empty (one-shot), and the locals keep the staging buffers alive until
-  // the fence wait proves the GPU is done.
+  // ends empty (one-shot).
   const Device* device = device_;
   std::vector<std::function<void(VkCommandBuffer)>> records =
       std::move(records_);
-  std::vector<Buffer> staging = std::move(staging_);
+  auto staging = std::make_shared<std::vector<Buffer>>(std::move(staging_));
   device_ = nullptr;
   allocator_ = nullptr;
   records_.clear();
   staging_.clear();
 
   // One command buffer on a pool no other submit holds, one submit under the
-  // device's queue lock, one fence wait.
-  bool in_flight = false;
-  Status submitted = device->submit_single_time(
+  // device's queue lock, one fence wait. The device holds the staging buffers
+  // until the work completes: past a failed wait, which may leave the work
+  // running, until the device is destroyed. Each buffer keeps its allocator's
+  // state alive, so freeing them after the allocator is gone is safe.
+  return device->submit_single_time(
       [&records](VkCommandBuffer cmd) {
         for (const auto& record : records) {
           record(cmd);
         }
       },
-      nullptr, &in_flight);
-  if (!submitted.ok() && in_flight) {
-    release_after_failed_wait(*device, std::move(staging));
-  }
-  return submitted;
+      std::move(staging));
 }
 
-Result<Texture> upload_texture(const Device& device, Allocator& allocator,
-                               const ImageUploadDesc& desc) {
+Result<Image> upload_texture(const Device& device, Allocator& allocator,
+                             const ImageUploadDesc& desc) {
   // The one-texture batch: exactly the shared validate/record path, one
   // submit, one fence wait. A failed add leaves the batch to its destructor,
   // which discards the never-submitted command buffer.
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(Texture texture, batch.add(desc));
+  VG_ASSIGN(Image texture, batch.add(desc));
   VG_TRY(batch.finish());
   return texture;
 }

@@ -32,10 +32,10 @@
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
@@ -182,7 +182,7 @@ bool all_pixels_cleared(const std::vector<uint8_t>& px) {
   return true;
 }
 
-// A host-visible, mapped buffer of `pad + size` bytes with `size` bytes of
+// A device-mapped buffer of `pad + size` bytes with `size` bytes of
 // `data` copied in at byte offset `pad`. A non-zero pad lets a test bind the
 // data at a non-zero (4-aligned) offset, exercising LiveMesh's offset fields.
 vg::Buffer host_buffer_at(vg::Allocator& allocator, const void* data,
@@ -191,8 +191,7 @@ vg::Buffer host_buffer_at(vg::Allocator& allocator, const void* data,
   vg::BufferDesc desc;
   desc.size = pad + size;
   desc.usage = usage;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
+  desc.memory = vg::MemoryUsage::DeviceMapped;
   auto buf = allocator.create_buffer(desc);
   if (!buf.ok()) {
     ADD_FAILURE() << buf.status().message();
@@ -202,7 +201,7 @@ vg::Buffer host_buffer_at(vg::Allocator& allocator, const void* data,
   return std::move(buf).value();
 }
 
-// The three host-visible buffers a LiveMesh borrows; the caller keeps them
+// The three device-mapped buffers a LiveMesh borrows; the caller keeps them
 // alive (the LiveMesh only names their handles).
 struct LiveBuffers {
   vg::Buffer vertices;
@@ -220,9 +219,9 @@ VkDrawIndexedIndirectCommand draw_command(const assets::Mesh& mesh) {
 }
 
 // Builds a LiveMesh that draws `mesh` under `command`, backed by three
-// host-visible buffers each carrying `pad` leading bytes -- a non-zero `pad` (a
-// multiple of 4) exercises the vertex/index/indirect bind offsets. The owning
-// buffers land in `out`, which must outlive the draw.
+// device-mapped buffers each carrying `pad` leading bytes -- a non-zero `pad`
+// (a multiple of 4) exercises the vertex/index/indirect bind offsets. The
+// owning buffers land in `out`, which must outlive the draw.
 pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
                                    const assets::Mesh& mesh, VkDeviceSize pad,
                                    const VkDrawIndexedIndirectCommand& command,
@@ -261,7 +260,7 @@ pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
 // in a test-body vector so they outlive the render() calls yet are destroyed
 // before the allocator that produced them.
 struct AtlasResources {
-  vg::Texture texture;
+  vg::Image texture;
   vg::Sampler sampler;
   vg::DescriptorPool pool;
   VkDescriptorSet set = VK_NULL_HANDLE;
@@ -830,8 +829,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
   vg::BufferDesc cmd_desc;
   cmd_desc.size = sizeof(command);
   cmd_desc.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-  cmd_desc.memory = vg::MemoryUsage::HostVisible;
-  cmd_desc.mapped = true;
+  cmd_desc.memory = vg::MemoryUsage::DeviceMapped;
   auto indbuf = allocator.value().create_buffer(cmd_desc);
   ASSERT_TRUE(indbuf.ok()) << indbuf.status().message();
   std::memcpy(indbuf.value().mapped(), &command, sizeof(command));

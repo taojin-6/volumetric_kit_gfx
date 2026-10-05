@@ -14,20 +14,21 @@
 
 #include <glm/mat4x4.hpp>
 
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-class Allocator;
+using core::Allocator;
 using core::Device;
 namespace assets {
 struct Material;
@@ -102,10 +103,10 @@ VG_PIPELINES_API std::vector<MeshInstance> flatten_scene(
 /// succeeds and @ref draws is empty. Feed @ref draws straight into a
 /// @ref PbrFrame; the per-frame set 0 (@ref PbrScene) stays with the caller.
 ///
-/// @warning The @p device and @p allocator passed to @ref create must outlive
-///          the model -- every buffer, texture, and descriptor set here is
-///          allocated from them. The @ref PbrDraw list borrows the model's own
-///          meshes and materials, so it is valid exactly as long as this
+/// @warning The @p device passed to @ref create must outlive the model --
+///          every buffer, texture, and descriptor set here is made on it; the
+///          @p allocator need not. The @ref PbrDraw list borrows the model's
+///          own meshes and materials, so it is valid exactly as long as this
 ///          object.
 ///
 /// @code
@@ -128,8 +129,7 @@ class VG_PIPELINES_API PbrModel {
   ///        @p pipeline.
   /// @param device     Runs the upload submit and owns the descriptor pools;
   ///                   must outlive the model.
-  /// @param allocator  Allocates every buffer and texture; must outlive the
-  ///                   model.
+  /// @param allocator  Allocates every buffer and texture.
   /// @param pipeline   Supplies the reflected set-1 material layout; the model
   ///                   is drawable through any @ref PbrPipeline with the same
   ///                   layout.
@@ -195,7 +195,7 @@ class VG_PIPELINES_API PbrModel {
   // descriptor set outlive its resources, so any order is legal once the device
   // is idle (which the caller ensures before teardown).
   std::vector<GpuMesh> meshes_;     // parallel to Model::meshes
-  std::vector<Texture> textures_;   // every uploaded map + the two fallbacks
+  std::vector<Image> textures_;     // every uploaded map + the two fallbacks
   std::optional<Sampler> sampler_;  // filters every material map
   std::vector<PbrMaterial> materials_;  // parallel to Model::materials, then
                                         // the fallback material last

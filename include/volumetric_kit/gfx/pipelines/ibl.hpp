@@ -16,19 +16,20 @@
 
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-class Allocator;
+using core::Allocator;
 using core::Device;
 class UploadBatch;
 }  // namespace volumetric_kit::gfx
@@ -88,8 +89,8 @@ VG_PIPELINES_API glm::vec3 cube_face_direction(int face, float u,
 /// default-constructed `IblMaps` is empty (`valid()` is false) and safe to
 /// move-assign into.
 ///
-/// @warning The device and allocator passed to @ref bake_ibl must outlive
-///          these maps (see @ref Texture / @ref Sampler).
+/// @warning The device passed to @ref bake_ibl must outlive these maps (see
+///          @ref Image / @ref Sampler).
 ///
 /// @code
 /// Result<pipelines::IblMaps> ibl = pipelines::bake_ibl(device, alloc, sky);
@@ -127,9 +128,9 @@ struct IblMaps {
   IblMaps(const IblMaps&) = delete;
   IblMaps& operator=(const IblMaps&) = delete;
 
-  Texture irradiance;  ///< Diffuse irradiance cube (RGBA16F, single mip).
-  Texture prefilter;   ///< Prefiltered specular cube (RGBA16F, mipped).
-  Texture brdf_lut;    ///< 2D RG16F BRDF integration LUT.
+  Image irradiance;  ///< Diffuse irradiance cube (RGBA16F, single mip).
+  Image prefilter;   ///< Prefiltered specular cube (RGBA16F, mipped).
+  Image brdf_lut;    ///< 2D RG16F BRDF integration LUT.
   /// Filters all three maps: trilinear, `CLAMP_TO_EDGE` on every axis.
   std::optional<Sampler> sampler;
   /// The prefilter's highest mip index (mip count - 1); pass to
@@ -170,9 +171,8 @@ struct IblMaps {
 ///         Status::Code::InvalidArgument for a zero @p size or @p samples
 ///         (checked before anything records, leaving @p batch unchanged) or an
 ///         empty batch, plus everything @ref UploadBatch::add rejects.
-VG_PIPELINES_API Result<Texture> bake_brdf_lut(UploadBatch& batch,
-                                               uint32_t size,
-                                               uint32_t samples = 256);
+VG_PIPELINES_API Result<Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
+                                             uint32_t samples = 256);
 
 /// @brief Integrate the BRDF LUT and upload it in one blocking submit.
 ///
@@ -180,7 +180,7 @@ VG_PIPELINES_API Result<Texture> bake_brdf_lut(UploadBatch& batch,
 /// @ref bake_ibl, which shares one batch across all three maps.
 /// @param device     The device whose graphics queue runs the one-time
 ///                   transfer; must outlive the returned texture.
-/// @param allocator  Allocates the texture; must outlive it.
+/// @param allocator  Allocates the texture.
 /// @param size       LUT width and height in texels (> 0).
 /// @param samples    Importance samples per texel (> 0); the default matches
 ///                   @ref IblBakeDesc::brdf_lut_samples.
@@ -188,10 +188,10 @@ VG_PIPELINES_API Result<Texture> bake_brdf_lut(UploadBatch& batch,
 ///         @ref Status::Code::InvalidArgument for a null device or a zero
 ///         @p size or @p samples; otherwise whatever the batch's begin / add /
 ///         finish steps report.
-VG_PIPELINES_API Result<Texture> bake_brdf_lut(const Device& device,
-                                               Allocator& allocator,
-                                               uint32_t size,
-                                               uint32_t samples = 256);
+VG_PIPELINES_API Result<Image> bake_brdf_lut(const Device& device,
+                                             Allocator& allocator,
+                                             uint32_t size,
+                                             uint32_t samples = 256);
 
 /// @brief Convolve @p environment into the full IBL texture set: the diffuse
 ///        irradiance cube, the roughness-prefiltered specular chain, and the
@@ -203,7 +203,7 @@ VG_PIPELINES_API Result<Texture> bake_brdf_lut(const Device& device,
 /// result is deterministic: faces write disjoint texels with unchanged
 /// per-texel math, so any thread count yields identical bytes.
 /// @param device       Runs the upload submit; must outlive the maps.
-/// @param allocator    Allocates the textures; must outlive the maps.
+/// @param allocator    Allocates the textures.
 /// @param environment  The radiance function to convolve; called concurrently.
 /// @param desc         Resolutions and sample counts (defaults suit an
 ///                     analytic sky; see @ref IblBakeDesc).

@@ -24,6 +24,46 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **memory is volumetric_kit_core's.** `vg::Allocator`, `BufferDesc`,
+  `Buffer`, `MemoryUsage`, `HostAccess`, `HeapStats` and `MemoryStats` name the
+  core's types, and `vg::Image` / `ImageDesc` replace `Texture` /
+  `TextureDesc`, so buffers and images pass to recon unchanged. gfx no longer
+  builds its own VMA. Migrating:
+  - `MemoryUsage::DeviceLocal` and `Auto` → `DeviceOnly` (the default), which
+    never falls back to host memory: a full heap fails the allocation with
+    `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and a buffer past the heap's budget is
+    refused. `HostVisible` with `mapped = true` → `Staging` for a buffer only
+    copied to or from (usage `TRANSFER_SRC` / `TRANSFER_DST` at most), or
+    `DeviceMapped` for one the host writes and shaders read in place, which a
+    device without device-mapped memory refuses (`Unsupported`;
+    `device.caps().device_mapped_memory()` says beforehand).
+  - `BufferDesc::mapped` is gone: `Staging` and `DeviceMapped` buffers are
+    always mapped and coherent, `DeviceOnly` never. `host_access` defaults to
+    `SequentialWrite`; a buffer the host reads (a readback) sets `Random`,
+    which a device-mapped buffer on a discrete GPU refuses. `BufferDesc` and
+    `ImageDesc` take `queue_families` for a resource another queue family
+    uses (concurrent sharing).
+  - `ExternalHandleType` and the `external` fields are gone; export a buffer
+    with the core's `create_exported_buffer`.
+  - `Texture` → `Image` (header `core/image.hpp`; `core/texture.hpp` is gone),
+    `TextureDesc` → `ImageDesc` without `memory`. `texture.image()` →
+    `handle()`; `extent()` returns a `VkExtent3D`, so a 2D extent is
+    `{image.width(), image.height()}`. An image records its layout
+    (`layout()` / `set_layout`); `UploadBatch` images report
+    `SHADER_READ_ONLY_OPTIMAL`.
+  - `HeapStats` adds `reserved_bytes` and `allocation_bytes`, the allocator's
+    own share; with `VK_EXT_memory_budget` enabled, `usage_bytes` counts every
+    allocation in the process, as `FrameMetrics::memory_used_bytes` then does.
+  - Buffers and images may outlive the allocator that made them; only the
+    device must outlive them.
+  - `PbrScene::set_camera(slot, eye, lod)` → `set_camera(cmd, slot, eye,
+    lod)`, called before the frame's rendering begins: where the device has no
+    device-mapped memory, the camera uniform buffer is device-only and the
+    write is a recorded update. `PbrSceneDesc::camera_memory` forces that path.
+  - `PbrMaterial::create(device, allocator, layout, desc)` →
+    `create(device, batch, layout, desc)`: the factors upload through an open
+    `UploadBatch`, into device-only memory; draw the material once the batch
+    has finished. `PbrModel::create` does this for its materials.
 - `core`: **the instance and device are volumetric_kit_core's.** `vg::Instance`,
   `InstanceConfig`, `PhysicalDeviceInfo`, `Device`, `AdoptedDevice` and
   `DeviceRequirements` name the core's types, so a device gfx makes is the type

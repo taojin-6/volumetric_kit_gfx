@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // OffscreenTarget: empty/default, argument validation, the move-only lifecycle
-// (it owns Texture(s) + a readback Buffer), and an end-to-end
+// (it owns Image(s) + a readback Buffer), and an end-to-end
 // clear-and-readback through dynamic rendering -- the headless path
 // golden-image render tests build on. The clear-and-readback absorbs the former
 // render_readback_test, now expressed through the RenderTarget/OffscreenTarget

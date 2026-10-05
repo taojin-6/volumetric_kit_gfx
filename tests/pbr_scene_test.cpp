@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <utility>
 
@@ -13,11 +14,13 @@
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
@@ -79,10 +82,19 @@ class PbrSceneTest : public VulkanDeviceTest {
     return d;
   }
 
+  // Writes slot `slot`'s camera in a submit of its own, so a recorded update
+  // runs (and validation sees it).
+  void set_camera(const pipelines::PbrScene& scene, uint32_t slot,
+                  const glm::vec3& eye) {
+    const vg::Status status = device_->submit_single_time(
+        [&](VkCommandBuffer cmd) { scene.set_camera(cmd, slot, eye, 4.0f); });
+    EXPECT_TRUE(status.ok()) << status.message();
+  }
+
   std::optional<vg::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
   std::optional<vg::Sampler> sampler_;
-  std::optional<vg::Texture> tex_;
+  std::optional<vg::Image> tex_;
 };
 
 // The same fixture under validation-with-teeth: the base TearDown fails the
@@ -112,6 +124,18 @@ class PbrSubmitTest : public PbrSceneTest {
     return d;
   }
 
+  // A material whose factors went up through a finished batch of its own.
+  vg::Result<pipelines::PbrMaterial> make_material(
+      const pipelines::PbrMaterialDesc& desc) {
+    VG_ASSIGN(vg::UploadBatch batch,
+              vg::UploadBatch::begin(*device_, *allocator_));
+    VG_ASSIGN(pipelines::PbrMaterial material,
+              pipelines::PbrMaterial::create(
+                  device(), batch, pipeline_->descriptor_set_layout(1), desc));
+    VG_TRY(batch.finish());
+    return material;
+  }
+
   // Records `frame` through the fixture's pipeline into a throwaway primary
   // command buffer, outside any render pass -- enough for the set-0 bind under
   // test, and legal on its own when submit() correctly records nothing.
@@ -136,8 +160,7 @@ TEST_F(PbrSceneTest, CreatesSet0) {
   EXPECT_TRUE(scene.value().valid());
   EXPECT_EQ(scene.value().frames_in_flight(), 1u);  // the default ring depth
   EXPECT_NE(scene.value().descriptor_set(), VK_NULL_HANDLE);
-  // The mapped camera UBO is writable without a device present.
-  scene.value().set_camera(0, glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
+  set_camera(scene.value(), 0, glm::vec3(0.0f, 0.0f, 3.0f));
 }
 
 // One camera UBO + descriptor set per frame-in-flight slot. Distinct set
@@ -156,10 +179,10 @@ TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
   EXPECT_NE(scene.value().descriptor_set(1), VK_NULL_HANDLE);
   EXPECT_NE(scene.value().descriptor_set(0), scene.value().descriptor_set(1));
   EXPECT_EQ(scene.value().descriptor_set(2), VK_NULL_HANDLE);
-  scene.value().set_camera(0, glm::vec3(1.0f, 0.0f, 0.0f), 4.0f);
-  scene.value().set_camera(1, glm::vec3(0.0f, 1.0f, 0.0f), 4.0f);
-  // Out-of-range slot: guarded no-op, not a write through a bad pointer.
-  scene.value().set_camera(2, glm::vec3(0.0f), 4.0f);
+  set_camera(scene.value(), 0, glm::vec3(1.0f, 0.0f, 0.0f));
+  set_camera(scene.value(), 1, glm::vec3(0.0f, 1.0f, 0.0f));
+  // Out-of-range slot: guarded no-op, not a write past the ring.
+  set_camera(scene.value(), 2, glm::vec3(0.0f));
 }
 
 // PbrScene::create defaults frames_in_flight to 1 while FrameLoop::create and
@@ -193,9 +216,7 @@ TEST_F(PbrSubmitTest, DropsFrameWhoseSlotOutrunsTheSceneRing) {
 TEST_F(PbrSubmitTest, DropsFrameWithNoScene) {
   auto mesh = pipelines::upload_mesh(*device_, *allocator_, quad());
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
-  auto material = pipelines::PbrMaterial::create(
-      device(), *allocator_, pipeline_->descriptor_set_layout(1),
-      material_desc());
+  auto material = make_material(material_desc());
   ASSERT_TRUE(material.ok()) << material.status().message();
 
   pipelines::PbrDraw draw;
@@ -280,13 +301,13 @@ TEST_F(PbrSceneTest, SelfMoveAssignIsSafe) {
 
 // submit() with no draws records only state (bind pipeline + viewport + the
 // scene set), which is valid outside a render scope -- exercises the set-0 bind
-// path end to end. The full draw path is covered by examples/03_model.
+// path end to end. The full draw path is covered below.
 TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
   auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
                                           full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrScene scene = std::move(made).value();
-  scene.set_camera(0, glm::vec3(0.0f, 0.0f, 3.0f), 4.0f);
+  set_camera(scene, 0, glm::vec3(0.0f, 0.0f, 3.0f));
 
   pipelines::PbrFrame frame;
   frame.extent = {16, 16};
@@ -298,4 +319,102 @@ TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
   const vg::Status status = device_->submit_single_time(
       [&](VkCommandBuffer cmd) { pipeline_->submit(cmd, frame); });
   EXPECT_TRUE(status.ok()) << status.message();
+}
+
+// The camera reaches the shader from either home of its uniform buffer:
+// device-mapped memory written in place, or the device-only fallback written
+// by a recorded update, which a device without device-mapped memory takes.
+// One lit quad is drawn under a fixed view-projection, so only the camera
+// uniform moves the shading (the view vector of the specular highlight): the
+// same eye renders the same pixel from both placements, and another eye a
+// different one -- which proves the write landed, not a stale or zeroed
+// buffer. Under validation, so a recorded update inside the render pass, or
+// a missing barrier the layer catches, fails the test.
+TEST_F(PbrSubmitTest, CameraReachesTheShaderFromEitherPlacement) {
+  vg::OffscreenTargetDesc target_desc;
+  target_desc.extent = {16, 16};
+  target_desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;  // the fixture's layout
+  target_desc.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto target = vg::OffscreenTarget::create(*allocator_, target_desc);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+
+  pipelines::IblBakeDesc bake;
+  bake.irradiance_size = 4;
+  bake.prefilter_size = 8;
+  bake.prefilter_mip_levels = 2;
+  bake.prefilter_samples = 8;
+  bake.brdf_lut_size = 8;
+  bake.brdf_lut_samples = 16;
+  auto ibl = pipelines::bake_ibl(
+      *device_, *allocator_,
+      [](const glm::vec3& d) { return glm::vec3(0.2f) + 0.3f * d; }, bake);
+  ASSERT_TRUE(ibl.ok()) << ibl.status().message();
+
+  // A quad facing +Z across the middle of clip space, drawn with an identity
+  // view-projection.
+  volumetric_kit::gfx::assets::Mesh mesh;
+  const glm::vec3 corners[4] = {{-0.5f, -0.5f, 0.5f},
+                                {0.5f, -0.5f, 0.5f},
+                                {0.5f, 0.5f, 0.5f},
+                                {-0.5f, 0.5f, 0.5f}};
+  for (const glm::vec3& corner : corners) {
+    volumetric_kit::gfx::assets::Vertex v;
+    v.position = corner;
+    mesh.vertices.push_back(v);
+  }
+  mesh.indices = {0, 1, 2, 0, 2, 3};
+  auto gpu_mesh = pipelines::upload_mesh(*device_, *allocator_, mesh);
+  ASSERT_TRUE(gpu_mesh.ok()) << gpu_mesh.status().message();
+  pipelines::PbrMaterialDesc material_desc = this->material_desc();
+  material_desc.metallic_factor = 0.0f;
+  material_desc.roughness_factor = 0.3f;
+  auto material = make_material(material_desc);
+  ASSERT_TRUE(material.ok()) << material.status().message();
+  pipelines::PbrDraw draw;
+  draw.mesh = &gpu_mesh.value();
+  draw.material = &material.value();
+
+  // Renders one frame with the camera at `eye` and returns the center pixel.
+  const auto render = [&](const pipelines::PbrScene& scene,
+                          const glm::vec3& eye) -> uint32_t {
+    pipelines::PbrFrame frame;
+    frame.extent = target_desc.extent;
+    frame.scene = &scene;
+    frame.draws = &draw;
+    frame.draw_count = 1;
+    const vg::Status status =
+        device_->submit_single_time([&](VkCommandBuffer cmd) {
+          scene.set_camera(cmd, 0, eye, ibl.value().prefilter_max_lod);
+          target.value().prepare(cmd);
+          const vg::RenderTarget rt = target.value().target();
+          rt.begin(cmd, vg::RenderTargetBeginInfo{});
+          pipeline_->submit(cmd, frame);
+          rt.end(cmd);
+          target.value().record_readback(cmd);
+        });
+    EXPECT_TRUE(status.ok()) << status.message();
+    const auto* pixels = static_cast<const uint8_t*>(target.value().pixels());
+    uint32_t center = 0;
+    std::memcpy(&center, pixels + (8 * 16 + 8) * 4, sizeof(center));
+    return center;
+  };
+
+  pipelines::PbrSceneDesc scene_desc = ibl.value().scene_desc();
+  auto mapped = pipelines::PbrScene::create(device(), *allocator_,
+                                            scene_layout(), scene_desc);
+  ASSERT_TRUE(mapped.ok()) << mapped.status().message();
+  scene_desc.camera_memory = pipelines::FrameUniformMemory::DeviceOnly;
+  auto device_only = pipelines::PbrScene::create(device(), *allocator_,
+                                                 scene_layout(), scene_desc);
+  ASSERT_TRUE(device_only.ok()) << device_only.status().message();
+
+  const glm::vec3 front(0.0f, 0.0f, 3.0f);
+  const glm::vec3 grazing(3.0f, 0.0f, 0.6f);
+  const uint32_t front_mapped = render(mapped.value(), front);
+  const uint32_t front_device_only = render(device_only.value(), front);
+  const uint32_t grazing_device_only = render(device_only.value(), grazing);
+  EXPECT_EQ(front_mapped, front_device_only);
+  EXPECT_NE(front_device_only, grazing_device_only);
+  // The quad was drawn: not the cleared (zero) color.
+  EXPECT_NE(front_mapped, 0u);
 }

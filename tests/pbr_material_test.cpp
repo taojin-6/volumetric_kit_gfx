@@ -8,9 +8,9 @@
 #include <utility>
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
@@ -74,17 +74,28 @@ class PbrMaterialTest : public VulkanDeviceTest {
     return d;
   }
 
+  // Builds a material on a batch of its own and finishes it, so the factor
+  // upload runs (under the base fixture's validation capture).
+  vg::Result<pipelines::PbrMaterial> make(VkDescriptorSetLayout layout,
+                                          const pipelines::PbrMaterialDesc& d) {
+    VG_ASSIGN(vg::UploadBatch batch,
+              vg::UploadBatch::begin(*device_, *allocator_));
+    VG_ASSIGN(pipelines::PbrMaterial material,
+              pipelines::PbrMaterial::create(device(), batch, layout, d));
+    VG_TRY(batch.finish());
+    return material;
+  }
+
   std::optional<vg::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
   std::optional<vg::Sampler> sampler_;
-  std::optional<vg::Texture> tex_;
+  std::optional<vg::Image> tex_;
 };
 
 }  // namespace
 
 TEST_F(PbrMaterialTest, CreatesSet1) {
-  auto mat = pipelines::PbrMaterial::create(device(), *allocator_,
-                                            material_layout(), full_desc());
+  auto mat = make(material_layout(), full_desc());
   ASSERT_TRUE(mat.ok()) << mat.status().message();
   EXPECT_TRUE(mat.value().valid());
   EXPECT_NE(mat.value().descriptor_set(), VK_NULL_HANDLE);
@@ -93,22 +104,34 @@ TEST_F(PbrMaterialTest, CreatesSet1) {
 TEST_F(PbrMaterialTest, RejectsNullMap) {
   pipelines::PbrMaterialDesc d = full_desc();
   d.normal = VK_NULL_HANDLE;  // the shader samples every slot
-  auto mat = pipelines::PbrMaterial::create(device(), *allocator_,
-                                            material_layout(), d);
+  auto mat = make(material_layout(), d);
   ASSERT_FALSE(mat.ok());
   EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+// Validation precedes the factor upload, so a refused material queues nothing
+// and the batch it was given still finishes.
+TEST_F(PbrMaterialTest, RefusedMaterialLeavesTheBatchUsable) {
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+  pipelines::PbrMaterialDesc d = full_desc();
+  d.sampler = VK_NULL_HANDLE;
+  auto mat = pipelines::PbrMaterial::create(device(), batch.value(),
+                                            material_layout(), d);
+  ASSERT_FALSE(mat.ok());
+  EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
+  const vg::Status finished = batch.value().finish();
+  EXPECT_TRUE(finished.ok()) << finished.message();
+}
+
 TEST_F(PbrMaterialTest, RejectsNullLayout) {
-  auto mat = pipelines::PbrMaterial::create(device(), *allocator_,
-                                            VK_NULL_HANDLE, full_desc());
+  auto mat = make(VK_NULL_HANDLE, full_desc());
   ASSERT_FALSE(mat.ok());
   EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrMaterialTest, MoveLeavesSourceEmpty) {
-  auto made = pipelines::PbrMaterial::create(device(), *allocator_,
-                                             material_layout(), full_desc());
+  auto made = make(material_layout(), full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrMaterial source = std::move(made).value();
   ASSERT_TRUE(source.valid());
@@ -121,10 +144,8 @@ TEST_F(PbrMaterialTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(PbrMaterialTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  auto a = pipelines::PbrMaterial::create(device(), *allocator_,
-                                          material_layout(), full_desc());
-  auto b = pipelines::PbrMaterial::create(device(), *allocator_,
-                                          material_layout(), full_desc());
+  auto a = make(material_layout(), full_desc());
+  auto b = make(material_layout(), full_desc());
   ASSERT_TRUE(a.ok()) << a.status().message();
   ASSERT_TRUE(b.ok()) << b.status().message();
   pipelines::PbrMaterial dst = std::move(a).value();
@@ -137,8 +158,7 @@ TEST_F(PbrMaterialTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(PbrMaterialTest, SelfMoveAssignIsSafe) {
-  auto made = pipelines::PbrMaterial::create(device(), *allocator_,
-                                             material_layout(), full_desc());
+  auto made = make(material_layout(), full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrMaterial mat = std::move(made).value();
 

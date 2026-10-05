@@ -42,12 +42,12 @@ Result<OffscreenTarget> OffscreenTarget::create(
   }
 
   // Color target: COLOR_ATTACHMENT to render into, TRANSFER_SRC to copy out.
-  TextureDesc color_desc;
+  ImageDesc color_desc;
   color_desc.extent = desc.extent;
   color_desc.format = desc.color_format;
   color_desc.usage =
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  VG_ASSIGN(Texture color, allocator.create_image(color_desc));
+  VG_ASSIGN(Image color, allocator.create_image(color_desc));
 
   OffscreenTarget target;
   target.color_ = std::move(color);
@@ -55,17 +55,19 @@ Result<OffscreenTarget> OffscreenTarget::create(
   // Optional depth attachment: device-local, depth-stencil usage. depth_format
   // is validated depth-only above, so create_image derives a DEPTH-aspect view.
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    VG_ASSIGN(Texture depth,
+    VG_ASSIGN(Image depth,
               make_depth_attachment(allocator, desc.extent, desc.depth_format));
     target.depth_ = std::move(depth);
   }
 
   if (desc.readback) {
+    // Host memory the copy writes and the host reads: cached where the device
+    // has it, so reading pixels() back is not an uncached walk.
     BufferDesc readback_desc;
     readback_desc.size = readback_size;
     readback_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    readback_desc.memory = MemoryUsage::HostVisible;
-    readback_desc.mapped = true;
+    readback_desc.memory = MemoryUsage::Staging;
+    readback_desc.host_access = HostAccess::Random;
     VG_ASSIGN(Buffer readback, allocator.create_buffer(readback_desc));
     target.readback_ = std::move(readback);
   }
@@ -74,15 +76,14 @@ Result<OffscreenTarget> OffscreenTarget::create(
 }
 
 RenderTarget OffscreenTarget::target() const {
-  const RenderTargetAttachment color{color_.image(), color_.view(),
+  const RenderTargetAttachment color{color_.handle(), color_.view(),
                                      color_.format()};
   if (depth_.valid()) {
-    const RenderTargetAttachment depth{depth_.image(), depth_.view(),
+    const RenderTargetAttachment depth{depth_.handle(), depth_.view(),
                                        depth_.format()};
-    return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT,
-                        &depth);
+    return RenderTarget(extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT, &depth);
   }
-  return RenderTarget(color_.extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
+  return RenderTarget(extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
 }
 
 RenderTargetLayout OffscreenTarget::layout() const {
@@ -110,7 +111,7 @@ void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
   // it into a torn readback. On the first prepare (no prior access) the wider
   // src simply waits on nothing.
   ImageBarrierDesc to_color;
-  to_color.image = color_.image();
+  to_color.image = color_.handle();
   to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                        VK_PIPELINE_STAGE_TRANSFER_BIT;
   to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -125,7 +126,7 @@ void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
     // Depth is never read back; its only prior use is an earlier render's
     // depth write, which the src scope orders before the next clear.
     ImageBarrierDesc to_depth;
-    to_depth.image = depth_.image();
+    to_depth.image = depth_.handle();
     to_depth.src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     to_depth.dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
@@ -145,12 +146,12 @@ void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
   VG_CHECK(readback_.valid(),
            "OffscreenTarget::record_readback without a readback buffer");
 
-  const VkExtent2D ext = color_.extent();
+  const VkExtent2D ext = extent();
 
   // The render left the color image in COLOR_ATTACHMENT_OPTIMAL; move it to
   // TRANSFER_SRC for the copy-out.
   ImageBarrierDesc to_src;
-  to_src.image = color_.image();
+  to_src.image = color_.handle();
   to_src.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
   to_src.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -162,7 +163,7 @@ void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
   VkBufferImageCopy copy{};
   copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   copy.imageExtent = {ext.width, ext.height, 1};
-  vkCmdCopyImageToBuffer(cmd, color_.image(),
+  vkCmdCopyImageToBuffer(cmd, color_.handle(),
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          readback_.handle(), 1, &copy);
 

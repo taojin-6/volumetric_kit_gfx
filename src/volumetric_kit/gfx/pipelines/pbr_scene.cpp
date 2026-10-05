@@ -41,9 +41,11 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
   PbrScene scene;
   scene.slots_.reserve(frames_in_flight);
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VG_ASSIGN(OwnedDescriptorSet resources,
-              OwnedDescriptorSet::create(device, allocator, scene_layout,
-                                         sizeof(SceneUbo), 3));
+    VG_ASSIGN(Buffer ubo, make_frame_uniform_buffer(allocator, sizeof(SceneUbo),
+                                                    desc.camera_memory));
+    VG_ASSIGN(
+        OwnedDescriptorSet resources,
+        OwnedDescriptorSet::create(device, std::move(ubo), scene_layout, 3));
 
     // The IBL maps are frame-constant, so they live in every slot's set
     // alongside its camera (binding 0, written per frame by set_camera) at
@@ -63,13 +65,13 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
   return scene;
 }
 
-void PbrScene::set_camera(uint32_t slot, const glm::vec3& eye,
-                          float prefilter_max_lod) noexcept {
+void PbrScene::set_camera(VkCommandBuffer cmd, uint32_t slot,
+                          const glm::vec3& eye, float prefilter_max_lod) const {
   // Out-of-range slot is a no-op, mirroring descriptor_set()'s graceful degrade
-  // rather than writing through a garbage mapped() pointer.
+  // rather than writing past the ring.
   if (slot >= slots_.size()) return;
-  *static_cast<SceneUbo*>(slots_[slot].mapped()) =
-      SceneUbo{glm::vec4(eye, prefilter_max_lod)};
+  const SceneUbo block{glm::vec4(eye, prefilter_max_lod)};
+  slots_[slot].write_uniform(cmd, &block, sizeof(block));
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

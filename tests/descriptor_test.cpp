@@ -12,8 +12,8 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -40,8 +40,8 @@ VkDescriptorSetLayoutBinding sampler_binding(uint32_t binding) {
   return b;
 }
 
-// Adds a VMA allocator (for a sampled image to bind) on top of the device
-// fixture; mirrors AllocatorTest / TextureUploadTest. Skips with the base when
+// Adds an allocator (for a sampled image to bind) on top of the device
+// fixture; mirrors TextureUploadTest. Skips with the base when
 // no Vulkan device is present.
 class DescriptorImageTest : public VulkanDeviceTest {
  protected:
@@ -166,7 +166,7 @@ TEST_F(DescriptorImageTest, CombinedImageSamplerWriteSucceeds) {
   // write_combined_image_sampler path end to end. A malformed write is caught
   // by the validation layers under the sanitizer job; here we assert the set
   // stays valid through the write.
-  vg::TextureDesc tex_desc;
+  vg::ImageDesc tex_desc;
   tex_desc.extent = {4, 4};
   tex_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   tex_desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;

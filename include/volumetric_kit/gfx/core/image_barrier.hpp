@@ -31,7 +31,7 @@ namespace volumetric_kit::gfx {
 /// // Prepare a freshly created cubemap for its staging copy: every face
 /// // (and mip) UNDEFINED -> TRANSFER_DST in one barrier.
 /// ImageBarrierDesc to_dst;
-/// to_dst.image = cube.image();
+/// to_dst.image = cube.handle();
 /// to_dst.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 /// to_dst.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 /// to_dst.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;

@@ -376,8 +376,7 @@ vg::Buffer make_host_buffer(vg::Allocator& allocator, const void* data,
   vg::BufferDesc desc;
   desc.size = size;
   desc.usage = usage;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
+  desc.memory = vg::MemoryUsage::DeviceMapped;
   auto buffer = allocator.create_buffer(desc);
   EXPECT_TRUE(buffer.ok()) << buffer.status().message();
   vg::Buffer out = std::move(buffer).value();

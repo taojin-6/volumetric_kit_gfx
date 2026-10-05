@@ -264,8 +264,8 @@ glm::vec3 cube_face_direction(int face, float u, float v) noexcept {
   }
 }
 
-Result<Texture> bake_brdf_lut(UploadBatch& batch, uint32_t size,
-                              uint32_t samples) {
+Result<Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
+                            uint32_t samples) {
   if (size == 0) {
     return Status::invalid_argument("bake_brdf_lut: size must be non-zero");
   }
@@ -294,8 +294,8 @@ Result<Texture> bake_brdf_lut(UploadBatch& batch, uint32_t size,
   return batch.add(desc);
 }
 
-Result<Texture> bake_brdf_lut(const Device& device, Allocator& allocator,
-                              uint32_t size, uint32_t samples) {
+Result<Image> bake_brdf_lut(const Device& device, Allocator& allocator,
+                            uint32_t size, uint32_t samples) {
   if (device.handle() == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "bake_brdf_lut: device must hold a live VkDevice");
@@ -310,7 +310,7 @@ Result<Texture> bake_brdf_lut(const Device& device, Allocator& allocator,
         "bake_brdf_lut: size exceeds the device's maxImageDimension2D limit");
   }
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(Texture lut, bake_brdf_lut(batch, size, samples));
+  VG_ASSIGN(Image lut, bake_brdf_lut(batch, size, samples));
   VG_TRY(batch.finish());
   return lut;
 }
@@ -377,7 +377,7 @@ Result<IblMaps> bake_ibl(const Device& device, Allocator& allocator,
   // Queue an RGBA16F cube upload (sampled-ready once the batch finishes).
   const auto add_cube =
       [&batch](uint32_t base_size, uint32_t mips,
-               const std::vector<uint32_t>& data) -> Result<Texture> {
+               const std::vector<uint32_t>& data) -> Result<Image> {
     ImageUploadDesc d;
     d.extent = {base_size, base_size};
     d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -439,16 +439,16 @@ Result<IblMaps> bake_ibl(const Device& device, Allocator& allocator,
         std::string("bake_ibl: concurrent convolution failed: ") + e.what());
   }
 
-  VG_ASSIGN(Texture irradiance_tex,
+  VG_ASSIGN(Image irradiance_tex,
             add_cube(desc.irradiance_size, 1, irradiance));
   out.irradiance = std::move(irradiance_tex);
-  VG_ASSIGN(Texture prefilter_tex,
+  VG_ASSIGN(Image prefilter_tex,
             add_cube(desc.prefilter_size, mips, prefilter));
   out.prefilter = std::move(prefilter_tex);
   out.prefilter_max_lod = static_cast<float>(mips - 1);
 
   // BRDF integration LUT, environment-independent.
-  VG_ASSIGN(Texture lut,
+  VG_ASSIGN(Image lut,
             bake_brdf_lut(batch, desc.brdf_lut_size, desc.brdf_lut_samples));
   out.brdf_lut = std::move(lut);
 

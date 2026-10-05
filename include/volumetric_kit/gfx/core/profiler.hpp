@@ -27,13 +27,14 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
 
+using core::Allocator;
 using core::Device;
-class Allocator;
 
 /// @brief Construction parameters for a @ref Profiler.
 struct ProfilerConfig {

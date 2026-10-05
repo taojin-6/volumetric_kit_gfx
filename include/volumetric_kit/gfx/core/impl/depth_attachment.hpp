@@ -7,7 +7,7 @@
 /// Shared depth-attachment helpers for the two render-target owners that grow
 /// an optional depth image — @ref OffscreenTarget (core) and @ref
 /// windowing::Swapchain — so the depth-only format validation (and its
-/// combined-depth/stencil TODO) and the depth `Texture` build live in one
+/// combined-depth/stencil TODO) and the depth `Image` build live in one
 /// place instead of being copied per owner. Not a public header.
 
 #include <string>
@@ -56,11 +56,10 @@ inline Status validate_depth_only_format(VkFormat format,
 /// @param extent     Attachment size in texels.
 /// @param format     A depth-only format (validate with @ref
 ///                   validate_depth_only_format first).
-/// @return The depth @ref Texture, or a propagated allocation failure.
-inline Result<Texture> make_depth_attachment(Allocator& allocator,
-                                             VkExtent2D extent,
-                                             VkFormat format) {
-  TextureDesc desc;
+/// @return The depth @ref Image, or a propagated allocation failure.
+inline Result<Image> make_depth_attachment(Allocator& allocator,
+                                           VkExtent2D extent, VkFormat format) {
+  ImageDesc desc;
   desc.extent = extent;
   desc.format = format;
   desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;

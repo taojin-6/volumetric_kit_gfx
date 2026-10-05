@@ -399,9 +399,9 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
 // matching the one-time transition). It does NOT catch a missing/incorrect
 // *synchronization* scope — synchronization validation is not enabled — and the
 // per-image "no cross-frame sharing" property is guaranteed by construction
-// (one Texture per image below), not asserted here (RenderTarget hides its
-// depth handle). run_frames only *clears* depth; functional depth *testing* is
-// exercised end-to-end by example_03_model.
+// (one Image per swapchain image below), not asserted here (RenderTarget hides
+// its depth handle). run_frames only *clears* depth; functional depth *testing*
+// is exercised end-to-end by example_03_model.
 TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   win::Swapchain sc = make_depth_swapchain();
   ASSERT_TRUE(sc.valid());

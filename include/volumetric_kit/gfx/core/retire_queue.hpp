@@ -26,18 +26,17 @@ namespace volumetric_kit::gfx {
 /// `AGENTS.md`) without any cross-API GPU event. Fences are observed, not
 /// owned. The GPU-independent bookkeeping lives in @ref RetireList.
 ///
-/// @warning The producers a queued deleter frees through -- the @ref Device,
-/// and
-///          any @ref Allocator whose @ref Buffer / @ref Texture deleters are
-///          enqueued here -- must outlive this queue: destruction drains (waits
-///          for + runs) every pending deleter, which calls back into them.
-///          Compose so the queue is destroyed first (declare it after the
-///          Device/Allocator in an owning struct, so reverse member-destruction
-///          tears the queue down first).
+/// @warning The @ref Device a queued deleter frees through must outlive this
+///          queue: destruction drains (waits for + runs) every pending
+///          deleter, which calls back into it. Compose so the queue is
+///          destroyed first (declare it after the Device in an owning struct,
+///          so reverse member-destruction tears the queue down first). A
+///          @ref Buffer or @ref Image keeps its allocator's state alive
+///          itself, so the @ref Allocator need not outlive the queue.
 ///
 /// The deleter is a `std::function`, so it must be copyable: capture copyable
 /// state (raw handles, a `shared_ptr`), not a move-only @ref Buffer / @ref
-/// Texture by value.
+/// Image by value.
 ///
 /// @code
 /// RetireQueue retire(device.handle());

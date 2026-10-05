@@ -9,30 +9,16 @@
 # come from the system"), and takes its VkFormat metadata from the core's
 # format.hpp. glm (camera tier) is preferred from the system too (resolved at
 # the top level), falling back to a pinned vendored copy below when none is
-# installed. Vendored via pinned FetchContent: VMA (header-only, built in one
-# gfx_core TU), spirv-cross (SPIR-V reflection; a static archive linked
-# privately into gfx_core), and googletest.
+# installed. Vendored via pinned FetchContent: spirv-cross (SPIR-V reflection; a
+# static archive linked privately into gfx_core), tinygltf, ImGui and
+# googletest. VMA is the core's: its allocator compiles it, and gfx no longer
+# builds a copy (DECISIONS.md, "Memory comes from volumetric_kit_core").
 
 include(FetchContent)
 
 # Public deps (Vulkan, glm's preference, volumetric_kit_core) are resolved at
 # the top level so their imported targets are visible across sibling
 # subdirectories. This file owns only the vendored deps.
-
-# --- VMA: Vulkan Memory Allocator (header-only; implemented in one gfx_core TU)
-# ----
-#
-# The core's vulkan tier declares the same name and pin (its third_party/), and
-# when the core is built here it is made available before this file runs.
-# FetchContent keeps the first declaration of a name, so the core's pin governs
-# and this one takes effect only when the core was found installed: bump the two
-# together.
-FetchContent_Declare(
-  VulkanMemoryAllocator
-  GIT_REPOSITORY
-    https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-  GIT_TAG v3.4.0
-  GIT_SHALLOW TRUE)
 
 # --- glm: header-only vector/matrix math (camera + assets tiers) --------------
 # Only vendored when the top level did not find a system glm. glm's CMake
@@ -59,12 +45,11 @@ endif()
 
 # --- tinygltf: glTF 2.0 loader for the io tier (header-only) -----------------
 # tinygltf bundles its deps (nlohmann/json + stb_image) in the repo root and is
-# implemented in one gfx_io TU (tinygltf_impl.cpp), exactly like VMA above.
-# SOURCE_SUBDIR names a nonexistent dir so MakeAvailable populates the sources
-# without running tinygltf's own CMakeLists (which builds its loader_example and
-# installs targets we do not want). The io tier compiles against this single
-# include dir and links no Vulkan -- it is pure CPU (gfx_assets + tinygltf
-# only).
+# implemented in one gfx_io TU (tinygltf_impl.cpp). SOURCE_SUBDIR names a
+# nonexistent dir so MakeAvailable populates the sources without running
+# tinygltf's own CMakeLists (which builds its loader_example and installs
+# targets we do not want). The io tier compiles against this single include dir
+# and links no Vulkan -- it is pure CPU (gfx_assets + tinygltf only).
 FetchContent_Declare(
   tinygltf
   GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
@@ -143,21 +128,15 @@ FetchContent_Declare(
   GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE)
 
-# VMA + tinygltf + spirv-cross + ImGui are all needed by the library:
-# spirv-cross backs gfx_core's SPIR-V reflection (shader.cpp), and ImGui backs
-# the ui tier's overlay (imgui_overlay.cpp).
-FetchContent_MakeAvailable(VulkanMemoryAllocator tinygltf spirv-cross imgui)
+# tinygltf + spirv-cross + ImGui are all needed by the library: spirv-cross
+# backs gfx_core's SPIR-V reflection (shader.cpp), and ImGui backs the ui tier's
+# overlay (imgui_overlay.cpp).
+FetchContent_MakeAvailable(tinygltf spirv-cross imgui)
 
 # glm only when no system copy was found (see the declaration guard above).
 if(NOT VG_HAVE_SYSTEM_GLM)
   FetchContent_MakeAvailable(glm)
 endif()
-
-# Expose the vendored header location to the library target. VMA is implemented
-# in one TU (see the SYSTEM include in core/CMakeLists.txt).
-set(VG_VMA_INCLUDE_DIR
-    "${vulkanmemoryallocator_SOURCE_DIR}/include"
-    PARENT_SCOPE)
 
 # tinygltf + its bundled json/stb headers live in the repo root; the io tier
 # compiles against this dir and implements the library in one TU.

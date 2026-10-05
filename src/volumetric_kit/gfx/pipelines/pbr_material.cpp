@@ -3,10 +3,11 @@
 
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 
-#include <cstring>
 #include <utility>
 
 #include <glm/vec4.hpp>
+
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -27,7 +28,7 @@ static_assert(sizeof(MaterialUbo) == 48,
 
 }  // namespace
 
-Result<PbrMaterial> PbrMaterial::create(VkDevice device, Allocator& allocator,
+Result<PbrMaterial> PbrMaterial::create(VkDevice device, UploadBatch& batch,
                                         VkDescriptorSetLayout material_layout,
                                         const PbrMaterialDesc& desc) {
   if (device == VK_NULL_HANDLE || material_layout == VK_NULL_HANDLE) {
@@ -43,12 +44,9 @@ Result<PbrMaterial> PbrMaterial::create(VkDevice device, Allocator& allocator,
         "non-null");
   }
 
-  VG_ASSIGN(OwnedDescriptorSet resources,
-            OwnedDescriptorSet::create(device, allocator, material_layout,
-                                       sizeof(MaterialUbo), 5));
-
-  // Factor UBO (binding 0): written once -- the factors do not change per
-  // frame.
+  // Factor UBO (binding 0): uploaded once into device-only memory -- the
+  // factors do not change per frame. add_buffer copies the block into staging
+  // now, so it need not outlive this call.
   MaterialUbo block{};
   block.base_color_factor = desc.base_color_factor;
   block.emissive_factor = glm::vec4(desc.emissive_factor, 0.0f);
@@ -56,7 +54,20 @@ Result<PbrMaterial> PbrMaterial::create(VkDevice device, Allocator& allocator,
   block.roughness_factor = desc.roughness_factor;
   block.normal_scale = desc.normal_scale;
   block.occlusion_strength = desc.occlusion_strength;
-  std::memcpy(resources.mapped(), &block, sizeof(block));
+  BufferUploadDesc upload;
+  upload.data = &block;
+  upload.size = sizeof(block);
+  upload.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+  VG_ASSIGN(Buffer ubo, batch.add_buffer(upload));
+
+  Result<OwnedDescriptorSet> made =
+      OwnedDescriptorSet::create(device, std::move(ubo), material_layout, 5);
+  if (!made.ok()) {
+    // The batch queued a copy into the UBO, which failing here freed.
+    batch.poison();
+    return made.status();
+  }
+  OwnedDescriptorSet resources = std::move(made).value();
 
   // The five maps follow the factor UBO at bindings 1-5, matching model.frag.
   const VkImageView maps[5] = {desc.base_color, desc.metallic_roughness,

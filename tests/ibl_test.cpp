@@ -14,7 +14,7 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -60,10 +60,10 @@ class IblTest : public VulkanDeviceTest {
   // Copy every (mip, layer) of `texture` (left in SHADER_READ_ONLY_OPTIMAL by
   // the bake) into host memory, packed mip-major like ImageUploadDesc. Fails
   // the current test and returns empty on any error.
-  std::vector<uint8_t> read_back(const vg::Texture& texture, uint32_t layers,
+  std::vector<uint8_t> read_back(const vg::Image& texture, uint32_t layers,
                                  uint32_t texel_bytes) {
     const uint32_t mips = texture.mip_levels();
-    const VkExtent2D extent = texture.extent();
+    const VkExtent2D extent{texture.width(), texture.height()};
     VkDeviceSize total = 0;
     for (uint32_t m = 0; m < mips; ++m) {
       const uint32_t w = std::max(extent.width >> m, 1u);
@@ -74,15 +74,15 @@ class IblTest : public VulkanDeviceTest {
     vg::BufferDesc rb;
     rb.size = total;
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    rb.memory = vg::MemoryUsage::HostVisible;
-    rb.mapped = true;
+    rb.memory = vg::MemoryUsage::Staging;
+    rb.host_access = vg::HostAccess::Random;
     auto readback = allocator_->create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
       return {};
     }
 
-    const VkImage image = texture.image();
+    const VkImage image = texture.handle();
     const VkBuffer dst = readback.value().handle();
     const auto recorded = device_->submit_single_time([&](VkCommandBuffer cmd) {
       VkImageMemoryBarrier to_src{};

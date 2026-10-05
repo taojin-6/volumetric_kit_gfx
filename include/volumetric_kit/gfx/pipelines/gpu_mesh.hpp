@@ -14,11 +14,12 @@
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-class Allocator;
+using core::Allocator;
 using core::Device;
 class UploadBatch;
 namespace assets {
@@ -28,12 +29,12 @@ struct Mesh;
 
 namespace volumetric_kit::gfx::pipelines {
 
-/// @brief Owns a triangle mesh's device-local interleaved vertex buffer and
+/// @brief Owns a triangle mesh's device-only interleaved vertex buffer and
 ///        32-bit index buffer, and records an indexed draw of them.
 ///
 /// Produced by @ref upload_mesh from an @ref assets::Mesh. A
 /// default-constructed `GpuMesh` is empty (`valid()` is false) and safe to
-/// move-assign into. The buffers' producing @ref Allocator must outlive the
+/// move-assign into. The device the buffers were made on must outlive the
 /// mesh (see @ref Buffer).
 ///
 /// @code
@@ -124,7 +125,7 @@ VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
 /// round trip each.
 /// @param device     The device whose graphics queue runs the one-time
 ///                   transfer.
-/// @param allocator  Allocates the buffers; must outlive the returned mesh.
+/// @param allocator  Allocates the buffers.
 /// @param mesh       The CPU mesh; its `vertices` and `indices` must be
 ///                   non-empty.
 /// @return The GPU mesh -- draw-ready -- on success, or a non-OK @ref Status:

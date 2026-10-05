@@ -16,7 +16,7 @@
 #include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
 namespace volumetric_kit::gfx {
-class Allocator;
+class UploadBatch;
 }  // namespace volumetric_kit::gfx
 
 namespace volumetric_kit::gfx::pipelines {
@@ -53,31 +53,36 @@ struct PbrMaterialDesc {
 ///
 /// Self-contained, like @ref GpuMesh: it owns its own one-set @ref
 /// DescriptorPool, the @ref DescriptorSet allocated from it, and the factor
-/// UBO. Build one per material with @ref create against
-/// `PbrPipeline::descriptor_set_layout(1)`, then name it in a @ref PbrDraw. A
-/// default-constructed `PbrMaterial` is empty (`valid()` is false) and safe to
-/// move-assign into.
+/// UBO. The factors never change, so the UBO is device-only memory, uploaded
+/// through an @ref UploadBatch as a mesh's buffers are: build one per material
+/// with @ref create against `PbrPipeline::descriptor_set_layout(1)`, finish
+/// the batch, then name it in a @ref PbrDraw. A default-constructed
+/// `PbrMaterial` is empty (`valid()` is false) and safe to move-assign into.
 ///
-/// @warning The @p allocator passed to @ref create (and the device that backs
-///          it), plus every image @ref PbrMaterialDesc names, must outlive the
-///          material — its descriptor set points at them.
+/// @warning The device, plus every image @ref PbrMaterialDesc names, must
+///          outlive the material — its descriptor set points at them.
 ///
 /// @code
 /// PbrMaterialDesc d;
 /// d.base_color_factor = m.base_color_factor;
 /// d.base_color = base_view;  // ... and the other four maps + sampler
-/// Result<pipelines::PbrMaterial> mat = pipelines::PbrMaterial::create(
-///     device, allocator, pbr.descriptor_set_layout(1), d);
+/// VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+/// VG_ASSIGN(pipelines::PbrMaterial mat,
+///           pipelines::PbrMaterial::create(
+///               device.handle(), batch, pbr.descriptor_set_layout(1), d));
+/// VG_TRY(batch.finish());  // the factors are in place
 /// @endcode
 class VG_PIPELINES_API PbrMaterial {
  public:
   /// @brief Construct an empty material (owns nothing; `valid()` is false).
   PbrMaterial() = default;
 
-  /// @brief Build the set-1 binding for one material.
+  /// @brief Build the set-1 binding for one material, queuing its factors'
+  ///        upload on @p batch.
   /// @param device          The logical device that owns the pool + set.
-  /// @param allocator       Allocates the factor UBO; must outlive the
-  /// material.
+  /// @param batch           An open batch, on @p device, that uploads the
+  ///                        factor UBO; draw the material only once it has
+  ///                        finished.
   /// @param material_layout The reflected set-1 layout, from
   ///                        @ref PbrPipeline::descriptor_set_layout(1).
   /// @param desc            Factors plus the five map views + sampler.
@@ -85,9 +90,11 @@ class VG_PIPELINES_API PbrMaterial {
   ///      view in @p desc plus @p desc.sampler is non-`VK_NULL_HANDLE` —
   ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
   ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The material on success, or a non-OK @ref Status (a backend
-  ///         Status from buffer / pool / set allocation).
-  static Result<PbrMaterial> create(VkDevice device, Allocator& allocator,
+  /// @return The material on success, or a non-OK @ref Status: what
+  ///         @ref UploadBatch::add_buffer returns, or a backend Status from
+  ///         pool / set allocation, after which the batch is poisoned, as the
+  ///         copy it queued would write a freed buffer.
+  static Result<PbrMaterial> create(VkDevice device, UploadBatch& batch,
                                     VkDescriptorSetLayout material_layout,
                                     const PbrMaterialDesc& desc);
 

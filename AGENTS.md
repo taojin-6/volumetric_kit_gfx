@@ -81,11 +81,10 @@ shape. These are the mistakes reviews keep catching, so get them right at author
 - **`operator=` guards self-move** (`if (this != &other)`) and runs `destroy()` on the
   current state before adopting the source's.
 - **Type-erase the backend via a `std::function<void()>` deleter** so VMA/etc. stay out of
-  the public header (see `Buffer`/`Texture`). Reset the moved-from `deleter_` to `nullptr`
-  explicitly — a moved-from `std::function` is valid-but-unspecified and can otherwise run
-  twice. The producing owner (e.g. the `Allocator` and the device it wraps) must outlive
-  the resource: state that in an `@warning` and point at `RetireQueue` for fence-gated
-  destruction.
+  the public header (as the core's `Buffer`/`Image` do). Reset the moved-from `deleter_` to
+  `nullptr` explicitly — a moved-from `std::function` is valid-but-unspecified and can
+  otherwise run twice. The producing owner (e.g. the device) must outlive the resource:
+  state that in an `@warning` and point at `RetireQueue` for fence-gated destruction.
 - **Validate before creating** — reject zero size/extent, `usage == 0`,
   `VK_FORMAT_UNDEFINED`, etc. with a non-OK `Status` before touching Vulkan/VMA.
 

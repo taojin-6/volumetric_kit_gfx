@@ -41,7 +41,7 @@ TEST_F(LiveMeshDeviceTest, ValidRequiresAllThreeBuffers) {
     vg::BufferDesc desc;
     desc.size = 256;
     desc.usage = usage;
-    desc.memory = vg::MemoryUsage::DeviceLocal;
+    desc.memory = vg::MemoryUsage::DeviceOnly;
     return allocator.value().create_buffer(desc);
   };
   auto vtx = make(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);

@@ -9,14 +9,18 @@
 
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
+
+namespace volumetric_kit::core {
+class Allocator;
+}  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
 
-class Allocator;
+using core::Allocator;
 
 /// @brief Parameters for @ref OffscreenTarget::create.
 struct OffscreenTargetDesc {
@@ -49,9 +53,10 @@ struct OffscreenTargetDesc {
 /// swapchain; both produce a @ref RenderTarget, so a pass renders into either
 /// unchanged.
 ///
-/// @warning The @p allocator passed to @ref create must outlive the target: the
-///          owned @ref Texture / @ref Buffer free through it. Retire the target
-///          ahead of allocator teardown.
+/// @warning The device the @p allocator passed to @ref create allocates on
+///          must outlive the target: the owned @ref Image / @ref Buffer free
+///          through it (the allocator need not). Retire the target ahead of
+///          device teardown.
 ///
 /// @code
 /// Result<OffscreenTarget> rt = OffscreenTarget::create(
@@ -69,7 +74,7 @@ class VG_CORE_API OffscreenTarget {
   OffscreenTarget() = default;
 
   /// @brief Allocate the attachment image(s) and readback buffer for @p desc.
-  /// @param allocator  The allocator that backs (and outlives) the images.
+  /// @param allocator  Allocates the images and the readback buffer.
   /// @param desc       Extent, formats, and whether to allocate readback.
   /// @return The target on success, or a non-OK @ref Status:
   ///         - a zero @ref OffscreenTargetDesc::extent or a
@@ -100,14 +105,16 @@ class VG_CORE_API OffscreenTarget {
   RenderTargetLayout layout() const;
 
   /// @return The attachment extent in texels.
-  VkExtent2D extent() const noexcept { return color_.extent(); }
+  VkExtent2D extent() const noexcept {
+    return {color_.width(), color_.height()};
+  }
 
   /// @return The color `VkImage`, for the caller's pre/post-render barriers.
-  VkImage color_image() const noexcept { return color_.image(); }
+  VkImage color_image() const noexcept { return color_.handle(); }
 
   /// @return The depth `VkImage` for the caller's barriers, or `VK_NULL_HANDLE`
   ///         when the target has no depth attachment.
-  VkImage depth_image() const noexcept { return depth_.image(); }
+  VkImage depth_image() const noexcept { return depth_.handle(); }
 
   /// @brief Record the transitions into the attachment layouts (dynamic
   ///        rendering performs none itself): the color image
@@ -146,8 +153,8 @@ class VG_CORE_API OffscreenTarget {
   bool valid() const noexcept { return color_.valid(); }
 
  private:
-  Texture color_;
-  Texture depth_;    // empty when created without a depth_format
+  Image color_;
+  Image depth_;      // empty when created without a depth_format
   Buffer readback_;  // empty when created without readback
 };
 

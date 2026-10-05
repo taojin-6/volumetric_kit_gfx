@@ -4,7 +4,7 @@
 #pragma once
 
 /// @file texture_upload.hpp
-/// @brief Fill device-local GPU resources from CPU data: sampled @ref Texture
+/// @brief Fill device-local GPU resources from CPU data: sampled @ref Image
 ///        objects from pixels and @ref Buffer objects from bytes, one blocking
 ///        transfer each (@ref upload_texture, @ref upload_buffer) or many
 ///        uploads per submit (@ref UploadBatch).
@@ -17,8 +17,8 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
@@ -85,8 +85,8 @@ struct BufferUploadDesc {
 ///        with one.
 ///
 /// @ref begin opens a batch on a device that meets the renderer's requirements;
-/// each @ref add / @ref add_buffer validates its desc, creates the device-local
-/// destination (@ref Texture or @ref Buffer) plus a staging @ref Buffer, and
+/// each @ref add / @ref add_buffer validates its desc, creates the device-only
+/// destination (@ref Image or @ref Buffer) plus a staging @ref Buffer, and
 /// queues the copies -- and, for textures, layout transitions; @ref finish
 /// records them all into one command buffer of the device's
 /// (`Device::submit_single_time`), submits it and blocks on a fence, after
@@ -96,9 +96,10 @@ struct BufferUploadDesc {
 /// be reused -- @ref begin a new one. A default-constructed batch is likewise
 /// empty and safe to move-assign into.
 ///
-/// @warning The @p device and @p allocator passed to @ref begin must outlive
-///          the batch (and, per @ref Texture / @ref Buffer, every resource it
-///          produced). Destroying a batch without calling @ref finish discards
+/// @warning The @p device passed to @ref begin must outlive the batch and every
+///          resource it produced, and the @p allocator the batch; the
+///          resources may outlive the allocator. Destroying a batch without
+///          calling @ref finish discards
 ///          the pending uploads: nothing is submitted, the staging buffers are
 ///          freed, and the resources returned by @ref add / @ref add_buffer
 ///          hold undefined contents.
@@ -106,7 +107,7 @@ struct BufferUploadDesc {
 /// @code
 /// Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
 /// if (!batch) return batch.status();
-/// Result<Texture> albedo = batch.value().add(albedo_desc);
+/// Result<Image> albedo = batch.value().add(albedo_desc);
 /// if (!albedo) return albedo.status();
 /// Result<Buffer> vertices = batch.value().add_buffer(vertex_desc);
 /// if (!vertices) return vertices.status();
@@ -125,8 +126,7 @@ class VG_CORE_API UploadBatch {
   /// @param device     Records and submits the batch at @ref finish; must
   ///                   outlive the batch.
   /// @param allocator  Allocates each add's staging buffer and destination
-  ///                   resource; must outlive the batch and everything it
-  ///                   returned.
+  ///                   resource; must outlive the batch.
   /// @return The open batch; @ref Status::Code::Unsupported naming the first
   ///         renderer requirement @p device did not enable; or
   ///         @ref Status::Code::InvalidArgument for a moved-from @p device.
@@ -147,23 +147,25 @@ class VG_CORE_API UploadBatch {
   /// add leaves the batch open and unchanged, with nothing recorded.
   /// @param desc  Source pixels, extent, format, and layer/mip options; see
   ///              @ref upload_texture for the validation rules.
-  /// @return The created texture -- usable only after @ref finish returns OK --
-  ///         or a non-OK @ref Status: @ref Status::Code::InvalidArgument when
-  ///         the batch is empty (not begun, moved-from, or already finished),
-  ///         plus everything @ref upload_texture rejects.
+  /// @return The created texture -- usable only after @ref finish returns OK,
+  ///         and recording `SHADER_READ_ONLY_OPTIMAL`, the layout finish leaves
+  ///         it in, as its `layout()` -- or a non-OK @ref Status: @ref
+  ///         Status::Code::InvalidArgument when the batch is empty (not begun,
+  ///         moved-from, or already finished), plus everything @ref
+  ///         upload_texture rejects.
   /// @warning Keep the returned texture alive at least until @ref finish
   ///          returns: the recorded upload writes into it, so destroying it
   ///          earlier would submit against a freed image.
-  Result<Texture> add(const ImageUploadDesc& desc);
+  Result<Image> add(const ImageUploadDesc& desc);
 
-  /// @brief Create a device-local buffer for @p desc and queue its upload on
+  /// @brief Create a device-only buffer for @p desc and queue its upload on
   ///        the batch.
   ///
   /// The destination is created with `TRANSFER_DST | desc.usage` in
-  /// @ref MemoryUsage::DeviceLocal memory; the bytes stage through an internal
-  /// host-visible buffer that lives until @ref finish. Validation and resource
-  /// creation happen before any recording, so a failed add leaves the batch
-  /// open and unchanged, with nothing recorded.
+  /// @ref MemoryUsage::DeviceOnly memory; the bytes stage through an internal
+  /// @ref MemoryUsage::Staging buffer that lives until @ref finish. Validation
+  /// and resource creation happen before any recording, so a failed add leaves
+  /// the batch open and unchanged, with nothing recorded.
   /// @param desc  Source bytes, byte length, and destination usage.
   /// @return The created buffer -- holding its bytes only after @ref finish
   ///         returns OK -- or a non-OK @ref Status: @ref
@@ -184,11 +186,11 @@ class VG_CORE_API UploadBatch {
   /// failure alike (a failed batch's uploads are discarded, and its textures
   /// and buffers hold undefined contents).
   ///
-  /// If the wait fails, the device may still be running the copies: the
-  /// staging buffers are then freed only once the device's queue drains, and
-  /// kept (leaked, and logged) if it never does, as after a lost device. The
-  /// added textures and buffers may likewise still be written, so treat the
-  /// device as lost before freeing them.
+  /// If the wait fails, the device may still be running the copies: it then
+  /// keeps the staging buffers with the command buffer until it is destroyed
+  /// (`Device::submit_single_time`). The added textures and buffers may
+  /// likewise still be written, so treat the device as lost before freeing
+  /// them.
   /// @return OK once every added texture is sampled-ready and every added
   ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
   ///         batch is empty or @ref poison ed, or a backend @ref Status
@@ -229,7 +231,7 @@ class VG_CORE_API UploadBatch {
 };
 
 /// @brief Upload @p desc.pixels into a new device-local, shader-sampled @ref
-///        Texture, returning once the copy has completed on the GPU.
+///        Image, returning once the copy has completed on the GPU.
 ///
 /// A one-texture @ref UploadBatch (begin + add + finish): stages the
 /// pixels through a host-visible buffer and records one
@@ -242,7 +244,7 @@ class VG_CORE_API UploadBatch {
 /// @param device     The device whose graphics queue runs the one-time
 ///                   transfer; must outlive the returned texture.
 /// @param allocator  Allocates the staging buffer and the destination image;
-///                   must outlive the returned texture (see @ref Texture).
+///                   must outlive the returned texture (see @ref Image).
 /// @param desc       Source pixels, extent, format, and layer/mip options.
 /// @return The texture -- sampled-ready in `SHADER_READ_ONLY_OPTIMAL`, with a
 ///         default view spanning all mips and layers -- or a non-OK @ref
@@ -264,9 +266,9 @@ class VG_CORE_API UploadBatch {
 ///         from the staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).
-VG_CORE_API Result<Texture> upload_texture(const Device& device,
-                                           Allocator& allocator,
-                                           const ImageUploadDesc& desc);
+VG_CORE_API Result<Image> upload_texture(const Device& device,
+                                         Allocator& allocator,
+                                         const ImageUploadDesc& desc);
 
 /// @brief Upload @p desc.data into a new device-local @ref Buffer, returning
 ///        once the copy has completed on the GPU.

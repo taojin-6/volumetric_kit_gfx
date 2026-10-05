@@ -13,8 +13,8 @@
 #include <utility>
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -47,7 +47,7 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   // A four-layer 2D array image, transitioned in per-range steps: layers 1..2
   // first, then the outer layers, then the whole image at once through the
   // remaining-mips/layers defaults.
-  vg::TextureDesc desc;
+  vg::ImageDesc desc;
   desc.extent = {8, 8};
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -55,7 +55,7 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   auto texture = allocator_->create_image(desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
 
-  const VkImage image = texture.value().image();
+  const VkImage image = texture.value().handle();
   auto recorded = device_->submit_single_time([image](VkCommandBuffer cmd) {
     vg::ImageBarrierDesc to_dst;
     to_dst.image = image;

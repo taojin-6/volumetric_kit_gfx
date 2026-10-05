@@ -61,7 +61,7 @@ TEST_F(CommandTest, BufferReRecordsAcrossBeginEndCycles) {
   EXPECT_TRUE(cmd.value().end().ok());
 }
 
-// End-to-end: record vkCmdFillBuffer into a host-visible buffer, submit on the
+// End-to-end: record vkCmdFillBuffer into a staging buffer, submit on the
 // graphics queue, fence-wait, then read the result back through the mapping.
 // Proves CommandPool + CommandBuffer + Fence + Allocator compose into a real
 // CPU -> GPU -> CPU round trip.
@@ -72,8 +72,8 @@ TEST_F(CommandTest, RecordFillSubmitReadback) {
   vg::BufferDesc desc;
   desc.size = 64;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
+  desc.memory = vg::MemoryUsage::Staging;
+  desc.host_access = vg::HostAccess::Random;
   auto buffer = allocator.value().create_buffer(desc);
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
 
