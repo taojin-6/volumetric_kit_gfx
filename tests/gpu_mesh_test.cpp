@@ -55,7 +55,7 @@ TEST_F(GpuMeshTest, EmptyMeshIsRejected) {
   const assets::Mesh empty;  // no vertices / indices
   auto mesh = pipelines::upload_mesh(*device_, *allocator_, empty);
   ASSERT_FALSE(mesh.ok());
-  EXPECT_EQ(mesh.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(mesh.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GpuMeshTest, BatchUploadsManyMeshesInOneSubmit) {
@@ -66,7 +66,7 @@ TEST_F(GpuMeshTest, BatchUploadsManyMeshesInOneSubmit) {
   // and usable.
   const assets::Mesh empty;
   EXPECT_EQ(pipelines::upload_mesh(batch.value(), empty).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 
   auto a = pipelines::upload_mesh(batch.value(), quad());
   auto b = pipelines::upload_mesh(batch.value(), quad());
@@ -74,7 +74,7 @@ TEST_F(GpuMeshTest, BatchUploadsManyMeshesInOneSubmit) {
   ASSERT_TRUE(b.ok()) << b.status().message();
 
   // One submit for both meshes; both come back draw-ready.
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(a.value().valid());
   EXPECT_TRUE(b.value().valid());
@@ -86,7 +86,7 @@ TEST_F(GpuMeshTest, BatchFormRejectsEmptyBatch) {
   vg::UploadBatch batch;  // default-constructed: owns nothing
   auto mesh = pipelines::upload_mesh(batch, quad());
   ASSERT_FALSE(mesh.ok());
-  EXPECT_EQ(mesh.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(mesh.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GpuMeshTest, MoveLeavesSourceEmpty) {

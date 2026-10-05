@@ -46,11 +46,12 @@ void GpuMesh::record_draw(VkCommandBuffer cmd) const {
   vkCmdDrawIndexed(cmd, index_count_, 1, 0, 0, 0);
 }
 
-Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
+core::Result<GpuMesh> upload_mesh(UploadBatch& batch,
+                                  const assets::Mesh& mesh) {
   // Mesh-level validation before either add_buffer, so an invalid mesh leaves
   // the batch untouched (add_buffer rejects an empty batch itself).
   if (mesh.vertices.empty() || mesh.indices.empty()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_mesh: mesh has no vertices or indices");
   }
   BufferUploadDesc vertex_desc;
@@ -59,14 +60,14 @@ Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
   vertex_desc.size =
       VkDeviceSize{mesh.vertices.size()} * sizeof(assets::Vertex);
   vertex_desc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-  // A failed first add records nothing, so the batch stays usable (VG_ASSIGN
+  // A failed first add records nothing, so the batch stays usable (VKC_ASSIGN
   // returns without poisoning it).
-  VG_ASSIGN(core::Buffer vertices, batch.add_buffer(vertex_desc));
+  VKC_ASSIGN(core::Buffer vertices, batch.add_buffer(vertex_desc));
   BufferUploadDesc index_desc;
   index_desc.data = mesh.indices.data();
   index_desc.size = VkDeviceSize{mesh.indices.size()} * sizeof(uint32_t);
   index_desc.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  Result<core::Buffer> indices = batch.add_buffer(index_desc);
+  core::Result<core::Buffer> indices = batch.add_buffer(index_desc);
   if (!indices.ok()) {
     // The vertex copy is already recorded into `vertices`, which unwinds (and
     // frees) as we return: poison the batch so a later finish() discards that
@@ -78,14 +79,15 @@ Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
                  static_cast<uint32_t>(mesh.indices.size()));
 }
 
-Result<GpuMesh> upload_mesh(const Device& device, core::Allocator& allocator,
-                            const assets::Mesh& mesh) {
+core::Result<GpuMesh> upload_mesh(const core::Device& device,
+                                  core::Allocator& allocator,
+                                  const assets::Mesh& mesh) {
   // The one-mesh batch: record both buffers, one submit, one fence wait. A
   // failed record leaves the batch to its destructor, which discards the
   // never-submitted command buffer.
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(GpuMesh gpu, upload_mesh(batch, mesh));
-  VG_TRY(batch.finish());
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(GpuMesh gpu, upload_mesh(batch, mesh));
+  VKC_TRY(batch.finish());
   return gpu;
 }
 

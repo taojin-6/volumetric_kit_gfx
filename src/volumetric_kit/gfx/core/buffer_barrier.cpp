@@ -3,13 +3,13 @@
 
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 
-#include "volumetric_kit/gfx/core/check.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 
 namespace volumetric_kit::gfx {
 
 void cmd_buffer_barrier(VkCommandBuffer cmd, const BufferBarrierDesc& desc) {
-  VG_CHECK(desc.buffer != VK_NULL_HANDLE,
-           "cmd_buffer_barrier: buffer must be set");
+  VKC_CHECK(desc.buffer != VK_NULL_HANDLE,
+            "cmd_buffer_barrier: buffer must be set");
   VkBufferMemoryBarrier barrier{};
   barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
   barrier.srcAccessMask = desc.src_access;

@@ -32,16 +32,16 @@ struct PushConstants {
 
 }  // namespace
 
-Result<PbrPipeline> PbrPipeline::create(VkDevice device,
-                                        const RenderTargetLayout& layout) {
-  VG_ASSIGN(ShaderModule vert,
-            ShaderModule::create(
-                device, reinterpret_cast<const uint32_t*>(vg_model_vert_spv),
-                vg_model_vert_spv_size));
-  VG_ASSIGN(ShaderModule frag,
-            ShaderModule::create(
-                device, reinterpret_cast<const uint32_t*>(vg_model_frag_spv),
-                vg_model_frag_spv_size));
+core::Result<PbrPipeline> PbrPipeline::create(
+    VkDevice device, const RenderTargetLayout& layout) {
+  VKC_ASSIGN(ShaderModule vert,
+             ShaderModule::create(
+                 device, reinterpret_cast<const uint32_t*>(vg_model_vert_spv),
+                 vg_model_vert_spv_size));
+  VKC_ASSIGN(ShaderModule frag,
+             ShaderModule::create(
+                 device, reinterpret_cast<const uint32_t*>(vg_model_frag_spv),
+                 vg_model_frag_spv_size));
 
   // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), and
   // tangent (3) -- the layout model.vert declares.
@@ -64,7 +64,7 @@ Result<PbrPipeline> PbrPipeline::create(VkDevice device,
   desc.vertex_attribute_count = 4;
   desc.depth_test = true;
   desc.depth_write = true;
-  VG_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
+  VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
 
   PbrPipeline pbr;
   pbr.pipeline_ = std::move(pipeline);

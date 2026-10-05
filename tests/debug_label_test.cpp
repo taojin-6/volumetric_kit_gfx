@@ -7,9 +7,10 @@
 #include <utility>
 
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 
 namespace {
 
@@ -24,7 +25,7 @@ namespace vkc = volumetric_kit::core;
 class DebugLabelTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    vg::InstanceConfig instance_config;
+    vkc::InstanceConfig instance_config;
     instance_config.request_debug_utils = true;  // active emit path everywhere
     // Prefer validation: on the Linux sanitizers job it is the detector that
     // catches an unbalanced / double-end label (ASan/UBSan cannot — it is a
@@ -33,20 +34,20 @@ class DebugLabelTest : public ::testing::Test {
     // with debug-utils only: the active emit path still runs, just without
     // the validation backstop.
     instance_config.enable_validation = true;
-    auto instance = vg::Instance::create(instance_config);
+    auto instance = vkc::Instance::create(instance_config);
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
     instance_.emplace(std::move(instance).value());
 
-    const vg::DeviceRequirements reqs = vg::device_requirements();
+    const vkc::DeviceRequirements reqs = vg::device_requirements();
     auto physical = instance_->select_physical_device(reqs);
     if (!physical.ok()) {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
     // The device learns from the instance whether the extension is enabled:
     // its entry points only resolve then.
-    auto device = vg::Device::create(*instance_, physical.value(), reqs);
+    auto device = vkc::Device::create(*instance_, physical.value(), reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
     // A pool of the test's own: a real handle to name.
@@ -56,8 +57,8 @@ class DebugLabelTest : public ::testing::Test {
     pool_ = std::move(pool).value();
   }
 
-  std::optional<vg::Instance> instance_;
-  std::optional<vg::Device> device_;
+  std::optional<vkc::Instance> instance_;
+  std::optional<vkc::Device> device_;
   vkc::CommandPool pool_;
 };
 
@@ -78,7 +79,7 @@ TEST_F(DebugLabelTest, TableActiveMatchesInstanceFlag) {
 // rejects; here active() must report false whether or not the table is live.
 TEST_F(DebugLabelTest, NullNameLeavesScopeInert) {
   const vg::DebugUtilsTable table = vg::debug_utils(*device_);
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope scope(cmd, table, nullptr);
     EXPECT_FALSE(scope.active());
   });
@@ -103,7 +104,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
                       reinterpret_cast<uint64_t>(pool_.handle()), "test pool");
 
   const float color[4] = {0.2f, 0.4f, 0.8f, 1.0f};
-  vg::Status record_status =
+  vkc::Status record_status =
       device_->submit_single_time([&](VkCommandBuffer cmd) {
         // The scope must open and close while cmd is recording; the inner block
         // ends the region before submit_single_time calls vkEndCommandBuffer.
@@ -123,7 +124,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
   {
     vg::QueueLabelScope queue_scope(device_->queue(), table, "frame", color);
     EXPECT_EQ(queue_scope.active(), table.active());
-    vg::Status submit_status =
+    vkc::Status submit_status =
         device_->submit_single_time([](VkCommandBuffer) {});
     EXPECT_TRUE(submit_status.ok()) << submit_status.message();
   }
@@ -136,7 +137,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
 // layer (when present on the sanitizers job) catches an actual double-end.
 TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
   const vg::DebugUtilsTable table = vg::debug_utils(*device_);
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope source(cmd, table, "region");
     const bool was_active = source.active();
 
@@ -154,7 +155,7 @@ TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
 // final destruction stay strictly nested for the validation layer.
 TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
   const vg::DebugUtilsTable table = vg::debug_utils(*device_);
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope src(cmd, table, "src region");
     vg::DebugLabelScope dst(cmd, table, "dst region");
     const bool src_active = src.active();
@@ -170,7 +171,7 @@ TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
 // keeps its state and emits exactly one End at exit.
 TEST_F(DebugLabelTest, DebugLabelSelfMoveIsSafe) {
   const vg::DebugUtilsTable table = vg::debug_utils(*device_);
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope scope(cmd, table, "region");
     const bool was_active = scope.active();
 

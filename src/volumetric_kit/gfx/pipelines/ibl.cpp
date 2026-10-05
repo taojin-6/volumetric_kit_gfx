@@ -19,7 +19,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -264,16 +264,18 @@ glm::vec3 cube_face_direction(int face, float u, float v) noexcept {
   }
 }
 
-Result<core::Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
-                                  uint32_t samples) {
+core::Result<core::Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
+                                        uint32_t samples) {
   if (size == 0) {
-    return Status::invalid_argument("bake_brdf_lut: size must be non-zero");
+    return core::Status::invalid_argument(
+        "bake_brdf_lut: size must be non-zero");
   }
   if (samples == 0) {
-    return Status::invalid_argument("bake_brdf_lut: samples must be non-zero");
+    return core::Status::invalid_argument(
+        "bake_brdf_lut: samples must be non-zero");
   }
   if (!batch.valid()) {  // before integrating, not after
-    return Status::invalid_argument("bake_brdf_lut: batch must be open");
+    return core::Status::invalid_argument("bake_brdf_lut: batch must be open");
   }
   // The concurrent integration can throw (std::async on thread exhaustion, or
   // a worker allocation) -- convert to a Status so the whole API stays on the
@@ -282,7 +284,7 @@ Result<core::Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
   try {
     lut = integrate_brdf_lut(size, samples);
   } catch (const std::exception& e) {
-    return Status::out_of_memory(
+    return core::Status::out_of_memory(
         std::string("bake_brdf_lut: concurrent integration failed: ") +
         e.what());
   }
@@ -294,42 +296,44 @@ Result<core::Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
   return batch.add(desc);
 }
 
-Result<core::Image> bake_brdf_lut(const Device& device,
-                                  core::Allocator& allocator, uint32_t size,
-                                  uint32_t samples) {
+core::Result<core::Image> bake_brdf_lut(const core::Device& device,
+                                        core::Allocator& allocator,
+                                        uint32_t size, uint32_t samples) {
   if (device.handle() == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_brdf_lut: device must hold a live VkDevice");
   }
   if (size == 0 || samples == 0) {  // before Vulkan is touched
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_brdf_lut: size and samples must be non-zero");
   }
   if (size > device.caps().limits().maxImageDimension2D) {
     // From device caps, before the ~size*size-sample integration runs.
-    return Status::unsupported(
+    return core::Status::unsupported(
         "bake_brdf_lut: size exceeds the device's maxImageDimension2D limit");
   }
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(core::Image lut, bake_brdf_lut(batch, size, samples));
-  VG_TRY(batch.finish());
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(core::Image lut, bake_brdf_lut(batch, size, samples));
+  VKC_TRY(batch.finish());
   lut.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return lut;
 }
 
-Result<IblMaps> bake_ibl(const Device& device, core::Allocator& allocator,
-                         const EnvironmentSampler& environment,
-                         const IblBakeDesc& desc) {
+core::Result<IblMaps> bake_ibl(const core::Device& device,
+                               core::Allocator& allocator,
+                               const EnvironmentSampler& environment,
+                               const IblBakeDesc& desc) {
   if (device.handle() == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_ibl: device must hold a live VkDevice");
   }
   if (!environment) {
-    return Status::invalid_argument("bake_ibl: environment must be callable");
+    return core::Status::invalid_argument(
+        "bake_ibl: environment must be callable");
   }
   if (desc.irradiance_size == 0 || desc.prefilter_size == 0 ||
       desc.brdf_lut_size == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_ibl: every texture size must be non-zero");
   }
   // Reject over-limit sizes up front from the device caps -- otherwise the
@@ -338,26 +342,26 @@ Result<IblMaps> bake_ibl(const Device& device, core::Allocator& allocator,
   const VkPhysicalDeviceLimits& limits = device.caps().limits();
   if (desc.irradiance_size > limits.maxImageDimensionCube ||
       desc.prefilter_size > limits.maxImageDimensionCube) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "bake_ibl: irradiance_size / prefilter_size exceeds the device's "
         "maxImageDimensionCube limit");
   }
   if (desc.brdf_lut_size > limits.maxImageDimension2D) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "bake_ibl: brdf_lut_size exceeds the device's maxImageDimension2D "
         "limit");
   }
   if (!(desc.irradiance_sample_delta > 0.0f)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_ibl: irradiance_sample_delta must be positive");
   }
   if (desc.prefilter_samples == 0 || desc.brdf_lut_samples == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_ibl: every sample count must be non-zero");
   }
   if (desc.prefilter_mip_levels == 0 ||
       desc.prefilter_mip_levels > full_mip_chain(desc.prefilter_size)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "bake_ibl: prefilter_mip_levels must fit prefilter_size's mip chain");
   }
 
@@ -367,19 +371,19 @@ Result<IblMaps> bake_ibl(const Device& device, core::Allocator& allocator,
   sd.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   sd.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   sd.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  VG_ASSIGN(Sampler sampler, Sampler::create(device.handle(), sd));
+  VKC_ASSIGN(Sampler sampler, Sampler::create(device.handle(), sd));
   out.sampler.emplace(std::move(sampler));
 
   // One batch for all three textures: one submit + fence wait instead of a
   // blocking round trip each. A failure below returns without finishing; the
   // batch (and its pending copies into any dropped textures) is discarded,
   // never submitted.
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
 
   // Queue an RGBA16F cube upload (sampled-ready once the batch finishes).
   const auto add_cube =
       [&batch](uint32_t base_size, uint32_t mips,
-               const std::vector<uint32_t>& data) -> Result<core::Image> {
+               const std::vector<uint32_t>& data) -> core::Result<core::Image> {
     ImageUploadDesc d;
     d.extent = {base_size, base_size};
     d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -437,26 +441,26 @@ Result<IblMaps> bake_ibl(const Device& device, core::Allocator& allocator,
           return px;
         });
   } catch (const std::exception& e) {
-    return Status::out_of_memory(
+    return core::Status::out_of_memory(
         std::string("bake_ibl: concurrent convolution failed: ") + e.what());
   }
 
-  VG_ASSIGN(core::Image irradiance_tex,
-            add_cube(desc.irradiance_size, 1, irradiance));
+  VKC_ASSIGN(core::Image irradiance_tex,
+             add_cube(desc.irradiance_size, 1, irradiance));
   out.irradiance = std::move(irradiance_tex);
-  VG_ASSIGN(core::Image prefilter_tex,
-            add_cube(desc.prefilter_size, mips, prefilter));
+  VKC_ASSIGN(core::Image prefilter_tex,
+             add_cube(desc.prefilter_size, mips, prefilter));
   out.prefilter = std::move(prefilter_tex);
   out.prefilter_max_lod = static_cast<float>(mips - 1);
 
   // BRDF integration LUT, environment-independent.
-  VG_ASSIGN(core::Image lut,
-            bake_brdf_lut(batch, desc.brdf_lut_size, desc.brdf_lut_samples));
+  VKC_ASSIGN(core::Image lut,
+             bake_brdf_lut(batch, desc.brdf_lut_size, desc.brdf_lut_samples));
   out.brdf_lut = std::move(lut);
 
   // One submit + fence wait for all three IBL textures, which it leaves
   // sampled-ready.
-  VG_TRY(batch.finish());
+  VKC_TRY(batch.finish());
   out.irradiance.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   out.prefilter.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   out.brdf_lut.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

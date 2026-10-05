@@ -39,7 +39,7 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
 
   vkc::Allocator make_allocator() {
     // Allocator has no public empty state, so this one keeps the value()
-    // (a VG_CHECK abort on the near-impossible failure of allocator creation
+    // (a VKC_CHECK abort on the near-impossible failure of allocator creation
     // against the already-asserted device); the fallible image allocations that
     // can realistically OOM live in make_target / make_depth_target, which
     // return empty on failure instead of aborting.
@@ -83,7 +83,7 @@ TEST_F(OffscreenTargetDeviceTest, ZeroExtentRejected) {
   desc.color_format = kFormat;
   auto target = vg::OffscreenTarget::create(allocator, desc);
   ASSERT_FALSE(target.ok());
-  EXPECT_EQ(target.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(target.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(OffscreenTargetDeviceTest, UndefinedColorFormatRejected) {
@@ -93,7 +93,7 @@ TEST_F(OffscreenTargetDeviceTest, UndefinedColorFormatRejected) {
   desc.color_format = VK_FORMAT_UNDEFINED;
   auto target = vg::OffscreenTarget::create(allocator, desc);
   ASSERT_FALSE(target.ok());
-  EXPECT_EQ(target.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(target.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // A vendor extension's format has no texel size in the core's format table
@@ -106,7 +106,7 @@ TEST_F(OffscreenTargetDeviceTest, ReadbackOfVendorFormatUnsupported) {
   desc.color_format = static_cast<VkFormat>(1000464000);
   auto target = vg::OffscreenTarget::create(allocator, desc);
   ASSERT_FALSE(target.ok());
-  EXPECT_EQ(target.status().domain(), vg::Status::Code::Unsupported);
+  EXPECT_EQ(target.status().domain(), vkc::Status::Code::Unsupported);
 }
 
 // --- Move-only lifecycle ---------------------------------------------------

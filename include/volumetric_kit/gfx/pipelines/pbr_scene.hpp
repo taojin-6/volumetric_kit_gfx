@@ -11,8 +11,8 @@
 
 #include <glm/vec3.hpp>
 
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
@@ -55,7 +55,7 @@ struct PbrSceneDesc {
 ///          outlive the scene.
 ///
 /// @code
-/// Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
+/// core::Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
 ///     device, allocator, pbr.descriptor_set_layout(0), ibl_desc,
 ///     loop.frames_in_flight());
 /// // each frame, with the windowing Frame f from FrameLoop::begin_frame,
@@ -80,14 +80,15 @@ class VG_PIPELINES_API PbrScene {
   /// @pre @p device and @p scene_layout are non-`VK_NULL_HANDLE`, every view
   ///      in @p desc plus @p desc.sampler is non-`VK_NULL_HANDLE`, and
   ///      @p frames_in_flight >= 1 — validated before Vulkan is touched,
-  ///      otherwise a non-OK @ref Status with domain
-  ///      @ref Status::Code::InvalidArgument.
-  /// @return The scene on success, or a non-OK @ref Status (a backend
+  ///      otherwise a non-OK `core::Status` with domain
+  ///      `core::Status::Code::InvalidArgument`.
+  /// @return The scene on success, or a non-OK `core::Status` (a backend
   ///         Status from buffer / pool / set allocation).
-  static Result<PbrScene> create(VkDevice device, core::Allocator& allocator,
-                                 VkDescriptorSetLayout scene_layout,
-                                 const PbrSceneDesc& desc,
-                                 uint32_t frames_in_flight = 1);
+  static core::Result<PbrScene> create(VkDevice device,
+                                       core::Allocator& allocator,
+                                       VkDescriptorSetLayout scene_layout,
+                                       const PbrSceneDesc& desc,
+                                       uint32_t frames_in_flight = 1);
 
   ~PbrScene() = default;
   PbrScene(PbrScene&&) noexcept = default;

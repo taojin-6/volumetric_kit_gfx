@@ -6,8 +6,10 @@
 #include <mutex>
 #include <string>
 
-#include "volumetric_kit/gfx/core/check.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/core/base/check.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
 // Third-party renderer backend. The platform backend (imgui_impl_glfw) is
@@ -33,42 +35,43 @@ void log_vk_result(VkResult err) {
   if (err == VK_SUCCESS) {
     return;
   }
-  log_message(LogLevel::Error,
-              "imgui vulkan backend: " + std::string(to_string(err)));
+  log_message(core::LogLevel::Error,
+              "imgui vulkan backend: " + std::string(core::to_string(err)));
 }
 
 }  // namespace
 
-Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
-                                          VkInstance instance,
-                                          const ImGuiOverlayConfig& config) {
+core::Result<ImGuiOverlay> ImGuiOverlay::create(
+    const core::Device& device, VkInstance instance,
+    const ImGuiOverlayConfig& config) {
   if (instance == VK_NULL_HANDLE) {
-    return Status::invalid_argument("ImGuiOverlay::create needs an instance");
+    return core::Status::invalid_argument(
+        "ImGuiOverlay::create needs an instance");
   }
   if (device.handle() == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ImGuiOverlay::create needs a valid device");
   }
   if (config.layout.color_count == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ImGuiOverlay::create needs a layout with a color attachment");
   }
   if (static_cast<uint32_t>(config.layout.samples) == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ImGuiOverlay::create needs a layout with a non-zero sample count");
   }
   if (config.min_image_count < 2) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ImGuiOverlay::create needs min_image_count >= 2");
   }
   if (config.image_count < config.min_image_count) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ImGuiOverlay::create needs image_count >= min_image_count");
   }
   // The backend's pipeline is built for dynamic rendering on a graphics queue:
   // a device made for another library may lack either.
-  VG_TRY(device.check_enabled(device_requirements())
-             .with_context("ImGuiOverlay::create"));
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("ImGuiOverlay::create"));
 
   // The ImGui pipeline is created (during Init) for dynamic rendering, so it
   // bakes the target's color/depth formats + sample count. The backend deep-
@@ -112,8 +115,8 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
 
   if (!ImGui_ImplVulkan_Init(&init)) {
     ImGui::DestroyContext(context);
-    return vk_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "ImGui_ImplVulkan_Init failed");
+    return core::vk_error(VK_ERROR_INITIALIZATION_FAILED,
+                          "ImGui_ImplVulkan_Init failed");
   }
 
   ImGuiOverlay overlay;
@@ -144,14 +147,14 @@ ImGuiOverlay& ImGuiOverlay::operator=(ImGuiOverlay&& other) noexcept {
 }
 
 void ImGuiOverlay::new_frame() {
-  VG_CHECK(context_ != nullptr, "new_frame on an empty ImGuiOverlay");
+  VKC_CHECK(context_ != nullptr, "new_frame on an empty ImGuiOverlay");
   ImGui::SetCurrentContext(context_);
   ImGui_ImplVulkan_NewFrame();
   ImGui::NewFrame();
 }
 
 void ImGuiOverlay::render(VkCommandBuffer cmd) {
-  VG_CHECK(context_ != nullptr, "render on an empty ImGuiOverlay");
+  VKC_CHECK(context_ != nullptr, "render on an empty ImGuiOverlay");
   ImGui::SetCurrentContext(context_);
   ImGui::Render();
   // RenderDrawData may (re)create a texture — the font atlas on first render —

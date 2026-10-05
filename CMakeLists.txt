@@ -80,7 +80,7 @@ else()
   set(VG_HAVE_SYSTEM_GLM OFF)
 endif()
 
-# volumetric_kit_core: gfx's Status / Result / VG_CHECK / log sink come from its
+# volumetric_kit_core: gfx takes Status / Result / VKC_CHECK / log sink from its
 # base tier (DECISIONS.md, 2026-10-04), so they are the same types recon and
 # calib use. Its vulkan tier supplies the Vulkan umbrella header, the VkResult
 # bridge, the format metadata gfx's image code reads (format.hpp) and the shader

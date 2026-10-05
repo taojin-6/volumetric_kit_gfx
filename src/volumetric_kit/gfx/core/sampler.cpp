@@ -5,14 +5,17 @@
 
 #include <cmath>
 
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+
 namespace volumetric_kit::gfx {
 
 // The move/destroy lifecycle lives in the core's UniqueHandle;
 // here we only validate, create the handle, and adopt it.
 
-Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
+core::Result<Sampler> Sampler::create(VkDevice device,
+                                      const SamplerDesc& desc) {
   if (device == VK_NULL_HANDLE) {
-    return Status::invalid_argument("Sampler::create: device is null");
+    return core::Status::invalid_argument("Sampler::create: device is null");
   }
   // Reject an empty or NaN LOD range up front as a domain error rather than
   // passing the contradiction to vkCreateSampler (VUID-VkSamplerCreateInfo-
@@ -20,7 +23,7 @@ Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
   // slip past a bare `max_lod < min_lod` test and must be checked explicitly.
   if (std::isnan(desc.min_lod) || std::isnan(desc.max_lod) ||
       desc.max_lod < desc.min_lod) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Sampler::create: min_lod/max_lod must be numbers with "
         "max_lod >= min_lod");
   }
@@ -40,7 +43,7 @@ Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
   // keeps normalized coordinates, and leaves mipLodBias at 0.
 
   VkSampler handle = VK_NULL_HANDLE;
-  VG_VK_TRY(vkCreateSampler(device, &info, nullptr, &handle));
+  VKC_VK_TRY(vkCreateSampler(device, &info, nullptr, &handle));
 
   Sampler sampler;
   sampler.handle_ =

@@ -11,13 +11,13 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/unique_handle.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -67,7 +67,7 @@ struct GraphicsPipelineDesc {
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   /// Polygon fill mode. `VK_POLYGON_MODE_LINE` (wireframe) / `..._POINT` need
   /// the device's `fillModeNonSolid` feature — require it in the
-  /// @ref DeviceRequirements the device is made with.
+  /// `core::DeviceRequirements` the device is made with.
   VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
   /// Face-culling mode. Front faces are counter-clockwise (the winding the
   /// camera tier's Y-flipped projection yields for outward geometry), so
@@ -109,7 +109,8 @@ struct GraphicsPipelineDesc {
 /// desc.vertex_shader = &vert;    // ShaderModule, reflected for the layout
 /// desc.fragment_shader = &frag;
 /// desc.layout = offscreen.layout();  // or any RenderTarget's layout
-/// Result<GraphicsPipeline> pipeline = GraphicsPipeline::create(device, desc);
+/// core::Result<GraphicsPipeline> pipeline =
+///     GraphicsPipeline::create(device, desc);
 /// if (!pipeline) return pipeline.status();
 /// // ... vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
 /// //                       pipeline.value().handle());
@@ -132,11 +133,11 @@ class VG_CORE_API GraphicsPipeline {
   ///      @p desc.depth_write is set only with @p desc.depth_test; and
   ///      @p desc.depth_test is requested only when @p desc.layout carries a
   ///      depth format. These are validated before Vulkan is touched and
-  ///      otherwise yield a non-OK @ref Status with domain
-  ///      @ref Status::Code::InvalidArgument.
-  /// @return The pipeline on success, or a non-OK @ref Status.
-  static Result<GraphicsPipeline> create(VkDevice device,
-                                         const GraphicsPipelineDesc& desc);
+  ///      otherwise yield a non-OK `core::Status` with domain
+  ///      `core::Status::Code::InvalidArgument`.
+  /// @return The pipeline on success, or a non-OK `core::Status`.
+  static core::Result<GraphicsPipeline> create(
+      VkDevice device, const GraphicsPipelineDesc& desc);
 
   ~GraphicsPipeline() = default;
   GraphicsPipeline(GraphicsPipeline&&) noexcept = default;

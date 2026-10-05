@@ -16,10 +16,10 @@
 
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 
@@ -29,9 +29,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 class UploadBatch;
 }  // namespace volumetric_kit::gfx
 
@@ -94,9 +91,10 @@ VG_PIPELINES_API glm::vec3 cube_face_direction(int face, float u,
 ///          `core::Image` / @ref Sampler).
 ///
 /// @code
-/// Result<pipelines::IblMaps> ibl = pipelines::bake_ibl(device, alloc, sky);
+/// core::Result<pipelines::IblMaps> ibl =
+///     pipelines::bake_ibl(device, alloc, sky);
 /// if (!ibl) return ibl.status();
-/// Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
+/// core::Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
 ///     device.handle(), alloc, pbr.descriptor_set_layout(0),
 ///     ibl.value().scene_desc(), frames_in_flight);
 /// // each frame, before its rendering begins:
@@ -170,13 +168,13 @@ struct IblMaps {
 /// @param size     LUT width and height in texels (> 0).
 /// @param samples  Importance samples per texel (> 0); the default matches
 ///                 @ref IblBakeDesc::brdf_lut_samples.
-/// @return The RG16F LUT texture on success, or a non-OK @ref Status: @ref
-///         Status::Code::InvalidArgument for a zero @p size or @p samples
-///         (checked before anything records, leaving @p batch unchanged) or an
-///         empty batch, plus everything @ref UploadBatch::add rejects.
-VG_PIPELINES_API Result<core::Image> bake_brdf_lut(UploadBatch& batch,
-                                                   uint32_t size,
-                                                   uint32_t samples = 256);
+/// @return The RG16F LUT texture on success, or a non-OK `core::Status`:
+///         `core::Status::Code::InvalidArgument` for a zero @p size or
+///         @p samples (checked before anything records, leaving @p batch
+///         unchanged) or an empty batch, plus everything @ref UploadBatch::add
+///         rejects.
+VG_PIPELINES_API core::Result<core::Image> bake_brdf_lut(
+    UploadBatch& batch, uint32_t size, uint32_t samples = 256);
 
 /// @brief Integrate the BRDF LUT and upload it in one blocking submit.
 ///
@@ -188,14 +186,13 @@ VG_PIPELINES_API Result<core::Image> bake_brdf_lut(UploadBatch& batch,
 /// @param size       LUT width and height in texels (> 0).
 /// @param samples    Importance samples per texel (> 0); the default matches
 ///                   @ref IblBakeDesc::brdf_lut_samples.
-/// @return The RG16F LUT texture -- sampled-ready -- or a non-OK @ref Status:
-///         @ref Status::Code::InvalidArgument for a null device or a zero
-///         @p size or @p samples; otherwise whatever the batch's begin / add /
-///         finish steps report.
-VG_PIPELINES_API Result<core::Image> bake_brdf_lut(const Device& device,
-                                                   core::Allocator& allocator,
-                                                   uint32_t size,
-                                                   uint32_t samples = 256);
+/// @return The RG16F LUT texture -- sampled-ready -- or a non-OK
+///         `core::Status`: `core::Status::Code::InvalidArgument` for a null
+///         device or a zero @p size or @p samples; otherwise whatever the
+///         batch's begin / add / finish steps report.
+VG_PIPELINES_API core::Result<core::Image> bake_brdf_lut(
+    const core::Device& device, core::Allocator& allocator, uint32_t size,
+    uint32_t samples = 256);
 
 /// @brief Convolve @p environment into the full IBL texture set: the diffuse
 ///        irradiance cube, the roughness-prefiltered specular chain, and the
@@ -215,14 +212,13 @@ VG_PIPELINES_API Result<core::Image> bake_brdf_lut(const Device& device,
 ///      @p desc size and sample count is non-zero,
 ///      `desc.irradiance_sample_delta > 0`, and `desc.prefilter_mip_levels` is
 ///      within the full chain for `desc.prefilter_size` -- validated before
-///      Vulkan is touched, otherwise a non-OK @ref Status with domain
-///      @ref Status::Code::InvalidArgument.
+///      Vulkan is touched, otherwise a non-OK `core::Status` with domain
+///      `core::Status::Code::InvalidArgument`.
 /// @return The baked maps (with @ref IblMaps::prefilter_max_lod filled) on
-///         success, or a non-OK @ref Status (a backend Status from the
+///         success, or a non-OK `core::Status` (a backend Status from the
 ///         sampler, upload, or submit step).
-VG_PIPELINES_API Result<IblMaps> bake_ibl(const Device& device,
-                                          core::Allocator& allocator,
-                                          const EnvironmentSampler& environment,
-                                          const IblBakeDesc& desc = {});
+VG_PIPELINES_API core::Result<IblMaps> bake_ibl(
+    const core::Device& device, core::Allocator& allocator,
+    const EnvironmentSampler& environment, const IblBakeDesc& desc = {});
 
 }  // namespace volumetric_kit::gfx::pipelines

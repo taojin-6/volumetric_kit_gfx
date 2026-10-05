@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+
 namespace volumetric_kit::gfx {
 
 // The move/destroy lifecycle lives in the core's UniqueHandle;
@@ -39,7 +41,7 @@ bool specialization_valid(const VkSpecializationInfo* info) {
 
 }  // namespace
 
-Result<GraphicsPipeline> GraphicsPipeline::create(
+core::Result<GraphicsPipeline> GraphicsPipeline::create(
     VkDevice device, const GraphicsPipelineDesc& desc) {
   // Validate before touching Vulkan, so misuse yields a clean Status instead of
   // a crash in the driver (validation off is the shipping default). The desc
@@ -48,60 +50,60 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   // last, just before the first Vulkan call below.
   if (desc.vertex_shader == nullptr || desc.fragment_shader == nullptr ||
       !desc.vertex_shader->valid() || !desc.fragment_shader->valid()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: vertex_shader and fragment_shader must be "
         "non-null, valid modules");
   }
   if (desc.layout.color_count == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: layout must have at least one color "
         "attachment");
   }
   if (desc.layout.color_count > RenderTargetLayout::kMaxColorAttachments) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: layout color_count exceeds "
         "kMaxColorAttachments");
   }
   for (uint32_t i = 0; i < desc.layout.color_count; ++i) {
     if (desc.layout.color_formats[i] == VK_FORMAT_UNDEFINED) {
-      return Status::invalid_argument(
+      return core::Status::invalid_argument(
           "GraphicsPipeline::create: layout color formats must be defined");
     }
   }
   if (desc.entry_point == nullptr) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: entry_point must be non-null");
   }
   // Only vertex + fragment stages exist here, so a patch-list topology -- which
   // requires tessellation stages -- could never assemble a valid pipeline.
   if (desc.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: patch-list topology requires tessellation "
         "stages, which this pipeline does not provide");
   }
   if ((desc.vertex_binding_count > 0 && desc.vertex_bindings == nullptr) ||
       (desc.vertex_attribute_count > 0 && desc.vertex_attributes == nullptr)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: vertex binding/attribute pointers must be "
         "non-null when their counts are non-zero");
   }
   if (desc.depth_write && !desc.depth_test) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: depth_write requires depth_test (Vulkan "
         "disables depth writes when depth testing is off)");
   }
   if (desc.depth_test && desc.layout.depth_format == VK_FORMAT_UNDEFINED) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: depth_test requires layout to carry a depth "
         "format");
   }
   if (!specialization_valid(desc.fragment_specialization)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: fragment_specialization needs non-null "
         "pointers for its non-zero counts and every map entry within dataSize");
   }
   if (device == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: device must be non-null");
   }
 
@@ -145,7 +147,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
     add_resource(r);
   }
   if (binding_conflict) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "GraphicsPipeline::create: the vertex and fragment shaders declare the "
         "same (set, binding) with different descriptor types or array sizes");
   }
@@ -190,7 +192,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
     layout_info.pPushConstantRanges = &push_range;
   }
   VkPipelineLayout layout = VK_NULL_HANDLE;
-  VG_VK_TRY(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout));
+  VKC_VK_TRY(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout));
   core::UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> owned_layout(
       device, layout);
 
@@ -307,8 +309,8 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   info.renderPass = VK_NULL_HANDLE;
 
   VkPipeline pipeline = VK_NULL_HANDLE;
-  VG_VK_TRY(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
-                                      &pipeline));
+  VKC_VK_TRY(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info,
+                                       nullptr, &pipeline));
 
   GraphicsPipeline result;
   result.set_layouts_ = std::move(set_layouts);

@@ -9,10 +9,11 @@
 #include <vector>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/query_pool.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
@@ -158,28 +159,28 @@ struct Profiler::Impl {
   }
 };
 
-Result<Profiler> Profiler::create(const Device& device,
-                                  const ProfilerConfig& config) {
+core::Result<Profiler> Profiler::create(const core::Device& device,
+                                        const ProfilerConfig& config) {
   if (config.frames_in_flight == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Profiler::create: frames_in_flight is zero");
   }
   if (config.max_gpu_sections_per_frame == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Profiler::create: max_gpu_sections_per_frame is zero");
   }
   // Two queries per section for every slot: a count past 32 bits would wrap
   // to a pool smaller than the ranges the slots index.
   if (config.max_gpu_sections_per_frame >
       std::numeric_limits<uint32_t>::max() / 2 / config.frames_in_flight) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Profiler::create: frames_in_flight * max_gpu_sections_per_frame * 2 "
         "does not fit in 32 bits");
   }
   // The profiler times frames the renderer records: a device made for another
   // library may lack the renderer's floor, a graphics queue included.
-  VG_TRY(device.check_enabled(device_requirements())
-             .with_context("Profiler::create"));
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("Profiler::create"));
 
   auto impl = std::make_unique<Impl>();
   impl->frames_in_flight = config.frames_in_flight;
@@ -194,7 +195,7 @@ Result<Profiler> Profiler::create(const Device& device,
   if (impl->valid_bits != 0) {
     const uint32_t query_count =
         config.frames_in_flight * config.max_gpu_sections_per_frame * 2;
-    Result<core::QueryPool> pool =
+    core::Result<core::QueryPool> pool =
         core::QueryPool::create(device.handle(), query_count);
     if (!pool) {
       return pool.status();
@@ -381,7 +382,7 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
     } else if (!d.warned_overflow) {
       d.warned_overflow = true;
       log_message(
-          LogLevel::Warning,
+          core::LogLevel::Warning,
           "Profiler: gpu_scope calls exceeded "
           "max_gpu_sections_per_frame; extra stages are CPU-timed only");
     }

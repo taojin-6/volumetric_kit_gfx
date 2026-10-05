@@ -77,13 +77,13 @@ class PbrMaterialTest : public VulkanDeviceTest {
 
   // Builds a material on a batch of its own and finishes it, so the factor
   // upload runs (under the base fixture's validation capture).
-  vg::Result<pipelines::PbrMaterial> make(VkDescriptorSetLayout layout,
-                                          const pipelines::PbrMaterialDesc& d) {
-    VG_ASSIGN(vg::UploadBatch batch,
-              vg::UploadBatch::begin(*device_, *allocator_));
-    VG_ASSIGN(pipelines::PbrMaterial material,
-              pipelines::PbrMaterial::create(device(), batch, layout, d));
-    VG_TRY(batch.finish());
+  vkc::Result<pipelines::PbrMaterial> make(
+      VkDescriptorSetLayout layout, const pipelines::PbrMaterialDesc& d) {
+    VKC_ASSIGN(vg::UploadBatch batch,
+               vg::UploadBatch::begin(*device_, *allocator_));
+    VKC_ASSIGN(pipelines::PbrMaterial material,
+               pipelines::PbrMaterial::create(device(), batch, layout, d));
+    VKC_TRY(batch.finish());
     return material;
   }
 
@@ -107,7 +107,7 @@ TEST_F(PbrMaterialTest, RejectsNullMap) {
   d.normal = VK_NULL_HANDLE;  // the shader samples every slot
   auto mat = make(material_layout(), d);
   ASSERT_FALSE(mat.ok());
-  EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(mat.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // Validation precedes the factor upload, so a refused material queues nothing
@@ -120,8 +120,8 @@ TEST_F(PbrMaterialTest, RefusedMaterialLeavesTheBatchUsable) {
   auto mat = pipelines::PbrMaterial::create(device(), batch.value(),
                                             material_layout(), d);
   ASSERT_FALSE(mat.ok());
-  EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
-  const vg::Status finished = batch.value().finish();
+  EXPECT_EQ(mat.status().domain(), vkc::Status::Code::InvalidArgument);
+  const vkc::Status finished = batch.value().finish();
   EXPECT_TRUE(finished.ok()) << finished.message();
 }
 
@@ -137,7 +137,7 @@ TEST_F(PbrMaterialTest, CreatesManyMaterialsOnOneUpload) {
   auto materials = pipelines::PbrMaterial::create_all(device(), batch.value(),
                                                       material_layout(), descs);
   ASSERT_TRUE(materials.ok()) << materials.status().message();
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
 
   ASSERT_EQ(materials.value().size(), descs.size());
@@ -165,23 +165,23 @@ TEST_F(PbrMaterialTest, RefusedCreateAllLeavesTheBatchUsable) {
   auto none = pipelines::PbrMaterial::create_all(device(), batch.value(),
                                                  material_layout(), {});
   ASSERT_FALSE(none.ok());
-  EXPECT_EQ(none.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(none.status().domain(), vkc::Status::Code::InvalidArgument);
 
   std::vector<pipelines::PbrMaterialDesc> descs(3, full_desc());
   descs[2].emissive = VK_NULL_HANDLE;
   auto mixed = pipelines::PbrMaterial::create_all(device(), batch.value(),
                                                   material_layout(), descs);
   ASSERT_FALSE(mixed.ok());
-  EXPECT_EQ(mixed.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(mixed.status().domain(), vkc::Status::Code::InvalidArgument);
 
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   EXPECT_TRUE(finished.ok()) << finished.message();
 }
 
 TEST_F(PbrMaterialTest, RejectsNullLayout) {
   auto mat = make(VK_NULL_HANDLE, full_desc());
   ASSERT_FALSE(mat.ok());
-  EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(mat.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrMaterialTest, MoveLeavesSourceEmpty) {

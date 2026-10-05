@@ -208,13 +208,13 @@ TEST_F(IblTest, BakesBrdfLutStandalone) {
 TEST_F(IblTest, BrdfLutRejectsZeroSizeZeroSamplesAndEmptyBatch) {
   EXPECT_EQ(
       pipelines::bake_brdf_lut(*device_, *allocator_, 0).status().domain(),
-      vg::Status::Code::InvalidArgument);
+      vkc::Status::Code::InvalidArgument);
   EXPECT_EQ(
       pipelines::bake_brdf_lut(*device_, *allocator_, 8, 0).status().domain(),
-      vg::Status::Code::InvalidArgument);
+      vkc::Status::Code::InvalidArgument);
   vg::UploadBatch empty;  // never begun
   EXPECT_EQ(pipelines::bake_brdf_lut(empty, 8, 8).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(IblTest, RejectsInvalidBakeDesc) {
@@ -226,42 +226,42 @@ TEST_F(IblTest, RejectsInvalidBakeDesc) {
 
   pipelines::IblBakeDesc d = tiny_desc();
   d.irradiance_size = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.prefilter_size = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.brdf_lut_size = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.irradiance_sample_delta = 0.0f;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.prefilter_samples = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.brdf_lut_samples = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();
   d.prefilter_mip_levels = 0;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 
   d = tiny_desc();  // an 8x8 base carries at most 4 mips (8, 4, 2, 1)
   d.prefilter_mip_levels = 5;
-  EXPECT_EQ(domain_for(d), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(domain_for(d), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(IblTest, RejectsNullEnvironment) {
   auto baked = pipelines::bake_ibl(
       *device_, *allocator_, pipelines::EnvironmentSampler{}, tiny_desc());
   ASSERT_FALSE(baked.ok());
-  EXPECT_EQ(baked.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(baked.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // Two identical bakes must produce identical texels: the concurrent per-face

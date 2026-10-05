@@ -10,10 +10,10 @@
 
 #include <glm/mat4x4.hpp>
 
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -39,7 +39,7 @@ struct PbrFrame;
 /// @warning The @p device passed to @ref create must outlive the pipeline.
 ///
 /// @code
-/// Result<pipelines::PbrPipeline> pbr =
+/// core::Result<pipelines::PbrPipeline> pbr =
 ///     pipelines::PbrPipeline::create(device, target.layout());
 /// if (!pbr) return pbr.status();
 /// // Build set 0 (PbrScene) + set 1 (PbrMaterial) against its reflected
@@ -64,12 +64,13 @@ class VG_PIPELINES_API PbrPipeline {
   /// @pre @p device is non-`VK_NULL_HANDLE`; @p layout carries a depth format
   ///      and at least one color attachment with a defined format. These are
   ///      validated before Vulkan is touched and otherwise yield a non-OK
-  ///      @ref Status with domain @ref Status::Code::InvalidArgument.
-  /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
-  ///         Status::Code::InvalidArgument when @p layout has no depth format,
-  ///         or a backend Status from shader-module / pipeline creation).
-  static Result<PbrPipeline> create(VkDevice device,
-                                    const RenderTargetLayout& layout);
+  ///      `core::Status` with domain `core::Status::Code::InvalidArgument`.
+  /// @return The pipeline on success, or a non-OK `core::Status` (e.g.
+  ///         `core::Status::Code::InvalidArgument` when @p layout has no depth
+  ///         format, or a backend Status from shader-module / pipeline
+  ///         creation).
+  static core::Result<PbrPipeline> create(VkDevice device,
+                                          const RenderTargetLayout& layout);
 
   ~PbrPipeline() = default;
   PbrPipeline(PbrPipeline&&) noexcept = default;

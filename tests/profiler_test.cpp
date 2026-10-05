@@ -32,23 +32,23 @@ class ProfilerTest : public VulkanDeviceTest {
   // unavailable. Overrides VulkanDeviceTest::SetUp, which enables validation
   // only on request.
   void SetUp() override {
-    vg::InstanceConfig icfg;
+    vkc::InstanceConfig icfg;
     icfg.enable_validation = true;
     icfg.request_debug_utils = true;
-    auto instance = vg::Instance::create(icfg);
+    auto instance = vkc::Instance::create(icfg);
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
     instance_.emplace(std::move(instance).value());
 
-    const vg::DeviceRequirements reqs = requirements();
+    const vkc::DeviceRequirements reqs = requirements();
     auto physical = instance_->select_physical_device(reqs);
     if (!physical.ok()) {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
     caps_ = physical.value();
 
-    auto device = vg::Device::create(*instance_, caps_, reqs);
+    auto device = vkc::Device::create(*instance_, caps_, reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
   }
@@ -64,7 +64,7 @@ class ProfilerTest : public VulkanDeviceTest {
   // begin_frame. `body` records work between begin_frame and end_frame.
   template <class Body>
   void run_frame(vg::Profiler& profiler, uint32_t slot, Body&& body) {
-    vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
       profiler.begin_frame(slot, cmd);
       body(cmd);
       profiler.end_frame();
@@ -200,7 +200,7 @@ TEST_F(ProfilerTest, MultiSlotMultiSectionResolves) {
 // recording buffer; the stage must resolve has_gpu == false.
 TEST_F(ProfilerTest, GpuScopeWithMismatchedCmdIsCpuOnly) {
   vg::Profiler profiler = make_profiler();
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     profiler.begin_frame(0, VK_NULL_HANDLE);  // CPU-only frame: no reset
     {
       auto s = profiler.gpu_scope(cmd, "stage");
@@ -221,7 +221,7 @@ TEST_F(ProfilerTest, GpuScopeWithMismatchedCmdIsCpuOnly) {
 // no-op. (The @warning still asks callers to close scopes within the frame.)
 TEST_F(ProfilerTest, ScopeOpenAtEndFrameStillResolves) {
   vg::Profiler profiler = make_profiler();
-  vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     profiler.begin_frame(0, cmd);
     vg::Profiler::Scope open = profiler.gpu_scope(cmd, "open");
     profiler.end_frame();  // finalizes `open` before the buffer is submitted
@@ -268,7 +268,7 @@ TEST_F(ProfilerTest, NullNameStageIsRecordedUnnamed) {
 TEST_F(ProfilerTest, CreateRejectsQueryCountOverflow) {
   auto result = vg::Profiler::create(*device_, make_config(3, 0x2AAAAAABu));
   ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(result.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // --- move-only contract: Profiler ------------------------------------------

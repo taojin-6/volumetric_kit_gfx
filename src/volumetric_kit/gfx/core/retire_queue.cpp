@@ -53,7 +53,7 @@ void RetireQueue::drain() {
       // Device loss (or an invalid fence) means the guarded work won't
       // complete; the deleter still runs to reclaim the resource, but record it
       // -- this noexcept teardown path has no other observability hook.
-      log_message(LogLevel::Warning,
+      log_message(core::LogLevel::Warning,
                   "RetireQueue::drain: vkWaitForFences did not return "
                   "VK_SUCCESS; freeing the resource regardless");
     }

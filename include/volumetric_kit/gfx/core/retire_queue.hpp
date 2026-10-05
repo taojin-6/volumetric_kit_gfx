@@ -9,9 +9,9 @@
 #include <cstddef>
 #include <functional>
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/retire_list.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -26,7 +26,7 @@ namespace volumetric_kit::gfx {
 /// `AGENTS.md`) without any cross-API GPU event. Fences are observed, not
 /// owned. The GPU-independent bookkeeping lives in @ref RetireList.
 ///
-/// @warning The @ref Device a queued deleter frees through must outlive this
+/// @warning The `core::Device` a queued deleter frees through must outlive this
 ///          queue: destruction drains (waits for + runs) every pending
 ///          deleter, which calls back into it. Compose so the queue is
 ///          destroyed first (declare it after the Device in an owning struct,

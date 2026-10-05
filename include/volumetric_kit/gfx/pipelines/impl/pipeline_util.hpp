@@ -7,7 +7,7 @@
 /// @brief Small command-recording helpers shared by the pipelines tier's
 ///        `submit()` paths. Internal -- not part of the public technique API.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 

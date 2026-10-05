@@ -12,11 +12,12 @@
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/gfx/app/export.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 
 namespace volumetric_kit::gfx::app {
 
@@ -40,10 +41,10 @@ struct HeadlessAppConfig {
   /// result. `needs_present` must stay false, as a headless app has no
   /// surface. Labels and object names follow the instance, which requests
   /// `VK_EXT_debug_utils`.
-  DeviceRequirements device = device_requirements();
+  core::DeviceRequirements device = device_requirements();
 };
 
-/// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,
+/// @brief Owns the headless bring-up chain — `core::Instance`, `core::Device`,
 ///        `core::Allocator` — created in one call and destroyed in reverse
 ///        order. No surface, no present queue: it runs wherever a Vulkan
 ///        device exists (CI, batch jobs).
@@ -53,7 +54,7 @@ struct HeadlessAppConfig {
 ///
 /// @note Resources created *after* the app — targets, pipelines, uploads built
 ///       on @ref device / @ref allocator — destruct before it; make sure the
-///       GPU is done with them first (e.g. @ref Device::submit_single_time
+///       GPU is done with them first (e.g. `core::Device::submit_single_time`
 ///       already blocks until completion).
 ///
 /// @code
@@ -73,12 +74,12 @@ class VG_APP_API HeadlessApp {
   ///        @p config extensions) → physical-device selection (no surface) →
   ///        device (no present queue) → allocator.
   /// @param config  App identity and optional instance extensions.
-  /// @return The app on success, or the first failing step's @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a `config.device` with
+  /// @return The app on success, or the first failing step's `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` for a `config.device` with
   ///         `needs_present` (before any Vulkan call);
-  ///         @ref Status::Code::Unsupported when no device qualifies;
+  ///         `core::Status::Code::Unsupported` when no device qualifies;
   ///         otherwise the propagated failure.
-  static Result<HeadlessApp> create(const HeadlessAppConfig& config);
+  static core::Result<HeadlessApp> create(const HeadlessAppConfig& config);
 
   ~HeadlessApp() = default;
   HeadlessApp(HeadlessApp&& other) noexcept = default;
@@ -87,13 +88,13 @@ class VG_APP_API HeadlessApp {
   HeadlessApp& operator=(const HeadlessApp&) = delete;
 
   /// @return The owned instance. @pre @ref valid.
-  Instance& instance() noexcept { return *state_->instance; }
+  core::Instance& instance() noexcept { return *state_->instance; }
   /// @copydoc instance
-  const Instance& instance() const noexcept { return *state_->instance; }
+  const core::Instance& instance() const noexcept { return *state_->instance; }
   /// @return The owned device. @pre @ref valid.
-  Device& device() noexcept { return *state_->device; }
+  core::Device& device() noexcept { return *state_->device; }
   /// @copydoc device
-  const Device& device() const noexcept { return *state_->device; }
+  const core::Device& device() const noexcept { return *state_->device; }
   /// @return The owned allocator. @pre @ref valid.
   core::Allocator& allocator() noexcept { return *state_->allocator; }
   /// @copydoc allocator
@@ -111,8 +112,8 @@ class VG_APP_API HeadlessApp {
   // device it wraps, device before the instance), and cheap defaulted moves.
   // std::optional stands in where a type has no public default constructor.
   struct State {
-    std::optional<Instance> instance;
-    std::optional<Device> device;
+    std::optional<core::Instance> instance;
+    std::optional<core::Device> device;
     std::optional<core::Allocator> allocator;
   };
   std::unique_ptr<State> state_;

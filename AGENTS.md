@@ -16,7 +16,8 @@ using MoltenVK on Apple and one GLSL → SPIR-V shader set across platforms.
   contracts. See the [recorded decisions](DECISIONS.md#locked-decisions).
 - Descriptor layouts come from spirv-cross reflection. Use per-pipeline
   submission structs; there is no library scene graph or global frame type.
-- Reach Vulkan through `core/vulkan.hpp` and the link-time loader. Keep VMA
+- Reach Vulkan through the core's umbrella,
+  `volumetric_kit/core/vulkan/vulkan.hpp`, and the link-time loader. Keep VMA
   and backend details out of public headers.
 - Use volumetric_kit_core's types by their own names -- `core::Buffer` inside
   gfx, `vkc::Buffer` in tests and examples -- and include the core's headers.
@@ -104,9 +105,11 @@ leak/double-free detectors — a green normal build is necessary but not suffici
 
 ## Conventions
 
-- C++17, with no compiler extensions; fallible APIs use `Status` / `Result<T>`,
-  volumetric_kit_core's types (`core/result.hpp`); a failed Vulkan call is
-  `vk_error` / `VG_VK_TRY`, read back with `vk_result`.
+- C++17, with no compiler extensions; fallible APIs use the core's
+  `core::Status` / `core::Result<T>` (`volumetric_kit/core/base/result.hpp`),
+  propagated with `VKC_TRY` / `VKC_ASSIGN`; a failed Vulkan call is
+  `core::vk_error` / `VKC_VK_TRY`, read back with `core::vk_result`
+  (`volumetric_kit/core/vulkan/vk_result.hpp`).
 - Prefer plain behavior-level tests over private-state backdoors.
 - Mark deferred work inline with greppable `TODO:` comments.
 - Full Doxygen on public classes/functions, matching

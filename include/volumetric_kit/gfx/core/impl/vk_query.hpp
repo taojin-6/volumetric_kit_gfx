@@ -6,26 +6,27 @@
 /// @file core/impl/vk_query.hpp
 /// Internal helpers for swapchain.cpp: the Vulkan "enumerate (count, then
 /// fill)" idiom for a surface's formats and present modes, each returning a
-/// @ref Result so a real failure surfaces. The instance and physical-device
+/// `core::Result` so a real failure surfaces. The instance and physical-device
 /// queries live in the core's vulkan tier. Not a public header.
 
 #include <cstdint>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
 /// @return The surface formats @p device offers on @p surface (empty if none),
-///         or a non-OK @ref Status if the query fails. `VK_INCOMPLETE` on the
-///         fill call is a success code (the list changed size between the count
-///         and fill — a display reconfiguration): the entries actually written
-///         are trusted, not treated as a failure.
-inline Result<std::vector<VkSurfaceFormatKHR>> surface_formats(
+///         or a non-OK `core::Status` if the query fails. `VK_INCOMPLETE` on
+///         the fill call is a success code (the list changed size between the
+///         count and fill — a display reconfiguration): the entries actually
+///         written are trusted, not treated as a failure.
+inline core::Result<std::vector<VkSurfaceFormatKHR>> surface_formats(
     VkPhysicalDevice device, VkSurfaceKHR surface) {
   uint32_t count = 0;
-  VG_VK_TRY(
+  VKC_VK_TRY(
       vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, nullptr));
   std::vector<VkSurfaceFormatKHR> formats(count);
   if (count == 0) {
@@ -34,20 +35,21 @@ inline Result<std::vector<VkSurfaceFormatKHR>> surface_formats(
   const VkResult filled = vkGetPhysicalDeviceSurfaceFormatsKHR(
       device, surface, &count, formats.data());
   if (filled != VK_SUCCESS && filled != VK_INCOMPLETE) {
-    return vk_error(filled, "vkGetPhysicalDeviceSurfaceFormatsKHR");
+    return core::vk_error(filled, "vkGetPhysicalDeviceSurfaceFormatsKHR");
   }
   formats.resize(count);
   return formats;
 }
 
 /// @return The present modes @p device offers on @p surface (empty if none), or
-///         a non-OK @ref Status if the query fails. Tolerates `VK_INCOMPLETE`
-///         on the fill call exactly as @ref surface_formats does.
-inline Result<std::vector<VkPresentModeKHR>> surface_present_modes(
+///         a non-OK `core::Status` if the query fails. Tolerates
+///         `VK_INCOMPLETE` on the fill call exactly as @ref surface_formats
+///         does.
+inline core::Result<std::vector<VkPresentModeKHR>> surface_present_modes(
     VkPhysicalDevice device, VkSurfaceKHR surface) {
   uint32_t count = 0;
-  VG_VK_TRY(vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &count,
-                                                      nullptr));
+  VKC_VK_TRY(vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &count,
+                                                       nullptr));
   std::vector<VkPresentModeKHR> modes(count);
   if (count == 0) {
     return modes;
@@ -55,7 +57,7 @@ inline Result<std::vector<VkPresentModeKHR>> surface_present_modes(
   const VkResult filled = vkGetPhysicalDeviceSurfacePresentModesKHR(
       device, surface, &count, modes.data());
   if (filled != VK_SUCCESS && filled != VK_INCOMPLETE) {
-    return vk_error(filled, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+    return core::vk_error(filled, "vkGetPhysicalDeviceSurfacePresentModesKHR");
   }
   modes.resize(count);
   return modes;

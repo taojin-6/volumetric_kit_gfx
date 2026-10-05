@@ -89,7 +89,7 @@ class PbrSceneTest : public VulkanDeviceTest {
   // runs (and validation sees it).
   void set_camera(const pipelines::PbrScene& scene, uint32_t slot,
                   const glm::vec3& eye) {
-    const vg::Status status = device_->submit_single_time(
+    const vkc::Status status = device_->submit_single_time(
         [&](VkCommandBuffer cmd) { scene.set_camera(cmd, slot, eye, 4.0f); });
     EXPECT_TRUE(status.ok()) << status.message();
   }
@@ -130,14 +130,14 @@ class PbrSubmitTest : public PbrSceneTest {
   }
 
   // A material whose factors went up through a finished batch of its own.
-  vg::Result<pipelines::PbrMaterial> make_material(
+  vkc::Result<pipelines::PbrMaterial> make_material(
       const pipelines::PbrMaterialDesc& desc) {
-    VG_ASSIGN(vg::UploadBatch batch,
-              vg::UploadBatch::begin(*device_, *allocator_));
-    VG_ASSIGN(pipelines::PbrMaterial material,
-              pipelines::PbrMaterial::create(
-                  device(), batch, pipeline_->descriptor_set_layout(1), desc));
-    VG_TRY(batch.finish());
+    VKC_ASSIGN(vg::UploadBatch batch,
+               vg::UploadBatch::begin(*device_, *allocator_));
+    VKC_ASSIGN(pipelines::PbrMaterial material,
+               pipelines::PbrMaterial::create(
+                   device(), batch, pipeline_->descriptor_set_layout(1), desc));
+    VKC_TRY(batch.finish());
     return material;
   }
 
@@ -189,7 +189,7 @@ class PbrSubmitTest : public PbrSceneTest {
   }
 
   // A 16x16 target in the fixture pipeline's formats.
-  vg::Result<vg::OffscreenTarget> make_target() {
+  vkc::Result<vg::OffscreenTarget> make_target() {
     vg::OffscreenTargetDesc desc;
     desc.extent = {kTargetSize, kTargetSize};
     desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;  // the fixture's layout
@@ -224,7 +224,7 @@ class PbrSubmitTest : public PbrSceneTest {
     frame.scene = &scene;
     frame.draws = &draw;
     frame.draw_count = 1;
-    const vg::Status status =
+    const vkc::Status status =
         device_->submit_single_time([&](VkCommandBuffer cmd) {
           for (const View& view : views) {
             scene.set_camera(cmd, 0, view.eye, ibl_->prefilter_max_lod);
@@ -339,7 +339,7 @@ TEST_F(PbrSceneTest, RejectsZeroFramesInFlight) {
       pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
                                   full_desc(), /*frames_in_flight=*/0);
   ASSERT_FALSE(scene.ok());
-  EXPECT_EQ(scene.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, RejectsNullMap) {
@@ -348,14 +348,14 @@ TEST_F(PbrSceneTest, RejectsNullMap) {
   auto scene =
       pipelines::PbrScene::create(device(), *allocator_, scene_layout(), d);
   ASSERT_FALSE(scene.ok());
-  EXPECT_EQ(scene.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, RejectsNullLayout) {
   auto scene = pipelines::PbrScene::create(device(), *allocator_,
                                            VK_NULL_HANDLE, full_desc());
   ASSERT_FALSE(scene.ok());
-  EXPECT_EQ(scene.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, MoveLeavesSourceEmpty) {
@@ -419,7 +419,7 @@ TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
   frame.draws = nullptr;
   frame.draw_count = 0;
 
-  const vg::Status status = device_->submit_single_time(
+  const vkc::Status status = device_->submit_single_time(
       [&](VkCommandBuffer cmd) { pipeline_->submit(cmd, frame); });
   EXPECT_TRUE(status.ok()) << status.message();
 }
@@ -489,7 +489,7 @@ TEST_F(PbrSubmitTest, PackedMaterialsEachReadTheirOwnFactors) {
   auto materials = pipelines::PbrMaterial::create_all(
       device(), batch.value(), pipeline_->descriptor_set_layout(1), descs);
   ASSERT_TRUE(materials.ok()) << materials.status().message();
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   ASSERT_EQ(materials.value().size(), 2u);
 
@@ -512,7 +512,7 @@ TEST(PbrSceneDeathTest, SetCameraRejectsNullCommandBuffer) {
   const pipelines::PbrScene empty;
   EXPECT_DEATH(
       {
-        vg::set_log_handler({});  // route the abort message to stderr
+        vkc::set_log_handler({});  // route the abort message to stderr
         empty.set_camera(VK_NULL_HANDLE, 0, glm::vec3(0.0f), 0.0f);
       },
       "needs the frame's command buffer");

@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+
 namespace volumetric_kit::gfx::windowing {
 
 Surface::Surface(VkInstance instance, VkSurfaceKHR surface) noexcept
@@ -27,7 +29,7 @@ Surface& Surface::operator=(Surface&& other) noexcept {
   return *this;
 }
 
-Result<Surface> Surface::headless(VkInstance instance) {
+core::Result<Surface> Surface::headless(VkInstance instance) {
   // vkCreateHeadlessSurfaceEXT is an extension entry point the link-time loader
   // does not export as a symbol, so resolve it dynamically: a driver without
   // VK_EXT_headless_surface (e.g. MoltenVK) then yields Unsupported instead of
@@ -35,13 +37,13 @@ Result<Surface> Surface::headless(VkInstance instance) {
   auto create = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
       vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT"));
   if (create == nullptr) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "VK_EXT_headless_surface is not available on this instance");
   }
   VkHeadlessSurfaceCreateInfoEXT info{};
   info.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
-  VG_VK_TRY(create(instance, &info, nullptr, &surface));
+  VKC_VK_TRY(create(instance, &info, nullptr, &surface));
   return Surface(instance, surface);
 }
 

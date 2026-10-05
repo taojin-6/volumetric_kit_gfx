@@ -5,45 +5,49 @@
 
 #include <utility>
 
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace volumetric_kit::gfx::windowing {
 
-Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
-                                    uint32_t frames_in_flight) {
+core::Result<FrameLoop> FrameLoop::create(const core::Device& device,
+                                          Swapchain& swapchain,
+                                          uint32_t frames_in_flight) {
   if (frames_in_flight == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "FrameLoop::create: frames_in_flight must be >= 1");
   }
   if (!swapchain.valid()) {
-    return Status::invalid_argument("FrameLoop::create: swapchain is empty");
+    return core::Status::invalid_argument(
+        "FrameLoop::create: swapchain is empty");
   }
   // The loop's per-frame barriers name graphics stages and its frames record
   // dynamic rendering: a device made for another library may lack either.
-  VG_TRY(device.check_enabled(device_requirements())
-             .with_context("FrameLoop::create"));
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("FrameLoop::create"));
 
   FrameLoop loop;
   loop.device_ = &device;
   loop.swapchain_ = &swapchain;
 
-  VG_ASSIGN(core::CommandPool pool,
-            core::CommandPool::create(device.handle(), device.queue_family()));
+  VKC_ASSIGN(core::CommandPool pool,
+             core::CommandPool::create(device.handle(), device.queue_family()));
   loop.pool_ = std::move(pool);
 
   // Per frame-in-flight slot: a command buffer, an image-available semaphore,
   // and an in-flight fence (created signaled so the first wait does not block).
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VG_ASSIGN(core::CommandBuffer cmd, loop.pool_.allocate_primary());
+    VKC_ASSIGN(core::CommandBuffer cmd, loop.pool_.allocate_primary());
     loop.command_buffers_.push_back(std::move(cmd));
-    VG_ASSIGN(core::Semaphore available,
-              core::Semaphore::create(device.handle()));
+    VKC_ASSIGN(core::Semaphore available,
+               core::Semaphore::create(device.handle()));
     loop.image_available_.push_back(std::move(available));
-    VG_ASSIGN(core::Fence fence,
-              core::Fence::create(device.handle(), /*signaled=*/true));
+    VKC_ASSIGN(core::Fence fence,
+               core::Fence::create(device.handle(), /*signaled=*/true));
     loop.in_flight_.push_back(std::move(fence));
   }
 
@@ -51,12 +55,12 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   // to avoid racing the presentation engine) + an in-flight-fence tracking
   // slot. Built here and rebuilt by ensure_image_sync() if a later
   // Swapchain::recreate changes the image count.
-  VG_TRY(loop.ensure_image_sync());
+  VKC_TRY(loop.ensure_image_sync());
 
   return loop;
 }
 
-Status FrameLoop::ensure_image_sync() {
+core::Status FrameLoop::ensure_image_sync() {
   // Rebuild the per-image sync objects when the swapchain handle changes — i.e.
   // after a Swapchain::recreate produced a fresh chain. Keying on the handle
   // (not just the image count) also covers a same-count rebuild: that still
@@ -74,23 +78,25 @@ Status FrameLoop::ensure_image_sync() {
   const uint32_t image_count = swapchain_->image_count();
   if (current == last_swapchain_ && render_finished_.size() == image_count &&
       images_in_flight_.size() == image_count) {
-    return Status{};
+    return core::Status{};
   }
   render_finished_.clear();
   render_finished_.reserve(image_count);
   for (uint32_t i = 0; i < image_count; ++i) {
-    VG_ASSIGN(core::Semaphore finished,
-              core::Semaphore::create(device_->handle()));
+    VKC_ASSIGN(core::Semaphore finished,
+               core::Semaphore::create(device_->handle()));
     render_finished_.push_back(std::move(finished));
   }
   images_in_flight_.assign(image_count, VK_NULL_HANDLE);
   last_swapchain_ = current;
-  return Status{};
+  return core::Status{};
 }
 
-Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
+core::Result<std::optional<Frame>> FrameLoop::begin_frame(
+    VkExtent2D current_extent) {
   if (swapchain_ == nullptr) {
-    return Status::invalid_argument("FrameLoop::begin_frame on an empty loop");
+    return core::Status::invalid_argument(
+        "FrameLoop::begin_frame on an empty loop");
   }
   if (current_extent.width == 0 || current_extent.height == 0) {
     // Minimized: nothing to acquire or rebuild; an armed rebuild stays armed
@@ -112,9 +118,9 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
   bool rebuilt_this_call = false;
   for (int attempt = 0; attempt < 2; ++attempt) {
     if (needs_recreate_ && !rebuilt_this_call) {
-      const Status rebuilt = swapchain_->recreate(current_extent);
+      const core::Status rebuilt = swapchain_->recreate(current_extent);
       if (!rebuilt.ok()) {
-        if (rebuilt.domain() == Status::Code::InvalidArgument &&
+        if (rebuilt.domain() == core::Status::Code::InvalidArgument &&
             swapchain_->valid()) {
           // The surface reported a zero extent mid-rebuild (still minimized):
           // the old chain is intact, so skip this tick and retry later.
@@ -139,11 +145,11 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
       // (The rebuild produced a fresh swapchain handle, so the next raw
       // begin_frame's ensure_image_sync refreshes the per-image semaphores.)
       if (recreate_callback_) {
-        VG_TRY(recreate_callback_(swapchain_->extent()));
+        VKC_TRY(recreate_callback_(swapchain_->extent()));
       }
       needs_recreate_ = false;
     }
-    Result<Frame> frame = begin_frame();
+    core::Result<Frame> frame = begin_frame();
     if (frame.ok()) {
       return std::optional<Frame>(frame.value());
     }
@@ -156,23 +162,23 @@ Result<std::optional<Frame>> FrameLoop::begin_frame(VkExtent2D current_extent) {
   return std::optional<Frame>{};
 }
 
-Result<Frame> FrameLoop::begin_frame() {
+core::Result<Frame> FrameLoop::begin_frame() {
   if (swapchain_ == nullptr || !swapchain_->valid()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "FrameLoop::begin_frame: swapchain is empty (moved-from, or a failed "
         "rebuild)");
   }
   // A Swapchain::recreate may have changed the image count since the last
   // frame; resize the per-image sync arrays before indexing them below.
-  VG_TRY(ensure_image_sync());
+  VKC_TRY(ensure_image_sync());
 
   const uint32_t slot = current_slot_;
 
   // Keep the CPU at most N frames ahead: wait until this slot's previous frame
   // has finished on the GPU before reusing its command buffer / semaphore.
-  VG_TRY(in_flight_[slot].wait());
+  VKC_TRY(in_flight_[slot].wait());
 
-  Result<uint32_t> acquired =
+  core::Result<uint32_t> acquired =
       swapchain_->acquire_next_image(image_available_[slot].handle());
   if (!acquired.ok()) {
     // OUT_OF_DATE (or another error) flows to the caller, which recreates the
@@ -194,13 +200,13 @@ Result<Frame> FrameLoop::begin_frame() {
       // restore the slot before surfacing the error (best-effort: the original
       // error outranks a recovery failure).
       (void)recover_slot(slot);
-      return vk_error(waited, "vkWaitForFences");
+      return core::vk_error(waited, "vkWaitForFences");
     }
   }
   images_in_flight_[image_index] = in_flight_[slot].handle();
 
   const VkCommandBuffer cmd = command_buffers_[slot].handle();
-  const Status begun =
+  const core::Status begun =
       command_buffers_[slot].begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
   if (!begun.ok()) {
     (void)recover_slot(slot);
@@ -238,20 +244,21 @@ Result<Frame> FrameLoop::begin_frame() {
   return frame;
 }
 
-Status FrameLoop::end_frame(const Frame& frame) {
+core::Status FrameLoop::end_frame(const Frame& frame) {
   // Frame is a public aggregate with every member defaulted and FrameLoop is
   // default-constructible, so a hand-built Frame -- or one from a loop that has
   // since been moved from -- reaches here with indices addressing nothing.
   // Reject it rather than dereferencing a null swapchain and indexing empty
   // vectors, matching the guards on both begin_frame overloads.
   if (swapchain_ == nullptr || !valid()) {
-    return Status::invalid_argument("FrameLoop::end_frame on an empty loop");
+    return core::Status::invalid_argument(
+        "FrameLoop::end_frame on an empty loop");
   }
   const uint32_t slot = frame.slot;
   if (slot >= command_buffers_.size() ||
       frame.image_index >= render_finished_.size() ||
       frame.cmd == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "FrameLoop::end_frame: frame did not come from this loop's "
         "begin_frame (slot / image index out of range, or no command buffer)");
   }
@@ -273,7 +280,7 @@ Status FrameLoop::end_frame(const Frame& frame) {
   to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   cmd_image_barrier(frame.cmd, to_present);
 
-  const Status ended = command_buffers_[slot].end();
+  const core::Status ended = command_buffers_[slot].end();
   if (!ended.ok()) {
     // This frame's acquire signal was never consumed by a submit; restore the
     // slot's sync state so the loop stays usable (best-effort: the original
@@ -300,7 +307,7 @@ Status FrameLoop::end_frame(const Frame& frame) {
   // Resetting here (rather than in begin_frame) keeps the fence signalled on
   // every earlier failure or abandoned Frame, so the next begin_frame on this
   // slot never blocks forever on a fence that will never be submitted.
-  const Status fence_ready = in_flight_[slot].reset();
+  const core::Status fence_ready = in_flight_[slot].reset();
   if (!fence_ready.ok()) {
     (void)recover_slot(slot);
     return fence_ready;
@@ -313,10 +320,10 @@ Status FrameLoop::end_frame(const Frame& frame) {
     // The failed submit consumed nothing: the acquire signal is still pending
     // and the fence was just reset, so recover_slot restores both.
     (void)recover_slot(slot);
-    return vk_error(submitted, "vkQueueSubmit");
+    return core::vk_error(submitted, "vkQueueSubmit");
   }
 
-  Status present = swapchain_->present(frame.image_index, signal_sem);
+  core::Status present = swapchain_->present(frame.image_index, signal_sem);
   if (swapchain_stale(present)) {
     // Arm the managed protocol's rebuild; raw callers see the status as ever
     // (they never read needs_recreate_). This is the one managed-state write on
@@ -333,7 +340,7 @@ Status FrameLoop::end_frame(const Frame& frame) {
   return present;
 }
 
-Status FrameLoop::recover_slot(uint32_t slot) {
+core::Status FrameLoop::recover_slot(uint32_t slot) {
   // A successful acquire left image_available_[slot] with a pending signal that
   // only a queue submit may consume: an empty submit drains it and re-signals
   // the slot fence, restoring both invariants (semaphore unsignaled, fence
@@ -353,14 +360,14 @@ Status FrameLoop::recover_slot(uint32_t slot) {
 
   // The fence must be unsignaled for the submit to signal it: reset, submit,
   // then wait. If any step fails the queue itself is failing — fall through.
-  Status status = in_flight_[slot].reset();
+  core::Status status = in_flight_[slot].reset();
   if (status.ok()) {
     const VkResult submitted =
         device_->queue_submit(1, &submit, in_flight_[slot].handle());
     if (submitted == VK_SUCCESS) {
       return in_flight_[slot].wait();
     }
-    status = vk_error(submitted, "vkQueueSubmit");
+    status = core::vk_error(submitted, "vkQueueSubmit");
   }
 
   // The drain never reached the queue, so the fence is now unsignaled with
@@ -369,8 +376,8 @@ Status FrameLoop::recover_slot(uint32_t slot) {
   // begin_frame fails cleanly instead of blocking forever in
   // in_flight_[slot].wait(). The acquire semaphore may stay signaled, but only
   // when the queue is already broken, where the next frame errors out anyway.
-  VG_ASSIGN(core::Fence resignaled,
-            core::Fence::create(device_->handle(), /*signaled=*/true));
+  VKC_ASSIGN(core::Fence resignaled,
+             core::Fence::create(device_->handle(), /*signaled=*/true));
   // images_in_flight_ caches this slot's fence *by raw handle* -- in as many
   // entries as the slot has been acquired for -- and does not own it. Scrub
   // those entries before the assignment below destroys the old fence, or the
@@ -390,7 +397,7 @@ void FrameLoop::set_profiler(Profiler* profiler) noexcept {
 }
 
 void FrameLoop::set_recreate_callback(
-    std::function<Status(VkExtent2D)> callback) {
+    std::function<core::Status(VkExtent2D)> callback) {
   recreate_callback_ = std::move(callback);
 }
 

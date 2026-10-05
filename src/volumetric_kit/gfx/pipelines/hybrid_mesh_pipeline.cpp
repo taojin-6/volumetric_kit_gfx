@@ -113,14 +113,14 @@ struct RecordGeometry {
 
 }  // namespace
 
-Result<HybridMeshPipeline> HybridMeshPipeline::create(
+core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
     VkDevice device, const RenderTargetLayout& layout) {
-  VG_ASSIGN(
+  VKC_ASSIGN(
       ShaderModule vert,
       ShaderModule::create(
           device, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_vert_spv),
           vg_hybrid_mesh_vert_spv_size));
-  VG_ASSIGN(
+  VKC_ASSIGN(
       ShaderModule frag,
       ShaderModule::create(
           device, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_frag_spv),
@@ -162,7 +162,7 @@ Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.depth_test = true;
   desc.depth_write = true;
   desc.fragment_specialization = &spec;
-  VG_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
+  VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
 
   HybridMeshPipeline hybrid;
   hybrid.pipeline_ = std::move(pipeline);

@@ -7,7 +7,7 @@
 /// @brief A borrowed, per-frame-variable triangle mesh drawn indirectly -- the
 ///        `volumetric_kit_recon` live zero-copy handoff.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -23,8 +23,8 @@ namespace volumetric_kit::gfx::pipelines {
 /// frame (e.g. a reconstruction compute pass emitting marching-cubes geometry)
 /// and records an *indirect* indexed draw against them. The draw count lives in
 /// the buffer, so a mesh that grew or shrank this frame draws correctly with no
-/// CPU round trip. The buffers may live on a @ref Device "device" the renderer
-/// **adopted** from the producer, making the handoff zero-copy.
+/// CPU round trip. The buffers may live on a device (`core::Device`) the
+/// renderer **adopted** from the producer, making the handoff zero-copy.
 ///
 /// Because it borrows, a `LiveMesh` is a plain value (copy it freely) -- there
 /// is no ownership to move. A default-constructed one is empty (`valid()` is

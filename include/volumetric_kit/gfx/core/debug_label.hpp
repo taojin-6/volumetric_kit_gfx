@@ -16,25 +16,21 @@
 /// a handle a readable name in a capture.
 ///
 /// Every entry point routes through a @ref DebugUtilsTable, which
-/// @ref debug_utils loads from a @ref Device. When the extension is not enabled
-/// the table is inactive, and every operation here compiles to a
+/// @ref debug_utils loads from a `core::Device`. When the extension is not
+/// enabled the table is inactive, and every operation here compiles to a
 /// branch-to-noop — no labels are emitted and no error is raised.
 
 #include <cstdint>
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 
 /// @brief The `VK_EXT_debug_utils` entry points of @p device, for the scopes
 ///        and naming below.
@@ -54,7 +50,7 @@ using core::Device;
 /// then go.
 /// @param device  The device to label on; it must outlive the table.
 /// @return The device's entry points, or an inactive table.
-VG_CORE_API DebugUtilsTable debug_utils(const Device& device);
+VG_CORE_API DebugUtilsTable debug_utils(const core::Device& device);
 
 /// @brief A nested debug-label region inside a command buffer, opened on
 ///        construction and closed on destruction.

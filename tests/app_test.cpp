@@ -19,12 +19,14 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
@@ -52,18 +54,18 @@ bool instance_has_headless_surface() {
 // The SurfaceFactory the tests hand to WindowedApp::create: a raw
 // VK_EXT_headless_surface the app adopts (and later destroys) — the headless
 // stand-in for a window system's glfwCreateWindowSurface.
-vg::Result<VkSurfaceKHR> create_headless_surface(VkInstance instance) {
+vkc::Result<VkSurfaceKHR> create_headless_surface(VkInstance instance) {
   auto create = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
       vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT"));
   if (create == nullptr) {
-    return vg::Status::unsupported("vkCreateHeadlessSurfaceEXT unavailable");
+    return vkc::Status::unsupported("vkCreateHeadlessSurfaceEXT unavailable");
   }
   VkHeadlessSurfaceCreateInfoEXT info{};
   info.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   const VkResult result = create(instance, &info, nullptr, &surface);
   if (result != VK_SUCCESS) {
-    return vg::vk_error(result, "vkCreateHeadlessSurfaceEXT");
+    return vkc::vk_error(result, "vkCreateHeadlessSurfaceEXT");
   }
   return surface;
 }
@@ -84,8 +86,8 @@ vg::app::WindowedAppConfig windowed_config(
 // a test can knock out exactly one field and watch that check fire. Never
 // dereferenced: every case built on this is rejected on its arguments, before
 // a handle reaches Vulkan.
-vg::AdoptedDevice placeholder_share() {
-  vg::AdoptedDevice adopted;
+vkc::AdoptedDevice placeholder_share() {
+  vkc::AdoptedDevice adopted;
   adopted.instance = reinterpret_cast<VkInstance>(0x1);
   adopted.instance_api_version = VK_API_VERSION_1_3;
   adopted.physical_device = reinterpret_cast<VkPhysicalDevice>(0x2);
@@ -114,11 +116,11 @@ class WindowedAppTest : public ::testing::Test {
     if (!instance_has_headless_surface()) {
       GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
     }
-    vg::InstanceConfig icfg;
+    vkc::InstanceConfig icfg;
     icfg.enable_validation = true;
     icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-    auto instance = vg::Instance::create(icfg);
+    auto instance = vkc::Instance::create(icfg);
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -126,7 +128,7 @@ class WindowedAppTest : public ::testing::Test {
     if (!surface.ok()) {
       GTEST_SKIP() << "headless surface: " << surface.status().message();
     }
-    vg::DeviceRequirements reqs = vg::device_requirements();
+    vkc::DeviceRequirements reqs = vg::device_requirements();
     reqs.needs_present = true;
     auto physical =
         instance.value().select_physical_device(reqs, surface.value().handle());
@@ -140,28 +142,28 @@ class WindowedAppTest : public ::testing::Test {
     auto app = vg::app::WindowedApp::create(config, create_headless_surface);
     EXPECT_TRUE(app.ok()) << app.status().message();
     // Return empty on failure rather than aborting via Result::value()
-    // (VG_CHECK): callers assert on validity, so the test fails cleanly.
+    // (VKC_CHECK): callers assert on validity, so the test fails cleanly.
     return app.ok() ? std::move(app).value() : vg::app::WindowedApp{};
   }
 
   // Drive `count` clear-only frames through the app's begin/end passthroughs.
   // The fixed headless extent matches the built swapchain, so no tick is
   // skipped and any non-OK status is a real failure.
-  vg::Status run_frames(vg::app::WindowedApp& app, int count) {
+  vkc::Status run_frames(vg::app::WindowedApp& app, int count) {
     for (int i = 0; i < count; ++i) {
       auto frame = app.begin_frame(app.swapchain().extent());
       if (!frame.ok()) {
         return frame.status();
       }
       if (!frame.value().has_value()) {
-        return vg::Status::invalid_argument("unexpected skipped tick");
+        return vkc::Status::invalid_argument("unexpected skipped tick");
       }
       vg::RenderTargetBeginInfo begin;
       begin.clear_color.float32[0] = 0.1f;
       begin.clear_color.float32[3] = 1.0f;
       frame.value()->target->begin(frame.value()->cmd, begin);
       frame.value()->target->end(frame.value()->cmd);
-      vg::Status end = app.end_frame(*frame.value());
+      vkc::Status end = app.end_frame(*frame.value());
       if (!end.ok()) {
         return end;
       }
@@ -175,29 +177,29 @@ class WindowedAppTest : public ::testing::Test {
 // building instance + present-capable device the way another library would,
 // then handing over the raw handles.
 TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
-  vg::InstanceConfig icfg;
+  vkc::InstanceConfig icfg;
   icfg.enable_validation = true;
   icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
                      VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-  auto instance = vg::Instance::create(icfg);
+  auto instance = vkc::Instance::create(icfg);
   ASSERT_TRUE(instance.ok()) << instance.status().message();
   // Selection needs a surface; the app builds its own below, so this one only
   // serves the embedder's device creation.
   auto probe = win::Surface::headless(instance.value().handle());
   ASSERT_TRUE(probe.ok()) << probe.status().message();
-  vg::DeviceRequirements reqs = vg::device_requirements();
+  vkc::DeviceRequirements reqs = vg::device_requirements();
   reqs.needs_present = true;
   auto physical =
       instance.value().select_physical_device(reqs, probe.value().handle());
   ASSERT_TRUE(physical.ok()) << physical.status().message();
-  auto owner = vg::Device::create(instance.value(), physical.value(), reqs,
-                                  probe.value().handle());
+  auto owner = vkc::Device::create(instance.value(), physical.value(), reqs,
+                                   probe.value().handle());
   ASSERT_TRUE(owner.ok()) << owner.status().message();
 
   // A present-capable device enables the swapchain extension; adopt verifies
   // the declaration against what the renderer needs.
   const char* const kEnabled[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-  vg::AdoptedDevice adopted;
+  vkc::AdoptedDevice adopted;
   adopted.instance = instance.value().handle();
   adopted.instance_api_version = instance.value().api_version();
   adopted.physical_device = physical.value().handle();
@@ -230,25 +232,25 @@ TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
     // Everything downstream of the device is still the app's own, and live:
     // frames render end to end through the borrowed device's queues.
     EXPECT_EQ(app.value().swapchain().extent().width, 256u);
-    vg::Status frames = run_frames(app.value(), 3);
+    vkc::Status frames = run_frames(app.value(), 3);
     EXPECT_TRUE(frames.ok()) << frames.message();
   }  // the app destructs here -- it must NOT destroy the borrowed device
 
   // The owner's device survived the app's teardown: a submit proves the
   // adopted app left it intact (a double-free trips the sanitizer job).
-  vg::Status after = owner.value().submit_single_time([](VkCommandBuffer) {});
+  vkc::Status after = owner.value().submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(after.ok()) << after.message();
 
   // The share is held to the renderer's floor even when config.device starts
   // from bare requirements, which name no dynamic rendering: a share that
   // never enabled it is refused rather than rendered on.
   vg::app::WindowedAppConfig bare = windowed_config();
-  bare.device = vg::DeviceRequirements{};
+  bare.device = vkc::DeviceRequirements{};
   adopted.enabled_features.dynamic_rendering = false;
   auto refused =
       vg::app::WindowedApp::adopt(adopted, bare, create_headless_surface);
   ASSERT_FALSE(refused.ok());
-  EXPECT_EQ(refused.status().domain(), vg::Status::Code::Unsupported)
+  EXPECT_EQ(refused.status().domain(), vkc::Status::Code::Unsupported)
       << refused.status().message();
 }
 
@@ -267,7 +269,7 @@ TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {
   EXPECT_TRUE(app.frame_loop().valid());
   EXPECT_EQ(app.frame_loop().frames_in_flight(), 2u);
 
-  const vg::Status status = run_frames(app, 3);
+  const vkc::Status status = run_frames(app, 3);
   EXPECT_TRUE(status.ok()) << status.message();
   EXPECT_TRUE(app.wait_idle().ok());
 }
@@ -276,10 +278,10 @@ TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {
 // name no dynamic rendering, still build a chain every pass can render on.
 TEST_F(WindowedAppTest, CreateMergesTheRendererFloorIn) {
   vg::app::WindowedAppConfig config = windowed_config();
-  config.device = vg::DeviceRequirements{};
+  config.device = vkc::DeviceRequirements{};
   vg::app::WindowedApp app = make_app(config);
   ASSERT_TRUE(app.valid());
-  const vg::Status enabled =
+  const vkc::Status enabled =
       app.device().check_enabled(vg::device_requirements());
   EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
@@ -297,7 +299,7 @@ TEST_F(WindowedAppTest, DepthConfigBuildsDepthCapableSwapchain) {
 
   // run_frames' begin info clears depth too: load_op defaults to CLEAR, so
   // every frame writes the depth attachments create() wired in.
-  const vg::Status status = run_frames(app, 3);
+  const vkc::Status status = run_frames(app, 3);
   EXPECT_TRUE(status.ok()) << status.message();
   EXPECT_TRUE(app.wait_idle().ok());
 }
@@ -314,7 +316,7 @@ TEST_F(WindowedAppTest, RecreateCallbackForwardsToLoop) {
   app.set_recreate_callback([&](VkExtent2D extent) {
     ++callback_runs;
     callback_extent = extent;
-    return vg::Status{};
+    return vkc::Status{};
   });
 
   // A frame at the current extent: no rebuild, the callback stays quiet.
@@ -345,17 +347,17 @@ TEST_F(WindowedAppTest, ZeroFramesInFlightPropagatesLoopError) {
   config.frames_in_flight = 0;
   auto app = vg::app::WindowedApp::create(config, create_headless_surface);
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // A factory that reports failure has its exact Status surfaced by create().
 TEST_F(WindowedAppTest, SurfaceFactoryFailurePropagates) {
   auto app = vg::app::WindowedApp::create(
-      windowed_config(), [](VkInstance) -> vg::Result<VkSurfaceKHR> {
-        return vg::Status::io_error("test: window system failed");
+      windowed_config(), [](VkInstance) -> vkc::Result<VkSurfaceKHR> {
+        return vkc::Status::io_error("test: window system failed");
       });
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::IoError);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::IoError);
 }
 
 // A factory that "succeeds" with a null handle is rejected up front instead of
@@ -363,9 +365,9 @@ TEST_F(WindowedAppTest, SurfaceFactoryFailurePropagates) {
 TEST_F(WindowedAppTest, NullSurfaceFromFactoryIsRejected) {
   auto app = vg::app::WindowedApp::create(
       windowed_config(),
-      [](VkInstance) -> vg::Result<VkSurfaceKHR> { return VK_NULL_HANDLE; });
+      [](VkInstance) -> vkc::Result<VkSurfaceKHR> { return VK_NULL_HANDLE; });
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(WindowedAppTest, MoveLeavesSourceEmpty) {
@@ -385,7 +387,7 @@ TEST_F(WindowedAppTest, MoveLeavesSourceEmpty) {
   // NOLINTNEXTLINE(bugprone-use-after-move)
   auto frame = src.begin_frame(VkExtent2D{256, 256});
   ASSERT_FALSE(frame.ok());
-  EXPECT_EQ(frame.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(frame.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(WindowedAppTest, MoveAssignOverLiveLeavesSourceEmpty) {
@@ -422,13 +424,13 @@ TEST(WindowedAppEmpty, OperationsFailCleanly) {
   EXPECT_FALSE(app.valid());
   auto frame = app.begin_frame(VkExtent2D{256, 256});
   ASSERT_FALSE(frame.ok());
-  EXPECT_EQ(frame.status().domain(), vg::Status::Code::InvalidArgument);
-  const vg::Status end = app.end_frame(win::Frame{});
+  EXPECT_EQ(frame.status().domain(), vkc::Status::Code::InvalidArgument);
+  const vkc::Status end = app.end_frame(win::Frame{});
   ASSERT_FALSE(end.ok());
-  EXPECT_EQ(end.domain(), vg::Status::Code::InvalidArgument);
-  const vg::Status idle = app.wait_idle();
+  EXPECT_EQ(end.domain(), vkc::Status::Code::InvalidArgument);
+  const vkc::Status idle = app.wait_idle();
   ASSERT_FALSE(idle.ok());
-  EXPECT_EQ(idle.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(idle.domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // A null surface factory is rejected before any Vulkan call, so this runs
@@ -437,7 +439,7 @@ TEST(WindowedAppValidation, NullSurfaceFactoryIsRejected) {
   auto app = vg::app::WindowedApp::create(
       vg::app::WindowedAppConfig{}, vg::app::WindowedApp::SurfaceFactory{});
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // adopt()'s argument checks all reject before a handle reaches Vulkan, so they
@@ -447,13 +449,13 @@ TEST(WindowedAppValidation, NullSurfaceFactoryIsRejected) {
 // A windowed app must present, so a compute-only share is refused up front
 // rather than failing deeper as a missing present queue.
 TEST(WindowedAppValidation, AdoptRejectsShareWithoutPresentQueue) {
-  vg::AdoptedDevice adopted = placeholder_share();
+  vkc::AdoptedDevice adopted = placeholder_share();
   adopted.has_present = false;
   adopted.present_queue = VK_NULL_HANDLE;
   auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(),
                                          create_headless_surface);
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // Every handle is vetted before the factory runs: a share that was never going
@@ -461,19 +463,19 @@ TEST(WindowedAppValidation, AdoptRejectsShareWithoutPresentQueue) {
 // (a real window surface, in the non-headless case).
 TEST(WindowedAppValidation, AdoptRejectsNullHandlesWithoutRunningFactory) {
   bool factory_ran = false;
-  auto factory = [&factory_ran](VkInstance) -> vg::Result<VkSurfaceKHR> {
+  auto factory = [&factory_ran](VkInstance) -> vkc::Result<VkSurfaceKHR> {
     factory_ran = true;
-    return vg::Status::unsupported("the factory must not run");
+    return vkc::Status::unsupported("the factory must not run");
   };
-  auto expect_rejected = [&factory](const vg::AdoptedDevice& adopted,
+  auto expect_rejected = [&factory](const vkc::AdoptedDevice& adopted,
                                     const char* which) {
     auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(), factory);
     ASSERT_FALSE(app.ok()) << which;
-    EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument)
+    EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument)
         << which;
   };
 
-  vg::AdoptedDevice adopted = placeholder_share();
+  vkc::AdoptedDevice adopted = placeholder_share();
   adopted.instance = VK_NULL_HANDLE;
   expect_rejected(adopted, "null instance");
 
@@ -497,15 +499,15 @@ TEST(WindowedAppValidation, AdoptRejectsNullHandlesWithoutRunningFactory) {
 TEST(WindowedAppValidation,
      AdoptRejectsUnsetInstanceVersionWithoutRunningFactory) {
   bool factory_ran = false;
-  auto factory = [&factory_ran](VkInstance) -> vg::Result<VkSurfaceKHR> {
+  auto factory = [&factory_ran](VkInstance) -> vkc::Result<VkSurfaceKHR> {
     factory_ran = true;
-    return vg::Status::unsupported("the factory must not run");
+    return vkc::Status::unsupported("the factory must not run");
   };
-  vg::AdoptedDevice adopted = placeholder_share();
+  vkc::AdoptedDevice adopted = placeholder_share();
   adopted.instance_api_version = 0;
   auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(), factory);
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_FALSE(factory_ran);
 }
 
@@ -516,7 +518,7 @@ TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFactory) {
       vg::app::WindowedApp::adopt(placeholder_share(), windowed_config(),
                                   vg::app::WindowedApp::SurfaceFactory{});
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_NE(app.status().message().find("WindowedApp::adopt"),
             std::string::npos)
       << app.status().message();
@@ -525,9 +527,9 @@ TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFactory) {
 TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFromFactory) {
   auto app = vg::app::WindowedApp::adopt(
       placeholder_share(), windowed_config(),
-      [](VkInstance) -> vg::Result<VkSurfaceKHR> { return VK_NULL_HANDLE; });
+      [](VkInstance) -> vkc::Result<VkSurfaceKHR> { return VK_NULL_HANDLE; });
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_NE(app.status().message().find("WindowedApp::adopt"),
             std::string::npos)
       << app.status().message();
@@ -596,12 +598,12 @@ TEST(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
 // yield a device every gfx type runs on.
 TEST(HeadlessAppConfigTest, MergesTheRendererFloorIn) {
   vg::app::HeadlessAppConfig config = headless_config();
-  config.device = vg::DeviceRequirements{};
+  config.device = vkc::DeviceRequirements{};
   auto app = vg::app::HeadlessApp::create(config);
   if (!app.ok()) {
     GTEST_SKIP() << "no Vulkan device: " << app.status().message();
   }
-  const vg::Status enabled =
+  const vkc::Status enabled =
       app.value().device().check_enabled(vg::device_requirements());
   EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
@@ -613,7 +615,7 @@ TEST(HeadlessAppValidation, NeedsPresentIsRejected) {
   config.device.needs_present = true;
   auto app = vg::app::HeadlessApp::create(config);
   ASSERT_FALSE(app.ok());
-  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(app.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(HeadlessAppTest, MoveLeavesSourceEmpty) {

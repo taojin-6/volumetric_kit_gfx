@@ -71,14 +71,14 @@ target_include_directories(
 # find_dependency() calls stay simple: volumetric_kit_core -- its base tier
 # (Status / Result / the log sink in every tier's signatures) and its vulkan
 # tier (the Instance, PhysicalDeviceInfo, Device and Allocator gfx's API takes,
-# the umbrella header core/vulkan.hpp forwards to, the VkResult bridge
-# result.hpp names, and the format metadata) -- and the system's Vulkan headers,
-# which every gfx TU compiles against. gfx links the Vulkan loader PRIVATE --
-# its own implementation calls it, and no public gfx signature needs it -- but
-# the core's vulkan tier links it PUBLIC, so consumers get it through that. VMA
-# is the core's, compiled into its allocator; gfx no longer builds a copy. glm
-# is intentionally absent: no public gfx_core header names a glm type (see the
-# rationale at the top-level find_package site in CMakeLists.txt).
+# the Vulkan umbrella header, the VkResult bridge, and the format metadata) --
+# and the system's Vulkan headers, which every gfx TU compiles against. gfx
+# links the Vulkan loader PRIVATE -- its own implementation calls it, and no
+# public gfx signature needs it -- but the core's vulkan tier links it PUBLIC,
+# so consumers get it through that. VMA is the core's, compiled into its
+# allocator; gfx no longer builds a copy. glm is intentionally absent: no public
+# gfx_core header names a glm type (see the rationale at the top-level
+# find_package site in CMakeLists.txt).
 target_link_libraries(
   gfx_core
   PUBLIC volumetric_kit::core_base volumetric_kit::core_vulkan Vulkan::Headers

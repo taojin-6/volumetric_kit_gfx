@@ -28,6 +28,10 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-05 — gfx writes every core name as the core does** -- `core::Status`,
+  `core::Device`, `VKC_TRY` in gfx; `vkc::` in tests and examples -- and its re-export
+  headers and `VG_*` macro aliases are gone (amends the device and error-handling entries).
+  See the dated entry below.
 - **2026-10-04 — Sync, descriptors and queries come from volumetric_kit_core.** gfx's
   fences, semaphores, descriptor objects, command pools and buffers, query pool and
   `UniqueHandle` are gone; gfx uses the core's. The profiler times frames on the core's
@@ -84,6 +88,40 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-05 — gfx writes the core's types and macros under the core's names
+
+Amends "The device comes from volumetric_kit_core" and "Error handling comes
+from volumetric_kit_core", below, as recon's 2026-10-04 entry amended its own.
+
+**The rule.** gfx names volumetric_kit_core's types, functions and macros as
+the core does: `core::Status`, `core::Result`, `core::Device`,
+`core::vk_error` and `VKC_TRY`, `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY` in
+gfx's namespaces, and `volumetric_kit::core::` (a `vkc` alias) in tests,
+examples and consumers -- the rule "Memory comes from volumetric_kit_core"
+set for the allocator, now for every name. The headers that only re-exported
+the core's names into `vg::` are gone -- `core/result.hpp`, `check.hpp`,
+`instance.hpp`, `physical_device_info.hpp` and the `vulkan.hpp` forwarder --
+and so are the four macro aliases. What stays under `core/` is gfx's own:
+`device_requirements.hpp` (was `device.hpp`; only `device_requirements()`),
+`log.hpp` (`log_message`, source `"vg"`), `debug_label.hpp` (`debug_utils`
+and the labels), and the renderer's types. gfx declares no `core` namespace of
+its own, so `core::Status` in gfx's namespaces finds `volumetric_kit::core`.
+
+**Why.** The aliases kept gfx's call sites unchanged while it moved onto the
+core, and its open branches merging cleanly. With stages 2a to 2c landed
+nothing waits on them, and two spellings of one type cost every reader: an
+application using recon and gfx met one device as `vkc::Device` and
+`vg::Device`, and each re-export header was one more file to keep in step
+with the core's. recon dropped its re-exports the same way (its #167).
+
+**What it costs.** Consumers rename on their next pin bump: the four macros,
+`vg::X` to `vkc::X` for each core name, and the include map in the
+CHANGELOG. gfx's own names (`vg::device_requirements`, `vg::log_message`,
+`vg::debug_utils`) are unchanged. The tests of the core's types under gfx's
+names (`result_test`, `core_vulkan_tier_test`) are gone with the names; the
+core tests its own, and `swapchain_stale`, the one gfx function the tier test
+covered, moved to `windowing_test`.
 
 ## 2026-10-04 — Sync, descriptors and queries come from volumetric_kit_core
 
@@ -159,7 +197,8 @@ gfx makes is the type recon binds, and the reverse.
   examples (the family's alias for `volumetric_kit::core`), including the
   core's headers directly. The names aliased before this entry -- `Status`,
   `Result`, the `VG_*` macros, `Instance`, `Device` and the rest of the device
-  entry below -- move the same way in a follow-up; a `TODO` marks each alias.
+  entry below -- have since moved the same way ("gfx writes the core's types
+  and macros under the core's names", above).
 
 - **Every buffer names its placement, as the core's DECISIONS.md, "Where
   memory lives", sets out.** Vertex, index and uploaded buffers, textures and
@@ -231,7 +270,9 @@ core's (stage 2a's second half): `Instance`, `InstanceConfig`,
 `PhysicalDeviceInfo`, `Device`, `AdoptedDevice`, `EnabledFeatures`,
 `DeviceRequirements`, `merge` and `check_device_support` are using-declarations
 in `vg::`, as recon's are in `vr::`. A device gfx makes is the type recon adopts,
-and the reverse.
+and the reverse. *Amended 2026-10-05:* gfx names them `core::` and the
+using-declarations are gone ("gfx writes the core's types and macros under the
+core's names", above).
 
 - **gfx brings its requirements, not a config.** `device_requirements()`
   returns the renderer's floor -- Vulkan 1.3, a graphics queue,
@@ -324,6 +365,10 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   library alike.
 
 ## 2026-10-04 — Error handling comes from volumetric_kit_core
+
+*Amended 2026-10-05:* gfx names these as the core does -- `core::Status`,
+`VKC_TRY`, `VKC_CHECK` -- and the `vg::` names and `VG_*` macros below are
+gone ("gfx writes the core's types and macros under the core's names", above).
 
 gfx's `Status`, `Result`, `VG_CHECK` and log sink are volumetric_kit_core's
 base tier, fetched pinned by commit (`third_party/CMakeLists.txt`), linked

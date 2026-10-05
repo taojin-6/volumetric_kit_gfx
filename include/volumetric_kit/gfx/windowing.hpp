@@ -14,11 +14,11 @@
 /// write one `#include` instead of three. It is purely additive: the individual
 /// headers remain public for code that wants finer-grained dependencies.
 ///
-/// @note Like the headers it aggregates, this transitively includes
-///       `core/vulkan.hpp`. If you rely on GLFW's Vulkan
-///       WSI helpers (e.g. `glfwCreateWindowSurface`), include a Vulkan header
-///       before `<GLFW/glfw3.h>` so `glfw3.h` sees Vulkan and declares them —
-///       the examples do this by including `core/vulkan.hpp` first.
+/// @note Like the headers it aggregates, this transitively includes the
+///       core's `volumetric_kit/core/vulkan/vulkan.hpp`. If you rely on GLFW's
+///       Vulkan WSI helpers (e.g. `glfwCreateWindowSurface`), include a Vulkan
+///       header before `<GLFW/glfw3.h>` so `glfw3.h` sees Vulkan and declares
+///       them — the examples do this by including the core's umbrella first.
 ///
 /// @code
 /// #include "volumetric_kit/gfx/windowing.hpp"

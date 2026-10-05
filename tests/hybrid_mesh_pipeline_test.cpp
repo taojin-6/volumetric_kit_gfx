@@ -297,7 +297,7 @@ TEST_F(HybridMeshPipelineDeviceTest, RejectsLayoutWithoutDepth) {
   layout.color_count = 1;  // no depth format -> depth-tested pipeline rejected
   auto pipeline = pipelines::HybridMeshPipeline::create(device(), layout);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(HybridMeshPipelineDeviceTest, MoveLeavesSourceEmpty) {

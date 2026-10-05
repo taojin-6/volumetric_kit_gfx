@@ -49,16 +49,16 @@ MaterialUbo factors_of(const PbrMaterialDesc& desc) {
 
 }  // namespace
 
-Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
+core::Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
     VkDevice device, UploadBatch& batch, VkDescriptorSetLayout material_layout,
     const std::vector<PbrMaterialDesc>& descs) {
   if (device == VK_NULL_HANDLE || material_layout == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrMaterial::create_all: device and material_layout must be "
         "non-null");
   }
   if (descs.empty()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrMaterial::create_all: descs must name at least one material");
   }
   for (const PbrMaterialDesc& desc : descs) {
@@ -66,7 +66,7 @@ Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
         desc.metallic_roughness == VK_NULL_HANDLE ||
         desc.normal == VK_NULL_HANDLE || desc.occlusion == VK_NULL_HANDLE ||
         desc.emissive == VK_NULL_HANDLE || desc.sampler == VK_NULL_HANDLE) {
-      return Status::invalid_argument(
+      return core::Status::invalid_argument(
           "PbrMaterial::create_all: all five map views and the sampler must "
           "be non-null");
     }
@@ -79,8 +79,8 @@ Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
   std::vector<OwnedDescriptorSet> sets;
   sets.reserve(descs.size());
   for (size_t i = 0; i < descs.size(); ++i) {
-    VG_ASSIGN(OwnedDescriptorSet set,
-              OwnedDescriptorSet::create(device, material_layout, 5));
+    VKC_ASSIGN(OwnedDescriptorSet set,
+               OwnedDescriptorSet::create(device, material_layout, 5));
     sets.push_back(std::move(set));
   }
   std::vector<uint8_t> packed(descs.size() * kFactorStride, 0);
@@ -100,7 +100,7 @@ Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
   upload.data = packed.data();
   upload.size = packed.size();
   upload.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-  VG_ASSIGN(core::Buffer uploaded, batch.add_buffer(upload));
+  VKC_ASSIGN(core::Buffer uploaded, batch.add_buffer(upload));
   *factors = std::move(uploaded);
 
   for (size_t i = 0; i < descs.size(); ++i) {
@@ -123,11 +123,11 @@ Result<std::vector<PbrMaterial>> PbrMaterial::create_all(
   return materials;
 }
 
-Result<PbrMaterial> PbrMaterial::create(VkDevice device, UploadBatch& batch,
-                                        VkDescriptorSetLayout material_layout,
-                                        const PbrMaterialDesc& desc) {
-  VG_ASSIGN(std::vector<PbrMaterial> materials,
-            create_all(device, batch, material_layout, {desc}));
+core::Result<PbrMaterial> PbrMaterial::create(
+    VkDevice device, UploadBatch& batch, VkDescriptorSetLayout material_layout,
+    const PbrMaterialDesc& desc) {
+  VKC_ASSIGN(std::vector<PbrMaterial> materials,
+             create_all(device, batch, material_layout, {desc}));
   return std::move(materials.front());
 }
 

@@ -24,10 +24,10 @@ repos:
         additional_dependencies: [cmakelang, pyyaml]
 
   # Enforce the Vulkan-include umbrella: first-party code includes
-  # "volumetric_kit/gfx/core/vulkan.hpp", never <vulkan/...> directly. That
-  # header forwards to volumetric_kit_core's umbrella, which owns the
-  # loader/dispatch choice (link-time loader today; volk later) and the oldest
-  # Vulkan headers the family supports, so no gfx source can bypass either.
+  # volumetric_kit_core's "volumetric_kit/core/vulkan/vulkan.hpp", never
+  # <vulkan/...> directly. The core's umbrella owns the loader/dispatch choice
+  # (link-time loader today; volk later) and the oldest Vulkan headers the
+  # family supports, so no gfx source can bypass either.
   # Fails if any tracked C / C++ / CUDA / Obj-C++ source includes a <vulkan/...>
   # path. The pattern is anchored to the start of a line (after optional
   # whitespace) so it matches real `#include` directives, not the path quoted
@@ -36,7 +36,7 @@ repos:
   - repo: local
     hooks:
       - id: vulkan-include-umbrella
-        name: enforce core/vulkan.hpp Vulkan-include umbrella
+        name: enforce the core's vulkan.hpp Vulkan-include umbrella
         entry: '^\s*#\s*include\s*[<"]vulkan/'
         language: pygrep
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$

@@ -10,10 +10,11 @@
 #include <optional>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
 namespace volumetric_kit::core {
@@ -22,10 +23,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 
 namespace windowing {
 
@@ -69,8 +66,8 @@ struct SwapchainConfig {
 /// @param status  A status returned by @ref Swapchain::acquire_next_image,
 ///                @ref Swapchain::present, or the @ref FrameLoop frame calls.
 /// @return `true` when the right response is to recreate and continue.
-inline bool swapchain_stale(const Status& status) noexcept {
-  const std::optional<VkResult> result = vk_result(status);
+inline bool swapchain_stale(const core::Status& status) noexcept {
+  const std::optional<VkResult> result = core::vk_result(status);
   return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
 }
 
@@ -84,8 +81,8 @@ inline bool swapchain_stale(const Status& status) noexcept {
 /// compatible after a resize. With @ref SwapchainConfig::depth_format set, the
 /// per-image depth attachments are likewise rebuilt (and re-transitioned into
 /// their attachment layout) on every @ref recreate. @ref acquire_next_image /
-/// @ref present surface `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK @ref Status
-/// whose @ref Status::code is that result, so the caller knows to @ref
+/// @ref present surface `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK `core::Status`
+/// whose `core::Status::code` is that result, so the caller knows to @ref
 /// recreate. A default-constructed `Swapchain` is empty (`valid()` is false).
 ///
 /// @warning The @p device and surface passed to @ref create must outlive the
@@ -117,19 +114,20 @@ class VG_WINDOWING_API Swapchain {
   ///                   the per-image depth attachments (and reallocates them on
   ///                   every @ref recreate). Borrowed; must outlive the
   ///                   swapchain. Unused for a color-only swapchain.
-  /// @return The swapchain on success, or a non-OK @ref Status:
+  /// @return The swapchain on success, or a non-OK `core::Status`:
   ///         a null @p surface, a non-present @p device, a non-depth
   ///         `config.depth_format`, or a set `config.depth_format` without an
-  ///         @p allocator returns @ref Status::Code::InvalidArgument; a surface
-  ///         with no formats / present modes, or a `config.depth_format` the
-  ///         device cannot render depth through (stencil aspect, or no
-  ///         optimal-tiling depth-attachment support), or a @p device that did
-  ///         not enable the renderer's requirements, returns
-  ///         @ref Status::Code::Unsupported; a failed Vulkan call carries its
-  ///         `VkResult`.
-  static Result<Swapchain> create(const Device& device, VkSurfaceKHR surface,
-                                  const SwapchainConfig& config,
-                                  core::Allocator* allocator = nullptr);
+  ///         @p allocator returns `core::Status::Code::InvalidArgument`; a
+  ///         surface with no formats / present modes, or a
+  ///         `config.depth_format` the device cannot render depth through
+  ///         (stencil aspect, or no optimal-tiling depth-attachment support),
+  ///         or a @p device that did not enable the renderer's requirements,
+  ///         returns `core::Status::Code::Unsupported`; a failed Vulkan call
+  ///         carries its `VkResult`.
+  static core::Result<Swapchain> create(const core::Device& device,
+                                        VkSurfaceKHR surface,
+                                        const SwapchainConfig& config,
+                                        core::Allocator* allocator = nullptr);
 
   ~Swapchain();
   Swapchain(Swapchain&& other) noexcept;
@@ -143,20 +141,21 @@ class VG_WINDOWING_API Swapchain {
   /// @param timeout_ns       Maximum wait, in nanoseconds.
   /// @return The acquired image index. `VK_SUBOPTIMAL_KHR` still returns an
   ///         index (render proceeds); `VK_ERROR_OUT_OF_DATE_KHR` returns a
-  ///         non-OK @ref Status carrying that code — @ref recreate and retry.
-  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
-  Result<uint32_t> acquire_next_image(VkSemaphore image_available,
-                                      uint64_t timeout_ns = UINT64_MAX);
+  ///         non-OK `core::Status` carrying that code — @ref recreate and
+  ///         retry. An empty swapchain returns
+  ///         `core::Status::Code::InvalidArgument`.
+  core::Result<uint32_t> acquire_next_image(VkSemaphore image_available,
+                                            uint64_t timeout_ns = UINT64_MAX);
 
   /// @brief Present image @p image_index on the device's present queue.
   /// @param image_index     An index from @ref acquire_next_image.
   /// @param render_finished  Waited before presenting (signaled by the render
   ///                        submission).
-  /// @return OK on success; a non-OK @ref Status carrying
+  /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` when the
   ///         swapchain should be recreated, or another failed `VkResult`.
-  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
-  Status present(uint32_t image_index, VkSemaphore render_finished);
+  ///         An empty swapchain returns `core::Status::Code::InvalidArgument`.
+  core::Status present(uint32_t image_index, VkSemaphore render_finished);
 
   /// @brief Rebuild the swapchain for @p extent (resize / out-of-date), keeping
   ///        the format and present mode. Idles the device, then hands the old
@@ -165,16 +164,15 @@ class VG_WINDOWING_API Swapchain {
   /// @param extent  The new desired size (clamped/overridden as in @ref
   /// create).
   /// @return OK on success. A zero @p extent (minimized window) fails with
-  ///         @ref Status::Code::InvalidArgument *without touching the current
-  ///         swapchain*, which stays valid for a later retry. A failed rebuild
-  ///         (`vkCreateSwapchainKHR`, or the image-view creation that follows)
-  ///         empties the object (`valid()` false) but keeps its device /
-  ///         surface / format, so a later @ref recreate can retry it once the
-  ///         transient failure clears. Called on a moved-from or
+  ///         `core::Status::Code::InvalidArgument` *without touching the
+  ///         current swapchain*, which stays valid for a later retry. A failed
+  ///         rebuild (`vkCreateSwapchainKHR`, or the image-view creation that
+  ///         follows) empties the object (`valid()` false) but keeps its
+  ///         device / surface / format, so a later @ref recreate can retry it
+  ///         once the transient failure clears. Called on a moved-from or
   ///         default-constructed swapchain (no device to rebuild on), fails
-  ///         with
-  ///         @ref Status::Code::InvalidArgument.
-  Status recreate(VkExtent2D extent);
+  ///         with `core::Status::Code::InvalidArgument`.
+  core::Status recreate(VkExtent2D extent);
 
   /// @return The render target for swapchain image @p image_index.
   /// @pre @p image_index < @ref image_count.
@@ -219,15 +217,15 @@ class VG_WINDOWING_API Swapchain {
   bool valid() const noexcept { return swapchain_ != VK_NULL_HANDLE; }
 
  private:
-  Status select_surface_properties(const SwapchainConfig& config);
-  Status build(VkExtent2D extent);
+  core::Status select_surface_properties(const SwapchainConfig& config);
+  core::Status build(VkExtent2D extent);
   // Image views + optional per-image depth attachments + render targets.
-  Status create_image_resources(VkExtent2D extent);
+  core::Status create_image_resources(VkExtent2D extent);
   void destroy_resources() noexcept;  // views + depth + swapchain
   void reset_state() noexcept;        // null handles + zero metadata to empty
   void destroy() noexcept;
 
-  const Device* device_ = nullptr;         // borrowed; outlives this
+  const core::Device* device_ = nullptr;   // borrowed; outlives this
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  // borrowed; outlives this
   // Borrowed; outlives this. Non-null only when depth_format_ is set.
   core::Allocator* allocator_ = nullptr;

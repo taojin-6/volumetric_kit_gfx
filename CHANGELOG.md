@@ -29,6 +29,26 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **gfx writes the core's names; its re-exports of them are gone.**
+  gfx's API names volumetric_kit_core's types and macros as the core does,
+  so the `vg::` names for them and the `VG_*` macros are removed. Migrating:
+  - `VG_TRY` / `VG_ASSIGN` / `VG_CHECK` / `VG_VK_TRY` → `VKC_TRY` /
+    `VKC_ASSIGN` / `VKC_CHECK` / `VKC_VK_TRY`.
+  - `vg::Status`, `Result`, `vk_error`, `vk_result`, `to_string`,
+    `Instance`, `InstanceConfig`, `PhysicalDeviceInfo`, `Device`,
+    `AdoptedDevice`, `DeviceRequirements`, `EnabledFeatures`,
+    `DeviceSupport`, `merge`, `check_device_support`, `LogLevel`,
+    `LogHandler` and `set_log_handler` → `vkc::` (`volumetric_kit::core::`).
+    gfx's own names stay: `vg::device_requirements()`, `vg::log_message`,
+    `vg::kLogSource`, `vg::debug_utils`.
+  - Headers: `gfx/core/result.hpp` → `core/base/result.hpp` (and
+    `core/vulkan/vk_result.hpp` for the `VkResult` bridge and `VKC_VK_TRY`);
+    `gfx/core/check.hpp` → `core/base/check.hpp`; `gfx/core/instance.hpp`,
+    `physical_device_info.hpp` and `vulkan.hpp` → the core's
+    `core/vulkan/` headers of the same names; `gfx/core/device.hpp` →
+    `core/vulkan/device.hpp`, with `device_requirements()` now in
+    `gfx/core/device_requirements.hpp`. All are under
+    `volumetric_kit/`.
 - `core`: **sync, descriptors, commands and queries are volumetric_kit_core's.**
   gfx's `Fence`, `Semaphore`, `TimelineSemaphore`, `DescriptorSetLayout`,
   `DescriptorPool`, `DescriptorSet`, `CommandPool`, `CommandBuffer`,

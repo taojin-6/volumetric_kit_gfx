@@ -9,8 +9,8 @@
 // drives that under Xvfb to validate the real window -> surface -> swapchain ->
 // present path headlessly.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"  // before GLFW, so glfw3.h sees
-// Vulkan and declares its helpers
+// Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -28,6 +28,7 @@
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
@@ -157,7 +158,7 @@ int run(GLFWwindow* window, int max_frames) {
 
     f.target->end(f.cmd);
 
-    const vg::Status present = app.end_frame(f);
+    const vkc::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
       exit_code = 1;
@@ -170,7 +171,7 @@ int run(GLFWwindow* window, int max_frames) {
   // it — while its frame loop may still have frames in flight that reference
   // them (including after an error break above). Idle the device first so their
   // destruction is safe.
-  if (const vg::Status idle = app.wait_idle(); !idle) {
+  if (const vkc::Status idle = app.wait_idle(); !idle) {
     std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
     exit_code = 1;
   }

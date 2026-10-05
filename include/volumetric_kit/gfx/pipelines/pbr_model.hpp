@@ -14,8 +14,8 @@
 
 #include <glm/mat4x4.hpp>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
@@ -28,9 +28,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 namespace assets {
 struct Material;
 struct Model;
@@ -113,7 +110,7 @@ VG_PIPELINES_API std::vector<MeshInstance> flatten_scene(
 /// @code
 /// std::optional<assets::Model> model = io::load_gltf("helmet.glb", &err);
 /// if (!model) return fail(err);
-/// Result<pipelines::PbrModel> gpu =
+/// core::Result<pipelines::PbrModel> gpu =
 ///     pipelines::PbrModel::create(device, allocator, pbr, *model);
 /// if (!gpu) return fail(gpu.status().message());
 /// pipelines::PbrFrame frame;  // + extent / view_proj / scene / slot
@@ -139,14 +136,14 @@ class VG_PIPELINES_API PbrModel {
   ///                   skipped; empty meshes stay as skipped draws; a model
   ///                   with no meshes yields a valid model with zero draws.
   /// @pre @p device holds a live `VkDevice` and @p pipeline is `valid()` --
-  ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
-  ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The model on success, or a non-OK @ref Status (a backend
+  ///      validated before Vulkan is touched, otherwise a non-OK `core::Status`
+  ///      with domain `core::Status::Code::InvalidArgument`.
+  /// @return The model on success, or a non-OK `core::Status` (a backend
   ///         Status from the upload, sampler, or material step).
-  static Result<PbrModel> create(const Device& device,
-                                 core::Allocator& allocator,
-                                 const PbrPipeline& pipeline,
-                                 const assets::Model& model);
+  static core::Result<PbrModel> create(const core::Device& device,
+                                       core::Allocator& allocator,
+                                       const PbrPipeline& pipeline,
+                                       const assets::Model& model);
 
   ~PbrModel() = default;
   PbrModel(PbrModel&&) noexcept = default;

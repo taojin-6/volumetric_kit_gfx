@@ -29,20 +29,20 @@ TEST(ShaderModuleTest, NullDeviceRejected) {
   const uint32_t word = 0;
   auto module = vg::ShaderModule::create(VK_NULL_HANDLE, &word, 4);
   ASSERT_FALSE(module.ok());
-  EXPECT_EQ(module.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(module.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST(ShaderModuleTest, NullCodeRejected) {
   auto module = vg::ShaderModule::create(VK_NULL_HANDLE, nullptr, 4);
   ASSERT_FALSE(module.ok());
-  EXPECT_EQ(module.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(module.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST(ShaderModuleTest, ZeroSizeRejected) {
   const uint32_t word = 0;
   auto module = vg::ShaderModule::create(VK_NULL_HANDLE, &word, 0);
   ASSERT_FALSE(module.ok());
-  EXPECT_EQ(module.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(module.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST(ShaderModuleTest, MisalignedSizeRejected) {
@@ -50,7 +50,7 @@ TEST(ShaderModuleTest, MisalignedSizeRejected) {
   // 6 bytes is not a whole number of SPIR-V words -- reject before Vulkan.
   auto module = vg::ShaderModule::create(VK_NULL_HANDLE, &word, 6);
   ASSERT_FALSE(module.ok());
-  EXPECT_EQ(module.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(module.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST(ShaderModuleTest, DefaultConstructedIsEmpty) {
