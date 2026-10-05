@@ -28,11 +28,11 @@
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
@@ -262,7 +262,7 @@ pipelines::LiveMesh make_live_mesh(vkc::Allocator& allocator,
 struct AtlasResources {
   vkc::Image texture;
   vg::Sampler sampler;
-  vg::DescriptorPool pool;
+  vkc::DescriptorPool pool;
   VkDescriptorSet set = VK_NULL_HANDLE;
 };
 
@@ -378,7 +378,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
       return {};
     }
 
-    auto pool = vg::CommandPool::create(device(), device_->queue_family());
+    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
     EXPECT_TRUE(pool.ok()) << pool.status().message();
     if (!pool.ok()) {
       return {};
@@ -476,7 +476,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
 
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+    auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
     if (!pool.ok()) {
       ADD_FAILURE() << pool.status().message();
       return VK_NULL_HANDLE;

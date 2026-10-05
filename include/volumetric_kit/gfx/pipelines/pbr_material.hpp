@@ -53,10 +53,10 @@ struct PbrMaterialDesc {
 /// @brief Owns the set-1 descriptor resources for one @ref PbrPipeline
 ///        material: a factor uniform buffer plus the five sampled maps.
 ///
-/// Self-contained, like @ref GpuMesh: it owns its own one-set @ref
-/// DescriptorPool and the @ref DescriptorSet allocated from it, and shares
-/// the factor UBO its factors live in. The factors never change, so the UBO
-/// is device-only memory, uploaded through an @ref UploadBatch as a mesh's
+/// Self-contained, like @ref GpuMesh: it owns its own one-set
+/// `core::DescriptorPool` and the `core::DescriptorSet` allocated from it, and
+/// shares the factor UBO its factors live in. The factors never change, so the
+/// UBO is device-only memory, uploaded through an @ref UploadBatch as a mesh's
 /// buffers are: build the materials with @ref create_all (or one with
 /// @ref create) against `PbrPipeline::descriptor_set_layout(1)`, finish the
 /// batch, then name them in @ref PbrDraw "PbrDraws". @ref create_all packs

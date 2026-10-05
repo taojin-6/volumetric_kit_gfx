@@ -110,7 +110,7 @@ leak/double-free detectors — a green normal build is necessary but not suffici
 - Prefer plain behavior-level tests over private-state backdoors.
 - Mark deferred work inline with greppable `TODO:` comments.
 - Full Doxygen on public classes/functions, matching
-  `include/volumetric_kit/gfx/core/sync.hpp`: `@file`/`@brief` on headers,
+  `include/volumetric_kit/gfx/core/sampler.hpp`: `@file`/`@brief` on headers,
   `@brief` and a `@code` example per class, and `@brief`/`@param`/`@return`
   (`@pre` where needed) on methods. An accessor may use just `/// @return`.
 - Deleted copy/defaulted move declarations convey ownership; do not repeat

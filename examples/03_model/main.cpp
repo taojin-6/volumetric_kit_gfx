@@ -65,12 +65,12 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
@@ -416,8 +416,8 @@ struct Skybox {
   std::optional<vg::Sampler> sampler;  // no public default ctor (see #47)
   vkc::Image cube;
   vg::GraphicsPipeline pipeline;
-  vg::DescriptorPool pool;
-  vg::DescriptorSet set;  // set 0: the samplerCube
+  vkc::DescriptorPool pool;
+  vkc::DescriptorSet set;  // set 0: the samplerCube
 };
 
 vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
@@ -474,7 +474,7 @@ Skybox setup_skybox(const vg::Device& device, vkc::Allocator& alloc,
   s.pipeline = std::move(pipeline).value();
 
   const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  auto pool = vg::DescriptorPool::create(device.handle(), &size, 1, 1);
+  auto pool = vkc::DescriptorPool::create(device.handle(), &size, 1, 1);
   if (!pool.ok()) {
     std::fprintf(stderr, "skybox pool: %s\n", pool.status().message().c_str());
     *ok = false;

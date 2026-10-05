@@ -18,8 +18,8 @@
 
 #include "imgui.h"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -210,7 +210,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(
       ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
 
-  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -273,7 +273,7 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
   overlay.new_frame();
   ImGui::ShowDemoWindow();
 
-  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -336,13 +336,13 @@ vg::FrameMetrics sample_metrics() {
   metrics.cpu_frame_ms = 11.0;
   metrics.memory_used_bytes = 256u * 1024u * 1024u;
   metrics.memory_budget_bytes = 1024u * 1024u * 1024u;
-  vg::FrameMetrics::Section gpu_stage;
+  vkc::StageRow gpu_stage;
   gpu_stage.name = "render";
   gpu_stage.cpu_ms = 0.8;
   gpu_stage.gpu_ms = 1.2;
   gpu_stage.has_gpu = true;
   metrics.sections.push_back(gpu_stage);
-  vg::FrameMetrics::Section cpu_stage;
+  vkc::StageRow cpu_stage;
   cpu_stage.name = "cull";
   cpu_stage.cpu_ms = 0.3;
   metrics.sections.push_back(cpu_stage);

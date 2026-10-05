@@ -7,9 +7,9 @@
 /// @brief A `VkSampler`: the filtering and addressing state a shader reads a
 ///        texture through.
 
+#include "volumetric_kit/core/vulkan/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
@@ -45,7 +45,7 @@ struct SamplerDesc {
 // maxSamplerAnisotropy limit, so create() would take the Device (for its caps),
 // not a raw VkDevice.
 
-/// @brief Owns a `VkSampler` and frees it via @ref UniqueHandle.
+/// @brief Owns a `VkSampler` and frees it via `core::UniqueHandle`.
 ///
 /// A sampler is a pure device object (no backing memory), independent of any
 /// one texture: bind it alongside a sampled `core::Image` in a descriptor set.
@@ -87,7 +87,7 @@ class VG_CORE_API Sampler {
  private:
   Sampler() = default;
 
-  UniqueHandle<VkSampler, vkDestroySampler> handle_;
+  core::UniqueHandle<VkSampler, vkDestroySampler> handle_;
 };
 
 }  // namespace volumetric_kit::gfx

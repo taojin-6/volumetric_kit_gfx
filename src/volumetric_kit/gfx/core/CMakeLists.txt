@@ -4,7 +4,7 @@
 # --- gfx_core: Tier 1 -------------------------------------------------------
 # Foundation tier: version API, gfx's names for volumetric_kit_core's
 # Status/Result error handling, log sink and contract checks, instance, device
-# and allocator (buffers and images), plus sync primitives and uploads. Every
+# and allocator (buffers and images), plus uploads and render targets. Every
 # other tier depends on this; it depends only on volumetric_kit_core's base and
 # vulkan tiers + Vulkan + spirv-cross (a private impl detail backing SPIR-V
 # reflection in shader.cpp).
@@ -20,20 +20,15 @@ target_sources(
   gfx_core
   PRIVATE version.cpp
           debug_label.cpp
-          sync.cpp
-          query_pool.cpp
           profiler.cpp
           retire_queue.cpp
           sampler.cpp
           shader.cpp
-          descriptor.cpp
           graphics_pipeline.cpp
           render_target.cpp
           image_barrier.cpp
           buffer_barrier.cpp
           offscreen_target.cpp
-          command_pool.cpp
-          command_buffer.cpp
           texture_upload.cpp)
 
 # Generated headers: the VG_CORE_API export macro + the configured version

@@ -40,20 +40,15 @@ add_executable(
   device_test.cpp
   debug_label_test.cpp
   log_test.cpp
-  sync_test.cpp
-  query_pool_test.cpp
   profiler_test.cpp
-  unique_handle_test.cpp
   retire_list_test.cpp
   retire_queue_test.cpp
   shader_test.cpp
-  descriptor_test.cpp
   graphics_pipeline_test.cpp
   render_target_test.cpp
   image_barrier_test.cpp
   buffer_barrier_test.cpp
   offscreen_target_test.cpp
-  command_buffer_test.cpp
   sampler_test.cpp
   texture_upload_test.cpp)
 target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core

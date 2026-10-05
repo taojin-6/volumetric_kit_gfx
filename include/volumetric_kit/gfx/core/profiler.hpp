@@ -168,7 +168,7 @@ class VG_CORE_API Profiler {
 
   /// @brief Open a CPU-only timed stage.
   /// @param name  Stage label; must have string-literal lifetime (stored by
-  ///              pointer, see @ref FrameMetrics::Section::name).
+  ///              pointer, see `core::StageRow::name`).
   /// @return A @ref Scope timing until it is destroyed; inert if called outside
   ///         a @ref begin_frame / @ref end_frame pair.
   Scope cpu_scope(const char* name);
@@ -194,7 +194,7 @@ class VG_CORE_API Profiler {
 
   /// @return Whether GPU timestamp timing is available (the graphics queue
   ///         reports non-zero `timestampValidBits`). When false, GPU scopes
-  ///         time CPU only and every @ref FrameMetrics::Section reports
+  ///         time CPU only and every `core::StageRow` reports
   ///         `has_gpu` false.
   bool gpu_timing() const noexcept;
 

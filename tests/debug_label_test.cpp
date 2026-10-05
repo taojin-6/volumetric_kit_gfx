@@ -6,7 +6,7 @@
 #include <optional>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
@@ -14,6 +14,7 @@
 namespace {
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 
 // A self-contained instance + device with VK_EXT_debug_utils opted in, so the
 // resolved table is active wherever the extension is present (and inactive,
@@ -50,14 +51,14 @@ class DebugLabelTest : public ::testing::Test {
     device_.emplace(std::move(device).value());
     // A pool of the test's own: a real handle to name.
     auto pool =
-        vg::CommandPool::create(device_->handle(), device_->queue_family());
+        vkc::CommandPool::create(device_->handle(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     pool_.emplace(std::move(pool).value());
   }
 
   std::optional<vg::Instance> instance_;
   std::optional<vg::Device> device_;
-  std::optional<vg::CommandPool> pool_;
+  std::optional<vkc::CommandPool> pool_;
 };
 
 }  // namespace

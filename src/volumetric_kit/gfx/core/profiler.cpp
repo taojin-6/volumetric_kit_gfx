@@ -4,16 +4,16 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 
 #include <chrono>
-#include <optional>
 #include <utility>
 #include <vector>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/query_pool.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
-#include "volumetric_kit/gfx/core/query_pool.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -29,8 +29,8 @@ double ms_since(Clock::time_point start) {
 
 // pImpl: keeps the timestamp pool, the marker table, and <chrono> out of the
 // public header. One owns-everything struct; the only owned Vulkan resource is
-// the QueryPool (move-only), so Profiler's move/dtor are defaulted around the
-// unique_ptr.
+// the core's QueryPool (move-only), so Profiler's move/dtor are defaulted
+// around the unique_ptr.
 struct Profiler::Impl {
   // A stage recorded in the current frame; CPU time is filled in on finalize.
   struct Section {
@@ -64,9 +64,12 @@ struct Profiler::Impl {
   bool gpu_timing = false;
   float ts_period_ns = 0.0f;
   DebugUtilsTable table;
-  // QueryPool is create-only (no public default ctor), so hold it optionally;
-  // engaged only where gpu_timing is supported.
-  std::optional<QueryPool> query_pool;
+  // The core's pool; valid only where gpu_timing is supported.
+  // TODO: time on the core's GpuTimer instead if it gains a frames-in-flight
+  // window (a slot's spans read when the slot recurs); today it reads spans
+  // when a blocking submit returns (DECISIONS.md, "Sync, descriptors and
+  // queries come from volumetric_kit_core").
+  core::QueryPool query_pool;
   const core::Allocator* allocator = nullptr;  // borrowed; sampled at end_frame
 
   std::vector<SlotFrame> slots;  // one per in-flight slot
@@ -104,8 +107,8 @@ struct Profiler::Impl {
       return;
     }
     s.cpu_ms = ms_since(s.cpu_start);
-    if (s.has_gpu && query_pool) {
-      query_pool->cmd_write_timestamp(
+    if (s.has_gpu && query_pool.valid()) {
+      query_pool.cmd_write_timestamp(
           s.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query + 1);
     }
     if (s.label) {
@@ -125,22 +128,22 @@ struct Profiler::Impl {
 
     std::vector<uint64_t> ticks;
     bool gpu_ok = false;
-    if (f.gpu_count > 0 && query_pool) {
+    if (f.gpu_count > 0 && query_pool.valid()) {
       ticks.resize(static_cast<size_t>(f.gpu_count) * 2);
       gpu_ok =
-          query_pool->read_results(f.query_base, f.gpu_count * 2, ticks.data())
+          query_pool.read_results(f.query_base, f.gpu_count * 2, ticks.data())
               .ok();
     }
 
     m.sections.reserve(f.sections.size());
     for (const Section& s : f.sections) {
-      FrameMetrics::Section out;
+      core::StageRow out;
       out.name = s.name;
       out.cpu_ms = s.cpu_ms;
       if (s.has_gpu && gpu_ok) {
         const uint32_t local = s.begin_query - f.query_base;
-        out.gpu_ms = ticks_to_ms(
-            timestamp_delta(ticks[local], ticks[local + 1], valid_bits),
+        out.gpu_ms = core::ticks_to_ms(
+            core::timestamp_delta(ticks[local], ticks[local + 1], valid_bits),
             ts_period_ns);
         out.has_gpu = true;
       }
@@ -179,11 +182,12 @@ Result<Profiler> Profiler::create(const Device& device,
   if (impl->gpu_timing) {
     const uint32_t query_count =
         config.frames_in_flight * config.max_gpu_sections_per_frame * 2;
-    Result<QueryPool> pool = QueryPool::create(device.handle(), query_count);
+    Result<core::QueryPool> pool =
+        core::QueryPool::create(device.handle(), query_count);
     if (!pool) {
       return pool.status();
     }
-    impl->query_pool.emplace(std::move(pool).value());
+    impl->query_pool = std::move(pool).value();
   }
 
   Profiler profiler;
@@ -268,9 +272,9 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
 
   // Reset the slot's whole timestamp range up front (outside any render pass)
   // so each gpu_scope can write into it.
-  if (d.gpu_timing && cmd != VK_NULL_HANDLE && d.query_pool) {
+  if (d.gpu_timing && cmd != VK_NULL_HANDLE && d.query_pool.valid()) {
     const uint32_t base = d.slot_query_base(slot);
-    d.query_pool->cmd_reset(cmd, base, d.max_gpu_sections * 2);
+    d.query_pool.cmd_reset(cmd, base, d.max_gpu_sections * 2);
   }
 }
 
@@ -355,11 +359,11 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
 
   // Write the begin timestamp when timing is available and the per-frame GPU
   // budget is not yet exhausted; otherwise this stage is CPU-only.
-  if (records_gpu && d.gpu_timing && d.query_pool) {
+  if (records_gpu && d.gpu_timing && d.query_pool.valid()) {
     if (d.gpu_count < d.max_gpu_sections) {
       s.begin_query = d.slot_query_base(d.current_slot) + d.gpu_count * 2;
       s.has_gpu = true;
-      d.query_pool->cmd_write_timestamp(
+      d.query_pool.cmd_write_timestamp(
           cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query);
       ++d.gpu_count;
     } else if (!d.warned_overflow) {

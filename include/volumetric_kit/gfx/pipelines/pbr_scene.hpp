@@ -45,11 +45,11 @@ struct PbrSceneDesc {
 /// frame-in-flight slot**: create the scene with the frame loop's
 /// `frames_in_flight`, then each frame write and bind the acquired frame's
 /// slot, so a frame's update never waits on another frame's reads. Each slot
-/// owns its own one-set @ref DescriptorPool, @ref DescriptorSet, and camera
-/// UBO in device-only memory, written by an update recorded into the frame's
-/// command buffer -- which is why @ref set_camera takes that command buffer,
-/// and is called before rendering begins. A default-constructed `PbrScene` is
-/// empty (`valid()` is false) and safe to move-assign into.
+/// owns its own one-set `core::DescriptorPool`, `core::DescriptorSet`, and
+/// camera UBO in device-only memory, written by an update recorded into the
+/// frame's command buffer -- which is why @ref set_camera takes that command
+/// buffer, and is called before rendering begins. A default-constructed
+/// `PbrScene` is empty (`valid()` is false) and safe to move-assign into.
 ///
 /// @warning The device, plus the IBL images @ref PbrSceneDesc names, must
 ///          outlive the scene.

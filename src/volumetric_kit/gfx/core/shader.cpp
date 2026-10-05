@@ -127,17 +127,9 @@ Result<ShaderModule> ShaderModule::create(VkDevice device, const uint32_t* code,
         e.what());
   }
 
-  VkShaderModuleCreateInfo info{};
-  info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  info.codeSize = size_bytes;
-  info.pCode = code;
-
-  VkShaderModule handle = VK_NULL_HANDLE;
-  VG_VK_TRY(vkCreateShaderModule(device, &info, nullptr, &handle));
-
   ShaderModule shader;
-  shader.module_ =
-      UniqueHandle<VkShaderModule, vkDestroyShaderModule>(device, handle);
+  VG_ASSIGN(shader.module_,
+            core::ShaderModule::create(device, code, size_bytes));
   shader.resources_ = std::move(resources);
   shader.push_constant_size_ = push_constant_size;
   shader.stage_ = stage;

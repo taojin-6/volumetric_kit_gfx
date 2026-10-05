@@ -94,7 +94,7 @@ class VG_PIPELINES_API PbrPipeline {
 
   /// @brief The reflected layout for descriptor @p set (0 = scene, 1 =
   /// material)
-  ///        -- pass to @ref DescriptorPool::allocate.
+  ///        -- pass to `core::DescriptorPool::allocate`.
   /// @param set  The set index.
   /// @return The set's `VkDescriptorSetLayout`, or `VK_NULL_HANDLE` if @p set
   /// is

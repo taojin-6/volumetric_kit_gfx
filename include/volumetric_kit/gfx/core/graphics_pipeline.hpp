@@ -11,12 +11,12 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
-#include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
@@ -184,7 +184,7 @@ class VG_CORE_API GraphicsPipeline {
   }
 
   /// @return The `VkDescriptorSetLayout` for descriptor set @p set — pass it to
-  ///         @ref DescriptorPool::allocate to make a matching set — or
+  ///         `core::DescriptorPool::allocate` to make a matching set — or
   ///         `VK_NULL_HANDLE` when @p set is beyond what the shaders declare.
   VkDescriptorSetLayout descriptor_set_layout(uint32_t set) const noexcept {
     return set < set_layouts_.size() ? set_layouts_[set].handle()
@@ -195,9 +195,9 @@ class VG_CORE_API GraphicsPipeline {
   // Declared sets-before-layout-before-pipeline so reverse-order member
   // destruction frees the pipeline first, then its layout, then the descriptor
   // set layouts both were built from.
-  std::vector<DescriptorSetLayout> set_layouts_;
-  UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> layout_;
-  UniqueHandle<VkPipeline, vkDestroyPipeline> pipeline_;
+  std::vector<core::DescriptorSetLayout> set_layouts_;
+  core::UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> layout_;
+  core::UniqueHandle<VkPipeline, vkDestroyPipeline> pipeline_;
 };
 
 }  // namespace volumetric_kit::gfx

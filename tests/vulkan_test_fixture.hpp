@@ -34,10 +34,10 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
@@ -128,7 +128,7 @@ class VulkanDeviceTest : public ::testing::Test {
   // or wait error. Shared by the command-buffer and offscreen-readback tests,
   // which all issue a single one-time-submit buffer and read the result back.
   void submit_and_wait(VkCommandBuffer cmd) {
-    auto fence = vg::Fence::create(device());
+    auto fence = vkc::Fence::create(device());
     ASSERT_TRUE(fence.ok()) << fence.status().message();
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
