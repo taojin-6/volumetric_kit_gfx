@@ -12,11 +12,13 @@
 //   vg_vk_create_bench --copies K [cycles]
 //       K processes at once, each running `cycles` cycles; prints the
 //       machine-wide rate of create/destroy cycles per second
-//   vg_vk_create_bench --leak-check [--layers] [cycles]
+//   vg_vk_create_bench --leak-check [--layers] [--anchor] [cycles]
 //       `cycles` cycles in one process (default 100), printing the process's
 //       open file descriptors, threads and resident memory every 10 cycles,
 //       and the VkResult of the first call that fails; --layers enables
-//       VK_LAYER_KHRONOS_validation, as the validating test fixtures do
+//       VK_LAYER_KHRONOS_validation, as the validating test fixtures do;
+//       --anchor keeps one extra instance alive throughout, so the loader
+//       never unloads the driver library between cycles
 
 #include <dirent.h>
 #include <spawn.h>
@@ -249,7 +251,34 @@ std::string process_usage() {
   return "fds " + std::to_string(fds) + ", threads " + threads + ", rss " + rss;
 }
 
-int run_leak_check(int cycles) {
+int run_leak_check(int cycles, bool anchor) {
+  // An instance held for the whole run keeps the driver library loaded.
+  VkInstance anchor_instance = VK_NULL_HANDLE;
+  if (anchor) {
+    VkApplicationInfo app{};
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.apiVersion = VK_API_VERSION_1_3;
+    VkInstanceCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    ici.pApplicationInfo = &app;
+    // As in one_cycle: a portability driver (MoltenVK) is listed only on
+    // request, and an instance with no driver would keep nothing loaded.
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> exts(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, exts.data());
+    const char* portability_ext = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    if (has_extension(exts, portability_ext)) {
+      ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+      ici.enabledExtensionCount = 1;
+      ici.ppEnabledExtensionNames = &portability_ext;
+    }
+    const VkResult result = vkCreateInstance(&ici, nullptr, &anchor_instance);
+    if (result != VK_SUCCESS) {
+      report_failure("vkCreateInstance (anchor)", result);
+      return 1;
+    }
+  }
   std::printf("bench: before any cycle: %s\n", process_usage().c_str());
   Phases t;
   for (int i = 1; i <= cycles; ++i) {
@@ -265,6 +294,9 @@ int run_leak_check(int cycles) {
   }
   std::printf("bench: all %d cycles succeeded\n", cycles);
   std::fflush(stdout);
+  if (anchor_instance != VK_NULL_HANDLE) {
+    vkDestroyInstance(anchor_instance, nullptr);
+  }
   return 0;
 }
 
@@ -309,11 +341,15 @@ int main(int argc, char** argv) {
   }
   if (argc >= 2 && std::strcmp(argv[1], "--leak-check") == 0) {
     int next = 2;
-    if (argc > next && std::strcmp(argv[next], "--layers") == 0) {
-      g_layers = true;
-      ++next;
+    bool anchor = false;
+    for (; next < argc && argv[next][0] == '-'; ++next) {
+      if (std::strcmp(argv[next], "--layers") == 0) {
+        g_layers = true;
+      } else if (std::strcmp(argv[next], "--anchor") == 0) {
+        anchor = true;
+      }
     }
-    return run_leak_check(argc > next ? std::atoi(argv[next]) : 100);
+    return run_leak_check(argc > next ? std::atoi(argv[next]) : 100, anchor);
   }
   if (argc >= 3 && std::strcmp(argv[1], "--copies") == 0) {
     const int cycles = argc >= 4 ? std::atoi(argv[3]) : 10;

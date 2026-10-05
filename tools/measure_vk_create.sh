@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Temporary measurement (draft PR, not for merging). Earlier runs on this branch
-# measured what a Vulkan instance/device create-destroy cycle costs; this one
-# looks for why vkCreateInstance starts failing after ~31 GPU tests run in one
-# process on the NVIDIA boxes. Run after the build, from the repository root:
+# measured what a Vulkan instance/device create-destroy cycle costs, and found
+# vkCreateInstance failing after ~26-31 instances in one process on NVIDIA:
+# libnvidia-tls cannot get static TLS once the driver library has been loaded
+# and unloaded that many times. This run checks that keeping it loaded fixes
+# that, and times the pipelines tests in one process. Run after the build, from the repository root:
 #
 #   tools/measure_vk_create.sh [build-dir]
 #
@@ -23,35 +25,29 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 fi
 echo "--- limits: open files $(ulimit -n), processes $(ulimit -u)"
 
-echo "=== A. 100 create/destroy cycles in one process, no layers"
-"${bench}" --leak-check 100
+echo "=== A. 40 create/destroy cycles in one process (failed at cycle 27 last run)"
+"${bench}" --leak-check 40
 
-echo "=== B. The same with the validation layer"
-"${bench}" --leak-check --layers 100
+echo "=== A2. 100 cycles with one extra instance kept alive throughout"
+"${bench}" --leak-check --anchor 100
 
-echo "=== C. The pipelines tests in one process, with the loader's errors"
+echo "=== C. The pipelines tests: one process per test against one process for all"
+ctest_log="${build}/ctest_one_per_test.log"
+ctest --test-dir "${build}" -R '^pipelines\.' -j1 > "${ctest_log}" 2>&1
+echo "--- ctest, one process per test, one at a time:"
+grep -E 'tests passed|Total Test time' "${ctest_log}"
+echo "skipped under ctest: $(grep -cE 'Test +#[0-9]+: .*Skipped' "${ctest_log}")"
+# On NVIDIA, preload libnvidia-tls so it is loaded once, at start-up, and never
+# unloaded: the static-TLS exhaustion seen in the last run then cannot happen.
+preload=""
+for f in /lib/x86_64-linux-gnu/libnvidia-tls.so.* /usr/lib/x86_64-linux-gnu/libnvidia-tls.so.*; do
+  [ -e "${f}" ] && { preload="${f}"; break; }
+done
+echo "--- the test binary, one process, all tests (preloading: ${preload:-nothing}); wall seconds, then gtest's own total:"
 log="${build}/tests/pipelines_one_process.log"
-(
-  cd "${build}/tests" || exit 1
-  VK_LOADER_DEBUG=error,warn ./vg_pipelines_test > pipelines_one_process.log 2>&1 &
-  pid=$!
-  # Sample the test process's open file descriptors while it runs (Linux).
-  max_fds=0
-  while kill -0 "${pid}" 2>/dev/null; do
-    if [ -d "/proc/${pid}/fd" ]; then
-      n=$(ls "/proc/${pid}/fd" 2>/dev/null | wc -l)
-      [ "${n}" -gt "${max_fds}" ] && max_fds=${n}
-    fi
-    sleep 0.2
-  done
-  wait "${pid}"
-  echo "most open file descriptors seen: ${max_fds}"
-)
+TIMEFORMAT='%R'
+( cd "${build}/tests" && time env ${preload:+LD_PRELOAD="${preload}"} ./vg_pipelines_test > pipelines_one_process.log 2>&1 )
+grep -E '^\[==========\] .* ran\.' "${log}"
 grep -E '^\[  (PASSED|FAILED|SKIPPED) +\] [0-9]+ test' "${log}"
 echo "--- skip reasons (count, message):"
 grep -A1 -E ': Skipped$' "${log}" | grep -vE ': Skipped$|^--$' | sort | uniq -c | sort -rn | head -5
-echo "--- tests run before the first skip: $(awk '/^\[ RUN      \]/{n++} /: Skipped$/{print n-1; exit}' "${log}")"
-echo "--- loader errors and warnings (count, message), up to the first skip:"
-awk '/: Skipped$/{exit} {print}' "${log}" | grep -E 'ERROR|WARNING' | sed -E 's/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -10
-echo "--- loader output at the first failed vkCreateInstance:"
-awk '/^\[ RUN      \]/{buf=""} {buf=buf "\n" $0} /: Skipped$/{print buf; exit}' "${log}" | grep -E 'ERROR|WARNING|RUN|Skipped|instance' | tail -15
