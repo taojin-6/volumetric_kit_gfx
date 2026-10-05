@@ -28,15 +28,11 @@ class DebugLabelTest : public ::testing::Test {
     // Prefer validation: on the Linux sanitizers job it is the detector that
     // catches an unbalanced / double-end label (ASan/UBSan cannot — it is a
     // Vulkan API misuse, not a memory error). Where the layer is missing or
-    // present-but-unloadable (common on macOS) vkCreateInstance fails, so fall
-    // back to debug-utils only: the active emit path still runs, just without
+    // present-but-unloadable (common on macOS) the core's instance continues
+    // with debug-utils only: the active emit path still runs, just without
     // the validation backstop.
     instance_config.enable_validation = true;
     auto instance = vg::Instance::create(instance_config);
-    if (!instance.ok()) {
-      instance_config.enable_validation = false;
-      instance = vg::Instance::create(instance_config);
-    }
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }

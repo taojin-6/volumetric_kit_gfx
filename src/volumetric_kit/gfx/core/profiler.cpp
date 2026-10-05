@@ -160,6 +160,10 @@ Result<Profiler> Profiler::create(const Device& device,
     return Status::invalid_argument(
         "Profiler::create: max_gpu_sections_per_frame is zero");
   }
+  // The profiler times frames the renderer records: a device made for another
+  // library may lack the renderer's floor, a graphics queue included.
+  VG_TRY(device.check_enabled(device_requirements())
+             .with_context("Profiler::create"));
 
   auto impl = std::make_unique<Impl>();
   impl->frames_in_flight = config.frames_in_flight;

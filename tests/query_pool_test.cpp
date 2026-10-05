@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -20,19 +19,6 @@ using QueryPoolTest = VulkanDeviceTest;
 // device is invalid, which the fixture has already asserted against.
 vg::QueryPool make_pool(VkDevice device, uint32_t count = 2) {
   return std::move(vg::QueryPool::create(device, count)).value();
-}
-
-// How many low bits of a timestamp the graphics queue family reports as valid;
-// zero means timestamps carry no signal on this device, so the round-trip test
-// must not assert on the tick values.
-uint32_t graphics_timestamp_valid_bits(VkPhysicalDevice physical,
-                                       uint32_t family) {
-  uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
-  std::vector<VkQueueFamilyProperties> families(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families.data());
-  if (family >= count) return 0;
-  return families[family].timestampValidBits;
 }
 
 }  // namespace
@@ -148,8 +134,7 @@ TEST_F(QueryPoolTest, ResetWriteSubmitReadBack) {
   // invalid (VUID-vkCmdWriteTimestamp-timestampValidBits-00829) and the values
   // carry no signal, so skip before recording anything; some devices (e.g.
   // certain MoltenVK configs) report zero.
-  const uint32_t valid_bits = graphics_timestamp_valid_bits(
-      device_->physical_device(), device_->queue_family());
+  const uint32_t valid_bits = device_->timestamp_valid_bits();
   if (valid_bits == 0) {
     GTEST_SKIP() << "graphics queue reports timestampValidBits == 0; ticks "
                     "carry no signal on this device";

@@ -16,10 +16,10 @@
 /// to the family's log sink (source "vulkan"), and an error-recording handler
 /// there makes TearDown fail the test on any VUID. Best-effort — when the layer
 /// is unavailable (local dev without it, or a manifest whose library fails to
-/// load) the test still runs, just without teeth (as it always did); CI
-/// (lavapipe + the layer) gets them. The plain device tests leave
-/// wants_validation() at its default (false) and are unaffected. A fixture
-/// that needs more of the device overrides requirements().
+/// load) the core's instance continues without it, so the test still runs,
+/// just without teeth; CI (lavapipe + the layer) gets them. The plain device
+/// tests leave wants_validation() at its default (false) and are unaffected. A
+/// fixture that needs more of the device overrides requirements().
 
 #include <gtest/gtest.h>
 
@@ -53,12 +53,6 @@ class VulkanDeviceTest : public ::testing::Test {
     vg::InstanceConfig icfg;
     icfg.enable_validation = wants_validation();
     auto instance = vg::Instance::create(icfg);
-    if (!instance.ok() && wants_validation()) {
-      // The layer was requested but the instance failed (e.g. a manifest whose
-      // library will not load locally); retry without it so the test still
-      // runs, just without teeth.
-      instance = vg::Instance::create(vg::InstanceConfig{});
-    }
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -75,7 +69,6 @@ class VulkanDeviceTest : public ::testing::Test {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
     caps_ = physical.value();
-    physical_ = caps_.handle();
 
     auto device = vg::Device::create(*instance_, caps_, reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
@@ -132,7 +125,6 @@ class VulkanDeviceTest : public ::testing::Test {
 
   std::optional<vg::Instance> instance_;
   vg::PhysicalDeviceInfo caps_;
-  VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   std::optional<vg::Device> device_;
 
  private:

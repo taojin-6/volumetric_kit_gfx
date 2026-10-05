@@ -90,16 +90,32 @@ and the reverse.
   own `DeviceRequirements` and `Device::requirements` are gone. The core
   enables `VK_KHR_swapchain` for `needs_present`, and portability subset where
   the device exposes it.
+- **The floor holds wherever gfx meets a device.** The app tier merges
+  `device_requirements()` into `config.device`, so a config built from bare
+  requirements can only add to the floor. A device gfx did not make -- one
+  built for recon's requirements, say, on a compute-only queue -- is held to
+  the floor by `Device::check_enabled` in `UploadBatch::begin` (and so every
+  upload helper), `Swapchain::create`, `FrameLoop::create`, `Profiler::create`
+  and `ImGuiOverlay::create`, rather than having graphics barriers recorded on
+  it.
 - **Debug labels follow the instance.** The core's instance requests
   `VK_EXT_debug_utils` by default, and its device resolves labels when the
   instance enabled it, so the app tier no longer threads a flag through.
-  gfx keeps its `DebugUtilsTable` for queue labels, which the core's device
-  does not record; `debug_utils(device)` loads it, gated on
-  `Device::debug_labels_available`. A `TODO:` marks moving queue labels into the
-  core if another library needs them.
+  gfx keeps its `DebugUtilsTable`, as the core's device records neither queue
+  labels nor label colors; `debug_utils(device)` loads it, gated on
+  `Device::debug_labels_available`. A `TODO:` marks taking both from the core
+  if another library needs them.
 - **No shared command pool.** The core's device keeps its pools to itself, so
-  `UploadBatch` records on a transient pool of its own -- which also lifts its
-  old caveat about sharing the device's pool across threads.
+  `UploadBatch` queues its copies and records them at `finish` through
+  `Device::submit_single_time`, on a pool no other submit holds -- which also
+  lifts its old caveat about sharing the device's pool across threads. After a
+  failed wait the device keeps the command buffer; the staging buffers, whose
+  allocator is gone by the time the device is, are freed once the queue
+  drains, or leaked (and logged) if it never does.
+- **Borrowers ask the device for its submit mutex.** It is never null -- the
+  embedder's on a shared queue, else the device's own, which does not move with
+  it -- so `ImGuiOverlay` borrows the device by address, as `Swapchain` and
+  `FrameLoop` do, and locks its mutex on each render.
 - **The allocator reads the device's usable version** (`caps().api_version()`,
   the lower of the device's and its instance's) instead of reconstructing the
   instance's from the loader, which an adopted device's could not be.

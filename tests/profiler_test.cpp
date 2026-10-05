@@ -27,17 +27,14 @@ class ProfilerTest : public VulkanDeviceTest {
  protected:
   // Build the instance/device with debug-utils enabled (and validation as the
   // label-balance backstop), so gpu_scope's label emit/close path is exercised;
-  // fall back to debug-utils-only where the layer is unavailable. Overrides
-  // VulkanDeviceTest::SetUp, which enables validation only on request.
+  // the core's instance continues debug-utils-only where the layer is
+  // unavailable. Overrides VulkanDeviceTest::SetUp, which enables validation
+  // only on request.
   void SetUp() override {
     vg::InstanceConfig icfg;
     icfg.enable_validation = true;
     icfg.request_debug_utils = true;
     auto instance = vg::Instance::create(icfg);
-    if (!instance.ok()) {
-      icfg.enable_validation = false;
-      instance = vg::Instance::create(icfg);
-    }
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -49,7 +46,6 @@ class ProfilerTest : public VulkanDeviceTest {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
     caps_ = physical.value();
-    physical_ = caps_.handle();
 
     auto device = vg::Device::create(*instance_, caps_, reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();

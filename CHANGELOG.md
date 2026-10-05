@@ -58,6 +58,19 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
     `enabled_dynamic_rendering` → `enabled_features.core`,
     `.timeline_semaphore` and `.dynamic_rendering`. Set `instance_api_version`,
     and `present_mutex` beside `submit_mutex` for a shared present queue.
+    `WindowedApp::adopt` refuses an unset `instance_api_version` before it
+    runs the surface factory.
+  - The renderer's floor holds however a device arrives: `HeadlessApp` and
+    `WindowedApp` merge `device_requirements()` into `config.device`, and
+    `UploadBatch::begin` (so every upload helper), `Swapchain::create`,
+    `FrameLoop::create`, `Profiler::create` and `ImGuiOverlay::create` return
+    `Unsupported` for a device that did not enable it, such as one made for
+    another library's requirements. `HeadlessApp::create` refuses
+    `needs_present` before creating an instance.
+  - `UploadBatch` records its uploads at `finish`, on a command pool of the
+    device's, instead of a pool per batch. `ImGuiOverlay` borrows its device
+    by address, as `Swapchain` and `FrameLoop` do: keep the device where it is
+    for the overlay's lifetime.
 - `core`: **gfx builds on the system's Vulkan headers**, as the family's core
   does, and no longer vendors Vulkan-Headers or Vulkan-Utility-Libraries. The
   core is pinned at its PR #13 with its vulkan tier on and linked PUBLIC: its

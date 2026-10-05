@@ -54,9 +54,10 @@ struct WindowedAppConfig {
   /// the application adds -- the escape hatch for anything the facade does not
   /// surface directly (e.g. `features.fillModeNonSolid` for a wireframe
   /// @ref GraphicsPipeline).
-  /// @note Both @ref WindowedApp::create and @ref WindowedApp::adopt set
-  ///       `needs_present`: a windowed app always presents. Labels and object
-  ///       names follow the instance -- the one @ref WindowedApp::create
+  /// @note Both @ref WindowedApp::create and @ref WindowedApp::adopt merge the
+  ///       floor in whatever this holds, so a field here can only add to it,
+  ///       and set `needs_present`: a windowed app always presents. Labels and
+  ///       object names follow the instance -- the one @ref WindowedApp::create
   ///       builds, or @ref AdoptedDevice::enabled_debug_utils for an adopted
   ///       device.
   DeviceRequirements device = device_requirements();
@@ -160,21 +161,25 @@ class VG_APP_API WindowedApp {
   /// the surface (from @p create_surface), the allocator, the swapchain, and
   /// the frame loop, all on the borrowed device.
   ///
-  /// @param adopted  The embedder's device and queues. `queue` is the
-  ///                 renderer's graphics queue, and `has_present` must be set
-  ///                 with a valid `present_queue`: a windowed app must present,
-  ///                 so unlike @ref Device::adopt this cannot be a compute-only
-  ///                 share. Set `submit_mutex` (and `present_mutex`) when a
-  ///                 queue is shared with another library.
+  /// @param adopted  The embedder's device and queues. `instance_api_version`
+  ///                 must be the version the instance was created with.
+  ///                 `queue` is the renderer's graphics queue, and
+  ///                 `has_present` must be set with a valid `present_queue`: a
+  ///                 windowed app must present, so unlike @ref Device::adopt
+  ///                 this cannot be a compute-only share. Set `submit_mutex`
+  ///                 (and `present_mutex`) when a queue is shared with another
+  ///                 library. The share is held to the renderer's floor merged
+  ///                 with `config.device`.
   /// @param config   As @ref create, except `app_name`, `enable_validation`
   ///                 and `instance_extensions` are ignored -- the embedder
   ///                 already created the instance those configure.
   /// @param create_surface  As @ref create; called with `adopted.instance`.
   /// @return The app on success, or the first failing step's @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a null @p create_surface,
-  ///         a factory returning `VK_NULL_HANDLE`, a zero
-  ///         `config.frames_in_flight`, a null handle in @p adopted, or an
-  ///         @p adopted without present; @ref Status::Code::Unsupported when
+  ///         @ref Status::Code::InvalidArgument for a null handle, an unset
+  ///         `instance_api_version` or no present queue in @p adopted -- all
+  ///         found before @p create_surface runs -- a null @p create_surface,
+  ///         a factory returning `VK_NULL_HANDLE`, or a zero
+  ///         `config.frames_in_flight`; @ref Status::Code::Unsupported when
   ///         `present_family` cannot actually present to the surface
   ///         @p create_surface returned (@ref create chooses that family *for*
   ///         its surface and so cannot hit this; a device built before any
@@ -182,8 +187,9 @@ class VG_APP_API WindowedApp {
   ///         (including @ref Device::adopt's verification that the device
   ///         carries what the renderer needs).
   ///
-  /// @warning `adopted.instance`, `physical_device`, `device`, its queues and
-  ///          `submit_mutex` must all outlive the returned app.
+  /// @warning `adopted.instance`, `physical_device`, `device`, its queues,
+  ///          `submit_mutex` and `present_mutex` must all outlive the returned
+  ///          app.
   static Result<WindowedApp> adopt(const AdoptedDevice& adopted,
                                    const WindowedAppConfig& config,
                                    const SurfaceFactory& create_surface);

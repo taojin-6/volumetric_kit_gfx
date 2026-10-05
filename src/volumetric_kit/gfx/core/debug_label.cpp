@@ -5,6 +5,8 @@
 
 #include <utility>
 
+#include "volumetric_kit/gfx/core/device.hpp"
+
 namespace volumetric_kit::gfx {
 namespace {
 

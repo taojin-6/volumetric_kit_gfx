@@ -29,6 +29,10 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
         "Swapchain::create: device has no present queue (set "
         "DeviceRequirements::needs_present)");
   }
+  // A device made for another library may lack the renderer's floor, which
+  // every frame recorded into this swapchain's images relies on.
+  VG_TRY(device.check_enabled(device_requirements())
+             .with_context("Swapchain::create"));
   if (config.depth_format != VK_FORMAT_UNDEFINED) {
     if (allocator == nullptr) {
       return Status::invalid_argument(

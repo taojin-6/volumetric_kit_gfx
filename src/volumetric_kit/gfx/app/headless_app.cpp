@@ -9,6 +9,22 @@
 namespace volumetric_kit::gfx::app {
 
 Result<HeadlessApp> HeadlessApp::create(const HeadlessAppConfig& config) {
+  // No surface anywhere in the chain: selection needs no present-capable
+  // queue family and the device enables no swapchain extension. Refused before
+  // the instance exists, like every argument check.
+  if (config.device.needs_present) {
+    return Status::invalid_argument(
+        "HeadlessApp::create: a headless app has no surface to present to; "
+        "leave device.needs_present false");
+  }
+  // The renderer's floor, whatever config.device holds: a caller that built it
+  // from DeviceRequirements{} rather than device_requirements() still gets a
+  // device every gfx type can run on. One set of requirements then threads
+  // through selection and creation, so the device chosen is one the create
+  // accepts.
+  VG_ASSIGN(const DeviceRequirements reqs,
+            merge(device_requirements(), config.device));
+
   // Built at its resting place, like WindowedApp::create: a failure at any
   // step unwinds the partial State in reverse member order.
   auto state = std::make_unique<State>();
@@ -20,20 +36,11 @@ Result<HeadlessApp> HeadlessApp::create(const HeadlessAppConfig& config) {
   VG_ASSIGN(Instance instance, Instance::create(instance_config));
   state->instance.emplace(std::move(instance));
 
-  // No surface anywhere in the chain: selection needs no present-capable
-  // queue family and the device enables no swapchain extension.
-  if (config.device.needs_present) {
-    return Status::invalid_argument(
-        "HeadlessApp::create: a headless app has no surface to present to; "
-        "leave device.needs_present false");
-  }
-  // One set of requirements threads through selection and creation, so the
-  // device chosen is one the create accepts. The device learns from the
-  // instance whether VK_EXT_debug_utils was enabled, so labels work or no-op.
+  // The device learns from the instance whether VK_EXT_debug_utils was
+  // enabled, so labels work or no-op.
   VG_ASSIGN(PhysicalDeviceInfo physical,
-            state->instance->select_physical_device(config.device));
-  VG_ASSIGN(Device device,
-            Device::create(*state->instance, physical, config.device));
+            state->instance->select_physical_device(reqs));
+  VG_ASSIGN(Device device, Device::create(*state->instance, physical, reqs));
   state->device.emplace(std::move(device));
 
   VG_ASSIGN(Allocator allocator,

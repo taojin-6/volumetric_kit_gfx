@@ -22,12 +22,17 @@
 
 #include <cstdint>
 
-#include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
+
+using core::Device;
 
 /// @brief The `VK_EXT_debug_utils` entry points of @p device, for the scopes
 ///        and naming below.
@@ -37,9 +42,14 @@ namespace volumetric_kit::gfx {
 /// no-op. Resolving the entry points costs a few `vkGetDeviceProcAddr` calls,
 /// so keep the table for the device's lifetime rather than load it per label.
 ///
-/// TODO: take queue labels from the core's Device, which records command-buffer
-/// labels and object names but not queue labels, if a second library needs
-/// them; the table can then go.
+/// The core's Device resolves the command-buffer label and object-name entry
+/// points too (`Device::begin_debug_label`, `Device::set_object_name`), but
+/// its labels take no color and it records no queue labels, both of which the
+/// scopes below offer, so gfx resolves its own.
+///
+/// TODO: take labels and names from the core's Device once it records label
+/// colors and queue labels, if a second library needs them; the table can
+/// then go.
 /// @param device  The device to label on; it must outlive the table.
 /// @return The device's entry points, or an inactive table.
 VG_CORE_API DebugUtilsTable debug_utils(const Device& device);

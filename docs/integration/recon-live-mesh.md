@@ -133,7 +133,10 @@ compute-focused bootstrap that leaves `VkPhysicalDeviceVulkan13Features` zeroed
 would otherwise adopt cleanly and then hit
 `VUID-vkCmdBeginRendering-dynamicRendering-06446` on every frame. The fields
 default to "not enabled", so an embedder that declares nothing fails `adopt`
-loudly at startup instead.
+loudly at startup instead. A `Device` handed to gfx directly -- recon's own,
+since the type is shared -- meets the same check: gfx's entry points
+(`UploadBatch::begin`, `Swapchain::create`, `FrameLoop::create`, ...) refuse
+one whose record (`Device::check_enabled`) lacks the renderer's requirements.
 
 ## 4. Answers from recon
 

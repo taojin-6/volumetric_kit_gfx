@@ -21,6 +21,10 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   if (!swapchain.valid()) {
     return Status::invalid_argument("FrameLoop::create: swapchain is empty");
   }
+  // The loop's per-frame barriers name graphics stages and its frames record
+  // dynamic rendering: a device made for another library may lack either.
+  VG_TRY(device.check_enabled(device_requirements())
+             .with_context("FrameLoop::create"));
 
   FrameLoop loop;
   loop.device_ = &device;

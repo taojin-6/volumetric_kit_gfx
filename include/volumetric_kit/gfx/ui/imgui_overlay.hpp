@@ -9,7 +9,6 @@
 ///        rendering.
 
 #include <cstdint>
-#include <mutex>
 
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -68,7 +67,8 @@ struct ImGuiOverlayConfig {
 /// move-assign into.
 ///
 /// @warning The @p instance and @p device passed to @ref create must outlive
-///          the overlay (it borrows both). Wait for the renderer's queues to
+///          the overlay (it borrows both, the device by address, so it must
+///          not move meanwhile). Wait for the renderer's queues to
 ///          idle (@ref Device::wait_idle) before destroying the overlay while
 ///          frames it rendered are still in flight — teardown frees the ImGui
 ///          pipeline and descriptor pool.
@@ -94,8 +94,10 @@ class VG_UI_API ImGuiOverlay {
   ImGuiOverlay() = default;
 
   /// @brief Create an ImGui context + Vulkan backend for @p device.
-  /// @param device    A device with a graphics queue; its handles back the
-  ///                  backend and must outlive the overlay.
+  /// @param device    A device that enabled the renderer's requirements
+  ///                  (@ref device_requirements); its handles back the backend.
+  ///                  Borrowed by address: it must outlive the overlay and stay
+  ///                  where it is.
   /// @param instance  The instance @p device was created on (ImGui needs it for
   ///                  function/extension resolution); must outlive the overlay.
   /// @param config    The render-target layout to build the ImGui pipeline for,
@@ -104,9 +106,10 @@ class VG_UI_API ImGuiOverlay {
   ///         Status::Code::InvalidArgument for a null @p instance / moved-from
   ///         @p device, a @ref RenderTargetLayout with no color attachment or a
   ///         zero sample count, a @ref ImGuiOverlayConfig::min_image_count
-  ///         below 2, or an @ref ImGuiOverlayConfig::image_count below it; a
-  ///         backend @ref Status carrying the `VkResult` if ImGui's Vulkan
-  ///         backend fails to initialize.
+  ///         below 2, or an @ref ImGuiOverlayConfig::image_count below it;
+  ///         @ref Status::Code::Unsupported for a @p device without the
+  ///         renderer's requirements; a backend @ref Status carrying the
+  ///         `VkResult` if ImGui's Vulkan backend fails to initialize.
   static Result<ImGuiOverlay> create(const Device& device, VkInstance instance,
                                      const ImGuiOverlayConfig& config);
 
@@ -154,10 +157,9 @@ class VG_UI_API ImGuiOverlay {
   void destroy() noexcept;
 
   ImGuiContext* context_ = nullptr;  ///< Owns the backend via its BackendData.
-  /// Borrowed from @ref Device::submit_mutex at @ref create: guards the
-  /// backend's internal texture-upload submit on a shared queue (`nullptr` when
-  /// the queue is exclusively the device's).
-  std::mutex* submit_mutex_ = nullptr;
+  /// Borrowed at @ref create; @ref render holds its @ref Device::submit_mutex
+  /// around the backend's internal texture-upload submit.
+  const Device* device_ = nullptr;
 };
 
 }  // namespace ui

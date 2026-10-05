@@ -7,9 +7,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -17,6 +21,14 @@ namespace {
 // The shared instance + physical-device + headless logical-device fixture,
 // its device made from device_requirements().
 using DeviceTest = VulkanDeviceTest;
+
+// A device made to another library's requirements -- the core's defaults:
+// Vulkan 1.2 on a compute queue, without dynamic rendering -- as an embedder
+// might hand gfx one made for recon.
+class ForeignDeviceTest : public VulkanDeviceTest {
+ protected:
+  vg::DeviceRequirements requirements() const override { return {}; }
+};
 
 // Borrow a live device on its queue, declaring what Device::create enabled
 // for the renderer's requirements -- the shared-VkDevice interop shape.
@@ -122,4 +134,31 @@ TEST_F(DeviceTest, AdoptRefusesAShareWithoutDynamicRendering) {
   ASSERT_FALSE(borrowed.ok());
   EXPECT_EQ(borrowed.status().domain(), vg::Status::Code::Unsupported)
       << borrowed.status().message();
+}
+
+// gfx's entry points hold a device they did not make to the renderer's floor,
+// rather than record barriers its queue may not support or passes it did not
+// enable dynamic rendering for.
+TEST_F(ForeignDeviceTest, RendererEntryPointsRefuseIt) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
+
+  auto batch = vg::UploadBatch::begin(*device_, allocator.value());
+  ASSERT_FALSE(batch.ok());
+  EXPECT_EQ(batch.status().domain(), vg::Status::Code::Unsupported)
+      << batch.status().message();
+
+  const std::uint32_t word = 0;
+  vg::BufferUploadDesc desc;
+  desc.data = &word;
+  desc.size = sizeof(word);
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  auto buffer = vg::upload_buffer(*device_, allocator.value(), desc);
+  ASSERT_FALSE(buffer.ok());
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::Unsupported);
+
+  auto profiler = vg::Profiler::create(*device_);
+  ASSERT_FALSE(profiler.ok());
+  EXPECT_EQ(profiler.status().domain(), vg::Status::Code::Unsupported)
+      << profiler.status().message();
 }

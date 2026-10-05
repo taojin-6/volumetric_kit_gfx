@@ -80,12 +80,14 @@ vg::app::WindowedAppConfig windowed_config(
   return config;
 }
 
-// A share whose handles are all non-null, so a test can knock out exactly one
-// and watch that check fire. Never dereferenced: every case built on this is
-// rejected on its arguments, before a handle reaches Vulkan.
+// A share whose handles are all non-null and whose instance version is set, so
+// a test can knock out exactly one field and watch that check fire. Never
+// dereferenced: every case built on this is rejected on its arguments, before
+// a handle reaches Vulkan.
 vg::AdoptedDevice placeholder_share() {
   vg::AdoptedDevice adopted;
   adopted.instance = reinterpret_cast<VkInstance>(0x1);
+  adopted.instance_api_version = VK_API_VERSION_1_3;
   adopted.physical_device = reinterpret_cast<VkPhysicalDevice>(0x2);
   adopted.device = reinterpret_cast<VkDevice>(0x3);
   adopted.queue = reinterpret_cast<VkQueue>(0x4);
@@ -236,6 +238,18 @@ TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
   // adopted app left it intact (a double-free trips the sanitizer job).
   vg::Status after = owner.value().submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(after.ok()) << after.message();
+
+  // The share is held to the renderer's floor even when config.device starts
+  // from bare requirements, which name no dynamic rendering: a share that
+  // never enabled it is refused rather than rendered on.
+  vg::app::WindowedAppConfig bare = windowed_config();
+  bare.device = vg::DeviceRequirements{};
+  adopted.enabled_features.dynamic_rendering = false;
+  auto refused =
+      vg::app::WindowedApp::adopt(adopted, bare, create_headless_surface);
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.status().domain(), vg::Status::Code::Unsupported)
+      << refused.status().message();
 }
 
 // One create() call yields the whole chain: every accessor hands back a live
@@ -256,6 +270,18 @@ TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {
   const vg::Status status = run_frames(app, 3);
   EXPECT_TRUE(status.ok()) << status.message();
   EXPECT_TRUE(app.wait_idle().ok());
+}
+
+// config.device can only add to the renderer's floor: bare requirements, which
+// name no dynamic rendering, still build a chain every pass can render on.
+TEST_F(WindowedAppTest, CreateMergesTheRendererFloorIn) {
+  vg::app::WindowedAppConfig config = windowed_config();
+  config.device = vg::DeviceRequirements{};
+  vg::app::WindowedApp app = make_app(config);
+  ASSERT_TRUE(app.valid());
+  const vg::Status enabled =
+      app.device().check_enabled(vg::device_requirements());
+  EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
 
 // swapchain.depth_format flows through create(): the app passes its allocator
@@ -466,6 +492,23 @@ TEST(WindowedAppValidation, AdoptRejectsNullHandlesWithoutRunningFactory) {
   EXPECT_FALSE(factory_ran);
 }
 
+// Device::adopt refuses an unset instance version too, but only after the
+// factory has made a surface; the pre-check spares the embedder that.
+TEST(WindowedAppValidation,
+     AdoptRejectsUnsetInstanceVersionWithoutRunningFactory) {
+  bool factory_ran = false;
+  auto factory = [&factory_ran](VkInstance) -> vg::Result<VkSurfaceKHR> {
+    factory_ran = true;
+    return vg::Status::unsupported("the factory must not run");
+  };
+  vg::AdoptedDevice adopted = placeholder_share();
+  adopted.instance_api_version = 0;
+  auto app = vg::app::WindowedApp::adopt(adopted, windowed_config(), factory);
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_FALSE(factory_ran);
+}
+
 // The surface step is shared with create(), so it names the path that called
 // it -- an embedder is told which entry point rejected its factory.
 TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFactory) {
@@ -546,6 +589,31 @@ TEST(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
   config.device.features.fillModeNonSolid = VK_TRUE;
   auto app = vg::app::HeadlessApp::create(config);
   EXPECT_TRUE(app.ok()) << app.status().message();
+}
+
+// config.device can only add to the renderer's floor: requirements built from
+// DeviceRequirements{} (the core's defaults, without dynamic rendering) still
+// yield a device every gfx type runs on.
+TEST(HeadlessAppConfigTest, MergesTheRendererFloorIn) {
+  vg::app::HeadlessAppConfig config = headless_config();
+  config.device = vg::DeviceRequirements{};
+  auto app = vg::app::HeadlessApp::create(config);
+  if (!app.ok()) {
+    GTEST_SKIP() << "no Vulkan device: " << app.status().message();
+  }
+  const vg::Status enabled =
+      app.value().device().check_enabled(vg::device_requirements());
+  EXPECT_TRUE(enabled.ok()) << enabled.message();
+}
+
+// A headless app has no surface to present to. Refused before any Vulkan call,
+// so this runs everywhere.
+TEST(HeadlessAppValidation, NeedsPresentIsRejected) {
+  vg::app::HeadlessAppConfig config = headless_config();
+  config.device.needs_present = true;
+  auto app = vg::app::HeadlessApp::create(config);
+  ASSERT_FALSE(app.ok());
+  EXPECT_EQ(app.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 TEST_F(HeadlessAppTest, MoveLeavesSourceEmpty) {

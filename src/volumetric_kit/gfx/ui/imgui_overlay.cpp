@@ -65,6 +65,10 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
     return Status::invalid_argument(
         "ImGuiOverlay::create needs image_count >= min_image_count");
   }
+  // The backend's pipeline is built for dynamic rendering on a graphics queue:
+  // a device made for another library may lack either.
+  VG_TRY(device.check_enabled(device_requirements())
+             .with_context("ImGuiOverlay::create"));
 
   // The ImGui pipeline is created (during Init) for dynamic rendering, so it
   // bakes the target's color/depth formats + sample count. The backend deep-
@@ -114,27 +118,27 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
 
   ImGuiOverlay overlay;
   overlay.context_ = context;
-  // Borrow the device's shared-queue mutex (null on an exclusively-owned queue)
-  // so render() can serialize the backend's internal texture-upload submit.
-  overlay.submit_mutex_ = device.submit_mutex();
+  // Borrow the device, not its submit mutex: the device's own mutex does not
+  // move with it, so render() asks for the mutex each time.
+  overlay.device_ = &device;
   return overlay;
 }
 
 ImGuiOverlay::~ImGuiOverlay() { destroy(); }
 
 ImGuiOverlay::ImGuiOverlay(ImGuiOverlay&& other) noexcept
-    : context_(other.context_), submit_mutex_(other.submit_mutex_) {
+    : context_(other.context_), device_(other.device_) {
   other.context_ = nullptr;
-  other.submit_mutex_ = nullptr;
+  other.device_ = nullptr;
 }
 
 ImGuiOverlay& ImGuiOverlay::operator=(ImGuiOverlay&& other) noexcept {
   if (this != &other) {
     destroy();
     context_ = other.context_;
-    submit_mutex_ = other.submit_mutex_;
+    device_ = other.device_;
     other.context_ = nullptr;
-    other.submit_mutex_ = nullptr;
+    other.device_ = nullptr;
   }
   return *this;
 }
@@ -152,13 +156,10 @@ void ImGuiOverlay::render(VkCommandBuffer cmd) {
   ImGui::Render();
   // RenderDrawData may (re)create a texture — the font atlas on first render —
   // which the backend uploads via its own command buffer + a blocking submit on
-  // the graphics queue. Hold the shared-queue mutex across it so a borrowed
-  // queue shared with another library stays externally synchronized (no-op lock
-  // on an exclusively-owned queue).
-  std::unique_lock<std::mutex> lock;
-  if (submit_mutex_ != nullptr) {
-    lock = std::unique_lock<std::mutex>(*submit_mutex_);
-  }
+  // the graphics queue. Hold the device's submit mutex across it -- the
+  // embedder's on a queue shared with another library, else the device's own
+  // -- so it never races the renderer's or a sibling library's submits.
+  const std::lock_guard<std::mutex> lock(*device_->submit_mutex());
   ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 }
 
@@ -171,7 +172,7 @@ void ImGuiOverlay::destroy() noexcept {
     ImGui::DestroyContext(context_);
     context_ = nullptr;
   }
-  submit_mutex_ = nullptr;
+  device_ = nullptr;
 }
 
 }  // namespace volumetric_kit::gfx::ui
