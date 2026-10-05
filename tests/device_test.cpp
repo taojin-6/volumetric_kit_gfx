@@ -51,7 +51,7 @@ vg::AdoptedDevice borrow_device(const vg::Instance& instance,
 }  // namespace
 
 // The renderer's floor: Vulkan 1.3 on a graphics queue, with dynamic rendering
-// (every pass) and timeline semaphores (TimelineSemaphore). No present: a
+// (every pass) and timeline semaphores (core::TimelineSemaphore). No present: a
 // windowed caller asks for it.
 TEST(DeviceRequirementsTest, TheRendererFloor) {
   const vg::DeviceRequirements reqs = vg::device_requirements();

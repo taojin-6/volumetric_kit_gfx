@@ -4,6 +4,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 
 #include <chrono>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,10 @@ namespace volumetric_kit::gfx {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+// A published row's name is never null (core::StageRow::name), so a stage
+// opened without one is recorded -- and labelled -- under this.
+constexpr const char* kUnnamedStage = "(unnamed)";
 
 double ms_since(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start)
@@ -61,10 +66,10 @@ struct Profiler::Impl {
   uint32_t frames_in_flight = 1;
   uint32_t max_gpu_sections = 0;
   uint32_t valid_bits = 0;
-  bool gpu_timing = false;
   float ts_period_ns = 0.0f;
   DebugUtilsTable table;
-  // The core's pool; valid only where gpu_timing is supported.
+  // The core's pool, valid exactly where the device can time (non-zero
+  // timestampValidBits): the one record of whether GPU timing is on.
   // TODO: time on the core's GpuTimer instead if it gains a frames-in-flight
   // window (a slot's spans read when the slot recurs); today it reads spans
   // when a blocking submit returns (DECISIONS.md, "Sync, descriptors and
@@ -107,7 +112,7 @@ struct Profiler::Impl {
       return;
     }
     s.cpu_ms = ms_since(s.cpu_start);
-    if (s.has_gpu && query_pool.valid()) {
+    if (s.has_gpu) {
       query_pool.cmd_write_timestamp(
           s.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query + 1);
     }
@@ -128,7 +133,7 @@ struct Profiler::Impl {
 
     std::vector<uint64_t> ticks;
     bool gpu_ok = false;
-    if (f.gpu_count > 0 && query_pool.valid()) {
+    if (f.gpu_count > 0) {
       ticks.resize(static_cast<size_t>(f.gpu_count) * 2);
       gpu_ok =
           query_pool.read_results(f.query_base, f.gpu_count * 2, ticks.data())
@@ -163,6 +168,14 @@ Result<Profiler> Profiler::create(const Device& device,
     return Status::invalid_argument(
         "Profiler::create: max_gpu_sections_per_frame is zero");
   }
+  // Two queries per section for every slot: a count past 32 bits would wrap
+  // to a pool smaller than the ranges the slots index.
+  if (config.max_gpu_sections_per_frame >
+      std::numeric_limits<uint32_t>::max() / 2 / config.frames_in_flight) {
+    return Status::invalid_argument(
+        "Profiler::create: frames_in_flight * max_gpu_sections_per_frame * 2 "
+        "does not fit in 32 bits");
+  }
   // The profiler times frames the renderer records: a device made for another
   // library may lack the renderer's floor, a graphics queue included.
   VG_TRY(device.check_enabled(device_requirements())
@@ -172,14 +185,13 @@ Result<Profiler> Profiler::create(const Device& device,
   impl->frames_in_flight = config.frames_in_flight;
   impl->max_gpu_sections = config.max_gpu_sections_per_frame;
   impl->valid_bits = device.timestamp_valid_bits();
-  impl->gpu_timing = impl->valid_bits != 0;
   impl->ts_period_ns = device.caps().limits().timestampPeriod;
   impl->table = debug_utils(device);
   impl->slots.resize(config.frames_in_flight);
 
   // The timestamp pool exists only where timing is supported; without it every
   // GPU scope is a CPU-timed (and possibly labelled) no-op on the GPU clock.
-  if (impl->gpu_timing) {
+  if (impl->valid_bits != 0) {
     const uint32_t query_count =
         config.frames_in_flight * config.max_gpu_sections_per_frame * 2;
     Result<core::QueryPool> pool =
@@ -272,7 +284,7 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
 
   // Reset the slot's whole timestamp range up front (outside any render pass)
   // so each gpu_scope can write into it.
-  if (d.gpu_timing && cmd != VK_NULL_HANDLE && d.query_pool.valid()) {
+  if (cmd != VK_NULL_HANDLE && d.query_pool.valid()) {
     const uint32_t base = d.slot_query_base(slot);
     d.query_pool.cmd_reset(cmd, base, d.max_gpu_sections * 2);
   }
@@ -322,7 +334,7 @@ Profiler::Scope Profiler::cpu_scope(const char* name) {
   }
   Impl& d = *impl_;
   Impl::Section s;
-  s.name = name;
+  s.name = name != nullptr ? name : kUnnamedStage;
   s.cpu_start = Clock::now();
   const uint32_t index = static_cast<uint32_t>(d.current.size());
   d.current.push_back(s);
@@ -335,7 +347,7 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   }
   Impl& d = *impl_;
   Impl::Section s;
-  s.name = name;
+  s.name = name != nullptr ? name : kUnnamedStage;
   s.cpu_start = Clock::now();
   s.cmd = cmd;
 
@@ -347,19 +359,19 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   const bool records_gpu = (cmd == d.current_cmd);
 
   // A label is independent of timestamp timing: open it whenever debug-utils is
-  // active, even if no GPU timing is available. A null name is skipped —
-  // VkDebugUtilsLabelEXT::pLabelName must be non-null.
-  if (records_gpu && d.table.active() && name != nullptr) {
+  // active, even if no GPU timing is available. s.name is never null, as
+  // VkDebugUtilsLabelEXT::pLabelName must not be.
+  if (records_gpu && d.table.active()) {
     VkDebugUtilsLabelEXT label{};
     label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-    label.pLabelName = name;
+    label.pLabelName = s.name;
     d.table.cmd_begin(cmd, &label);
     s.label = true;
   }
 
   // Write the begin timestamp when timing is available and the per-frame GPU
   // budget is not yet exhausted; otherwise this stage is CPU-only.
-  if (records_gpu && d.gpu_timing && d.query_pool.valid()) {
+  if (records_gpu && d.query_pool.valid()) {
     if (d.gpu_count < d.max_gpu_sections) {
       s.begin_query = d.slot_query_base(d.current_slot) + d.gpu_count * 2;
       s.has_gpu = true;
@@ -386,7 +398,7 @@ const FrameMetrics& Profiler::metrics() const noexcept {
 }
 
 bool Profiler::gpu_timing() const noexcept {
-  return impl_ && impl_->gpu_timing;
+  return impl_ && impl_->query_pool.valid();
 }
 
 }  // namespace volumetric_kit::gfx

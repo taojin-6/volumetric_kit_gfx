@@ -49,7 +49,8 @@ Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
 
   OwnedDescriptorSet owned;
   owned.pool_ = std::move(pool);
-  owned.set_ = set;
+  owned.handle_ = set.handle();
+  owned.set_ = std::move(set);
   return owned;
 }
 

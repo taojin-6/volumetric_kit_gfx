@@ -20,6 +20,15 @@ namespace volumetric_kit::gfx {
 /// (linear min/mag with linear blending between mip levels) over the whole mip
 /// chain, with `REPEAT` wrapping on every axis. Override per field for, e.g.,
 /// `NEAREST` filtering or `CLAMP_TO_EDGE` wrapping.
+///
+/// @code
+/// SamplerDesc desc;  // trilinear, REPEAT
+/// desc.mag_filter = VK_FILTER_NEAREST;  // crisp texels up close
+/// desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+/// desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+/// desc.max_lod = 0.0f;  // the base level only
+/// Result<Sampler> sampler = Sampler::create(device.handle(), desc);
+/// @endcode
 struct SamplerDesc {
   VkFilter mag_filter = VK_FILTER_LINEAR;  ///< Filter when magnifying.
   VkFilter min_filter = VK_FILTER_LINEAR;  ///< Filter when minifying.

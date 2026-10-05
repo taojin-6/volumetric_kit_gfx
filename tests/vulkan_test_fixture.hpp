@@ -125,7 +125,7 @@ class VulkanDeviceTest : public ::testing::Test {
 
   // Submits `cmd` on the graphics queue gated by a throwaway fence and blocks
   // until it retires. Fails the current test (without aborting it) on a submit
-  // or wait error. Shared by the command-buffer and offscreen-readback tests,
+  // or wait error. Shared by the pipeline, offscreen-readback and UI tests,
   // which all issue a single one-time-submit buffer and read the result back.
   void submit_and_wait(VkCommandBuffer cmd) {
     auto fence = vkc::Fence::create(device());

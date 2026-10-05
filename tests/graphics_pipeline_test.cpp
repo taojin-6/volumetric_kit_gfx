@@ -409,9 +409,9 @@ vg::GraphicsPipeline build_mesh_pipeline(
 
 // Built from the shader pair that reflects a descriptor set (mesh_mvp.vert
 // declares set 0, a uniform buffer) rather than the set-less triangle pair,
-// because the owned std::vector<DescriptorSetLayout> is the member a defaulted
-// move-assign would clear on self-move -- while the two self-guarded
-// UniqueHandle members kept valid() and handle() intact, hiding it.
+// because the owned std::vector<core::DescriptorSetLayout> is the member a
+// defaulted move-assign would clear on self-move -- while the two self-guarded
+// core::UniqueHandle members kept valid() and handle() intact, hiding it.
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");

@@ -45,9 +45,9 @@ struct ProfilerConfig {
   /// retired). Must be >= 1.
   uint32_t frames_in_flight = 2;
   /// Upper bound on @ref Profiler::gpu_scope calls per frame; sizes the
-  /// timestamp pool (`frames_in_flight * this * 2` queries). Scopes beyond it
-  /// in a frame are still CPU-timed and still labelled, but carry no GPU
-  /// timing. Must be >= 1.
+  /// timestamp pool (`frames_in_flight * this * 2` queries, which must fit in
+  /// 32 bits). Scopes beyond it in a frame are still CPU-timed and still
+  /// labelled, but carry no GPU timing. Must be >= 1.
   uint32_t max_gpu_sections_per_frame = 32;
 };
 
@@ -131,7 +131,8 @@ class VG_CORE_API Profiler {
   /// @param config  In-flight depth and the per-frame GPU-scope bound.
   /// @return The profiler on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument when @p config has a zero
-  ///         `frames_in_flight` or `max_gpu_sections_per_frame`;
+  ///         `frames_in_flight` or `max_gpu_sections_per_frame`, or a
+  ///         `frames_in_flight * max_gpu_sections_per_frame * 2` past 32 bits;
   ///         @ref Status::Code::Unsupported for a @p device without the
   ///         renderer's requirements; otherwise a propagated failure from
   ///         creating the timestamp pool.
@@ -168,7 +169,8 @@ class VG_CORE_API Profiler {
 
   /// @brief Open a CPU-only timed stage.
   /// @param name  Stage label; must have string-literal lifetime (stored by
-  ///              pointer, see `core::StageRow::name`).
+  ///              pointer, see `core::StageRow::name`). A null name records
+  ///              the stage as `"(unnamed)"`, as a row's name is never null.
   /// @return A @ref Scope timing until it is destroyed; inert if called outside
   ///         a @ref begin_frame / @ref end_frame pair.
   Scope cpu_scope(const char* name);
@@ -182,7 +184,8 @@ class VG_CORE_API Profiler {
   ///              when begin_frame got `VK_NULL_HANDLE` for a CPU-only frame —
   ///              leaves the stage CPU-timed only, with no timestamps or label.
   /// @param name  Stage label and label text; string-literal lifetime. A null
-  ///              name records the stage but emits no debug-utils label.
+  ///              name records and labels the stage as `"(unnamed)"`, as a
+  ///              row's name is never null.
   /// @return A @ref Scope timing until it is destroyed; inert if called outside
   ///         a frame or with a null @p cmd.
   Scope gpu_scope(VkCommandBuffer cmd, const char* name);

@@ -53,12 +53,12 @@ class DebugLabelTest : public ::testing::Test {
     auto pool =
         vkc::CommandPool::create(device_->handle(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
-    pool_.emplace(std::move(pool).value());
+    pool_ = std::move(pool).value();
   }
 
   std::optional<vg::Instance> instance_;
   std::optional<vg::Device> device_;
-  std::optional<vkc::CommandPool> pool_;
+  vkc::CommandPool pool_;
 };
 
 }  // namespace
@@ -100,7 +100,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
 
   // A real handle to name: the test's command pool.
   vg::set_object_name(device_->handle(), table, VK_OBJECT_TYPE_COMMAND_POOL,
-                      reinterpret_cast<uint64_t>(pool_->handle()), "test pool");
+                      reinterpret_cast<uint64_t>(pool_.handle()), "test pool");
 
   const float color[4] = {0.2f, 0.4f, 0.8f, 1.0f};
   vg::Status record_status =
