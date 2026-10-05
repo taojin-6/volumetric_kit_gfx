@@ -189,6 +189,13 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
         "upload_texture: format must be an uncompressed, single-plane color "
         "format");
   }
+  if (core::format_needs_ycbcr_conversion(desc.format)) {
+    // The RGBA 4PACK16 formats are sized, but the sampled view the upload
+    // makes would need a sampler Y'CbCr conversion (see create_image).
+    return Status::unsupported(
+        "upload_texture: format needs a sampler Y'CbCr conversion to be "
+        "sampled");
+  }
   if (desc.mip_levels > mip_levels_for(desc.extent)) {
     return Status::invalid_argument(
         "upload_texture: mip_levels exceeds the full mip chain for extent");

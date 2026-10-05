@@ -3,10 +3,12 @@
 
 // gfx's headers compile beside the core's vulkan tier, included first: an
 // application that also uses the core's compute tier sees both, as recon will
-// once it adopts that tier. That order used to fail twice over: naming
-// core::to_string in gfx's namespace took the tier's to_string(VkResult), which
-// clashed with gfx's, and swapchain_stale's unqualified vk_result(status) also
-// found the tier's by argument-dependent lookup on the Status.
+// once it adopts that tier. That order failed twice over while gfx kept its own
+// VkResult bridge: naming core::to_string in gfx's namespace took the tier's
+// to_string(VkResult), which clashed with gfx's, and swapchain_stale's
+// unqualified vk_result(status) also found the tier's by argument-dependent
+// lookup on the Status. gfx's names are now the tier's, so an unqualified call
+// finds one function both ways.
 
 #include <gtest/gtest.h>
 
@@ -27,4 +29,9 @@ TEST(CoreVulkanTier, GfxBridgeWorksBesideIt) {
   EXPECT_EQ(vkc::vk_result(stale), VK_ERROR_OUT_OF_DATE_KHR);
   EXPECT_EQ(vg::to_string(VK_ERROR_DEVICE_LOST), "VK_ERROR_DEVICE_LOST");
   EXPECT_EQ(to_string(stale.domain()), "Backend");
+  // Unqualified, as a consumer with both namespaces in scope writes it.
+  using namespace volumetric_kit::gfx;
+  using namespace volumetric_kit::core;
+  EXPECT_EQ(vk_result(stale), VK_ERROR_OUT_OF_DATE_KHR);
+  EXPECT_EQ(to_string(VK_ERROR_DEVICE_LOST), "VK_ERROR_DEVICE_LOST");
 }

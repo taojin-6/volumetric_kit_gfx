@@ -6,8 +6,8 @@
 # Status/Result error handling, log sink and contract checks, Vulkan
 # instance/device setup, sync primitives, and GPU memory allocation
 # (buffers/images via VMA). Every other tier depends on this; it depends only on
-# volumetric_kit_core's base tier + Vulkan + VMA + spirv-cross (a private impl
-# detail backing SPIR-V reflection in shader.cpp).
+# volumetric_kit_core's base and vulkan tiers + Vulkan + VMA + spirv-cross (a
+# private impl detail backing SPIR-V reflection in shader.cpp).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -20,7 +20,6 @@ target_sources(
   gfx_core
   PRIVATE version.cpp
           vma_impl.cpp
-          result.cpp
           instance.cpp
           physical_device_info.cpp
           device.cpp
@@ -87,20 +86,18 @@ target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
 # Public deps are independently re-findable, so the installed package's
 # find_dependency() calls stay simple: volumetric_kit_core's base tier (Status /
-# Result / the log sink in every tier's signatures) and the system's Vulkan
-# headers, which every gfx TU compiles against. The Vulkan loader is PRIVATE:
-# our implementation (VMA) links it, but it never surfaces in the public API. So
-# is the core's vulkan tier for now: only the format metadata
-# (volumetric_kit/core/vulkan/format.hpp) is used, and no public header names
-# it. glm is intentionally absent: no public gfx_core header names a glm type
-# (see the rationale at the top-level find_package site in CMakeLists.txt).
-#
-# TODO: make volumetric_kit::core_vulkan PUBLIC when gfx_core's public API takes
-# the core's Device (DECISIONS.md, 2026-10-04, the stages still open).
+# Result / the log sink in every tier's signatures), its vulkan tier (whose
+# umbrella header core/vulkan.hpp forwards to, and whose vk_result.hpp
+# result.hpp takes the VkResult bridge from), and the system's Vulkan headers,
+# which every gfx TU compiles against. gfx links the Vulkan loader PRIVATE --
+# our implementation (VMA) calls it, and no public gfx signature needs it -- but
+# the core's vulkan tier links it PUBLIC, so consumers get it through that. glm
+# is intentionally absent: no public gfx_core header names a glm type (see the
+# rationale at the top-level find_package site in CMakeLists.txt).
 target_link_libraries(
   gfx_core
-  PUBLIC volumetric_kit::core_base Vulkan::Headers
-  PRIVATE volumetric_kit::core_vulkan Vulkan::Vulkan)
+  PUBLIC volumetric_kit::core_base volumetric_kit::core_vulkan Vulkan::Headers
+  PRIVATE Vulkan::Vulkan)
 
 # spirv-cross: SPIR-V reflection for descriptor-set layouts, used privately in
 # shader.cpp -- its headers/types never reach gfx_core's public API. SYSTEM-mark

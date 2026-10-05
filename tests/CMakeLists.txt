@@ -62,10 +62,12 @@ vg_target_warnings(vg_core_test)
 
 # shader_test loads a compiled SPIR-V blob; compile the triangle shaders next to
 # the test binary and pass it the directory via VG_SHADER_DIR.
-vg_compile_shaders(
+vkc_compile_shaders(
   vg_core_test
   OUTPUT_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  TARGET_ENV
+  vulkan1.3
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/triangle.vert"
   "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
@@ -90,12 +92,11 @@ vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
 
 # gfx's headers beside the core's vulkan tier, whose vk_result.hpp the test
-# includes first -- the order in which their names clashed.
+# includes first -- the order in which their names once clashed. gfx_core brings
+# the tier.
 add_executable(vg_core_vulkan_tier_test core_vulkan_tier_test.cpp)
-target_link_libraries(
-  vg_core_vulkan_tier_test
-  PRIVATE volumetric_kit::gfx_windowing volumetric_kit::core_vulkan
-          GTest::gtest_main)
+target_link_libraries(vg_core_vulkan_tier_test
+                      PRIVATE volumetric_kit::gfx_windowing GTest::gtest_main)
 vg_target_warnings(vg_core_vulkan_tier_test)
 vg_discover_tests(vg_core_vulkan_tier_test)
 

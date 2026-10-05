@@ -96,6 +96,19 @@ TEST_F(OffscreenTargetDeviceTest, UndefinedColorFormatRejected) {
   EXPECT_EQ(target.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+// A vendor extension's format has no texel size in the core's format table
+// (core Vulkan and KHR only), so its readback buffer cannot be sized. Passed by
+// value: VK_FORMAT_R16G16_SFIXED5_NV, which older headers do not name.
+TEST_F(OffscreenTargetDeviceTest, ReadbackOfVendorFormatUnsupported) {
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTargetDesc desc;
+  desc.extent = {32, 32};
+  desc.color_format = static_cast<VkFormat>(1000464000);
+  auto target = vg::OffscreenTarget::create(allocator, desc);
+  ASSERT_FALSE(target.ok());
+  EXPECT_EQ(target.status().domain(), vg::Status::Code::Unsupported);
+}
+
 // --- Move-only lifecycle ---------------------------------------------------
 
 TEST_F(OffscreenTargetDeviceTest, MoveConstructLeavesSourceEmpty) {

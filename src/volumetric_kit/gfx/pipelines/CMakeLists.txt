@@ -70,18 +70,32 @@ target_link_libraries(
 # PbrPipeline ships its own technique: compile shaders/model.{vert,frag} to
 # SPIR-V and embed each as a constexpr byte array compiled into the library
 # (pbr_pipeline.cpp #includes model_{vert,frag}.spv.hpp), so a consumer needs no
-# shader files. vg_embed_shaders puts the generated headers on a PRIVATE include
-# path -- internal, not installed.
-vg_embed_shaders(
-  gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/model.vert"
+# shader files. vkc_embed_shaders (volumetric_kit_core's vkc_shaders.cmake) puts
+# the generated headers on a PRIVATE include path -- internal, not installed --
+# and the vg_ prefix keeps the symbols apart from a sibling's shader of the same
+# name. vulkan1.3 is gfx's device floor (device.cpp).
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/model.vert"
   "${PROJECT_SOURCE_DIR}/shaders/model.frag")
 
 # --- Embedded reconstruction hybrid-mesh shaders ----------------------------
 # HybridMeshPipeline (the volumetric_kit_recon handoff) likewise embeds its
 # technique: hybrid_mesh.{vert,frag} -> SPIR-V compiled into the library
 # (hybrid_mesh_pipeline.cpp #includes hybrid_mesh_{vert,frag}.spv.hpp).
-vg_embed_shaders(
-  gfx_pipelines SHADERS "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
 
 vg_target_warnings(gfx_pipelines)

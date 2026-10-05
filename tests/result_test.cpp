@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// gfx's side of error handling: the core's Status and Result under gfx's
-// names, the VkResult bridge, and the VG_* macros. The core's own tests cover
-// Status and Result themselves.
+// gfx's side of error handling: the core's Status, Result and VkResult bridge
+// under gfx's names, and the VG_* macros. The core's own tests cover them
+// themselves.
 
 #include <gtest/gtest.h>
 
@@ -21,13 +21,15 @@
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 
-// A Status from gfx passes to recon or calib unchanged: it is the core's type.
-// gfx does not name the core's to_string(Status::Code); an unqualified call
-// finds it by argument-dependent lookup.
+// A Status from gfx passes to recon or calib unchanged: it is the core's type,
+// and gfx's VkResult bridge is the core's functions, not a copy of them.
 TEST(Status, IsTheCoresType) {
   static_assert(std::is_same_v<vg::Status, vkc::Status>);
   static_assert(std::is_same_v<vg::Result<int>, vkc::Result<int>>);
+  static_assert(&vg::vk_error == &vkc::vk_error);
+  static_assert(&vg::vk_result == &vkc::vk_result);
   EXPECT_EQ(to_string(vg::Status::Code::Backend), "Backend");
+  EXPECT_EQ(vg::to_string(vg::Status::Code::Backend), "Backend");
 }
 
 TEST(Status, VkErrorBuildsABackendStatus) {

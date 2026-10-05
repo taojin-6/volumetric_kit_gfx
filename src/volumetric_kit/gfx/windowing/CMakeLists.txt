@@ -45,15 +45,15 @@ target_include_directories(
          "$<BUILD_INTERFACE:${_vg_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
-# gfx_core is PUBLIC (its types appear in this tier's API); the Vulkan loader is
-# PRIVATE (this tier calls the WSI entry points -- vkCreateSwapchainKHR,
-# vkAcquireNextImageKHR, ... -- but never surfaces a loader symbol publicly). So
-# is the core's vulkan tier: swapchain.cpp classifies the depth format through
-# its format.hpp (via core/impl/depth_attachment.hpp).
+# gfx_core is PUBLIC (its types appear in this tier's API), and brings the
+# core's vulkan tier, whose format.hpp swapchain.cpp classifies the depth format
+# through (via core/impl/depth_attachment.hpp). The Vulkan loader is PRIVATE
+# (this tier calls the WSI entry points -- vkCreateSwapchainKHR,
+# vkAcquireNextImageKHR, ... -- but never surfaces a loader symbol publicly).
 target_link_libraries(
   gfx_windowing
   PUBLIC volumetric_kit::gfx_core Vulkan::Headers
-  PRIVATE volumetric_kit::core_vulkan Vulkan::Vulkan)
+  PRIVATE Vulkan::Vulkan)
 
 vg_target_warnings(gfx_windowing)
 

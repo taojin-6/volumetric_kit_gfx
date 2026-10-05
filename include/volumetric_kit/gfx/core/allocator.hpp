@@ -202,7 +202,9 @@ class VG_CORE_API Allocator {
   ///           names no view-compatible bit, or `MemoryUsage::HostVisible`
   ///           (images have no host accessor; copy to a HostVisible buffer for
   ///           readback) return domain @ref Status::Code::InvalidArgument;
-  ///         - `desc.external != None` returns @ref Status::Code::Unsupported;
+  ///         - `desc.external != None`, or `desc.with_view` with a format whose
+  ///           view needs a sampler Y'CbCr conversion (multi-planar, 4:2:2,
+  ///           RGBA 4PACK16), returns @ref Status::Code::Unsupported;
   ///         - a failed image, allocation, or view creation returns a
   ///           backend @ref Status carrying the `VkResult`.
   ///         The full `extent` × `depth` is recoverable from the returned

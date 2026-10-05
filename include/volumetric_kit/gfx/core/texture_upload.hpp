@@ -240,8 +240,10 @@ class VG_CORE_API UploadBatch {
 ///         @ref ImageUploadDesc); @ref Status::Code::Unsupported for an extent
 ///         beyond the device's `maxImageDimension2D` (`maxImageDimensionCube`
 ///         for cubes), more layers than `maxImageArrayLayers`, a
-///         compressed/multi-planar/depth-stencil format, a format that cannot
-///         be sampled with optimal tiling, or `generate_mips` on a format that
+///         compressed/multi-planar/depth-stencil format, a vendor or EXT
+///         extension's format, one whose view needs a sampler Y'CbCr
+///         conversion (RGBA 4PACK16), a format that cannot be sampled with
+///         optimal tiling, or `generate_mips` on a format that
 ///         cannot be linear-blitted; otherwise a backend Status from the
 ///         staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the

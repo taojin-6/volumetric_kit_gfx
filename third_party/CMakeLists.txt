@@ -2,15 +2,16 @@
 # Copyright (c) 2026 Tao Jin
 
 # Dependencies. System via find_package: the Vulkan headers and loader, and
-# glslc/glslangValidator (shader compilation) -- re-findable, keeping the
-# installed export clean (consumers find_dependency(Vulkan)). The library
-# compiles against the system's Vulkan headers, as the family's core does (its
-# DECISIONS.md, "Vulkan headers come from the system"), and takes its VkFormat
-# metadata from the core's format.hpp. glm (camera tier) is preferred from the
-# system too (resolved at the top level), falling back to a pinned vendored copy
-# below when none is installed. Vendored via pinned FetchContent: VMA
-# (header-only, built in one gfx_core TU), spirv-cross (SPIR-V reflection; a
-# static archive linked privately into gfx_core), and googletest.
+# glslc/glslangValidator (shader compilation, through the core's
+# vkc_compile_shaders) -- re-findable, keeping the installed export clean
+# (consumers find_dependency(Vulkan)). The library compiles against the system's
+# Vulkan headers, as the family's core does (its DECISIONS.md, "Vulkan headers
+# come from the system"), and takes its VkFormat metadata from the core's
+# format.hpp. glm (camera tier) is preferred from the system too (resolved at
+# the top level), falling back to a pinned vendored copy below when none is
+# installed. Vendored via pinned FetchContent: VMA (header-only, built in one
+# gfx_core TU), spirv-cross (SPIR-V reflection; a static archive linked
+# privately into gfx_core), and googletest.
 
 include(FetchContent)
 
@@ -20,6 +21,12 @@ include(FetchContent)
 
 # --- VMA: Vulkan Memory Allocator (header-only; implemented in one gfx_core TU)
 # ----
+#
+# The core's vulkan tier declares the same name and pin (its third_party/), and
+# when the core is built here it is made available before this file runs.
+# FetchContent keeps the first declaration of a name, so the core's pin governs
+# and this one takes effect only when the core was found installed: bump the two
+# together.
 FetchContent_Declare(
   VulkanMemoryAllocator
   GIT_REPOSITORY

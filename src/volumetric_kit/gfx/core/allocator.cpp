@@ -288,6 +288,16 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
         "STORAGE, COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or "
         "INPUT_ATTACHMENT); set with_view = false for a transfer-only image");
   }
+  // A view of a multi-planar, 4:2:2 or RGBA 4PACK16 format must chain a sampler
+  // Y'CbCr conversion (VUID-VkImageViewCreateInfo-format-06415), which the
+  // default view does not.
+  // TODO: take a conversion in TextureDesc when a consumer samples video
+  // frames.
+  if (desc.with_view && core::format_needs_ycbcr_conversion(desc.format)) {
+    return Status::unsupported(
+        "with_view image format needs a sampler Y'CbCr conversion, which the "
+        "default view does not chain; set with_view = false");
+  }
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
