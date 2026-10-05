@@ -21,6 +21,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   validation (rejects null/empty/misaligned code) before Vulkan is touched.
 - GLSL→SPIR-V build step: `vg_compile_shaders()` (in `cmake/vg_shaders.cmake`) compiles
   shaders via glslc/glslangValidator; the first shaders are `shaders/triangle.{vert,frag}`.
+- `core`: `cmd_buffer_barrier` / `BufferBarrierDesc`
+  (`core/buffer_barrier.hpp`), the buffer counterpart of `cmd_image_barrier`.
+- `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
+  their factors share one uniform buffer, each at a 256-byte-aligned offset,
+  uploaded by one copy. `PbrModel::create` builds its materials this way.
 
 ### Changed
 
@@ -54,21 +59,27 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - `ImageDesc` has no `memory`. `texture.image()` →
     `handle()`; `extent()` returns a `VkExtent3D`, so a 2D extent is
     `{image.width(), image.height()}`. An image records its layout
-    (`layout()` / `set_layout`); `UploadBatch` images report
-    `SHADER_READ_ONLY_OPTIMAL`.
+    (`layout()` / `set_layout`). `upload_texture`, `bake_ibl`,
+    `bake_brdf_lut(device, ...)` and `PbrModel` return images recording
+    `SHADER_READ_ONLY_OPTIMAL`; an image from `UploadBatch::add` records
+    `UNDEFINED` until its owner records `SHADER_READ_ONLY_OPTIMAL` once
+    `finish` returns OK.
   - `HeapStats` adds `reserved_bytes` and `allocation_bytes`, the allocator's
     own share; with `VK_EXT_memory_budget` enabled, `usage_bytes` counts every
     allocation in the process, as `FrameMetrics::memory_used_bytes` then does.
   - Buffers and images may outlive the allocator that made them; only the
     device must outlive them.
   - `PbrScene::set_camera(slot, eye, lod)` → `set_camera(cmd, slot, eye,
-    lod)`, called before the frame's rendering begins: where the device has no
-    device-mapped memory, the camera uniform buffer is device-only and the
-    write is a recorded update. `PbrSceneDesc::camera_memory` forces that path.
+    lod)`, called before the frame's rendering begins: the camera uniform
+    buffer is device-only and the write is an update recorded into `cmd`, so
+    it applies to the work recorded after it -- two views in one command
+    buffer, each after its own call, see their own camera. A null `cmd` fails
+    the contract check.
   - `PbrMaterial::create(device, allocator, layout, desc)` →
     `create(device, batch, layout, desc)`: the factors upload through an open
-    `UploadBatch`, into device-only memory; draw the material once the batch
-    has finished. `PbrModel::create` does this for its materials.
+    `UploadBatch`, into device-only memory; keep the material alive until the
+    batch has finished, and draw it after. A failed create leaves the batch
+    unchanged.
 - `core`: **the instance and device are volumetric_kit_core's.** `vg::Instance`,
   `InstanceConfig`, `PhysicalDeviceInfo`, `Device`, `AdoptedDevice` and
   `DeviceRequirements` name the core's types, so a device gfx makes is the type

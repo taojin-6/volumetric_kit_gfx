@@ -38,6 +38,10 @@
 
 namespace volumetric_kit::gfx {
 
+// TODO: name Status, Result and the VkResult bridge below as the core does
+// (core::Status, vkc::Status outside gfx) and drop these aliases, with the
+// macros' rename below (DECISIONS.md, "Memory comes from
+// volumetric_kit_core").
 using core::Result;
 using core::Status;
 // The core's VkResult bridge (volumetric_kit/core/vulkan/vk_result.hpp), under

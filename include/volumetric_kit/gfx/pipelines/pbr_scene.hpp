@@ -33,12 +33,6 @@ struct PbrSceneDesc {
   VkImageView prefilter = VK_NULL_HANDLE;   ///< Prefiltered specular cube.
   VkImageView brdf_lut = VK_NULL_HANDLE;    ///< 2D BRDF integration LUT.
   VkSampler sampler = VK_NULL_HANDLE;  ///< Filters all three (mipped cube).
-  /// Where the per-frame camera uniform buffers live: device-mapped memory
-  /// where the device has room for them, else device-only memory written by
-  /// a recorded update (@ref make_frame_uniform_buffer). `DeviceOnly` keeps
-  /// them out of a discrete GPU's BAR window, which every library on the
-  /// device shares.
-  FrameUniformMemory camera_memory = FrameUniformMemory::Prefer;
 };
 
 /// @brief Owns the set-0 descriptor resources @ref PbrPipeline binds once per
@@ -50,13 +44,12 @@ struct PbrSceneDesc {
 /// data. The camera UBO and its descriptor set are **ringed per
 /// frame-in-flight slot**: create the scene with the frame loop's
 /// `frames_in_flight`, then each frame write and bind the acquired frame's
-/// slot — the CPU never rewrites a UBO the GPU may still be reading. Each slot
+/// slot, so a frame's update never waits on another frame's reads. Each slot
 /// owns its own one-set @ref DescriptorPool, @ref DescriptorSet, and camera
-/// UBO, in device-mapped memory or, where the device has none, device-only
-/// memory written by a recorded update -- which is why @ref set_camera takes
-/// the frame's command buffer, and is called before rendering begins. A
-/// default-constructed `PbrScene` is empty (`valid()` is false) and safe to
-/// move-assign into.
+/// UBO in device-only memory, written by an update recorded into the frame's
+/// command buffer -- which is why @ref set_camera takes that command buffer,
+/// and is called before rendering begins. A default-constructed `PbrScene` is
+/// empty (`valid()` is false) and safe to move-assign into.
 ///
 /// @warning The device, plus the IBL images @ref PbrSceneDesc names, must
 ///          outlive the scene.
@@ -90,9 +83,7 @@ class VG_PIPELINES_API PbrScene {
   ///      otherwise a non-OK @ref Status with domain
   ///      @ref Status::Code::InvalidArgument.
   /// @return The scene on success, or a non-OK @ref Status (a backend
-  ///         Status from buffer / pool / set allocation; device-mapped memory
-  ///         the device lacks or has no room for falls back rather than
-  ///         failing).
+  ///         Status from buffer / pool / set allocation).
   static Result<PbrScene> create(VkDevice device, core::Allocator& allocator,
                                  VkDescriptorSetLayout scene_layout,
                                  const PbrSceneDesc& desc,
@@ -111,12 +102,13 @@ class VG_PIPELINES_API PbrScene {
   PbrScene(const PbrScene&) = delete;
   PbrScene& operator=(const PbrScene&) = delete;
 
-  /// @brief Write the per-frame camera into slot @p slot's UBO.
+  /// @brief Record a write of the per-frame camera into slot @p slot's UBO.
   ///
-  /// Written through the mapping now, or recorded into @p cmd where the UBO
-  /// is device-only (@ref OwnedDescriptorSet::write_uniform); either way the
-  /// frame @p cmd submits sees it. Call it before the frame's rendering
-  /// begins: a recorded update is invalid inside a render pass instance.
+  /// Recorded into @p cmd (@ref OwnedDescriptorSet::write_uniform), so it
+  /// applies to the work recorded after it: two views rendered in one command
+  /// buffer, each after its own call, each see their own camera. Call it
+  /// before the frame's rendering begins: a recorded update is invalid inside
+  /// a render pass instance.
   /// @param cmd               The frame's command buffer, recording, outside
   ///                          a render pass instance.
   /// @param slot              The acquired frame's in-flight slot (e.g. the
@@ -127,8 +119,9 @@ class VG_PIPELINES_API PbrScene {
   /// @param prefilter_max_lod The specular prefilter's highest mip index
   ///                          (mip count - 1); the shader clamps roughness LOD
   ///                          to it.
-  /// @pre `valid()` and @p slot < @ref frames_in_flight; an out-of-range slot
-  ///      is ignored (no write), mirroring @ref descriptor_set.
+  /// @pre @p cmd is non-`VK_NULL_HANDLE` (a contract check), `valid()`, and
+  ///      @p slot < @ref frames_in_flight; an out-of-range slot is ignored
+  ///      (no write), mirroring @ref descriptor_set.
   void set_camera(VkCommandBuffer cmd, uint32_t slot, const glm::vec3& eye,
                   float prefilter_max_lod) const;
 

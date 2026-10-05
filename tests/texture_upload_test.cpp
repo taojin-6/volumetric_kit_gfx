@@ -114,6 +114,9 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   EXPECT_EQ(texture.value().extent().width, 2u);
   EXPECT_EQ(texture.value().extent().height, 2u);
   EXPECT_EQ(texture.value().mip_levels(), 1u);  // no mips requested
+  // The upload's transitions have been submitted, so the image records the
+  // layout they left it in.
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   // Copy the uploaded image back into a staging buffer and confirm the
   // bytes survived the staging -> image -> readback round trip (proving the
@@ -746,13 +749,16 @@ TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
   EXPECT_TRUE(buffer.value().is_device_local());
   EXPECT_TRUE(texture.value().is_device_local());
   EXPECT_EQ(buffer.value().size(), vertices.size() * sizeof(float));
-  // The layout finish leaves the image in, recorded for whoever it is handed.
-  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  // Nothing has transitioned the image yet -- an unfinished, failed or
+  // discarded batch never does -- so it records UNDEFINED until its owner
+  // records the layout a successful finish leaves it in.
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
 
   const vg::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_TRUE(buffer.value().valid());
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
 
   // The resources hold their allocator's state: dropping the allocator first
   // is safe, which is what lets a device keep a failed batch's staging

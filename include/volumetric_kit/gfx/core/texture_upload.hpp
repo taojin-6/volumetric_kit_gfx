@@ -27,6 +27,8 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
 
 /// @brief A CPU pixel buffer plus the options for uploading it into a sampled
@@ -91,7 +93,8 @@ struct BufferUploadDesc {
 /// records them all into one command buffer of the device's
 /// (`Device::submit_single_time`), submits it and blocks on a fence, after
 /// which every added texture is sampled-ready in `SHADER_READ_ONLY_OPTIMAL`
-/// and every added buffer holds its bytes. A batch is one-shot: after
+/// -- which its owner then records with `set_layout` -- and every added
+/// buffer holds its bytes. A batch is one-shot: after
 /// @ref finish (successful or not) it is empty (`valid()` is false) and cannot
 /// be reused -- @ref begin a new one. A default-constructed batch is likewise
 /// empty and safe to move-assign into.
@@ -112,6 +115,7 @@ struct BufferUploadDesc {
 /// Result<core::Buffer> vertices = batch.value().add_buffer(vertex_desc);
 /// if (!vertices) return vertices.status();
 /// VG_TRY(batch.value().finish());  // one submit; resources now GPU-ready
+/// albedo.value().set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 /// @endcode
 class VG_CORE_API UploadBatch {
  public:
@@ -149,8 +153,11 @@ class VG_CORE_API UploadBatch {
   /// @param desc  Source pixels, extent, format, and layer/mip options; see
   ///              @ref upload_texture for the validation rules.
   /// @return The created texture -- usable only after @ref finish returns OK,
-  ///         and recording `SHADER_READ_ONLY_OPTIMAL`, the layout finish leaves
-  ///         it in, as its `layout()` -- or a non-OK @ref Status: @ref
+  ///         and recording `VK_IMAGE_LAYOUT_UNDEFINED` as its `layout()`
+  ///         until then: nothing has transitioned it. Once finish returns OK
+  ///         it is in `SHADER_READ_ONLY_OPTIMAL`; record that with
+  ///         `set_layout`, as the core's `Image` asks of whoever submits a
+  ///         transition. Or a non-OK @ref Status: @ref
   ///         Status::Code::InvalidArgument when the batch is empty (not begun,
   ///         moved-from, or already finished), plus everything @ref
   ///         upload_texture rejects.
@@ -235,7 +242,7 @@ class VG_CORE_API UploadBatch {
 ///        `core::Image`, returning once the copy has completed on the GPU.
 ///
 /// A one-texture @ref UploadBatch (begin + add + finish): stages the
-/// pixels through a host-visible buffer and records one
+/// pixels through a `core::MemoryUsage::Staging` buffer and records one
 /// `VkBufferImageCopy` per mip level -- each spanning all
 /// @ref ImageUploadDesc::array_layers layers, which the packing contract keeps
 /// contiguous per mip -- plus, when @ref ImageUploadDesc::generate_mips, the
@@ -245,10 +252,11 @@ class VG_CORE_API UploadBatch {
 /// @param device     The device whose graphics queue runs the one-time
 ///                   transfer; must outlive the returned texture.
 /// @param allocator  Allocates the staging buffer and the destination image;
-///                   must outlive the returned texture (see `core::Image`).
+///                   the texture may outlive it (see `core::Image`).
 /// @param desc       Source pixels, extent, format, and layer/mip options.
-/// @return The texture -- sampled-ready in `SHADER_READ_ONLY_OPTIMAL`, with a
-///         default view spanning all mips and layers -- or a non-OK @ref
+/// @return The texture -- sampled-ready in `SHADER_READ_ONLY_OPTIMAL`, which
+///         its `layout()` records, with a default view spanning all mips and
+///         layers -- or a non-OK @ref
 ///         Status: @ref Status::Code::InvalidArgument for a zero extent,
 ///         `VK_FORMAT_UNDEFINED`, null pixels, zero
 ///         `array_layers`/`mip_levels`, a `cube` that is not a square six-layer
@@ -271,22 +279,22 @@ VG_CORE_API Result<core::Image> upload_texture(const Device& device,
                                                core::Allocator& allocator,
                                                const ImageUploadDesc& desc);
 
-/// @brief Upload @p desc.data into a new device-local `core::Buffer`, returning
+/// @brief Upload @p desc.data into a new device-only `core::Buffer`, returning
 ///        once the copy has completed on the GPU.
 ///
 /// A one-buffer @ref UploadBatch (begin + add_buffer + finish): stages the
-/// bytes through a host-visible buffer, records one `vkCmdCopyBuffer` into the
-/// `TRANSFER_DST | desc.usage` destination, then submits once and blocks on a
-/// fence. Uploading many buffers (or buffers and textures)? Share one batch
-/// instead of paying a round trip each.
+/// bytes through a `core::MemoryUsage::Staging` buffer, records one
+/// `vkCmdCopyBuffer` into the `TRANSFER_DST | desc.usage` destination, then
+/// submits once and blocks on a fence. Uploading many buffers (or buffers and
+/// textures)? Share one batch instead of paying a round trip each.
 ///
 /// @param device     The device whose graphics queue runs the one-time
-///                   transfer; must outlive the returned buffer's use.
-/// @param allocator  Allocates the staging and destination buffers; must
-///                   outlive the returned buffer (see `core::Buffer`).
+///                   transfer; must outlive the returned buffer.
+/// @param allocator  Allocates the staging and destination buffers; the
+///                   buffer may outlive it (see `core::Buffer`).
 /// @param desc       Source bytes, byte length, and destination usage.
-/// @return The buffer -- device-local, holding @p desc.size bytes of
-///         @p desc.data -- or a non-OK @ref Status: @ref
+/// @return The buffer -- `core::MemoryUsage::DeviceOnly`, holding
+///         @p desc.size bytes of @p desc.data -- or a non-OK @ref Status: @ref
 ///         Status::Code::InvalidArgument for null `data`, zero `size`, or a
 ///         `usage` that names no usage; @ref Status::Code::Unsupported for a
 ///         device that did not enable the renderer's requirements

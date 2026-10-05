@@ -26,6 +26,8 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
 class Profiler;
 

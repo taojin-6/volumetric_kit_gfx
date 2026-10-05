@@ -324,7 +324,8 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
 // Build the pipelines-tier PbrScene (set 0: camera + IBL) against the
 // pipeline's reflected set-0 layout, one camera UBO ring slot per frame in
 // flight. The caller refreshes the acquired slot's camera each frame through
-// scene.set_camera(slot, ...). Everything else GPU-side for the model -- the
+// scene.set_camera(cmd, slot, ...), before the frame's rendering begins.
+// Everything else GPU-side for the model -- the
 // meshes, material maps, materials (set 1), and draw list -- comes from
 // pipelines::PbrModel::create.
 pipelines::PbrScene make_pbr_scene(const vg::Device& device,
@@ -912,9 +913,8 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const glm::mat4 view_proj =
         rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
     // The camera moves each frame, so refresh the acquired slot's camera UBO
-    // before rendering begins (where the UBO is device-only, the write is a
-    // recorded update, which a render pass may not contain): begin_frame
-    // waited that slot's fence, so the GPU is not reading it.
+    // before rendering begins: the write is a recorded update, which a render
+    // pass may not contain.
     scene.set_camera(cmd, f.slot, rig.position(),
                      ibl.value().prefilter_max_lod);
 

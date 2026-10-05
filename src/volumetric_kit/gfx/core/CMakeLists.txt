@@ -30,6 +30,7 @@ target_sources(
           graphics_pipeline.cpp
           render_target.cpp
           image_barrier.cpp
+          buffer_barrier.cpp
           offscreen_target.cpp
           command_pool.cpp
           command_buffer.cpp

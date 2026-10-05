@@ -43,9 +43,12 @@ struct PbrFrame;
 ///     pipelines::PbrPipeline::create(device, target.layout());
 /// if (!pbr) return pbr.status();
 /// // Build set 0 (PbrScene) + set 1 (PbrMaterial) against its reflected
-/// // layouts, then each frame (f.slot = the in-flight slot):
-/// scene.set_camera(f.slot, eye, prefilter_max_lod);
-/// pbr.value().submit(cmd, frame);  // frame names the scene, slot, and draws
+/// // layouts, then each frame (f.slot = the in-flight slot), recording the
+/// // camera before rendering begins and the draws inside it:
+/// scene.set_camera(f.cmd, f.slot, eye, prefilter_max_lod);
+/// f.target->begin(f.cmd, clear);
+/// pbr.value().submit(f.cmd, frame);  // frame names the scene, slot, draws
+/// f.target->end(f.cmd);
 /// @endcode
 // TODO: a normal-as-color debug view like HybridMeshPipeline's
 // kHybridMeshNormals (for 03_model).

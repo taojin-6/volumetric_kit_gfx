@@ -30,6 +30,9 @@
 
 namespace volumetric_kit::gfx {
 
+// TODO: name the log sink as the core does (core::set_log_handler,
+// vkc::set_log_handler outside gfx) and drop these aliases (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::LogHandler;
 using core::LogLevel;
 using core::set_log_handler;

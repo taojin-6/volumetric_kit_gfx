@@ -7,6 +7,7 @@
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
+#include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
@@ -168,18 +169,13 @@ void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
                          readback_.handle(), 1, &copy);
 
   // Make the copy available to the host read.
-  VkBufferMemoryBarrier to_host{};
-  to_host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-  to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  BufferBarrierDesc to_host;
   to_host.buffer = readback_.handle();
-  to_host.offset = 0;
-  to_host.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &to_host,
-                       0, nullptr);
+  to_host.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  to_host.dst_stage = VK_PIPELINE_STAGE_HOST_BIT;
+  to_host.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+  to_host.dst_access = VK_ACCESS_HOST_READ_BIT;
+  cmd_buffer_barrier(cmd, to_host);
 }
 
 }  // namespace volumetric_kit::gfx

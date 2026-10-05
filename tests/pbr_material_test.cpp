@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
@@ -120,6 +121,59 @@ TEST_F(PbrMaterialTest, RefusedMaterialLeavesTheBatchUsable) {
                                             material_layout(), d);
   ASSERT_FALSE(mat.ok());
   EXPECT_EQ(mat.status().domain(), vg::Status::Code::InvalidArgument);
+  const vg::Status finished = batch.value().finish();
+  EXPECT_TRUE(finished.ok()) << finished.message();
+}
+
+// create_all builds every material on one shared factor upload: each gets a
+// set of its own, and the batch submits them all. That each draw reads its own
+// factors is PbrSubmitTest.PackedMaterialsEachReadTheirOwnFactors.
+TEST_F(PbrMaterialTest, CreatesManyMaterialsOnOneUpload) {
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+  std::vector<pipelines::PbrMaterialDesc> descs(3, full_desc());
+  descs[1].roughness_factor = 0.25f;
+  descs[2].metallic_factor = 0.0f;
+  auto materials = pipelines::PbrMaterial::create_all(device(), batch.value(),
+                                                      material_layout(), descs);
+  ASSERT_TRUE(materials.ok()) << materials.status().message();
+  const vg::Status finished = batch.value().finish();
+  ASSERT_TRUE(finished.ok()) << finished.message();
+
+  ASSERT_EQ(materials.value().size(), descs.size());
+  for (const pipelines::PbrMaterial& material : materials.value()) {
+    EXPECT_TRUE(material.valid());
+    EXPECT_NE(material.descriptor_set(), VK_NULL_HANDLE);
+  }
+  EXPECT_NE(materials.value()[0].descriptor_set(),
+            materials.value()[1].descriptor_set());
+  EXPECT_NE(materials.value()[1].descriptor_set(),
+            materials.value()[2].descriptor_set());
+
+  // The materials share the factor buffer: dropping one leaves the rest
+  // whole.
+  materials.value().erase(materials.value().begin());
+  EXPECT_TRUE(materials.value().front().valid());
+}
+
+// A refused create_all -- no materials, or one bad desc among good ones --
+// queues nothing, so the batch it was given still finishes.
+TEST_F(PbrMaterialTest, RefusedCreateAllLeavesTheBatchUsable) {
+  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  ASSERT_TRUE(batch.ok()) << batch.status().message();
+
+  auto none = pipelines::PbrMaterial::create_all(device(), batch.value(),
+                                                 material_layout(), {});
+  ASSERT_FALSE(none.ok());
+  EXPECT_EQ(none.status().domain(), vg::Status::Code::InvalidArgument);
+
+  std::vector<pipelines::PbrMaterialDesc> descs(3, full_desc());
+  descs[2].emissive = VK_NULL_HANDLE;
+  auto mixed = pipelines::PbrMaterial::create_all(device(), batch.value(),
+                                                  material_layout(), descs);
+  ASSERT_FALSE(mixed.ok());
+  EXPECT_EQ(mixed.status().domain(), vg::Status::Code::InvalidArgument);
+
   const vg::Status finished = batch.value().finish();
   EXPECT_TRUE(finished.ok()) << finished.message();
 }

@@ -202,10 +202,11 @@ Result<PbrModel> PbrModel::create(const Device& device,
       pipeline.descriptor_set_layout(1);
 
   // One material (set 1) per source material: factors via pbr_material_desc,
-  // uploaded on the batch, and maps resolved to the uploaded image for the
-  // slot or a fallback. A descriptor set may name an image whose upload is
-  // still queued; it is only read once the batch has finished.
-  out.materials_.reserve(model.materials.size() + 1);
+  // and maps resolved to the uploaded image for the slot or a fallback. A
+  // descriptor set may name an image whose upload is still queued; it is only
+  // read once the batch has finished.
+  std::vector<PbrMaterialDesc> descs;
+  descs.reserve(model.materials.size() + 1);
   for (const assets::Material& m : model.materials) {
     PbrMaterialDesc desc = pbr_material_desc(m);
     desc.base_color =
@@ -216,9 +217,7 @@ Result<PbrModel> PbrModel::create(const Device& device,
     desc.occlusion = out.textures_[tex_for(m.occlusion_texture, white)].view();
     desc.emissive = out.textures_[tex_for(m.emissive_texture, white)].view();
     desc.sampler = out.sampler_->handle();
-    VG_ASSIGN(PbrMaterial material, PbrMaterial::create(device.handle(), batch,
-                                                        material_layout, desc));
-    out.materials_.push_back(std::move(material));
+    descs.push_back(desc);
   }
 
   // Fallback material for meshes with no material: a matte white dielectric.
@@ -235,14 +234,21 @@ Result<PbrModel> PbrModel::create(const Device& device,
     desc.occlusion = out.textures_[white].view();
     desc.emissive = out.textures_[white].view();
     desc.sampler = out.sampler_->handle();
-    VG_ASSIGN(PbrMaterial fallback, PbrMaterial::create(device.handle(), batch,
-                                                        material_layout, desc));
-    out.materials_.push_back(std::move(fallback));
+    descs.push_back(desc);
   }
+
+  // Every material's factors share one UBO, uploaded on the batch by one copy.
+  VG_ASSIGN(
+      std::vector<PbrMaterial> materials,
+      PbrMaterial::create_all(device.handle(), batch, material_layout, descs));
+  out.materials_ = std::move(materials);
 
   // Submit every queued upload at once; the meshes are draw-ready, the
   // textures sampled-ready and the factors in place when this returns.
   VG_TRY(batch.finish());
+  for (core::Image& texture : out.textures_) {
+    texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
 
   // Resolve each flattened instance into a PbrDraw: its GPU mesh, world
   // transform, and the material its mesh names (or the fallback). The

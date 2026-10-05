@@ -34,6 +34,9 @@
 
 namespace volumetric_kit::gfx {
 
+// TODO: name the device types as the core does (core::Device, vkc::Device
+// outside gfx) and drop these aliases (DECISIONS.md, "Memory comes from
+// volumetric_kit_core").
 using core::AdoptedDevice;
 using core::check_device_support;
 using core::Device;

@@ -29,6 +29,8 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
 class UploadBatch;
 }  // namespace volumetric_kit::gfx
@@ -97,8 +99,8 @@ VG_PIPELINES_API glm::vec3 cube_face_direction(int face, float u,
 /// Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
 ///     device.handle(), alloc, pbr.descriptor_set_layout(0),
 ///     ibl.value().scene_desc(), frames_in_flight);
-/// // each frame:
-/// scene.value().set_camera(slot, eye, ibl.value().prefilter_max_lod);
+/// // each frame, before its rendering begins:
+/// scene.value().set_camera(cmd, slot, eye, ibl.value().prefilter_max_lod);
 /// @endcode
 struct IblMaps {
   IblMaps() = default;
@@ -162,7 +164,9 @@ struct IblMaps {
 /// The standard split-sum table: environment-free, so it is bakeable without
 /// an @ref EnvironmentSampler and shared by every environment.
 /// @param batch    An open batch; the LUT is sampled-ready only after the
-///                 caller's @ref UploadBatch::finish returns OK.
+///                 caller's @ref UploadBatch::finish returns OK, and records
+///                 `VK_IMAGE_LAYOUT_UNDEFINED` until the caller then records
+///                 `SHADER_READ_ONLY_OPTIMAL` (see @ref UploadBatch::add).
 /// @param size     LUT width and height in texels (> 0).
 /// @param samples  Importance samples per texel (> 0); the default matches
 ///                 @ref IblBakeDesc::brdf_lut_samples.

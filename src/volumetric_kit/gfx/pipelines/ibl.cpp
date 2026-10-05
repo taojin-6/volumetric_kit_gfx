@@ -313,6 +313,7 @@ Result<core::Image> bake_brdf_lut(const Device& device,
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
   VG_ASSIGN(core::Image lut, bake_brdf_lut(batch, size, samples));
   VG_TRY(batch.finish());
+  lut.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return lut;
 }
 
@@ -453,8 +454,12 @@ Result<IblMaps> bake_ibl(const Device& device, core::Allocator& allocator,
             bake_brdf_lut(batch, desc.brdf_lut_size, desc.brdf_lut_samples));
   out.brdf_lut = std::move(lut);
 
-  // One submit + fence wait for all three IBL textures.
+  // One submit + fence wait for all three IBL textures, which it leaves
+  // sampled-ready.
   VG_TRY(batch.finish());
+  out.irradiance.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  out.prefilter.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  out.brdf_lut.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return out;
 }
 

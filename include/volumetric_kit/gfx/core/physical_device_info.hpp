@@ -23,6 +23,8 @@
 
 namespace volumetric_kit::gfx {
 
+// TODO: name core::PhysicalDeviceInfo as the core does and drop this alias
+// (DECISIONS.md, "Memory comes from volumetric_kit_core").
 using core::PhysicalDeviceInfo;
 
 }  // namespace volumetric_kit::gfx

@@ -172,6 +172,11 @@ TEST_F(IblTest, BakesTinyMapSet) {
   EXPECT_EQ(maps.brdf_lut.format(), VK_FORMAT_R16G16_SFLOAT);
   ASSERT_TRUE(maps.sampler.has_value());
   EXPECT_TRUE(maps.sampler->valid());
+  // The bake's upload has finished, so every map records the layout it left
+  // them in.
+  EXPECT_EQ(maps.irradiance.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_EQ(maps.prefilter.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_EQ(maps.brdf_lut.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 TEST_F(IblTest, SceneDescNamesEveryViewAndTheSampler) {
@@ -197,6 +202,7 @@ TEST_F(IblTest, BakesBrdfLutStandalone) {
   EXPECT_EQ(lut.value().extent().width, 8u);
   EXPECT_EQ(lut.value().extent().height, 8u);
   EXPECT_EQ(lut.value().format(), VK_FORMAT_R16G16_SFLOAT);
+  EXPECT_EQ(lut.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 TEST_F(IblTest, BrdfLutRejectsZeroSizeZeroSamplesAndEmptyBatch) {

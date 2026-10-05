@@ -11,6 +11,7 @@
 
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
+#include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 
@@ -440,10 +441,9 @@ Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
   image_desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  // It records UNDEFINED, the layout its contents are in until finish()
+  // submits the transitions; the caller records SHADER_READ_ONLY_OPTIMAL then.
   VG_ASSIGN(core::Image texture, allocator_->create_image(image_desc));
-  // The layout finish() leaves every level in; the image is unusable until
-  // then, as the batch's resources are.
-  texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   // Everything that can fail has, so a failed add above leaves the batch
   // unchanged and usable. The handles and the desc's shape are copied: the
@@ -501,17 +501,13 @@ Result<core::Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
     // (or unmapped) destination does include TRANSFER and so serializes later
     // copies behind this barrier -- fine for those rarer cases.
     const BufferConsumeScope scope = buffer_consume_scope(usage);
-    VkBufferMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = scope.access;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    BufferBarrierDesc barrier;
     barrier.buffer = dst;
-    barrier.offset = 0;
-    barrier.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, scope.stages, 0,
-                         0, nullptr, 1, &barrier, 0, nullptr);
+    barrier.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    barrier.dst_stage = scope.stages;
+    barrier.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dst_access = scope.access;
+    cmd_buffer_barrier(cmd, barrier);
   });
 
   staging_.push_back(std::move(staging));
@@ -571,6 +567,7 @@ Result<core::Image> upload_texture(const Device& device,
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
   VG_ASSIGN(core::Image texture, batch.add(desc));
   VG_TRY(batch.finish());
+  texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return texture;
 }
 

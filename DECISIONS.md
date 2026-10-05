@@ -34,8 +34,8 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-04 — Memory comes from volumetric_kit_core.** `Allocator`, `Buffer` and
   `Image` (formerly gfx's `Texture`) are the core's, so every buffer names its placement --
   `DeviceOnly`, `DeviceMapped` or `Staging` -- and nothing spills into slower memory. The
-  per-frame camera uniforms are device-mapped, or device-only written by a recorded update;
-  material factors are uploaded. See the dated entry below.
+  per-frame camera uniforms are device-only, written by a recorded update; material factors
+  are uploaded, one buffer for a model's materials. See the dated entry below.
 - **2026-10-04 — The device comes from volumetric_kit_core.** `Instance`,
   `PhysicalDeviceInfo`, `Device`, `AdoptedDevice` and `DeviceRequirements` are the core's;
   gfx brings `device_requirements()`. See the dated entry below.
@@ -100,7 +100,7 @@ gfx makes is the type recon binds, and the reverse.
   examples (the family's alias for `volumetric_kit::core`), including the
   core's headers directly. The names aliased before this entry -- `Status`,
   `Result`, the `VG_*` macros, `Instance`, `Device` and the rest of the device
-  entry below -- move the same way in a follow-up.
+  entry below -- move the same way in a follow-up; a `TODO` marks each alias.
 
 - **Every buffer names its placement, as the core's DECISIONS.md, "Where
   memory lives", sets out.** Vertex, index and uploaded buffers, textures and
@@ -111,31 +111,43 @@ gfx makes is the type recon binds, and the reverse.
   back through `Staging` memory the host reads cached (`HostAccess::Random`).
   `BufferDesc::mapped` and `ImageDesc::memory` are gone: the placement says
   whether a buffer is mapped, and every image is device-only.
-- **The per-frame camera uniforms are `DeviceMapped`, or device-only written
-  by a recorded update.** The host writes them each frame and shaders read
-  them in place, the core's use for device-mapped memory. That placement never
-  falls back to host memory, and a device may lack it or have a full BAR
-  window, so `make_frame_uniform_buffer` takes device-only memory then, and
-  `OwnedDescriptorSet::write_uniform` records a `vkCmdUpdateBuffer` and a
-  barrier to the shaders' uniform reads. The core's DECISIONS.md names a
-  `CommandBatch` for that fallback; a recorded update in the frame's own
-  command buffer is the same placement without a second submit each frame.
-  Because the update is a command, `PbrScene::set_camera` takes the frame's
-  command buffer and is called before rendering begins, on every device, so a
-  caller written on a device with device-mapped memory is right on one
-  without. `PbrSceneDesc::camera_memory` forces the fallback -- to keep the
-  uniforms out of a BAR window other libraries share, and so tests cover that
-  path on any device.
-- **Material factors are uploaded, not mapped.** They never change, so
-  `PbrMaterial::create` puts them in device-only memory through the
-  `UploadBatch` that uploads the model's meshes and maps, rather than taking
-  device-mapped memory that per-frame data needs more. It poisons the batch if
-  it fails after queuing the copy.
+- **The per-frame camera uniforms are device-only, written by a recorded
+  update.** `make_frame_uniform_buffer` makes them `DeviceOnly`, and
+  `OwnedDescriptorSet::write_uniform` records into the frame's command buffer
+  a barrier after earlier reads and writes of the block, a `vkCmdUpdateBuffer`,
+  and a barrier to the shaders' uniform reads. The core's DECISIONS.md names
+  `DeviceMapped` memory for data the host rewrites each frame, falling back to
+  device-only memory written by a `CommandBatch`; a recorded update in the
+  frame's own command buffer is that fallback without a second submit. A
+  first cut wrote device-mapped memory where the device had room and fell
+  back to the update where it did not, but a device may lack that memory, so
+  `PbrScene::set_camera` had to take the command buffer and be called before
+  rendering on every device anyway. The mapped path then bought nothing but
+  a second behavior: a memcpy applies to the whole submitted frame, a
+  recorded update to the work after it, so a frame rendering two views
+  through one slot saw the last camera on one device and each view's own on
+  another. One path behaves the same everywhere -- each `set_camera` reaches
+  the work recorded after it -- leaves the BAR window to libraries that need
+  it, and has no fallback whose failures need sorting. Its cost is one small
+  update and two barriers a frame.
+- **Material factors are uploaded, not mapped, one buffer for many.** They
+  never change, so `PbrMaterial::create_all` puts every material's factors in
+  one device-only buffer, each at a 256-byte offset (the largest
+  `minUniformBufferOffsetAlignment` Vulkan allows, so no device query), and
+  uploads it on the `UploadBatch` that uploads the model's meshes and maps:
+  one staging buffer and one copy, not one each per material.
+  `PbrModel::create` builds its materials that way. The materials share the
+  buffer, so it lives until the last of them is destroyed. The descriptor
+  pools and sets are allocated before the copy is queued, so a failed create
+  leaves the batch unchanged rather than poisoning it.
 - **Images record their layout.** The core's `Image` records the layout its
-  contents are in, for a library handed one. An `UploadBatch` image records
-  `SHADER_READ_ONLY_OPTIMAL`, the layout `finish` leaves it in; render targets
-  transition their attachments every frame and keep their images to
-  themselves, so they record none.
+  contents are in, for a library handed one, and asks whoever submits a
+  transition to record it after. An `UploadBatch` image so records
+  `UNDEFINED` until `finish` returns OK -- a batch discarded, poisoned or
+  failed never transitions it -- and its owner records
+  `SHADER_READ_ONLY_OPTIMAL` then, as `upload_texture`, `bake_ibl` and
+  `PbrModel` do. Render targets transition their attachments every frame and
+  keep their images to themselves, so they record none.
 - **Resources outlive their allocator.** Each holds the core's VMA state, so
   only the device must outlive gfx's buffers and images. `UploadBatch::finish`
   now hands its staging buffers to `Device::submit_single_time`, which keeps

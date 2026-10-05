@@ -30,6 +30,9 @@
 
 namespace volumetric_kit::gfx {
 
+// TODO: name these as the core does (core::Instance, vkc::Instance outside
+// gfx) and drop the aliases (DECISIONS.md, "Memory comes from
+// volumetric_kit_core").
 using core::Instance;
 using core::InstanceConfig;
 
