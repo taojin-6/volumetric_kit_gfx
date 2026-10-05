@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 
-#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -15,27 +14,10 @@
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/mip_chain.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
-
-// Full mip count for an extent: floor(log2(max(w, h))) + 1.
-uint32_t mip_levels_for(VkExtent2D extent) {
-  uint32_t max_dim = std::max(extent.width, extent.height);
-  uint32_t levels = 1;
-  while (max_dim > 1) {
-    max_dim >>= 1;
-    ++levels;
-  }
-  return levels;
-}
-
-// The texel extent of mip level `m` of `extent`: each dimension halved, floored
-// at 1. The single source of truth for the packing layout, so plan_upload's
-// size validation and record_upload's per-mip copy offsets cannot drift.
-VkExtent2D mip_extent(VkExtent2D extent, uint32_t m) {
-  return {std::max(extent.width >> m, 1u), std::max(extent.height >> m, 1u)};
-}
 
 // Shader stages that may sample the finished texture. Moving each level to
 // SHADER_READ makes the upload visible to vertex-texture fetch as well as
@@ -202,7 +184,7 @@ core::Status plan_upload(const core::Device& device,
         "upload_texture: format needs a sampler Y'CbCr conversion to be "
         "sampled");
   }
-  if (desc.mip_levels > mip_levels_for(desc.extent)) {
+  if (desc.mip_levels > mip_level_count(desc.extent)) {
     return core::Status::invalid_argument(
         "upload_texture: mip_levels exceeds the full mip chain for extent");
   }
@@ -210,7 +192,7 @@ core::Status plan_upload(const core::Device& device,
   // mip-major then layer, per-mip extents halved with a floor of 1.
   VkDeviceSize texels_per_layer = 0;
   for (uint32_t m = 0; m < desc.mip_levels; ++m) {
-    const VkExtent2D e = mip_extent(desc.extent, m);
+    const VkExtent2D e = mip_level_extent(desc.extent, m);
     texels_per_layer += VkDeviceSize{e.width} * e.height;
   }
   const VkDeviceSize expected = texels_per_layer * texel * desc.array_layers;
@@ -237,7 +219,7 @@ core::Status plan_upload(const core::Device& device,
 
   plan->texel = texel;
   plan->image_mips =
-      desc.generate_mips ? mip_levels_for(desc.extent) : desc.mip_levels;
+      desc.generate_mips ? mip_level_count(desc.extent) : desc.mip_levels;
 
   // Mip generation blits with a linear filter, so the format must additionally
   // support both blit endpoints and linear filtering; otherwise the blit is
@@ -254,66 +236,6 @@ core::Status plan_upload(const core::Device& device,
     }
   }
   return core::Status{};
-}
-
-// Blit mip 0 down a freshly copied single-layer chain, moving each finished
-// level to SHADER_READ as we pass it. On entry every level is TRANSFER_DST and
-// mip 0 holds the source pixels; on exit every level is SHADER_READ.
-void record_mip_chain(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
-                      uint32_t mip_levels) {
-  // Every barrier here is a single-mip transition on `image` sourced at the
-  // TRANSFER stage; a local helper stands in for the designated initializers
-  // C++17 lacks, so each is one call instead of a nine-line struct.
-  auto barrier = [&](uint32_t mip, VkImageLayout old_layout,
-                     VkImageLayout new_layout, VkPipelineStageFlags dst_stage,
-                     VkAccessFlags src_access, VkAccessFlags dst_access) {
-    ImageBarrierDesc b;
-    b.image = image;
-    b.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    b.dst_stage = dst_stage;
-    b.src_access = src_access;
-    b.dst_access = dst_access;
-    b.old_layout = old_layout;
-    b.new_layout = new_layout;
-    b.base_mip = mip;
-    b.mip_count = 1;
-    cmd_image_barrier(cmd, b);
-  };
-
-  int32_t mip_w = static_cast<int32_t>(extent.width);
-  int32_t mip_h = static_cast<int32_t>(extent.height);
-  for (uint32_t level = 1; level < mip_levels; ++level) {
-    // Source (level - 1): TRANSFER_DST -> TRANSFER_SRC for the blit read.
-    barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_ACCESS_TRANSFER_READ_BIT);
-
-    const int32_t dst_w = mip_w > 1 ? mip_w / 2 : 1;
-    const int32_t dst_h = mip_h > 1 ? mip_h / 2 : 1;
-    VkImageBlit blit{};
-    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
-    blit.srcOffsets[1] = {mip_w, mip_h, 1};
-    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-    blit.dstOffsets[1] = {dst_w, dst_h, 1};
-    vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                   VK_FILTER_LINEAR);
-
-    // Source level done being read: TRANSFER_SRC -> SHADER_READ.
-    barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kSampleStages,
-            VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-    mip_w = dst_w;
-    mip_h = dst_h;
-  }
-
-  // The last level was only ever a blit destination (never a source), so it is
-  // still TRANSFER_DST: move it to SHADER_READ too.
-  barrier(mip_levels - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kSampleStages,
-          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 }
 
 // Copy staging into every supplied (mip, layer), generate the mip chain when
@@ -337,7 +259,7 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
   std::vector<VkBufferImageCopy> copies(desc.mip_levels);
   VkDeviceSize offset = 0;
   for (uint32_t m = 0; m < desc.mip_levels; ++m) {
-    const VkExtent2D e = mip_extent(desc.extent, m);
+    const VkExtent2D e = mip_level_extent(desc.extent, m);
     copies[m].bufferOffset = offset;
     copies[m].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0,
                                   desc.array_layers};
@@ -351,7 +273,12 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
   // 3. Mip generation (validated single-layer, single-source-mip): blit the
   //    chain down from the copied mip 0; every level ends in SHADER_READ.
   if (desc.generate_mips && plan.image_mips > 1) {
-    record_mip_chain(cmd, image, desc.extent, plan.image_mips);
+    MipChainDesc mips;
+    mips.image = image;
+    mips.extent = desc.extent;
+    mips.mip_levels = plan.image_mips;
+    mips.dst_stages = kSampleStages;
+    cmd_generate_mips(cmd, mips);
     return;
   }
 

@@ -55,23 +55,6 @@ struct FragmentSpecialization {
   VkBool32 srgb_target;
 };
 
-// Whether a color-attachment format encodes sRGB on write. Only the 8-bit
-// formats can be color attachments; the compressed sRGB formats cannot.
-bool is_srgb(VkFormat format) {
-  switch (format) {
-    case VK_FORMAT_R8_SRGB:
-    case VK_FORMAT_R8G8_SRGB:
-    case VK_FORMAT_R8G8B8_SRGB:
-    case VK_FORMAT_B8G8R8_SRGB:
-    case VK_FORMAT_R8G8B8A8_SRGB:
-    case VK_FORMAT_B8G8R8A8_SRGB:
-    case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
-      return true;
-    default:
-      return false;
-  }
-}
-
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
 // process* (the reconstruction library, in its own repo) against these exact
 // bytes, so reordering or resizing assets::Vertex is a silent wire break in
@@ -142,7 +125,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   // decides the sRGB path.
   const FragmentSpecialization spec_data{
       kHybridMeshLit, kHybridMeshNormals,
-      is_srgb(layout.color_formats[0]) ? VK_TRUE : VK_FALSE};
+      is_srgb_attachment(layout.color_formats[0]) ? VK_TRUE : VK_FALSE};
   const VkSpecializationMapEntry spec_entries[3] = {
       {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
       {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},

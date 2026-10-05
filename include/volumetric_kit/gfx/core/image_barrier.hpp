@@ -78,4 +78,20 @@ struct ImageBarrierDesc {
 VG_CORE_API void cmd_image_barrier(VkCommandBuffer cmd,
                                    const ImageBarrierDesc& desc);
 
+/// @brief Record the transitions described by @p descs as one
+///        `vkCmdPipelineBarrier`.
+///
+/// The barrier's stage masks are the union of the descriptions'; each keeps
+/// its own image, range, layouts and access masks. A union only widens the
+/// waits, so batching transitions that end a pass together -- every level of
+/// a finished mip chain, or each plane of a picture -- is always safe.
+/// @param cmd    A command buffer in the recording state.
+/// @param descs  The transitions; each as @ref cmd_image_barrier takes it.
+/// @param count  The number of @p descs; 0 records nothing.
+/// @pre Each description meets @ref cmd_image_barrier's precondition
+///      (checked with `VKC_CHECK`).
+VG_CORE_API void cmd_image_barriers(VkCommandBuffer cmd,
+                                    const ImageBarrierDesc* descs,
+                                    uint32_t count);
+
 }  // namespace volumetric_kit::gfx

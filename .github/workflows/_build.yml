@@ -407,13 +407,16 @@ jobs:
           fi
           # 02_imgui drives the ui tier's ImGui overlay; 03_model drives the
           # profiler's per-pass GPU timestamps + debug labels (built-in cube, no
-          # asset needed). All run with validation on, through the same
+          # asset needed); 04_image converts and mip-maps a picture every frame
+          # through ImagePipeline. All run with validation on, through the same
           # surface → swapchain → present path.
           xvfb-run -a build/examples/example_01_triangle --frames 30 2>&1 \
             | tee example.log
           xvfb-run -a build/examples/example_02_imgui --frames 30 2>&1 \
             | tee -a example.log
           xvfb-run -a build/examples/example_03_model --frames 30 2>&1 \
+            | tee -a example.log
+          xvfb-run -a build/examples/example_04_image --frames 30 2>&1 \
             | tee -a example.log
           if grep -qE 'VUID-' example.log; then
             echo "::error::Vulkan validation errors from the windowed examples"

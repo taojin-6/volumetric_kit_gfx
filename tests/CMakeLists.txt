@@ -98,7 +98,8 @@ vg_discover_tests(vg_app_test TEST_PREFIX "app.")
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device
 # availability.
-add_executable(vg_camera_test camera_test.cpp camera_rig_test.cpp)
+add_executable(vg_camera_test camera_test.cpp camera_rig_test.cpp
+                              image_view_2d_test.cpp)
 target_link_libraries(vg_camera_test PRIVATE volumetric_kit::gfx_camera
                                              GTest::gtest_main)
 vg_target_warnings(vg_camera_test)
@@ -114,6 +115,7 @@ add_executable(
   gpu_mesh_test.cpp
   hybrid_mesh_pipeline_test.cpp
   ibl_test.cpp
+  image_pipeline_test.cpp
   live_mesh_test.cpp
   pbr_material_test.cpp
   pbr_model_test.cpp
@@ -123,6 +125,18 @@ target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
+# image_pipeline_test's producer: a compute pass writing a source plane, so the
+# update's barriers are checked against a writer in a stage of its own.
+vkc_compile_shaders(
+  vg_pipelines_test
+  OUTPUT_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/write_words.comp")
+target_compile_definitions(
+  vg_pipelines_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
 
 # assets tier: the format-neutral model is header-only, so its test (PointCloud)

@@ -23,6 +23,24 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   shaders via glslc/glslangValidator; the first shaders are `shaders/triangle.{vert,frag}`.
 - `core`: `cmd_buffer_barrier` / `BufferBarrierDesc`
   (`core/buffer_barrier.hpp`), the buffer counterpart of `cmd_image_barrier`.
+- `pipelines`: `ImagePipeline` and `ImageTexture` (`pipelines/image_pipeline.hpp`)
+  draw 2D pictures -- RGBA, grey, a color ramp, or NV12 from a decoder -- into
+  rectangles of a render target. Each update copies the source's planes (images
+  or buffers), converts them to display color in an `_SRGB` image and rebuilds
+  its mip chain, so a picture shrunk by window scaling or zoom averages in
+  linear light; draws minify trilinearly and magnify nearest or linear.
+- `camera`: `ImageView2D` (`camera/image_view_2d.hpp`), a pan-and-zoom view of
+  a 2D image in a viewport, mapping image coordinates to target pixels and
+  back.
+- `core`: `cmd_generate_mips`, `mip_level_count` and `mip_level_extent`
+  (`core/mip_chain.hpp`) build a mip chain on the GPU from level 0, for an
+  image filled any way; `UploadBatch`'s `generate_mips` uses them.
+- `core`: `cmd_image_barriers` (`core/image_barrier.hpp`) records several
+  image transitions as one `vkCmdPipelineBarrier`, under the union of their
+  stage masks; `cmd_generate_mips` hands a finished chain to the samplers
+  with it, in one barrier rather than one per level.
+- `examples/04_image`: a zone plate drawn through `ImagePipeline`, re-converted
+  every frame, with scroll-to-zoom, drag-to-pan and resize.
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.

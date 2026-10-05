@@ -16,7 +16,8 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_camera)
 add_library(volumetric_kit::gfx_camera ALIAS gfx_camera)
 
-target_sources(gfx_camera PRIVATE camera.cpp orbit_camera.cpp camera_rig.cpp)
+target_sources(gfx_camera PRIVATE camera.cpp orbit_camera.cpp camera_rig.cpp
+                                  image_view_2d.cpp)
 
 generate_export_header(
   gfx_camera

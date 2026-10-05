@@ -92,6 +92,71 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   ASSERT_TRUE(recorded.ok()) << recorded.message();
 }
 
+TEST_F(ImageBarrierTest, BatchesTransitionsIntoOneBarrier) {
+  // Two images and two mip ranges of one, as a finished mip chain hands its
+  // levels over: each keeps its own range, layouts and access masks, under
+  // the union of their stage masks.
+  vkc::ImageDesc desc;
+  desc.extent = {8, 8};
+  desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  desc.mip_levels = 4;
+  auto chain = allocator_->create_image(desc);
+  ASSERT_TRUE(chain.ok()) << chain.status().message();
+  desc.mip_levels = 1;
+  auto plain = allocator_->create_image(desc);
+  ASSERT_TRUE(plain.ok()) << plain.status().message();
+
+  const VkImage a = chain.value().handle();
+  const VkImage b = plain.value().handle();
+  auto recorded = device_->submit_single_time([a, b](VkCommandBuffer cmd) {
+    vg::ImageBarrierDesc to_dst[2];
+    for (vg::ImageBarrierDesc& d : to_dst) {
+      d.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+      d.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      d.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+      d.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+      d.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
+    to_dst[0].image = a;
+    to_dst[1].image = b;
+    vg::cmd_image_barriers(cmd, to_dst, 2);
+
+    // Levels 0..2 of the chain as a blit source, then every level and the
+    // other image to SHADER_READ: three ranges, two old layouts, one call.
+    vg::ImageBarrierDesc to_src = to_dst[0];
+    to_src.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    to_src.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_src.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
+    to_src.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_src.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_src.mip_count = 3;
+    vg::cmd_image_barrier(cmd, to_src);
+
+    vg::ImageBarrierDesc to_read[3];
+    for (vg::ImageBarrierDesc& d : to_read) {
+      d.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      d.dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+      d.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+      d.dst_access = VK_ACCESS_SHADER_READ_BIT;
+      d.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      d.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    to_read[0].image = a;
+    to_read[0].old_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_read[0].src_access = VK_ACCESS_TRANSFER_READ_BIT;
+    to_read[0].mip_count = 3;
+    to_read[1].image = a;
+    to_read[1].base_mip = 3;
+    to_read[1].mip_count = 1;
+    to_read[2].image = b;
+    vg::cmd_image_barriers(cmd, to_read, 3);
+    vg::cmd_image_barriers(cmd, to_read, 0);  // records nothing
+  });
+  ASSERT_TRUE(recorded.ok()) << recorded.message();
+}
+
 // new_layout has no valid default: cmd_image_barrier VKC_CHECKs it rather than
 // silently recording an UNDEFINED -> UNDEFINED no-op. The check fires before
 // any Vulkan call, so no device is needed; the "DeathTest" suffix runs it
