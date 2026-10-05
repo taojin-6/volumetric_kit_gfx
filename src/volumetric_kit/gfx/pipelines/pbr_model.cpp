@@ -98,7 +98,8 @@ PbrMaterialDesc pbr_material_desc(const assets::Material& material) {
   return desc;
 }
 
-Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
+Result<PbrModel> PbrModel::create(const Device& device,
+                                  core::Allocator& allocator,
                                   const PbrPipeline& pipeline,
                                   const assets::Model& model) {
   if (device.handle() == VK_NULL_HANDLE) {
@@ -146,9 +147,9 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
   fallback_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   fallback_desc.pixels = white_px;
   fallback_desc.size = sizeof(white_px);
-  VG_ASSIGN(Image white_tex, batch.add(fallback_desc));
+  VG_ASSIGN(core::Image white_tex, batch.add(fallback_desc));
   fallback_desc.pixels = flat_px;
-  VG_ASSIGN(Image flat_tex, batch.add(fallback_desc));
+  VG_ASSIGN(core::Image flat_tex, batch.add(fallback_desc));
   const size_t white = out.textures_.size();
   out.textures_.push_back(std::move(white_tex));
   const size_t flat = out.textures_.size();
@@ -184,7 +185,7 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     desc.pixels = rgba.data();
     desc.size = rgba.size();
     desc.generate_mips = true;
-    VG_ASSIGN(Image tex, batch.add(desc));
+    VG_ASSIGN(core::Image tex, batch.add(desc));
     image_tex[i] = out.textures_.size();
     out.textures_.push_back(std::move(tex));
   }

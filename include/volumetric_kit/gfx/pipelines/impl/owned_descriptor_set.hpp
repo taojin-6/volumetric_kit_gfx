@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -18,10 +18,6 @@
 namespace volumetric_kit::core {
 class Allocator;
 }  // namespace volumetric_kit::core
-
-namespace volumetric_kit::gfx {
-using core::Allocator;
-}  // namespace volumetric_kit::gfx
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -55,8 +51,8 @@ enum class FrameUniformMemory {
 /// @return The buffer -- mapped when device-mapped -- or
 ///         @ref Status::Code::InvalidArgument for a size outside those bounds,
 ///         or the allocator's failure for the device-only buffer.
-Result<Buffer> make_frame_uniform_buffer(
-    Allocator& allocator, VkDeviceSize size,
+Result<core::Buffer> make_frame_uniform_buffer(
+    core::Allocator& allocator, VkDeviceSize size,
     FrameUniformMemory memory = FrameUniformMemory::Prefer);
 
 /// @brief Owns the one-set descriptor resources the PBR set-0 / set-1 bindings
@@ -74,7 +70,8 @@ Result<Buffer> make_frame_uniform_buffer(
 /// empty and its accessors stay consistent with @ref valid.
 ///
 /// @code
-/// VG_ASSIGN(Buffer ubo, make_frame_uniform_buffer(allocator, sizeof(Block)));
+/// VG_ASSIGN(core::Buffer ubo,
+///           make_frame_uniform_buffer(allocator, sizeof(Block)));
 /// VG_ASSIGN(OwnedDescriptorSet owned,
 ///           OwnedDescriptorSet::create(device, std::move(ubo), layout, 3));
 /// owned.write_uniform(cmd, &block, sizeof(block));  // before rendering
@@ -95,7 +92,7 @@ class OwnedDescriptorSet {
   ///      (the typed caller validates its own views/sampler first).
   /// @return The bundle on success, or a non-OK @ref Status from pool / set
   ///         allocation; @p ubo is freed with it on failure.
-  static Result<OwnedDescriptorSet> create(VkDevice device, Buffer ubo,
+  static Result<OwnedDescriptorSet> create(VkDevice device, core::Buffer ubo,
                                            VkDescriptorSetLayout layout,
                                            uint32_t sampler_count);
 
@@ -146,7 +143,7 @@ class OwnedDescriptorSet {
   VkDescriptorSet descriptor_set() const noexcept { return set_.handle(); }
 
   /// @return The uniform buffer bound at binding 0.
-  const Buffer& uniform_buffer() const noexcept { return ubo_; }
+  const core::Buffer& uniform_buffer() const noexcept { return ubo_; }
 
   /// @return `true` if this owns a built set.
   bool valid() const noexcept { return pool_.valid(); }
@@ -154,7 +151,7 @@ class OwnedDescriptorSet {
  private:
   DescriptorPool pool_;  // one-set pool that owns set_'s lifetime
   DescriptorSet set_;  // the allocated set: UBO at binding 0 + the owner's maps
-  Buffer ubo_;         // the uniform buffer the set points at
+  core::Buffer ubo_;   // the uniform buffer the set points at
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

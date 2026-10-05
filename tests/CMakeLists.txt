@@ -46,7 +46,6 @@ add_executable(
   unique_handle_test.cpp
   retire_list_test.cpp
   retire_queue_test.cpp
-  allocator_test.cpp
   shader_test.cpp
   descriptor_test.cpp
   graphics_pipeline_test.cpp

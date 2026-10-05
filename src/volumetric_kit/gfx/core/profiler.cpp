@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
@@ -67,7 +67,7 @@ struct Profiler::Impl {
   // QueryPool is create-only (no public default ctor), so hold it optionally;
   // engaged only where gpu_timing is supported.
   std::optional<QueryPool> query_pool;
-  const Allocator* allocator = nullptr;  // borrowed; sampled at end_frame
+  const core::Allocator* allocator = nullptr;  // borrowed; sampled at end_frame
 
   std::vector<SlotFrame> slots;  // one per in-flight slot
 
@@ -221,7 +221,7 @@ Profiler::Scope& Profiler::Scope::operator=(Scope&& other) noexcept {
   return *this;
 }
 
-void Profiler::set_memory_source(const Allocator* allocator) noexcept {
+void Profiler::set_memory_source(const core::Allocator* allocator) noexcept {
   if (impl_) {
     impl_->allocator = allocator;
   }
@@ -283,7 +283,7 @@ void Profiler::end_frame() noexcept {
   uint64_t used = 0;
   uint64_t budget = 0;
   if (d.allocator != nullptr) {
-    const MemoryStats stats = d.allocator->memory_stats();
+    const core::MemoryStats stats = d.allocator->memory_stats();
     for (uint32_t i = 0; i < stats.heap_count; ++i) {
       used += stats.heaps[i].usage_bytes;
       budget += stats.heaps[i].budget_bytes;

@@ -10,7 +10,8 @@
 
 namespace volumetric_kit::gfx::pipelines {
 
-GpuMesh::GpuMesh(Buffer vertices, Buffer indices, uint32_t index_count) noexcept
+GpuMesh::GpuMesh(core::Buffer vertices, core::Buffer indices,
+                 uint32_t index_count) noexcept
     : vertices_(std::move(vertices)),
       indices_(std::move(indices)),
       index_count_(index_count) {}
@@ -60,12 +61,12 @@ Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
   vertex_desc.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
   // A failed first add records nothing, so the batch stays usable (VG_ASSIGN
   // returns without poisoning it).
-  VG_ASSIGN(Buffer vertices, batch.add_buffer(vertex_desc));
+  VG_ASSIGN(core::Buffer vertices, batch.add_buffer(vertex_desc));
   BufferUploadDesc index_desc;
   index_desc.data = mesh.indices.data();
   index_desc.size = VkDeviceSize{mesh.indices.size()} * sizeof(uint32_t);
   index_desc.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  Result<Buffer> indices = batch.add_buffer(index_desc);
+  Result<core::Buffer> indices = batch.add_buffer(index_desc);
   if (!indices.ok()) {
     // The vertex copy is already recorded into `vertices`, which unwinds (and
     // frees) as we return: poison the batch so a later finish() discards that
@@ -77,7 +78,7 @@ Result<GpuMesh> upload_mesh(UploadBatch& batch, const assets::Mesh& mesh) {
                  static_cast<uint32_t>(mesh.indices.size()));
 }
 
-Result<GpuMesh> upload_mesh(const Device& device, Allocator& allocator,
+Result<GpuMesh> upload_mesh(const Device& device, core::Allocator& allocator,
                             const assets::Mesh& mesh) {
   // The one-mesh batch: record both buffers, one submit, one fence wait. A
   // failed record leaves the batch to its destructor, which discards the

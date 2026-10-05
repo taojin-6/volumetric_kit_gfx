@@ -7,7 +7,7 @@
 #include <optional>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -19,21 +19,22 @@ constexpr VkDeviceSize kMaxUpdateBytes = 65536;
 
 }  // namespace
 
-Result<Buffer> make_frame_uniform_buffer(Allocator& allocator,
-                                         VkDeviceSize size,
-                                         FrameUniformMemory memory) {
+Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
+                                               VkDeviceSize size,
+                                               FrameUniformMemory memory) {
   if (size == 0 || size % 4 != 0 || size > kMaxUpdateBytes) {
     return Status::invalid_argument(
         "make_frame_uniform_buffer: size must be a non-zero multiple of 4, at "
         "most 65536 bytes");
   }
-  BufferDesc desc;
+  core::BufferDesc desc;
   desc.size = size;
   if (memory == FrameUniformMemory::Prefer) {
     desc.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    desc.memory = MemoryUsage::DeviceMapped;
-    desc.host_access = HostAccess::SequentialWrite;  // written, never read
-    Result<Buffer> mapped = allocator.create_buffer(desc);
+    desc.memory = core::MemoryUsage::DeviceMapped;
+    desc.host_access =
+        core::HostAccess::SequentialWrite;  // written, never read
+    Result<core::Buffer> mapped = allocator.create_buffer(desc);
     if (mapped.ok()) {
       return mapped;
     }
@@ -48,12 +49,12 @@ Result<Buffer> make_frame_uniform_buffer(Allocator& allocator,
   }
   desc.usage =
       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  desc.memory = MemoryUsage::DeviceOnly;
+  desc.memory = core::MemoryUsage::DeviceOnly;
   return allocator.create_buffer(desc);
 }
 
 Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
-    VkDevice device, Buffer ubo, VkDescriptorSetLayout layout,
+    VkDevice device, core::Buffer ubo, VkDescriptorSetLayout layout,
     uint32_t sampler_count) {
   // One-set pool: the UBO + the owner's combined-image-samplers.
   const VkDescriptorPoolSize sizes[2] = {

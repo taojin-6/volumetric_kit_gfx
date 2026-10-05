@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
@@ -140,7 +140,7 @@ TEST_F(DeviceTest, AdoptRefusesAShareWithoutDynamicRendering) {
 // rather than record barriers its queue may not support or passes it did not
 // enable dynamic rendering for.
 TEST_F(ForeignDeviceTest, RendererEntryPointsRefuseIt) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto batch = vg::UploadBatch::begin(*device_, allocator.value());

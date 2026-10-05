@@ -19,7 +19,7 @@ struct SceneUbo {
 
 }  // namespace
 
-Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
+Result<PbrScene> PbrScene::create(VkDevice device, core::Allocator& allocator,
                                   VkDescriptorSetLayout scene_layout,
                                   const PbrSceneDesc& desc,
                                   uint32_t frames_in_flight) {
@@ -41,8 +41,9 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
   PbrScene scene;
   scene.slots_.reserve(frames_in_flight);
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VG_ASSIGN(Buffer ubo, make_frame_uniform_buffer(allocator, sizeof(SceneUbo),
-                                                    desc.camera_memory));
+    VG_ASSIGN(core::Buffer ubo,
+              make_frame_uniform_buffer(allocator, sizeof(SceneUbo),
+                                        desc.camera_memory));
     VG_ASSIGN(
         OwnedDescriptorSet resources,
         OwnedDescriptorSet::create(device, std::move(ubo), scene_layout, 3));

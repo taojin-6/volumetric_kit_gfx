@@ -7,8 +7,8 @@
 #include <optional>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
@@ -30,7 +30,7 @@ class PbrMaterialTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
 
@@ -86,10 +86,10 @@ class PbrMaterialTest : public VulkanDeviceTest {
     return material;
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
   std::optional<vg::Sampler> sampler_;
-  std::optional<vg::Image> tex_;
+  std::optional<vkc::Image> tex_;
 };
 
 }  // namespace

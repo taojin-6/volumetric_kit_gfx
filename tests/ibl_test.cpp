@@ -12,9 +12,9 @@
 
 #include <glm/vec3.hpp>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -52,7 +52,7 @@ class IblTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -60,7 +60,7 @@ class IblTest : public VulkanDeviceTest {
   // Copy every (mip, layer) of `texture` (left in SHADER_READ_ONLY_OPTIMAL by
   // the bake) into host memory, packed mip-major like ImageUploadDesc. Fails
   // the current test and returns empty on any error.
-  std::vector<uint8_t> read_back(const vg::Image& texture, uint32_t layers,
+  std::vector<uint8_t> read_back(const vkc::Image& texture, uint32_t layers,
                                  uint32_t texel_bytes) {
     const uint32_t mips = texture.mip_levels();
     const VkExtent2D extent{texture.width(), texture.height()};
@@ -71,11 +71,11 @@ class IblTest : public VulkanDeviceTest {
       total += VkDeviceSize{w} * h * layers * texel_bytes;
     }
 
-    vg::BufferDesc rb;
+    vkc::BufferDesc rb;
     rb.size = total;
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    rb.memory = vg::MemoryUsage::Staging;
-    rb.host_access = vg::HostAccess::Random;
+    rb.memory = vkc::MemoryUsage::Staging;
+    rb.host_access = vkc::HostAccess::Random;
     auto readback = allocator_->create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
@@ -123,7 +123,7 @@ class IblTest : public VulkanDeviceTest {
     return bytes;
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace

@@ -20,10 +20,6 @@ namespace volumetric_kit::core {
 class Allocator;
 }  // namespace volumetric_kit::core
 
-namespace volumetric_kit::gfx {
-using core::Allocator;
-}  // namespace volumetric_kit::gfx
-
 namespace volumetric_kit::gfx::pipelines {
 
 /// @brief The image-based-lighting maps bound into a @ref PbrScene (set 0,
@@ -97,7 +93,7 @@ class VG_PIPELINES_API PbrScene {
   ///         Status from buffer / pool / set allocation; device-mapped memory
   ///         the device lacks or has no room for falls back rather than
   ///         failing).
-  static Result<PbrScene> create(VkDevice device, Allocator& allocator,
+  static Result<PbrScene> create(VkDevice device, core::Allocator& allocator,
                                  VkDescriptorSetLayout scene_layout,
                                  const PbrSceneDesc& desc,
                                  uint32_t frames_in_flight = 1);

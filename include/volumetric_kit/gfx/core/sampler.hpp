@@ -48,7 +48,7 @@ struct SamplerDesc {
 /// @brief Owns a `VkSampler` and frees it via @ref UniqueHandle.
 ///
 /// A sampler is a pure device object (no backing memory), independent of any
-/// one texture: bind it alongside a sampled @ref Image in a descriptor set.
+/// one texture: bind it alongside a sampled `core::Image` in a descriptor set.
 ///
 /// @warning The @p device passed to @ref create must outlive the sampler: the
 ///          destructor frees through it, so destroying the device first is

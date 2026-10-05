@@ -33,7 +33,6 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
-using core::Allocator;
 using core::Device;
 
 /// @brief Construction parameters for a @ref Profiler.
@@ -148,7 +147,7 @@ class VG_CORE_API Profiler {
   /// @param allocator  The allocator to sample at each @ref end_frame, or
   ///                   `nullptr` to report zero memory. Borrowed; must outlive
   ///                   the profiler.
-  void set_memory_source(const Allocator* allocator) noexcept;
+  void set_memory_source(const core::Allocator* allocator) noexcept;
 
   /// @brief Begin a frame: publish the frame this slot last held, reset its
   ///        timestamp range, and start the frame's CPU clock.

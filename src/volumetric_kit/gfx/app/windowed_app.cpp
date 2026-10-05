@@ -16,13 +16,13 @@ namespace volumetric_kit::gfx::app {
 // allocator -> swapchain -> frame loop, all on whatever device `state` holds.
 Status WindowedApp::finish_bring_up(State& state,
                                     const WindowedAppConfig& config) {
-  VG_ASSIGN(Allocator allocator,
-            Allocator::create(state.instance_handle, *state.device));
+  VG_ASSIGN(core::Allocator allocator,
+            core::Allocator::create(state.instance_handle, *state.device));
   state.allocator.emplace(std::move(allocator));
 
   // A depth-configured swapchain allocates its per-image depth attachments
   // through the allocator; a color-only one takes none.
-  Allocator* depth_allocator =
+  core::Allocator* depth_allocator =
       config.swapchain.depth_format != VK_FORMAT_UNDEFINED ? &*state.allocator
                                                            : nullptr;
   VG_ASSIGN(windowing::Swapchain swapchain,

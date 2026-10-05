@@ -16,7 +16,7 @@
 
 #include <glm/vec3.hpp>
 
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -29,7 +29,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-using core::Allocator;
 using core::Device;
 class UploadBatch;
 }  // namespace volumetric_kit::gfx
@@ -90,7 +89,7 @@ VG_PIPELINES_API glm::vec3 cube_face_direction(int face, float u,
 /// move-assign into.
 ///
 /// @warning The device passed to @ref bake_ibl must outlive these maps (see
-///          @ref Image / @ref Sampler).
+///          `core::Image` / @ref Sampler).
 ///
 /// @code
 /// Result<pipelines::IblMaps> ibl = pipelines::bake_ibl(device, alloc, sky);
@@ -128,9 +127,9 @@ struct IblMaps {
   IblMaps(const IblMaps&) = delete;
   IblMaps& operator=(const IblMaps&) = delete;
 
-  Image irradiance;  ///< Diffuse irradiance cube (RGBA16F, single mip).
-  Image prefilter;   ///< Prefiltered specular cube (RGBA16F, mipped).
-  Image brdf_lut;    ///< 2D RG16F BRDF integration LUT.
+  core::Image irradiance;  ///< Diffuse irradiance cube (RGBA16F, single mip).
+  core::Image prefilter;   ///< Prefiltered specular cube (RGBA16F, mipped).
+  core::Image brdf_lut;    ///< 2D RG16F BRDF integration LUT.
   /// Filters all three maps: trilinear, `CLAMP_TO_EDGE` on every axis.
   std::optional<Sampler> sampler;
   /// The prefilter's highest mip index (mip count - 1); pass to
@@ -171,8 +170,9 @@ struct IblMaps {
 ///         Status::Code::InvalidArgument for a zero @p size or @p samples
 ///         (checked before anything records, leaving @p batch unchanged) or an
 ///         empty batch, plus everything @ref UploadBatch::add rejects.
-VG_PIPELINES_API Result<Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
-                                             uint32_t samples = 256);
+VG_PIPELINES_API Result<core::Image> bake_brdf_lut(UploadBatch& batch,
+                                                   uint32_t size,
+                                                   uint32_t samples = 256);
 
 /// @brief Integrate the BRDF LUT and upload it in one blocking submit.
 ///
@@ -188,10 +188,10 @@ VG_PIPELINES_API Result<Image> bake_brdf_lut(UploadBatch& batch, uint32_t size,
 ///         @ref Status::Code::InvalidArgument for a null device or a zero
 ///         @p size or @p samples; otherwise whatever the batch's begin / add /
 ///         finish steps report.
-VG_PIPELINES_API Result<Image> bake_brdf_lut(const Device& device,
-                                             Allocator& allocator,
-                                             uint32_t size,
-                                             uint32_t samples = 256);
+VG_PIPELINES_API Result<core::Image> bake_brdf_lut(const Device& device,
+                                                   core::Allocator& allocator,
+                                                   uint32_t size,
+                                                   uint32_t samples = 256);
 
 /// @brief Convolve @p environment into the full IBL texture set: the diffuse
 ///        irradiance cube, the roughness-prefiltered specular chain, and the
@@ -217,7 +217,7 @@ VG_PIPELINES_API Result<Image> bake_brdf_lut(const Device& device,
 ///         success, or a non-OK @ref Status (a backend Status from the
 ///         sampler, upload, or submit step).
 VG_PIPELINES_API Result<IblMaps> bake_ibl(const Device& device,
-                                          Allocator& allocator,
+                                          core::Allocator& allocator,
                                           const EnvironmentSampler& environment,
                                           const IblBakeDesc& desc = {});
 

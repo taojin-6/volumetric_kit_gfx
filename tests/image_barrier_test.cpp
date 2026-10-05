@@ -12,8 +12,8 @@
 #include <optional>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -33,12 +33,12 @@ class ImageBarrierTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -47,7 +47,7 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   // A four-layer 2D array image, transitioned in per-range steps: layers 1..2
   // first, then the outer layers, then the whole image at once through the
   // remaining-mips/layers defaults.
-  vg::ImageDesc desc;
+  vkc::ImageDesc desc;
   desc.extent = {8, 8};
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;

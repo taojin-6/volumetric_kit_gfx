@@ -13,8 +13,8 @@
 #include <string>
 #include <string_view>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -56,10 +56,11 @@ inline Status validate_depth_only_format(VkFormat format,
 /// @param extent     Attachment size in texels.
 /// @param format     A depth-only format (validate with @ref
 ///                   validate_depth_only_format first).
-/// @return The depth @ref Image, or a propagated allocation failure.
-inline Result<Image> make_depth_attachment(Allocator& allocator,
-                                           VkExtent2D extent, VkFormat format) {
-  ImageDesc desc;
+/// @return The depth `core::Image`, or a propagated allocation failure.
+inline Result<core::Image> make_depth_attachment(core::Allocator& allocator,
+                                                 VkExtent2D extent,
+                                                 VkFormat format) {
+  core::ImageDesc desc;
   desc.extent = extent;
   desc.format = format;
   desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;

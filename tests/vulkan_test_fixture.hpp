@@ -37,6 +37,7 @@
 #include "volumetric_kit/gfx/core/sync.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 
 class VulkanDeviceTest : public ::testing::Test {
  protected:

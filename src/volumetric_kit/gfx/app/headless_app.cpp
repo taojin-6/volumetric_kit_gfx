@@ -43,8 +43,8 @@ Result<HeadlessApp> HeadlessApp::create(const HeadlessAppConfig& config) {
   VG_ASSIGN(Device device, Device::create(*state->instance, physical, reqs));
   state->device.emplace(std::move(device));
 
-  VG_ASSIGN(Allocator allocator,
-            Allocator::create(state->instance->handle(), *state->device));
+  VG_ASSIGN(core::Allocator allocator,
+            core::Allocator::create(state->instance->handle(), *state->device));
   state->allocator.emplace(std::move(allocator));
 
   HeadlessApp app;

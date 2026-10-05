@@ -64,15 +64,15 @@
 #include "common/glfw_surface.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -89,6 +89,7 @@
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 namespace assets = volumetric_kit::gfx::assets;
 namespace camera = volumetric_kit::gfx::camera;
@@ -327,7 +328,7 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
 // meshes, material maps, materials (set 1), and draw list -- comes from
 // pipelines::PbrModel::create.
 pipelines::PbrScene make_pbr_scene(const vg::Device& device,
-                                   vg::Allocator& alloc,
+                                   vkc::Allocator& alloc,
                                    const pipelines::PbrPipeline& pipeline,
                                    const pipelines::IblMaps& ibl,
                                    uint32_t frames_in_flight, bool* ok) {
@@ -367,8 +368,8 @@ glm::vec3 sky_color(const glm::vec3& dir) {
 // with the IBL bake) and upload them through the core cube-upload path in one
 // submit. Stores linear HDR color in a float cube (the skybox shader tone-maps
 // it on output).
-vg::Image make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
-                        uint32_t size, bool* ok) {
+vkc::Image make_sky_cube(const vg::Device& device, vkc::Allocator& alloc,
+                         uint32_t size, bool* ok) {
   // RGBA16F (half) pixels: 16-bit float filters on the broad device set (incl.
   // MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
   // lack. Unclamped HDR (the skybox tone-maps on output); 2 uint32/texel,
@@ -412,7 +413,7 @@ struct SkyboxPush {
 // The environment cubemap plus the pipeline/descriptor that draws it.
 struct Skybox {
   std::optional<vg::Sampler> sampler;  // no public default ctor (see #47)
-  vg::Image cube;
+  vkc::Image cube;
   vg::GraphicsPipeline pipeline;
   vg::DescriptorPool pool;
   vg::DescriptorSet set;  // set 0: the samplerCube
@@ -432,7 +433,7 @@ vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
 }
 
 // Bake the environment cube + build the skybox pipeline and its descriptor set.
-Skybox setup_skybox(const vg::Device& device, vg::Allocator& alloc,
+Skybox setup_skybox(const vg::Device& device, vkc::Allocator& alloc,
                     const vg::RenderTargetLayout& layout, bool* ok) {
   *ok = true;  // output flag; cleared on the first failure below
   Skybox s;

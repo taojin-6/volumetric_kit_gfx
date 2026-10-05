@@ -14,7 +14,7 @@
 
 #include <glm/mat4x4.hpp>
 
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
@@ -28,7 +28,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-using core::Allocator;
 using core::Device;
 namespace assets {
 struct Material;
@@ -142,7 +141,8 @@ class VG_PIPELINES_API PbrModel {
   ///      with domain @ref Status::Code::InvalidArgument.
   /// @return The model on success, or a non-OK @ref Status (a backend
   ///         Status from the upload, sampler, or material step).
-  static Result<PbrModel> create(const Device& device, Allocator& allocator,
+  static Result<PbrModel> create(const Device& device,
+                                 core::Allocator& allocator,
                                  const PbrPipeline& pipeline,
                                  const assets::Model& model);
 
@@ -194,9 +194,9 @@ class VG_PIPELINES_API PbrModel {
   // they name -- tidy rather than required: Vulkan lets a not-in-flight
   // descriptor set outlive its resources, so any order is legal once the device
   // is idle (which the caller ensures before teardown).
-  std::vector<GpuMesh> meshes_;     // parallel to Model::meshes
-  std::vector<Image> textures_;     // every uploaded map + the two fallbacks
-  std::optional<Sampler> sampler_;  // filters every material map
+  std::vector<GpuMesh> meshes_;        // parallel to Model::meshes
+  std::vector<core::Image> textures_;  // every uploaded map + the two fallbacks
+  std::optional<Sampler> sampler_;     // filters every material map
   std::vector<PbrMaterial> materials_;  // parallel to Model::materials, then
                                         // the fallback material last
   std::vector<PbrDraw> draws_;  // borrows meshes_ + materials_ (stable: vector

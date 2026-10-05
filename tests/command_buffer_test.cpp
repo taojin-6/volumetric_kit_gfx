@@ -5,7 +5,7 @@
 
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -66,14 +66,14 @@ TEST_F(CommandTest, BufferReRecordsAcrossBeginEndCycles) {
 // Proves CommandPool + CommandBuffer + Fence + Allocator compose into a real
 // CPU -> GPU -> CPU round trip.
 TEST_F(CommandTest, RecordFillSubmitReadback) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
-  vg::BufferDesc desc;
+  vkc::BufferDesc desc;
   desc.size = 64;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  desc.memory = vg::MemoryUsage::Staging;
-  desc.host_access = vg::HostAccess::Random;
+  desc.memory = vkc::MemoryUsage::Staging;
+  desc.host_access = vkc::HostAccess::Random;
   auto buffer = allocator.value().create_buffer(desc);
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
 

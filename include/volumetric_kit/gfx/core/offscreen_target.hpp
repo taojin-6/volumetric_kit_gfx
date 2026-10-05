@@ -7,9 +7,9 @@
 /// @brief A headless render target: a device-local color image (with an
 ///        optional depth image) and a host-visible readback buffer.
 
-#include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -19,8 +19,6 @@ class Allocator;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-using core::Allocator;
 
 /// @brief Parameters for @ref OffscreenTarget::create.
 struct OffscreenTargetDesc {
@@ -54,9 +52,9 @@ struct OffscreenTargetDesc {
 /// unchanged.
 ///
 /// @warning The device the @p allocator passed to @ref create allocates on
-///          must outlive the target: the owned @ref Image / @ref Buffer free
-///          through it (the allocator need not). Retire the target ahead of
-///          device teardown.
+///          must outlive the target: the owned `core::Image` / `core::Buffer`
+///          free through it (the allocator need not). Retire the target ahead
+///          of device teardown.
 ///
 /// @code
 /// Result<OffscreenTarget> rt = OffscreenTarget::create(
@@ -89,7 +87,7 @@ class VG_CORE_API OffscreenTarget {
   ///           @ref Status::Code::InvalidArgument, and a combined depth/stencil
   ///           one @ref Status::Code::Unsupported (depth-only for now);
   ///         - a failed image/buffer allocation propagates its @ref Status.
-  static Result<OffscreenTarget> create(Allocator& allocator,
+  static Result<OffscreenTarget> create(core::Allocator& allocator,
                                         const OffscreenTargetDesc& desc);
 
   ~OffscreenTarget() = default;
@@ -153,9 +151,9 @@ class VG_CORE_API OffscreenTarget {
   bool valid() const noexcept { return color_.valid(); }
 
  private:
-  Image color_;
-  Image depth_;      // empty when created without a depth_format
-  Buffer readback_;  // empty when created without readback
+  core::Image color_;
+  core::Image depth_;      // empty when created without a depth_format
+  core::Buffer readback_;  // empty when created without readback
 };
 
 }  // namespace volumetric_kit::gfx

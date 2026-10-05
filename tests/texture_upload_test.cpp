@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -35,7 +35,7 @@ class TextureUploadTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -51,11 +51,11 @@ class TextureUploadTest : public VulkanDeviceTest {
                                              uint32_t texel_bytes) {
     const VkDeviceSize bytes = VkDeviceSize{mip_ext.width} * mip_ext.height *
                                layer_count * texel_bytes;
-    vg::BufferDesc rb;
+    vkc::BufferDesc rb;
     rb.size = bytes;
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    rb.memory = vg::MemoryUsage::Staging;
-    rb.host_access = vg::HostAccess::Random;
+    rb.memory = vkc::MemoryUsage::Staging;
+    rb.host_access = vkc::HostAccess::Random;
     auto readback = allocator_->create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
@@ -89,7 +89,7 @@ class TextureUploadTest : public VulkanDeviceTest {
     return std::vector<std::uint8_t>(mapped, mapped + bytes);
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -118,11 +118,11 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   // Copy the uploaded image back into a staging buffer and confirm the
   // bytes survived the staging -> image -> readback round trip (proving the
   // copy and the layout transitions landed the data correctly).
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = src.size();
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::Staging;
-  rb.host_access = vg::HostAccess::Random;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
@@ -355,11 +355,11 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
 
   // Read the last face back: proves the per-layer buffer offsets landed each
   // face in its own layer, not just that the submit succeeded.
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = kFaceBytes;
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::Staging;
-  rb.host_access = vg::HostAccess::Random;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
@@ -575,7 +575,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   EXPECT_TRUE(batch.value().valid());
 
-  std::vector<vg::Image> textures;
+  std::vector<vkc::Image> textures;
   for (int t = 0; t < 3; ++t) {
     auto texture = batch.value().add(small_desc(src[t]));
     ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -685,7 +685,7 @@ TEST_F(TextureUploadTest, BatchSelfMoveAssignIsSafe) {
 
 TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
   const std::array<std::uint8_t, 16> px{};
-  std::vector<vg::Image> textures;
+  std::vector<vkc::Image> textures;
   {
     auto batch = vg::UploadBatch::begin(*device_, *allocator_);
     ASSERT_TRUE(batch.ok()) << batch.status().message();
@@ -779,11 +779,11 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
 
   // Copy back into a staging buffer and confirm the bytes survived the
   // staging -> device-local -> readback round trip.
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = src.size();
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::Staging;
-  rb.host_access = vg::HostAccess::Random;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 

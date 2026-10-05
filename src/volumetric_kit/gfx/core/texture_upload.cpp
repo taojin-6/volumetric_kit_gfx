@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 
@@ -115,14 +115,14 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
 // @p src, written once front-to-back (write-combined where the device has it)
 // -- the single recipe both add() (pixels) and add_buffer() (bytes) stage their
 // source through.
-Result<Buffer> make_staging(Allocator& allocator, const void* src,
-                            VkDeviceSize size) {
-  BufferDesc desc;
+Result<core::Buffer> make_staging(core::Allocator& allocator, const void* src,
+                                  VkDeviceSize size) {
+  core::BufferDesc desc;
   desc.size = size;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = MemoryUsage::Staging;
-  desc.host_access = HostAccess::SequentialWrite;
-  VG_ASSIGN(Buffer staging, allocator.create_buffer(desc));
+  desc.memory = core::MemoryUsage::Staging;
+  desc.host_access = core::HostAccess::SequentialWrite;
+  VG_ASSIGN(core::Buffer staging, allocator.create_buffer(desc));
   std::memcpy(staging.mapped(), src, size);
   return staging;
 }
@@ -367,7 +367,7 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
 }  // namespace
 
 Result<UploadBatch> UploadBatch::begin(const Device& device,
-                                       Allocator& allocator) {
+                                       core::Allocator& allocator) {
   // A device made for another library may lack what the batch's barriers and
   // the renderer's later reads of its resources need -- a graphics queue
   // above all. Nothing is allocated until an add, nor recorded until finish().
@@ -413,7 +413,7 @@ UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   return *this;
 }
 
-Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
+Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
   if (!valid()) {
     return Status::invalid_argument(
         "UploadBatch::add on an empty batch (begin one first; a batch is "
@@ -422,7 +422,8 @@ Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
   UploadPlan plan;
   VG_TRY(plan_upload(*device_, desc, &plan));
 
-  VG_ASSIGN(Buffer staging, make_staging(*allocator_, desc.pixels, desc.size));
+  VG_ASSIGN(core::Buffer staging,
+            make_staging(*allocator_, desc.pixels, desc.size));
 
   // Destination: device-local sampled image. SAMPLED to read it in shaders,
   // TRANSFER_DST for the staging copy, and TRANSFER_SRC so the mip-chain blits
@@ -430,7 +431,7 @@ Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
   // the finished texture stays copyable/blittable (readback, screenshots,
   // re-upload) rather than that capability hinging on whether mips were asked
   // for.
-  ImageDesc image_desc;
+  core::ImageDesc image_desc;
   image_desc.extent = desc.extent;
   image_desc.format = desc.format;
   image_desc.mip_levels = plan.image_mips;
@@ -439,7 +440,7 @@ Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
   image_desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  VG_ASSIGN(Image texture, allocator_->create_image(image_desc));
+  VG_ASSIGN(core::Image texture, allocator_->create_image(image_desc));
   // The layout finish() leaves every level in; the image is unusable until
   // then, as the batch's resources are.
   texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -455,7 +456,7 @@ Result<Image> UploadBatch::add(const ImageUploadDesc& desc) {
   return texture;
 }
 
-Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
+Result<core::Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   if (!valid()) {
     return Status::invalid_argument(
         "UploadBatch::add_buffer on an empty batch (begin one first; a batch "
@@ -472,15 +473,16 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
         "upload_buffer: usage must name at least one buffer usage");
   }
 
-  VG_ASSIGN(Buffer staging, make_staging(*allocator_, desc.data, desc.size));
+  VG_ASSIGN(core::Buffer staging,
+            make_staging(*allocator_, desc.data, desc.size));
 
   // Destination: device-only memory, TRANSFER_DST for the staging copy plus
   // the caller's usage.
-  BufferDesc dst_desc;
+  core::BufferDesc dst_desc;
   dst_desc.size = desc.size;
   dst_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | desc.usage;
-  dst_desc.memory = MemoryUsage::DeviceOnly;
-  VG_ASSIGN(Buffer buffer, allocator_->create_buffer(dst_desc));
+  dst_desc.memory = core::MemoryUsage::DeviceOnly;
+  VG_ASSIGN(core::Buffer buffer, allocator_->create_buffer(dst_desc));
 
   // Everything that can fail has, so a failed add above leaves the batch
   // unchanged and usable.
@@ -539,7 +541,8 @@ Status UploadBatch::finish() {
   const Device* device = device_;
   std::vector<std::function<void(VkCommandBuffer)>> records =
       std::move(records_);
-  auto staging = std::make_shared<std::vector<Buffer>>(std::move(staging_));
+  auto staging =
+      std::make_shared<std::vector<core::Buffer>>(std::move(staging_));
   device_ = nullptr;
   allocator_ = nullptr;
   records_.clear();
@@ -559,23 +562,25 @@ Status UploadBatch::finish() {
       std::move(staging));
 }
 
-Result<Image> upload_texture(const Device& device, Allocator& allocator,
-                             const ImageUploadDesc& desc) {
+Result<core::Image> upload_texture(const Device& device,
+                                   core::Allocator& allocator,
+                                   const ImageUploadDesc& desc) {
   // The one-texture batch: exactly the shared validate/record path, one
   // submit, one fence wait. A failed add leaves the batch to its destructor,
   // which discards the never-submitted command buffer.
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(Image texture, batch.add(desc));
+  VG_ASSIGN(core::Image texture, batch.add(desc));
   VG_TRY(batch.finish());
   return texture;
 }
 
-Result<Buffer> upload_buffer(const Device& device, Allocator& allocator,
-                             const BufferUploadDesc& desc) {
+Result<core::Buffer> upload_buffer(const Device& device,
+                                   core::Allocator& allocator,
+                                   const BufferUploadDesc& desc) {
   // The one-buffer batch: shared validate/record path, one submit, one fence
   // wait (see upload_texture).
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(Buffer buffer, batch.add_buffer(desc));
+  VG_ASSIGN(core::Buffer buffer, batch.add_buffer(desc));
   VG_TRY(batch.finish());
   return buffer;
 }

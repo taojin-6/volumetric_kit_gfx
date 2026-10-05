@@ -58,7 +58,7 @@ Result<PbrMaterial> PbrMaterial::create(VkDevice device, UploadBatch& batch,
   upload.data = &block;
   upload.size = sizeof(block);
   upload.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-  VG_ASSIGN(Buffer ubo, batch.add_buffer(upload));
+  VG_ASSIGN(core::Buffer ubo, batch.add_buffer(upload));
 
   Result<OwnedDescriptorSet> made =
       OwnedDescriptorSet::create(device, std::move(ubo), material_layout, 5);

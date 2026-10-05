@@ -79,11 +79,11 @@ struct FrameMetrics {
   /// otherwise the sampled allocator's own. On unified memory the device
   /// typically reports one heap, so this is the one pool's usage. Per-heap
   /// detail, and the allocator's own share, are in
-  /// @ref Allocator::memory_stats.
+  /// `core::Allocator::memory_stats`.
   uint64_t memory_used_bytes = 0;
   /// Aggregate device memory budget, in bytes, with the same aggregation as
   /// @ref memory_used_bytes. Per-heap detail is available via
-  /// @ref Allocator::memory_stats.
+  /// `core::Allocator::memory_stats`.
   uint64_t memory_budget_bytes = 0;
 };
 

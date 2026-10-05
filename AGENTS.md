@@ -18,6 +18,10 @@ using MoltenVK on Apple and one GLSL → SPIR-V shader set across platforms.
   submission structs; there is no library scene graph or global frame type.
 - Reach Vulkan through `core/vulkan.hpp` and the link-time loader. Keep VMA
   and backend details out of public headers.
+- Use volumetric_kit_core's types by their own names -- `core::Buffer` inside
+  gfx, `vkc::Buffer` in tests and examples -- and include the core's headers.
+  Add no `vg::` alias for a core type
+  ([DECISIONS.md](DECISIONS.md#2026-10-04--memory-comes-from-volumetric_kit_core)).
 
 ## Read what the task needs
 

@@ -24,11 +24,17 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- `core`: **memory is volumetric_kit_core's.** `vg::Allocator`, `BufferDesc`,
-  `Buffer`, `MemoryUsage`, `HostAccess`, `HeapStats` and `MemoryStats` name the
-  core's types, and `vg::Image` / `ImageDesc` replace `Texture` /
-  `TextureDesc`, so buffers and images pass to recon unchanged. gfx no longer
-  builds its own VMA. Migrating:
+- `core`: **memory is volumetric_kit_core's.** gfx's API takes and returns the
+  core's `Allocator`, `Buffer` and `Image` (`volumetric_kit::core`, which the
+  family aliases `vkc`), so buffers and images pass to recon unchanged; gfx
+  keeps no names of its own for them, and no longer builds its own VMA.
+  Migrating:
+  - `vg::Allocator`, `BufferDesc`, `Buffer`, `MemoryUsage`, `HostAccess`,
+    `HeapStats` and `MemoryStats` → `vkc::` (`volumetric_kit::core::`), from
+    `volumetric_kit/core/vulkan/allocator.hpp`; `vg::Texture` /
+    `TextureDesc` → `vkc::Image` / `vkc::ImageDesc`, from
+    `volumetric_kit/core/vulkan/image.hpp`. gfx's `core/allocator.hpp`,
+    `core/buffer.hpp` and `core/texture.hpp` are gone.
   - `MemoryUsage::DeviceLocal` and `Auto` → `DeviceOnly` (the default), which
     never falls back to host memory: a full heap fails the allocation with
     `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and a buffer past the heap's budget is
@@ -45,8 +51,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
     uses (concurrent sharing).
   - `ExternalHandleType` and the `external` fields are gone; export a buffer
     with the core's `create_exported_buffer`.
-  - `Texture` → `Image` (header `core/image.hpp`; `core/texture.hpp` is gone),
-    `TextureDesc` → `ImageDesc` without `memory`. `texture.image()` →
+  - `ImageDesc` has no `memory`. `texture.image()` →
     `handle()`; `extent()` returns a `VkExtent3D`, so a 2D extent is
     `{image.width(), image.height()}`. An image records its layout
     (`layout()` / `set_layout`); `UploadBatch` images report

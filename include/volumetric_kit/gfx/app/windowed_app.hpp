@@ -15,8 +15,8 @@
 #include <string_view>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/app/export.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
@@ -64,7 +64,7 @@ struct WindowedAppConfig {
 };
 
 /// @brief Owns the whole windowed bring-up chain — @ref Instance,
-///        @ref windowing::Surface, @ref Device, @ref Allocator,
+///        @ref windowing::Surface, @ref Device, `core::Allocator`,
 ///        @ref windowing::Swapchain, @ref windowing::FrameLoop — created in
 ///        one call and destroyed in reverse order, with the surface threaded
 ///        consistently through device selection,
@@ -270,9 +270,11 @@ class VG_APP_API WindowedApp {
   /// @copydoc device
   const Device& device() const noexcept { return *state_->device; }
   /// @return The owned allocator. @pre @ref valid.
-  Allocator& allocator() noexcept { return *state_->allocator; }
+  core::Allocator& allocator() noexcept { return *state_->allocator; }
   /// @copydoc allocator
-  const Allocator& allocator() const noexcept { return *state_->allocator; }
+  const core::Allocator& allocator() const noexcept {
+    return *state_->allocator;
+  }
   /// @return The owned swapchain. @pre @ref valid.
   windowing::Swapchain& swapchain() noexcept { return state_->swapchain; }
   /// @copydoc swapchain
@@ -320,7 +322,7 @@ class VG_APP_API WindowedApp {
     VkInstance instance_handle = VK_NULL_HANDLE;
     windowing::Surface surface;
     std::optional<Device> device;
-    std::optional<Allocator> allocator;
+    std::optional<core::Allocator> allocator;
     windowing::Swapchain swapchain;
     windowing::FrameLoop frame_loop;
   };

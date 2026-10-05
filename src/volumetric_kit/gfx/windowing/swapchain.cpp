@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
@@ -19,7 +19,7 @@ namespace volumetric_kit::gfx::windowing {
 
 Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
                                     const SwapchainConfig& config,
-                                    Allocator* allocator) {
+                                    core::Allocator* allocator) {
   if (surface == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "Swapchain::create: surface must be non-null");
@@ -256,7 +256,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // the swapchain having to know the loop's.
     RenderTargetAttachment depth_attachment{};
     if (depth_format_ != VK_FORMAT_UNDEFINED) {
-      VG_ASSIGN(Image depth,
+      VG_ASSIGN(core::Image depth,
                 make_depth_attachment(*allocator_, extent, depth_format_));
       depth_attachment = {depth.handle(), depth.view(), depth_format_};
       depth_images_.push_back(std::move(depth));
@@ -278,7 +278,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // lifetime — RenderTarget::begin declares it, and load-op clears rewrite
     // the contents each frame with no further transition.
     VG_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
-      for (const Image& depth : depth_images_) {
+      for (const core::Image& depth : depth_images_) {
         ImageBarrierDesc to_depth;
         to_depth.image = depth.handle();
         to_depth.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;

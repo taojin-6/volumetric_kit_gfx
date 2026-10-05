@@ -5,8 +5,8 @@
 
 #include <utility>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
@@ -14,7 +14,7 @@
 namespace volumetric_kit::gfx {
 
 Result<OffscreenTarget> OffscreenTarget::create(
-    Allocator& allocator, const OffscreenTargetDesc& desc) {
+    core::Allocator& allocator, const OffscreenTargetDesc& desc) {
   if (desc.extent.width == 0 || desc.extent.height == 0) {
     return Status::invalid_argument(
         "OffscreenTarget::create: extent must be non-zero");
@@ -42,12 +42,12 @@ Result<OffscreenTarget> OffscreenTarget::create(
   }
 
   // Color target: COLOR_ATTACHMENT to render into, TRANSFER_SRC to copy out.
-  ImageDesc color_desc;
+  core::ImageDesc color_desc;
   color_desc.extent = desc.extent;
   color_desc.format = desc.color_format;
   color_desc.usage =
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  VG_ASSIGN(Image color, allocator.create_image(color_desc));
+  VG_ASSIGN(core::Image color, allocator.create_image(color_desc));
 
   OffscreenTarget target;
   target.color_ = std::move(color);
@@ -55,7 +55,7 @@ Result<OffscreenTarget> OffscreenTarget::create(
   // Optional depth attachment: device-local, depth-stencil usage. depth_format
   // is validated depth-only above, so create_image derives a DEPTH-aspect view.
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    VG_ASSIGN(Image depth,
+    VG_ASSIGN(core::Image depth,
               make_depth_attachment(allocator, desc.extent, desc.depth_format));
     target.depth_ = std::move(depth);
   }
@@ -63,12 +63,12 @@ Result<OffscreenTarget> OffscreenTarget::create(
   if (desc.readback) {
     // Host memory the copy writes and the host reads: cached where the device
     // has it, so reading pixels() back is not an uncached walk.
-    BufferDesc readback_desc;
+    core::BufferDesc readback_desc;
     readback_desc.size = readback_size;
     readback_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    readback_desc.memory = MemoryUsage::Staging;
-    readback_desc.host_access = HostAccess::Random;
-    VG_ASSIGN(Buffer readback, allocator.create_buffer(readback_desc));
+    readback_desc.memory = core::MemoryUsage::Staging;
+    readback_desc.host_access = core::HostAccess::Random;
+    VG_ASSIGN(core::Buffer readback, allocator.create_buffer(readback_desc));
     target.readback_ = std::move(readback);
   }
 

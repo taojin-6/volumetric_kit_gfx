@@ -10,11 +10,11 @@
 
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
-#include "volumetric_kit/gfx/core/image.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
@@ -40,7 +40,7 @@ class PbrSceneTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
 
@@ -91,10 +91,10 @@ class PbrSceneTest : public VulkanDeviceTest {
     EXPECT_TRUE(status.ok()) << status.message();
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
   std::optional<vg::Sampler> sampler_;
-  std::optional<vg::Image> tex_;
+  std::optional<vkc::Image> tex_;
 };
 
 // The same fixture under validation-with-teeth: the base TearDown fails the

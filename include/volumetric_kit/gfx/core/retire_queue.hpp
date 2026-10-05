@@ -31,12 +31,12 @@ namespace volumetric_kit::gfx {
 ///          deleter, which calls back into it. Compose so the queue is
 ///          destroyed first (declare it after the Device in an owning struct,
 ///          so reverse member-destruction tears the queue down first). A
-///          @ref Buffer or @ref Image keeps its allocator's state alive
-///          itself, so the @ref Allocator need not outlive the queue.
+///          `core::Buffer` or `core::Image` keeps its allocator's state alive
+///          itself, so the `core::Allocator` need not outlive the queue.
 ///
 /// The deleter is a `std::function`, so it must be copyable: capture copyable
-/// state (raw handles, a `shared_ptr`), not a move-only @ref Buffer / @ref
-/// Image by value.
+/// state (raw handles, a `shared_ptr`), not a move-only `core::Buffer` /
+/// `core::Image` by value.
 ///
 /// @code
 /// RetireQueue retire(device.handle());

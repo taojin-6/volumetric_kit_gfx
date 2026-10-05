@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/app/export.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
@@ -44,7 +44,7 @@ struct HeadlessAppConfig {
 };
 
 /// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,
-///        @ref Allocator — created in one call and destroyed in reverse
+///        `core::Allocator` — created in one call and destroyed in reverse
 ///        order. No surface, no present queue: it runs wherever a Vulkan
 ///        device exists (CI, batch jobs).
 ///
@@ -95,9 +95,11 @@ class VG_APP_API HeadlessApp {
   /// @copydoc device
   const Device& device() const noexcept { return *state_->device; }
   /// @return The owned allocator. @pre @ref valid.
-  Allocator& allocator() noexcept { return *state_->allocator; }
+  core::Allocator& allocator() noexcept { return *state_->allocator; }
   /// @copydoc allocator
-  const Allocator& allocator() const noexcept { return *state_->allocator; }
+  const core::Allocator& allocator() const noexcept {
+    return *state_->allocator;
+  }
 
   /// @return `true` if this owns a created chain (`false` when
   ///         default-constructed or moved-from).
@@ -111,7 +113,7 @@ class VG_APP_API HeadlessApp {
   struct State {
     std::optional<Instance> instance;
     std::optional<Device> device;
-    std::optional<Allocator> allocator;
+    std::optional<core::Allocator> allocator;
   };
   std::unique_ptr<State> state_;
 };

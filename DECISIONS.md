@@ -28,6 +28,9 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — gfx names the core's types as the core does** (`core::Buffer`, `vkc::Buffer`
+  outside gfx), with no aliases of its own: one name per type across the family. See
+  "Memory comes from volumetric_kit_core", below.
 - **2026-10-04 — Memory comes from volumetric_kit_core.** `Allocator`, `Buffer` and
   `Image` (formerly gfx's `Texture`) are the core's, so every buffer names its placement --
   `DeviceOnly`, `DeviceMapped` or `Staging` -- and nothing spills into slower memory. The
@@ -80,13 +83,24 @@ what has landed since then. Record amendments when a contract changes.
 
 ## 2026-10-04 — Memory comes from volumetric_kit_core
 
-gfx's allocator, buffers and images are the family's core's (stage 2b):
-`Allocator`, `BufferDesc`, `ImageDesc`, `Buffer`, `Image`, `MemoryUsage`,
-`HostAccess`, `HeapStats` and `MemoryStats` are using-declarations in `vg::`.
-gfx's own VMA, its `Allocator` and `Texture`, and `ExternalHandleType` -- a
-field whose every value but `None` was refused -- are gone; exported memory is
-the core's `create_exported_buffer`. A buffer gfx makes is the type recon
-binds, and the reverse.
+gfx's allocator, buffers and images are the family's core's (stage 2b), named
+as the core's: gfx's API takes and returns `core::Allocator`, `core::Buffer`
+and `core::Image`. gfx's own VMA, its `Allocator` and `Texture`, and
+`ExternalHandleType` -- a field whose every value but `None` was refused --
+are gone; exported memory is the core's `create_exported_buffer`. A buffer
+gfx makes is the type recon binds, and the reverse.
+
+- **No gfx names for the core's types.** gfx first named the core's types
+  through using-declarations in `vg::`, as recon does in `vr::`. That kept
+  call sites unchanged but gave each type a second name per library, an alias
+  header and docs to keep in step, and left a reader to discover that
+  `vg::Buffer` was `vkc::Buffer`. The point of the shared core is one type
+  for the whole family, so gfx spells the core's types as the core does:
+  `core::Allocator` inside gfx's namespaces, `vkc::Allocator` in tests and
+  examples (the family's alias for `volumetric_kit::core`), including the
+  core's headers directly. The names aliased before this entry -- `Status`,
+  `Result`, the `VG_*` macros, `Instance`, `Device` and the rest of the device
+  entry below -- move the same way in a follow-up.
 
 - **Every buffer names its placement, as the core's DECISIONS.md, "Where
   memory lives", sets out.** Vertex, index and uploaded buffers, textures and
