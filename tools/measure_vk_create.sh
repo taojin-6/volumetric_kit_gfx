@@ -33,8 +33,19 @@ done
 
 echo "=== 3. The pipelines tests: one process per test against one process for all"
 echo "--- ctest, one process per test, one at a time:"
-ctest --test-dir "${build}" -R '^pipelines\.' -j1 2>&1 | grep -E 'tests passed|Total Test time'
+ctest_log="${build}/ctest_one_per_test.log"
+ctest --test-dir "${build}" -R '^pipelines\.' -j1 > "${ctest_log}" 2>&1
+grep -E 'tests passed|Total Test time' "${ctest_log}"
+echo "skipped under ctest: $(grep -cE 'Test +#[0-9]+: .*Skipped' "${ctest_log}")"
 echo "--- the test binary, one process, all tests (wall seconds, then gtest's own total):"
+log="${build}/tests/pipelines_one_process.log"
 ( cd "${build}/tests" && time ./vg_pipelines_test > pipelines_one_process.log 2>&1 )
-grep -E '^\[==========\] .* ran\.' "${build}/tests/pipelines_one_process.log"
-grep -E '^\[  (PASSED|FAILED)  \]' "${build}/tests/pipelines_one_process.log"
+grep -E '^\[==========\] .* ran\.' "${log}"
+grep -E '^\[  (PASSED|FAILED|SKIPPED) +\] [0-9]+ test' "${log}"
+# A GPU test skips itself when it cannot get a device. Show why, and where
+# in the sequence the skipping started.
+echo "--- skip reasons (count, message):"
+grep -A1 -E ': Skipped$' "${log}" | grep -vE ': Skipped$|^--$' | sort | uniq -c | sort -rn | head -5
+echo "--- first test to skip, and the two tests before it:"
+awk '/^\[ RUN      \]/{prev2=prev1; prev1=cur; cur=$0} /: Skipped$/{print prev2; print prev1; print cur; exit}' "${log}"
+echo "--- tests run before the first skip: $(awk '/^\[ RUN      \]/{n++} /: Skipped$/{print n-1; exit}' "${log}")"
