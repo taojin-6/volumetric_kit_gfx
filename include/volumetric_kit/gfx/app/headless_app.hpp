@@ -29,15 +29,18 @@ struct HeadlessAppConfig {
   /// InstanceConfig::enable_validation).
   bool enable_validation = false;
   /// Extra instance extensions to enable (see @ref
-  /// InstanceConfig::extra_instance_extensions). None are needed for plain
-  /// offscreen rendering.
+  /// InstanceConfig::extensions). None are needed for plain offscreen
+  /// rendering.
   std::vector<const char*> instance_extensions;
-  /// Device features / extra extensions / feature chain to enable — the escape
-  /// hatch for anything the facade does not surface directly.
-  /// @note @ref HeadlessApp::create overwrites `enable_debug_utils`, deriving
-  ///       it from the instance it just built (the only correct source);
-  ///       `needs_present` stays false, as a headless app has no surface.
-  DeviceConfig device{};
+  /// What the device must provide: the renderer's floor
+  /// (@ref device_requirements) plus any features, extensions or feature chain
+  /// the application adds -- the escape hatch for anything the facade does not
+  /// surface directly. The app merges the floor in whatever this holds, so a
+  /// field here can only add to it; selection and creation both use the
+  /// result. `needs_present` must stay false, as a headless app has no
+  /// surface. Labels and object names follow the instance, which requests
+  /// `VK_EXT_debug_utils`.
+  DeviceRequirements device = device_requirements();
 };
 
 /// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,
@@ -70,8 +73,11 @@ class VG_APP_API HeadlessApp {
   ///        @p config extensions) → physical-device selection (no surface) →
   ///        device (no present queue) → allocator.
   /// @param config  App identity and optional instance extensions.
-  /// @return The app on success, or the first failing step's @ref Status
-  ///         (e.g. @ref Status::Code::Unsupported when no device qualifies).
+  /// @return The app on success, or the first failing step's @ref Status:
+  ///         @ref Status::Code::InvalidArgument for a `config.device` with
+  ///         `needs_present` (before any Vulkan call);
+  ///         @ref Status::Code::Unsupported when no device qualifies;
+  ///         otherwise the propagated failure.
   static Result<HeadlessApp> create(const HeadlessAppConfig& config);
 
   ~HeadlessApp() = default;

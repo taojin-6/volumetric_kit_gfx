@@ -116,7 +116,7 @@ class PbrSubmitTest : public PbrSceneTest {
   // command buffer, outside any render pass -- enough for the set-0 bind under
   // test, and legal on its own when submit() correctly records nothing.
   void record_submit(const pipelines::PbrFrame& frame) {
-    auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+    auto pool = vg::CommandPool::create(device(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();

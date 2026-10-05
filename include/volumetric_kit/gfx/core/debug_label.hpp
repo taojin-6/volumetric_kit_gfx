@@ -15,8 +15,9 @@
 /// submit timeline (where Nsight Systems shows it); @ref set_object_name gives
 /// a handle a readable name in a capture.
 ///
-/// Every entry point routes through a @ref DebugUtilsTable. When the extension
-/// is not enabled the table is inactive, and every operation here compiles to a
+/// Every entry point routes through a @ref DebugUtilsTable, which
+/// @ref debug_utils loads from a @ref Device. When the extension is not enabled
+/// the table is inactive, and every operation here compiles to a
 /// branch-to-noop — no labels are emitted and no error is raised.
 
 #include <cstdint>
@@ -25,7 +26,33 @@
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
+
+using core::Device;
+
+/// @brief The `VK_EXT_debug_utils` entry points of @p device, for the scopes
+///        and naming below.
+///
+/// Active only where the device's instance enabled the extension (the core's
+/// `Device::debug_labels_available`); inactive otherwise, so every label is a
+/// no-op. Resolving the entry points costs a few `vkGetDeviceProcAddr` calls,
+/// so keep the table for the device's lifetime rather than load it per label.
+///
+/// The core's Device resolves the command-buffer label and object-name entry
+/// points too (`Device::begin_debug_label`, `Device::set_object_name`), but
+/// its labels take no color and it records no queue labels, both of which the
+/// scopes below offer, so gfx resolves its own.
+///
+/// TODO: take labels and names from the core's Device once it records label
+/// colors and queue labels, if a second library needs them; the table can
+/// then go.
+/// @param device  The device to label on; it must outlive the table.
+/// @return The device's entry points, or an inactive table.
+VG_CORE_API DebugUtilsTable debug_utils(const Device& device);
 
 /// @brief A nested debug-label region inside a command buffer, opened on
 ///        construction and closed on destruction.
@@ -41,8 +68,9 @@ namespace volumetric_kit::gfx {
 ///          (i.e. the device it came from) alive for the scope's lifetime.
 ///
 /// @code
+/// const DebugUtilsTable labels = debug_utils(device);  // once per device
 /// {
-///   DebugLabelScope pass(cmd, device.debug_utils(), "shadow pass");
+///   DebugLabelScope pass(cmd, labels, "shadow pass");
 ///   record_shadow_draws(cmd);
 /// }  // region ends here
 /// @endcode
@@ -92,8 +120,7 @@ class VG_CORE_API DebugLabelScope {
 ///
 /// @code
 /// {
-///   QueueLabelScope frame(device.graphics_queue(), device.debug_utils(),
-///                         "frame 42");
+///   QueueLabelScope frame(device.queue(), labels, "frame 42");
 ///   vkQueueSubmit(...);
 /// }  // region ends here
 /// @endcode

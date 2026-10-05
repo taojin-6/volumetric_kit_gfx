@@ -23,9 +23,13 @@
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 class Allocator;
-class Device;
+using core::Device;
 class UploadBatch;
 }  // namespace volumetric_kit::gfx
 

@@ -16,10 +16,14 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
 class Allocator;
-class Device;
+using core::Device;
 
 namespace windowing {
 
@@ -102,7 +106,8 @@ class VG_WINDOWING_API Swapchain {
 
   /// @brief Create a swapchain on @p surface.
   /// @param device     A device created with present support
-  ///                   (`DeviceConfig::needs_present`).
+  ///                   (`DeviceRequirements::needs_present`) that enabled the
+  ///                   renderer's requirements (@ref device_requirements).
   /// @param surface    The surface to present to.
   /// @param config     Size, format/present-mode preferences, and the optional
   ///                   depth attachment format.
@@ -116,7 +121,8 @@ class VG_WINDOWING_API Swapchain {
   ///         @p allocator returns @ref Status::Code::InvalidArgument; a surface
   ///         with no formats / present modes, or a `config.depth_format` the
   ///         device cannot render depth through (stencil aspect, or no
-  ///         optimal-tiling depth-attachment support), returns
+  ///         optimal-tiling depth-attachment support), or a @p device that did
+  ///         not enable the renderer's requirements, returns
   ///         @ref Status::Code::Unsupported; a failed Vulkan call carries its
   ///         `VkResult`.
   static Result<Swapchain> create(const Device& device, VkSurfaceKHR surface,

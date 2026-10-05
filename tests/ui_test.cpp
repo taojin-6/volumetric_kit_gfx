@@ -9,8 +9,11 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
+#include <mutex>
 #include <utility>
 
 #include "imgui.h"
@@ -79,6 +82,26 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
 };
 
 // --- Validation: rejected before any ImGui context is created ---------------
+
+// A device made to another library's requirements (the core's defaults: no
+// dynamic rendering, which the backend's pipeline is built for) is refused.
+class ImGuiOverlayForeignDeviceTest : public VulkanDeviceTest {
+ protected:
+  vg::DeviceRequirements requirements() const override { return {}; }
+};
+
+TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
+  ui::ImGuiOverlayConfig config;
+  config.layout.color_formats[0] = kFormat;
+  config.layout.color_count = 1;
+  config.min_image_count = 2;
+  config.image_count = 2;
+  auto overlay =
+      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+  ASSERT_FALSE(overlay.ok());
+  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::Unsupported)
+      << overlay.status().message();
+}
 
 TEST_F(ImGuiOverlayDeviceTest, NullInstanceRejected) {
   auto overlay = ui::ImGuiOverlay::create(*device_, VK_NULL_HANDLE,
@@ -187,7 +210,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(
       ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -236,6 +259,42 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device());
+}
+
+// render() may submit on the device's queue itself (the font atlas, on the
+// first frame), so it holds the device's submit mutex -- the one every other
+// submit on that queue holds -- whether or not the queue is shared.
+TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
+  vg::Allocator allocator = make_allocator();
+  vg::OffscreenTarget target = make_target(allocator);
+  ui::ImGuiOverlay overlay = make_overlay(target.layout());
+  ImGui::SetCurrentContext(overlay.context());
+  ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+  overlay.new_frame();
+  ImGui::ShowDemoWindow();
+
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto cmd = pool.value().allocate_primary();
+  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+  ASSERT_TRUE(
+      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+  const VkCommandBuffer raw = cmd.value().handle();
+  const vg::RenderTarget rt = target.target();
+  rt.begin(raw, vg::RenderTargetBeginInfo{});
+
+  std::unique_lock<std::mutex> held(*device_->submit_mutex());
+  std::future<void> rendered =
+      std::async(std::launch::async, [&overlay, raw] { overlay.render(raw); });
+  // Blocked for as long as the mutex is held; it finishes once released.
+  EXPECT_EQ(rendered.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  held.unlock();
+  rendered.get();
+
+  rt.end(raw);
+  ASSERT_TRUE(cmd.value().end().ok());
+  vkDeviceWaitIdle(device());  // the backend's own upload, before teardown
 }
 
 // --- Metrics panel: CPU-only widget building (no device) --------------------

@@ -26,7 +26,7 @@
 /// `volumetric_kit/core/base/result.hpp`.
 ///
 /// @code
-/// Result<Device> r = Device::create(instance, physical, config);
+/// Result<Device> r = Device::create(instance, physical, reqs);
 /// if (!r) return r.status();   // propagate failure to our caller
 /// Device& device = r.value();  // safe: guarded by the !r check above
 /// @endcode

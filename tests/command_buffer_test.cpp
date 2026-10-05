@@ -18,18 +18,18 @@ using CommandTest = VulkanDeviceTest;
 // the fixture has already asserted against.
 vg::CommandPool make_pool(const vg::Device& device) {
   return std::move(
-             vg::CommandPool::create(device.handle(), device.graphics_family()))
+             vg::CommandPool::create(device.handle(), device.queue_family()))
       .value();
 }
 
 }  // namespace
 
 TEST_F(CommandTest, PoolCreatesOnGraphicsFamily) {
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   EXPECT_TRUE(pool.value().valid());
   EXPECT_NE(pool.value().handle(), VK_NULL_HANDLE);
-  EXPECT_EQ(pool.value().queue_family(), device_->graphics_family());
+  EXPECT_EQ(pool.value().queue_family(), device_->queue_family());
 }
 
 TEST_F(CommandTest, AllocatePrimaryProducesValidBuffer) {

@@ -66,7 +66,8 @@ struct GraphicsPipelineDesc {
   /// stages this pipeline does not provide.
   VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   /// Polygon fill mode. `VK_POLYGON_MODE_LINE` (wireframe) / `..._POINT` need
-  /// the device's `fillModeNonSolid` feature — enable it via @ref DeviceConfig.
+  /// the device's `fillModeNonSolid` feature — require it in the
+  /// @ref DeviceRequirements the device is made with.
   VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
   /// Face-culling mode. Front faces are counter-clockwise (the winding the
   /// camera tier's Y-flipped projection yields for outward geometry), so

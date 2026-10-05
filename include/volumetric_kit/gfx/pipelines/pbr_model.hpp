@@ -22,9 +22,13 @@
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 class Allocator;
-class Device;
+using core::Device;
 namespace assets {
 struct Material;
 struct Model;

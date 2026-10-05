@@ -81,25 +81,14 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   // VMA must not be told a higher Vulkan version than BOTH the instance was
   // created with and the device supports, or it calls core 1.1 entry points
   // (vkGetBufferMemoryRequirements2, vkBindBufferMemory2, …) the
-  // instance/device never loaded. An instance we created is at min(1.3, loader)
-  // (see instance.cpp), so reconstruct that and take the min with the device's
-  // apiVersion. Cap at the 1.1 floor VMA currently needs.
-  // An *adopted* device's instance is the embedder's, so that reconstruction
-  // does not describe it: its apiVersion is unknowable here and bounded only by
-  // AdoptedDevice's documented 1.1+ contract. The 1.1 cap below is what keeps
-  // this correct for both.
-  // TODO: bump the 1.1 cap to the negotiated 1.2/1.3 version once those device
-  // features land — and take the instance version as a parameter when doing so,
-  // since on the adopt path it cannot be reconstructed from the loader.
-  uint32_t instance_version = VK_API_VERSION_1_0;
-  if (vkEnumerateInstanceVersion(&instance_version) != VK_SUCCESS) {
-    instance_version = VK_API_VERSION_1_0;
-  }
-  instance_version =
-      std::min(instance_version, static_cast<uint32_t>(VK_API_VERSION_1_3));
-  VkPhysicalDeviceProperties props{};
-  vkGetPhysicalDeviceProperties(device.physical_device(), &props);
-  const uint32_t effective = std::min(instance_version, props.apiVersion);
+  // instance/device never loaded. The device records that bound -- the lower of
+  // its own version and its instance's, an adopted device's declared by its
+  // embedder -- as its usable version. Cap at the 1.1 floor VMA currently
+  // needs.
+  // TODO: bump the 1.1 cap to the usable 1.2/1.3 version once gfx relies on
+  // those versions' VMA paths -- or take the core's Allocator (DECISIONS.md,
+  // 2026-10-04, the stages still open).
+  const uint32_t effective = device.caps().api_version();
 
   VmaAllocatorCreateInfo info{};
   info.instance = instance;

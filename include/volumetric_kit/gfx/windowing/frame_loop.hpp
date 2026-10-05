@@ -20,9 +20,13 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
-class Device;
+using core::Device;
 class Profiler;
 
 namespace windowing {
@@ -91,11 +95,15 @@ class VG_WINDOWING_API FrameLoop {
   FrameLoop() = default;
 
   /// @brief Create a loop driving @p swapchain with @p frames_in_flight slots.
-  /// @param device            A device with a graphics (and present) queue.
+  /// @param device            A device with a graphics (and present) queue that
+  ///                          enabled the renderer's requirements
+  ///                          (@ref device_requirements).
   /// @param swapchain         The swapchain to acquire from / present to.
   /// @param frames_in_flight  CPU-ahead depth (>= 1; 2 is the common default).
   /// @return The loop on success, or a non-OK @ref Status (invalid argument for
-  ///         a zero count or empty swapchain; otherwise a propagated failure).
+  ///         a zero count or empty swapchain; @ref Status::Code::Unsupported
+  ///         for a @p device without the renderer's requirements; otherwise a
+  ///         propagated failure).
   static Result<FrameLoop> create(const Device& device, Swapchain& swapchain,
                                   uint32_t frames_in_flight = 2);
 

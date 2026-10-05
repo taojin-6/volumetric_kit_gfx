@@ -26,9 +26,13 @@
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
-class Device;
+using core::Device;
 class Allocator;
 
 /// @brief Construction parameters for a @ref Profiler.
@@ -52,7 +56,7 @@ struct ProfilerConfig {
 /// where the graphics queue reports non-zero `timestampValidBits` (MoltenVK may
 /// report zero — then GPU scopes degrade to CPU-only timing plus their label,
 /// never an error), and labels emit only where `VK_EXT_debug_utils` is enabled
-/// (see @ref Device::debug_utils). Drive it once per frame: @ref begin_frame at
+/// (see @ref debug_utils). Drive it once per frame: @ref begin_frame at
 /// the top (after the slot's in-flight fence is waited), @ref cpu_scope /
 /// @ref gpu_scope around work, @ref end_frame at the bottom; read the latest
 /// resolved snapshot from @ref metrics.
@@ -120,11 +124,15 @@ class VG_CORE_API Profiler {
   /// @brief Create a profiler for @p device.
   /// @param device  The device whose graphics queue is timed; supplies the
   ///                timestamp-validity, period, and debug-utils capabilities.
+  ///                It must have enabled the renderer's requirements
+  ///                (@ref device_requirements).
   /// @param config  In-flight depth and the per-frame GPU-scope bound.
   /// @return The profiler on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument when @p config has a zero
-  ///         `frames_in_flight` or `max_gpu_sections_per_frame`, otherwise a
-  ///         propagated failure from creating the timestamp pool.
+  ///         `frames_in_flight` or `max_gpu_sections_per_frame`;
+  ///         @ref Status::Code::Unsupported for a @p device without the
+  ///         renderer's requirements; otherwise a propagated failure from
+  ///         creating the timestamp pool.
   static Result<Profiler> create(const Device& device,
                                  const ProfilerConfig& config = {});
 

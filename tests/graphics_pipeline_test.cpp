@@ -126,7 +126,7 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
   void render_mesh(vg::OffscreenTarget& target,
                    const vg::GraphicsPipeline& pipeline, VkBuffer vbuf,
                    VkBuffer ibuf, uint32_t count) {
-    auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+    auto pool = vg::CommandPool::create(device(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -273,7 +273,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
       build_pipeline(target.value().layout(), vert, frag);
   ASSERT_TRUE(pipeline.valid());
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -640,7 +640,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   ASSERT_TRUE(set.ok()) << set.status().message();
   set.value().write_uniform_buffer(0, ubo.handle(), 0, sizeof(mvp));
 
-  auto cmd_pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto cmd_pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(cmd_pool.ok()) << cmd_pool.status().message();
   auto cmd = cmd_pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

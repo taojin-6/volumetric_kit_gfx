@@ -20,9 +20,6 @@ target_sources(
   gfx_core
   PRIVATE version.cpp
           vma_impl.cpp
-          instance.cpp
-          physical_device_info.cpp
-          device.cpp
           debug_label.cpp
           sync.cpp
           query_pool.cpp
@@ -85,14 +82,15 @@ target_include_directories(
 target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
 # Public deps are independently re-findable, so the installed package's
-# find_dependency() calls stay simple: volumetric_kit_core's base tier (Status /
-# Result / the log sink in every tier's signatures), its vulkan tier (whose
-# umbrella header core/vulkan.hpp forwards to, and whose vk_result.hpp
-# result.hpp takes the VkResult bridge from), and the system's Vulkan headers,
-# which every gfx TU compiles against. gfx links the Vulkan loader PRIVATE --
-# our implementation (VMA) calls it, and no public gfx signature needs it -- but
-# the core's vulkan tier links it PUBLIC, so consumers get it through that. glm
-# is intentionally absent: no public gfx_core header names a glm type (see the
+# find_dependency() calls stay simple: volumetric_kit_core -- its base tier
+# (Status / Result / the log sink in every tier's signatures) and its vulkan
+# tier (the Instance, PhysicalDeviceInfo and Device gfx's API takes, the
+# umbrella header core/vulkan.hpp forwards to, the VkResult bridge result.hpp
+# names, and the format metadata) -- and the system's Vulkan headers, which
+# every gfx TU compiles against. gfx links the Vulkan loader PRIVATE -- our
+# implementation (VMA) calls it, and no public gfx signature needs it -- but the
+# core's vulkan tier links it PUBLIC, so consumers get it through that. glm is
+# intentionally absent: no public gfx_core header names a glm type (see the
 # rationale at the top-level find_package site in CMakeLists.txt).
 target_link_libraries(
   gfx_core

@@ -24,6 +24,53 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **the instance and device are volumetric_kit_core's.** `vg::Instance`,
+  `InstanceConfig`, `PhysicalDeviceInfo`, `Device`, `AdoptedDevice` and
+  `DeviceRequirements` name the core's types, so a device gfx makes is the type
+  recon adopts. Migrating:
+  - `DeviceConfig` → `DeviceRequirements`, starting from
+    `vg::device_requirements()` (Vulkan 1.3, graphics queue, dynamic rendering,
+    timeline semaphores): `needs_present` and `features` keep their names,
+    `extra_device_extensions` → `extensions` (owned strings), and
+    `needs_external_memory` → add `VK_KHR_external_memory_fd` and
+    `VK_KHR_external_semaphore_fd` to `extensions`. `enable_debug_utils` is
+    gone: the device follows its instance. `Device::requirements(config)` →
+    `device_requirements()`; `HeadlessAppConfig::device` and
+    `WindowedAppConfig::device` are `DeviceRequirements`.
+  - `instance.select_physical_device(surface)` →
+    `select_physical_device(reqs, surface)`, returning a `PhysicalDeviceInfo`
+    for the best device meeting `reqs`; `Device::create(instance.handle(),
+    physical, config, surface)` → `Device::create(instance, info, reqs,
+    surface)`; `instance.query_physical_device(p)` →
+    `PhysicalDeviceInfo::query(p, instance.api_version())`.
+  - `InstanceConfig::extra_instance_extensions` → `extensions`, and
+    `enable_debug_utils` → `request_debug_utils`, now on by default.
+  - `Device::graphics_queue()` / `graphics_family()` /
+    `graphics_timestamp_valid_bits()` → `queue()` / `queue_family()` /
+    `timestamp_valid_bits()`. `command_pool()` is gone: make a `CommandPool` on
+    `queue_family()`, or use `submit_single_time`. `device.debug_utils()` →
+    `vg::debug_utils(device)`, by value; keep it for the device's lifetime.
+    `PhysicalDeviceInfo::features2()` is gone (`features()` and the
+    `supports_*` flags remain).
+  - `AdoptedDevice`: `graphics_family` / `graphics_queue` → `queue_family` /
+    `queue`; `enabled_device_extensions` / `_count` → `enabled_extensions` /
+    `_count`; `enabled_features`, `enabled_timeline_semaphore` and
+    `enabled_dynamic_rendering` → `enabled_features.core`,
+    `.timeline_semaphore` and `.dynamic_rendering`. Set `instance_api_version`,
+    and `present_mutex` beside `submit_mutex` for a shared present queue.
+    `WindowedApp::adopt` refuses an unset `instance_api_version` before it
+    runs the surface factory.
+  - The renderer's floor holds however a device arrives: `HeadlessApp` and
+    `WindowedApp` merge `device_requirements()` into `config.device`, and
+    `UploadBatch::begin` (so every upload helper), `Swapchain::create`,
+    `FrameLoop::create`, `Profiler::create` and `ImGuiOverlay::create` return
+    `Unsupported` for a device that did not enable it, such as one made for
+    another library's requirements. `HeadlessApp::create` refuses
+    `needs_present` before creating an instance.
+  - `UploadBatch` records its uploads at `finish`, on a command pool of the
+    device's, instead of a pool per batch. `ImGuiOverlay` borrows its device
+    by address, as `Swapchain` and `FrameLoop` do: keep the device where it is
+    for the overlay's lifetime.
 - `core`: **gfx builds on the system's Vulkan headers**, as the family's core
   does, and no longer vendors Vulkan-Headers or Vulkan-Utility-Libraries. The
   core is pinned at its PR #13 with its vulkan tier on and linked PUBLIC: its

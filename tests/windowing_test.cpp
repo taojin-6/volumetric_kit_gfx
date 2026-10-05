@@ -77,8 +77,8 @@ class WindowingTest : public ::testing::Test {
     }
     vg::InstanceConfig icfg;
     icfg.enable_validation = true;
-    icfg.extra_instance_extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                                      VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+    icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
+                       VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
     auto instance = vg::Instance::create(icfg);
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
@@ -95,16 +95,16 @@ class WindowingTest : public ::testing::Test {
     }
     surface_ = std::move(surface).value();
 
-    auto physical = instance_->select_physical_device(surface_.handle());
+    vg::DeviceRequirements reqs = vg::device_requirements();
+    reqs.needs_present = true;
+    auto physical = instance_->select_physical_device(reqs, surface_.handle());
     if (!physical.ok()) {
       GTEST_SKIP() << "no present-capable device: "
                    << physical.status().message();
     }
 
-    vg::DeviceConfig dcfg;
-    dcfg.needs_present = true;
-    auto device = vg::Device::create(instance_->handle(), physical.value(),
-                                     dcfg, surface_.handle());
+    auto device = vg::Device::create(*instance_, physical.value(), reqs,
+                                     surface_.handle());
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
 

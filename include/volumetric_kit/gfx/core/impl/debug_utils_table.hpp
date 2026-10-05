@@ -8,7 +8,8 @@
 /// capture-label surface emits through. The labels and object names this table
 /// drives are a single standard that RenderDoc, Nsight Graphics, Nsight
 /// Systems, and Xcode's Metal frame debugger all consume — one emitter, no
-/// per-tool code. Cached on @ref volumetric_kit::gfx::Device so each
+/// per-tool code. Loaded once per device by `debug_utils(device)`
+/// (debug_label.hpp) and kept by the caller for the device's lifetime, so each
 /// command/queue scope reads a resolved pointer instead of re-querying the
 /// loader. Not a public header.
 

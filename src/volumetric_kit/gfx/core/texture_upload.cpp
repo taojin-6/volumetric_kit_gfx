@@ -11,6 +11,7 @@
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/log.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -362,29 +363,40 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
   cmd_image_barrier(cmd, to_read);
 }
 
+// After a failed wait the device may still be reading `staging`. Its command
+// buffer is the device's, which keeps it until the device is destroyed; the
+// staging buffers cannot go with it (Device::submit_single_time's keep_alive),
+// as their deleters free through the allocator, which is gone by then. So free
+// them once the queue drains, and leak them if it never does (a lost device)
+// rather than free memory the GPU may still read.
+// TODO: hand them to the device as keep_alive once buffers are the core's
+// (stage 2b), which keep their allocator alive.
+void release_after_failed_wait(const Device& device,
+                               std::vector<Buffer> staging) {
+  if (device.wait_idle().ok()) {
+    return;  // the work is done: `staging` is freed on return
+  }
+  log_message(LogLevel::Error,
+              "UploadBatch::finish: the queue did not drain after a failed "
+              "wait; leaking the batch's staging buffers rather than freeing "
+              "memory the device may still read");
+  // Deliberately never deleted.
+  static_cast<void>(new std::vector<Buffer>(std::move(staging)));
+}
+
 }  // namespace
 
 Result<UploadBatch> UploadBatch::begin(const Device& device,
                                        Allocator& allocator) {
-  // One primary command buffer from the device's shared graphics pool -- the
-  // same pool Device::submit_single_time allocates from (and the same
-  // external-synchronization caveat; see the class docs).
-  VkCommandBufferAllocateInfo alloc_info{};
-  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  alloc_info.commandPool = device.command_pool();
-  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  alloc_info.commandBufferCount = 1;
-  VkCommandBuffer raw = VK_NULL_HANDLE;
-  VG_VK_TRY(vkAllocateCommandBuffers(device.handle(), &alloc_info, &raw));
-
-  // Owned immediately, so every failure path below frees it back to the pool.
-  CommandBuffer cmd(device.handle(), device.command_pool(), raw);
-  VG_TRY(cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+  // A device made for another library may lack what the batch's barriers and
+  // the renderer's later reads of its resources need -- a graphics queue
+  // above all. Nothing is allocated until an add, nor recorded until finish().
+  VG_TRY(device.check_enabled(device_requirements())
+             .with_context("UploadBatch::begin"));
 
   UploadBatch batch;
   batch.device_ = &device;
   batch.allocator_ = &allocator;
-  batch.cmd_ = std::move(cmd);
   return batch;
 }
 
@@ -393,26 +405,28 @@ UploadBatch::~UploadBatch() = default;
 UploadBatch::UploadBatch(UploadBatch&& other) noexcept
     : device_(other.device_),
       allocator_(other.allocator_),
-      cmd_(std::move(other.cmd_)),
+      records_(std::move(other.records_)),
       staging_(std::move(other.staging_)),
       poisoned_(other.poisoned_) {
   other.device_ = nullptr;
   other.allocator_ = nullptr;
+  other.records_.clear();
   other.staging_.clear();
   other.poisoned_ = false;
 }
 
 UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   if (this != &other) {
-    // The member moves free this batch's current command buffer and staging
-    // buffers (nothing was submitted, so freeing them is always safe).
+    // The member moves free this batch's queued commands and staging buffers
+    // (nothing was submitted, so freeing them is always safe).
     device_ = other.device_;
     allocator_ = other.allocator_;
-    cmd_ = std::move(other.cmd_);
+    records_ = std::move(other.records_);
     staging_ = std::move(other.staging_);
     poisoned_ = other.poisoned_;
     other.device_ = nullptr;
     other.allocator_ = nullptr;
+    other.records_.clear();
     other.staging_.clear();
     other.poisoned_ = false;
   }
@@ -447,9 +461,13 @@ Result<Texture> UploadBatch::add(const ImageUploadDesc& desc) {
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   VG_ASSIGN(Texture texture, allocator_->create_image(image_desc));
 
-  // Everything that can fail has; recording is plain vkCmd* calls, so a failed
-  // add above leaves the open command buffer untouched and the batch usable.
-  record_upload(cmd_.handle(), texture.image(), staging.handle(), desc, plan);
+  // Everything that can fail has, so a failed add above leaves the batch
+  // unchanged and usable. The handles and the desc's shape are copied: the
+  // pixels are already staged, and the caller keeps the texture alive.
+  records_.emplace_back([image = texture.image(), src = staging.handle(), desc,
+                         plan](VkCommandBuffer cmd) {
+    record_upload(cmd, image, src, desc, plan);
+  });
   staging_.push_back(std::move(staging));
   return texture;
 }
@@ -481,31 +499,35 @@ Result<Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   dst_desc.memory = MemoryUsage::DeviceLocal;
   VG_ASSIGN(Buffer buffer, allocator_->create_buffer(dst_desc));
 
-  // Everything that can fail has; recording is plain vkCmd* calls, so a failed
-  // add above leaves the open command buffer untouched and the batch usable.
-  VkBufferCopy region{};
-  region.size = desc.size;
-  vkCmdCopyBuffer(cmd_.handle(), staging.handle(), buffer.handle(), 1, &region);
+  // Everything that can fail has, so a failed add above leaves the batch
+  // unchanged and usable.
+  records_.emplace_back([src = staging.handle(), dst = buffer.handle(),
+                         size = desc.size,
+                         usage = desc.usage](VkCommandBuffer cmd) {
+    VkBufferCopy region{};
+    region.size = size;
+    vkCmdCopyBuffer(cmd, src, dst, 1, &region);
 
-  // Make the copy visible to the usage-implied consumers in the later
-  // submission that reads them (see buffer_consume_scope). Within this
-  // submission the scope never bites -- the batch records no consumers of its
-  // own. For the shader / vertex-input usages the dst scope stays off the
-  // TRANSFER stage, so the batch's copies overlap; a TRANSFER_SRC/DST (or
-  // unmapped) destination does include TRANSFER and so serializes later copies
-  // behind this barrier -- fine for those rarer cases.
-  const BufferConsumeScope scope = buffer_consume_scope(desc.usage);
-  VkBufferMemoryBarrier barrier{};
-  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  barrier.dstAccessMask = scope.access;
-  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.buffer = buffer.handle();
-  barrier.offset = 0;
-  barrier.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(cmd_.handle(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       scope.stages, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+    // Make the copy visible to the usage-implied consumers in the later
+    // submission that reads them (see buffer_consume_scope). Within this
+    // submission the scope never bites -- the batch records no consumers of
+    // its own. For the shader / vertex-input usages the dst scope stays off
+    // the TRANSFER stage, so the batch's copies overlap; a TRANSFER_SRC/DST
+    // (or unmapped) destination does include TRANSFER and so serializes later
+    // copies behind this barrier -- fine for those rarer cases.
+    const BufferConsumeScope scope = buffer_consume_scope(usage);
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = scope.access;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = dst;
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, scope.stages, 0,
+                         0, nullptr, 1, &barrier, 0, nullptr);
+  });
 
   staging_.push_back(std::move(staging));
   return buffer;
@@ -518,10 +540,10 @@ Status UploadBatch::finish() {
     return Status::invalid_argument("UploadBatch::finish on an empty batch");
   }
   if (poisoned_) {
-    // A caller dropped a resource an earlier add recorded a copy into (see
-    // poison()): submitting would reference freed memory. Discard the recorded
+    // A caller dropped a resource an earlier add queued a copy into (see
+    // poison()): submitting would reference freed memory. Discard the queued
     // work instead of submitting it -- moving into a temporary frees the
-    // command buffer + staging on return, and never submits.
+    // commands + staging on return, and never submits.
     UploadBatch discard(std::move(*this));
     return Status::invalid_argument(
         "UploadBatch::finish on a poisoned batch: an added resource was "
@@ -530,21 +552,31 @@ Status UploadBatch::finish() {
         "a new batch");
   }
   // Move the owned state into locals first: whatever happens below, the batch
-  // ends empty (one-shot), and the locals keep the staging buffers and command
-  // buffer alive until the fence wait proves the GPU is done -- they are freed
-  // on scope exit, error paths included.
+  // ends empty (one-shot), and the locals keep the staging buffers alive until
+  // the fence wait proves the GPU is done.
   const Device* device = device_;
-  CommandBuffer cmd = std::move(cmd_);
+  std::vector<std::function<void(VkCommandBuffer)>> records =
+      std::move(records_);
   std::vector<Buffer> staging = std::move(staging_);
   device_ = nullptr;
   allocator_ = nullptr;
+  records_.clear();
   staging_.clear();
 
-  VG_TRY(cmd.end());
-  // One submit + fence wait, shared with Device::submit_single_time. The
-  // moved-out cmd and staging buffers stay alive on the stack until it returns
-  // (the GPU is then done reading them), error paths included.
-  return device->submit_and_wait(cmd.handle());
+  // One command buffer on a pool no other submit holds, one submit under the
+  // device's queue lock, one fence wait.
+  bool in_flight = false;
+  Status submitted = device->submit_single_time(
+      [&records](VkCommandBuffer cmd) {
+        for (const auto& record : records) {
+          record(cmd);
+        }
+      },
+      nullptr, &in_flight);
+  if (!submitted.ok() && in_flight) {
+    release_after_failed_wait(*device, std::move(staging));
+  }
+  return submitted;
 }
 
 Result<Texture> upload_texture(const Device& device, Allocator& allocator,

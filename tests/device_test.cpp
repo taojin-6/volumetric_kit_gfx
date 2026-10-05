@@ -1,674 +1,164 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
+// gfx's side of the device: the requirements the renderer brings, a device
+// made from them, and the shared-device seam. The instance, physical device
+// and device are volumetric_kit_core's, whose own tests cover them.
+
 #include <gtest/gtest.h>
 
-#include <cstring>
-#include <mutex>
+#include <cstdint>
 #include <utility>
 
-// Internal helper header: the DebugUtils tests re-derive the expected
-// debug-utils enable decision from the loader's reported instance extensions
-// (has_extension / instance_extensions), matching how Instance::create decides.
-#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
+#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// The shared instance + physical-device + headless logical-device fixture.
+// The shared instance + physical-device + headless logical-device fixture,
+// its device made from device_requirements().
 using DeviceTest = VulkanDeviceTest;
 
-// Build an AdoptedDevice that borrows a live device on its graphics queue — the
-// shared-VkDevice interop shape. A default config needs no device extensions,
-// so no enabled-extension declaration is required; the two version-core feature
-// bits are declared because Device::create enables both and adopt verifies the
-// declaration rather than mere physical-device support.
-vg::AdoptedDevice borrow_device(VkInstance instance, VkPhysicalDevice physical,
+// A device made to another library's requirements -- the core's defaults:
+// Vulkan 1.2 on a compute queue, without dynamic rendering -- as an embedder
+// might hand gfx one made for recon.
+class ForeignDeviceTest : public VulkanDeviceTest {
+ protected:
+  vg::DeviceRequirements requirements() const override { return {}; }
+};
+
+// Borrow a live device on its queue, declaring what Device::create enabled
+// for the renderer's requirements -- the shared-VkDevice interop shape.
+vg::AdoptedDevice borrow_device(const vg::Instance& instance,
                                 const vg::Device& device) {
   vg::AdoptedDevice adopted;
-  adopted.instance = instance;
-  adopted.physical_device = physical;
+  adopted.instance = instance.handle();
+  adopted.instance_api_version = instance.api_version();
+  adopted.physical_device = device.physical_device();
   adopted.device = device.handle();
-  adopted.graphics_family = device.graphics_family();
-  adopted.graphics_queue = device.graphics_queue();
-  adopted.enabled_timeline_semaphore = true;
-  adopted.enabled_dynamic_rendering = true;
+  adopted.queue_family = device.queue_family();
+  adopted.queue = device.queue();
+  adopted.submit_mutex = device.submit_mutex();
+  adopted.enabled_features.timeline_semaphore = true;
+  adopted.enabled_features.dynamic_rendering = true;
+  adopted.enabled_debug_utils = instance.debug_utils_enabled();
   return adopted;
 }
 
 }  // namespace
 
-TEST_F(DeviceTest, ExposesGraphicsQueueAndCommandPool) {
+// The renderer's floor: Vulkan 1.3 on a graphics queue, with dynamic rendering
+// (every pass) and timeline semaphores (TimelineSemaphore). No present: a
+// windowed caller asks for it.
+TEST(DeviceRequirementsTest, TheRendererFloor) {
+  const vg::DeviceRequirements reqs = vg::device_requirements();
+  EXPECT_EQ(reqs.api_version, VK_API_VERSION_1_3);
+  EXPECT_NE(reqs.queue_flags & VK_QUEUE_GRAPHICS_BIT, 0U);
+  EXPECT_TRUE(reqs.dynamic_rendering);
+  EXPECT_TRUE(reqs.timeline_semaphore);
+  EXPECT_FALSE(reqs.needs_present);
+  EXPECT_TRUE(reqs.extensions.empty());
+}
+
+// An embedder sharing one device with a compute library builds it from the
+// union of both libraries' requirements.
+TEST(DeviceRequirementsTest, MergesWithAComputeLibrarysRequirements) {
+  vg::DeviceRequirements compute;
+  compute.queue_flags = VK_QUEUE_COMPUTE_BIT;
+  compute.scalar_block_layout = true;
+  compute.extensions = {"VK_KHR_external_memory_fd"};
+  vg::DeviceRequirements renderer = vg::device_requirements();
+  renderer.needs_present = true;
+
+  auto both = vg::merge(renderer, compute);
+  ASSERT_TRUE(both.ok()) << both.status().message();
+  EXPECT_EQ(both.value().api_version, VK_API_VERSION_1_3);
+  EXPECT_EQ(both.value().queue_flags,
+            VkQueueFlags{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT});
+  EXPECT_TRUE(both.value().needs_present);
+  EXPECT_TRUE(both.value().dynamic_rendering);
+  EXPECT_TRUE(both.value().scalar_block_layout);
+  EXPECT_EQ(both.value().extensions.size(), 1U);
+}
+
+// A device made from the renderer's requirements has what every pass needs,
+// on a graphics queue.
+TEST_F(DeviceTest, CreatesADeviceTheRendererCanUse) {
   EXPECT_NE(device_->handle(), VK_NULL_HANDLE);
-  EXPECT_NE(device_->graphics_queue(), VK_NULL_HANDLE);
-  EXPECT_NE(device_->command_pool(), VK_NULL_HANDLE);
-  EXPECT_FALSE(device_->has_present());  // headless config
+  EXPECT_NE(device_->queue(), VK_NULL_HANDLE);
+  EXPECT_NE(device_->queue_flags() & VK_QUEUE_GRAPHICS_BIT, 0U);
+  EXPECT_FALSE(device_->has_present());  // headless
+  EXPECT_GE(device_->caps().api_version(), VK_API_VERSION_1_3);
+  const vg::Status enabled = device_->check_enabled(vg::device_requirements());
+  EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
 
 TEST_F(DeviceTest, SingleTimeSubmitRoundTrips) {
   // No-op recording exercises allocate / begin / end / submit / fence-wait.
-  vg::Status status = device_->submit_single_time([](VkCommandBuffer) {});
+  const vg::Status status = device_->submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(status.ok()) << status.message();
 }
 
-TEST_F(DeviceTest, NeedsPresentWithoutSurfaceErrors) {
-  vg::DeviceConfig config;
-  config.needs_present = true;
-  auto device =
-      vg::Device::create(instance_->handle(), physical_, config);  // no surface
-  ASSERT_FALSE(device.ok());
-  EXPECT_EQ(device.status().domain(), vg::Status::Code::InvalidArgument);
-}
-
-TEST_F(DeviceTest, PresentQueuePathNeedsSurface) {
-  // The present-queue success path — has_present(), present_family/queue, and
-  // the graphics==present dedup — needs a real VkSurfaceKHR, which the core
-  // tier cannot create (surfaces are the windowing tier). Document the coverage
-  // gap with an explicit skip so it stays visible until a surface-backed test
-  // lands downstream, rather than being silently uncovered.
-  GTEST_SKIP() << "present-queue success path requires a surface (windowing "
-                  "tier); covered there";
-}
-
-TEST_F(DeviceTest, SelectedDeviceMeetsVulkan13Floor) {
-  // Device::create rejects a sub-1.3 device (shaders target SPIR-V 1.6 and the
-  // timeline-semaphore path uses 1.2 core entry points); the fixture device was
-  // created successfully, so the selected physical device must report >= 1.3.
-  VkPhysicalDeviceProperties props{};
-  vkGetPhysicalDeviceProperties(physical_, &props);
-  EXPECT_GE(props.apiVersion, VK_API_VERSION_1_3);
-}
-
-TEST_F(DeviceTest, FeatureChainWithVulkan12FeaturesEnablesTimeline) {
-  // The headline pNext fix: a caller passing VkPhysicalDeviceVulkan12Features
-  // (which aggregates timelineSemaphore) must NOT also get our standalone
-  // VkPhysicalDeviceTimelineSemaphoreFeatures linked — both in one chain
-  // violates VUID-VkDeviceCreateInfo-pNext-02830. create() instead raises
-  // timelineSemaphore inside the caller's struct. Verify device creation
-  // succeeds and a TimelineSemaphore is usable (proving timeline was enabled).
-  VkPhysicalDeviceVulkan12Features v12{};
-  v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-  // Left timelineSemaphore = VK_FALSE on purpose; create() must raise it.
-  vg::DeviceConfig config;
-  config.feature_chain = &v12;
-
-  auto device = vg::Device::create(instance_->handle(), physical_, config);
-  ASSERT_TRUE(device.ok()) << device.status().message();
-
-  auto timeline = vg::TimelineSemaphore::create(device.value().handle());
-  ASSERT_TRUE(timeline.ok()) << timeline.status().message();
-  EXPECT_TRUE(timeline.value().valid());
-}
-
-TEST_F(DeviceTest, BogusExtensionFailsUnsupported) {
-  vg::DeviceConfig config;
-  config.extra_device_extensions = {"VK_VG_definitely_not_a_real_extension"};
-  auto device = vg::Device::create(instance_->handle(), physical_, config);
-  ASSERT_FALSE(device.ok());
-  EXPECT_EQ(device.status().domain(), vg::Status::Code::Unsupported);
-}
-
-TEST_F(DeviceTest, KnownExtensionRequestSucceeds) {
-  // Request an extension the device actually reports, so create() must accept
-  // it.
-  auto caps = instance_->query_physical_device(physical_);
-  const char* candidate = nullptr;
-  if (caps.supports_device_extension("VK_KHR_portability_subset")) {
-    candidate = "VK_KHR_portability_subset";
-  } else if (caps.supports_device_extension(
-                 VK_KHR_MAINTENANCE2_EXTENSION_NAME)) {
-    candidate = VK_KHR_MAINTENANCE2_EXTENSION_NAME;
-  }
-  if (candidate == nullptr) {
-    GTEST_SKIP() << "device reports no extension to request";
-  }
-  vg::DeviceConfig config;
-  config.extra_device_extensions = {candidate};
-  auto device = vg::Device::create(instance_->handle(), physical_, config);
-  EXPECT_TRUE(device.ok()) << device.status().message();
-}
-
-TEST_F(DeviceTest, CapsReportsSaneExtensionsAndFormats) {
-  const vg::PhysicalDeviceInfo& caps = device_->caps();
-  EXPECT_EQ(caps.handle(), physical_);
-  EXPECT_FALSE(caps.supports_device_extension("VK_VG_not_real"));
-  // R8G8B8A8_UNORM as a sampled OPTIMAL image is required of every conformant
-  // implementation — true on MoltenVK and lavapipe.
-  EXPECT_TRUE(caps.format_supports(VK_FORMAT_R8G8B8A8_UNORM,
-                                   VK_IMAGE_TILING_OPTIMAL,
-                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
-  EXPECT_FALSE(caps.format_supports(VK_FORMAT_UNDEFINED,
-                                    VK_IMAGE_TILING_OPTIMAL,
-                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
-  EXPECT_GT(caps.limits().maxImageDimension2D, 0u);
-}
-
-TEST_F(DeviceTest, CapsExposesFeaturesPropertiesAndFormatProperties) {
-  const vg::PhysicalDeviceInfo& caps = device_->caps();
-  // properties(): a created device reports the >= 1.3 floor and a non-empty
-  // name.
-  EXPECT_GE(caps.properties().apiVersion, VK_API_VERSION_1_3);
-  EXPECT_NE(caps.properties().deviceName[0], '\0');
-  // features2(): query() sets the sType; features() forwards to its inner set.
-  EXPECT_EQ(caps.features2().sType,
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
-  EXPECT_EQ(&caps.features(), &caps.features2().features);
-  // format_properties(): the live query reports the sampled bit for a
-  // ubiquitous optimal-tiling format.
-  VkFormatProperties props = caps.format_properties(VK_FORMAT_R8G8B8A8_UNORM);
-  EXPECT_NE(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
-            0u);
-}
-
-TEST_F(DeviceTest, GraphicsTimestampValidBitsAreConsistent) {
-  // timestampValidBits is reported per queue family in [0, 64]; 0 means the
-  // graphics queue cannot write timestamps (MoltenVK may report this), so don't
-  // assert a specific value — lavapipe reports 64, MoltenVK may report 0. Just
-  // check internal consistency, plus the ns-per-tick conversion factor the
-  // capability gate pairs with.
-  const uint32_t bits = device_->graphics_timestamp_valid_bits();
-  EXPECT_LE(bits, 64u);
-  if (bits > 0) {
-    // If the graphics queue supports timestamps, timestampPeriod (the
-    // tick->nanosecond factor a timing path divides by) must be positive.
-    EXPECT_GT(device_->caps().limits().timestampPeriod, 0.0f);
-  }
-}
-
-TEST_F(DeviceTest, InstanceCapsMatchesDeviceCaps) {
-  // The same physical device, queried via the instance and via the created
-  // device, agrees on extension support.
-  auto via_instance = instance_->query_physical_device(physical_);
-  EXPECT_EQ(via_instance.supports_device_extension("VK_KHR_swapchain"),
-            device_->caps().supports_device_extension("VK_KHR_swapchain"));
-}
-
-TEST_F(DeviceTest, MoveConstructTransfersOwnership) {
-  auto made =
-      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-  ASSERT_TRUE(made.ok()) << made.status().message();
-  vg::Device source = std::move(made).value();
-  ASSERT_NE(source.handle(), VK_NULL_HANDLE);
-
-  vg::Device moved(std::move(source));
-  EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
-  // If the move had not nulled the source, both the moved-from device and
-  // `moved` would vkDestroyDevice the same handle at scope exit — a validation
-  // error.
-  EXPECT_EQ(source.handle(),
-            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-  // Metadata is zeroed too, not just the owned handles: a moved-from device
-  // reports an empty physical device (the recurring "forgot a scalar" miss).
-  EXPECT_EQ(source.physical_device(),
-            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-}
-
-TEST_F(DeviceTest, MoveAssignOverLiveDeviceLeavesSourceEmpty) {
-  auto a =
-      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-  auto b =
-      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-  ASSERT_TRUE(a.ok()) << a.status().message();
-  ASSERT_TRUE(b.ok()) << b.status().message();
-  vg::Device dst = std::move(a).value();
-  vg::Device src = std::move(b).value();
-
-  dst = std::move(src);  // frees dst's original VkDevice, then adopts src's
-  EXPECT_NE(dst.handle(), VK_NULL_HANDLE);
-  EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-}
-
-TEST_F(DeviceTest, SelfMoveAssignIsSafe) {
-  auto made =
-      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-  ASSERT_TRUE(made.ok()) << made.status().message();
-  vg::Device device = std::move(made).value();
-
-  // Pointer-laundered so -Wself-move stays quiet under -Werror.
-  vg::Device* alias = &device;
-  device = std::move(*alias);
-  EXPECT_NE(device.handle(), VK_NULL_HANDLE);
-}
-
-// Instance creation needs only the loader, so this runs without a GPU; it still
-// skips on a truly Vulkan-less host.
-TEST(InstanceTest, MoveConstructLeavesSourceEmpty) {
-  auto instance = vg::Instance::create(vg::InstanceConfig{});
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
-  vg::Instance source = std::move(instance).value();
-  ASSERT_NE(source.handle(), VK_NULL_HANDLE);
-
-  vg::Instance moved(std::move(source));
-  EXPECT_NE(moved.handle(), VK_NULL_HANDLE);
-  EXPECT_EQ(source.handle(),
-            VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-}
-
-TEST(InstanceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  auto a = vg::Instance::create(vg::InstanceConfig{});
-  if (!a.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << a.status().message();
-  }
-  auto b = vg::Instance::create(vg::InstanceConfig{});
-  ASSERT_TRUE(b.ok()) << b.status().message();
-  vg::Instance dst = std::move(a).value();
-  vg::Instance src = std::move(b).value();
-
-  dst = std::move(src);  // destroys dst's original instance, then adopts src's
-  EXPECT_NE(dst.handle(), VK_NULL_HANDLE);
-  EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-}
-
-TEST(InstanceTest, SelfMoveAssignIsSafe) {
-  auto created = vg::Instance::create(vg::InstanceConfig{});
-  if (!created.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << created.status().message();
-  }
-  vg::Instance instance = std::move(created).value();
-
-  vg::Instance* alias = &instance;
-  instance = std::move(*alias);
-  EXPECT_NE(instance.handle(), VK_NULL_HANDLE);
-}
-
-// Exercises the validation path: enabling it drives the debug-messenger
-// create/destroy lifetime (proc-addr resolution, pNext chaining, teardown) and
-// validation_enabled(). On the sanitizers job — which installs the validation
-// layers and runs under ASan — this is where the messenger lifetime and the
-// layer's own handle/lifetime checks get exercised. When the layer is absent,
-// create() warns and disables, so both outcomes are valid; the test asserts the
-// instance is still usable.
-TEST(InstanceTest, ValidationEnabledInstanceIsUsable) {
-  vg::InstanceConfig config;
-  config.enable_validation = true;
-  auto instance = vg::Instance::create(config);
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
-  // validation_enabled() must be coherent: true only if the messenger was
-  // created. Either way the instance must select a device (messenger active or
-  // not).
-  auto physical = instance.value().select_physical_device();
-  if (!physical.ok()) {
-    GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
-  }
-  EXPECT_NE(physical.value(), VK_NULL_HANDLE);
-}
-
-// --- Instance::debug_utils_enabled() + InstanceConfig::enable_debug_utils
-// Named with a DebugUtils prefix and kept at the file tail to localize the diff
-// (a sibling branch also appends to this file).
-
-// Default config requests neither validation nor debug-utils, so the extension
-// stays off and the accessor is coherent with that: false, and distinct from
-// validation_enabled() (also false here).
-TEST(InstanceDebugUtilsTest, DefaultConfigLeavesDebugUtilsDisabled) {
-  auto instance = vg::Instance::create(vg::InstanceConfig{});
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
-  EXPECT_FALSE(instance.value().debug_utils_enabled());
-  EXPECT_FALSE(instance.value().validation_enabled());
-}
-
-// Opt-in path: enable_debug_utils with validation OFF. When the extension is
-// available the accessor reports true; when it is absent it must report false
-// (and never crash). Validation stays off either way, proving the two facts are
-// independent. The extension is enabled iff debug_utils_enabled() is true, so
-// we re-derive the expectation from the loader's reported instance extensions
-// and require an exact match — the single-decision invariant.
-TEST(InstanceDebugUtilsTest, OptInEnablesDebugUtilsWithoutValidation) {
-  vg::InstanceConfig config;
-  config.enable_debug_utils = true;
-  auto instance = vg::Instance::create(config);
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
-  const bool ext_present = vg::has_extension(vg::instance_extensions(),
-                                             VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-  EXPECT_EQ(instance.value().debug_utils_enabled(), ext_present);
-  // Opting into debug-utils must not turn validation on.
-  EXPECT_FALSE(instance.value().validation_enabled());
-}
-
-// With validation ON, debug_utils_enabled() stays coherent with today's
-// behavior via two implications that hold on every path (including the degraded
-// one where the extension is enabled but the messenger fails to create):
-//   * the messenger lives only alongside the extension, so validation_enabled()
-//     implies debug_utils_enabled();
-//   * the flag is never true without the extension actually being present.
-TEST(InstanceDebugUtilsTest, ValidationKeepsDebugUtilsCoherent) {
-  vg::InstanceConfig config;
-  config.enable_validation = true;
-  auto instance = vg::Instance::create(config);
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
-  const bool debug_utils = instance.value().debug_utils_enabled();
-  if (instance.value().validation_enabled()) {
-    EXPECT_TRUE(debug_utils);
-  }
-  if (debug_utils) {
-    EXPECT_TRUE(vg::has_extension(vg::instance_extensions(),
-                                  VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
-  }
-}
-
-// The flag is metadata that must follow ownership: a moved-from instance
-// reports false, and the destination inherits the source's state.
-TEST(InstanceDebugUtilsTest, MoveTransfersDebugUtilsFlag) {
-  vg::InstanceConfig config;
-  config.enable_debug_utils = true;
-  auto created = vg::Instance::create(config);
-  if (!created.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << created.status().message();
-  }
-  vg::Instance source = std::move(created).value();
-  const bool had_debug_utils = source.debug_utils_enabled();
-
-  vg::Instance moved(std::move(source));
-  EXPECT_EQ(moved.debug_utils_enabled(), had_debug_utils);
-  EXPECT_FALSE(
-      source.debug_utils_enabled());  // NOLINT(bugprone-use-after-move)
-}
-
-// Move-assignment must carry the flag too: assigning over a live instance runs
-// the destroy()-then-adopt path, so the destination takes the source's state
-// and the moved-from source is emptied.
-TEST(InstanceDebugUtilsTest, MoveAssignTransfersDebugUtilsFlag) {
-  vg::InstanceConfig config;
-  config.enable_debug_utils = true;
-  auto created_src = vg::Instance::create(config);
-  auto created_dst = vg::Instance::create(config);
-  if (!created_src.ok() || !created_dst.ok()) {
-    GTEST_SKIP() << "no Vulkan instance";
-  }
-  vg::Instance source = std::move(created_src).value();
-  vg::Instance dest = std::move(created_dst).value();
-  const bool had_debug_utils = source.debug_utils_enabled();
-
-  dest = std::move(source);
-  EXPECT_EQ(dest.debug_utils_enabled(), had_debug_utils);
-  EXPECT_FALSE(
-      source.debug_utils_enabled());  // NOLINT(bugprone-use-after-move)
-}
-
-// Self-move is a no-op for the flag (and the instance): launder through a
-// pointer so -Wself-move under -Werror doesn't reject the assignment.
-TEST(InstanceDebugUtilsTest, SelfMoveKeepsDebugUtilsFlag) {
-  vg::InstanceConfig config;
-  config.enable_debug_utils = true;
-  auto created = vg::Instance::create(config);
-  if (!created.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << created.status().message();
-  }
-  vg::Instance instance = std::move(created).value();
-  const bool had_debug_utils = instance.debug_utils_enabled();
-
-  vg::Instance* p = &instance;
-  instance = std::move(*p);
-  EXPECT_EQ(instance.debug_utils_enabled(), had_debug_utils);
-}
-
-// --- Device::requirements / Device::adopt (shared-device interop) -----------
-
-TEST(DeviceRequirementsTest, ReflectConfig) {
-  // A headless default config needs graphics + the core timeline/dynamic
-  // features and no device extensions.
-  vg::DeviceRequirements reqs = vg::Device::requirements(vg::DeviceConfig{});
-  EXPECT_EQ(reqs.api_version, VK_API_VERSION_1_3);
-  EXPECT_TRUE((reqs.queue_flags & VK_QUEUE_GRAPHICS_BIT) != 0);
-  EXPECT_FALSE(reqs.needs_present);
-  EXPECT_TRUE(reqs.timeline_semaphore);
-  EXPECT_TRUE(reqs.dynamic_rendering);
-  EXPECT_TRUE(reqs.device_extensions.empty());
-
-  // needs_present pulls in VK_KHR_swapchain as a requirement.
-  vg::DeviceConfig present_config;
-  present_config.needs_present = true;
-  vg::DeviceRequirements present = vg::Device::requirements(present_config);
-  EXPECT_TRUE(present.needs_present);
-  ASSERT_EQ(present.device_extensions.size(), 1u);
-  EXPECT_STREQ(present.device_extensions.front(),
-               VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-}
-
-TEST(DeviceAdoptTest, RejectsNullHandles) {
-  auto adopted = vg::Device::adopt(vg::AdoptedDevice{}, vg::DeviceConfig{});
-  ASSERT_FALSE(adopted.ok());
-  EXPECT_EQ(adopted.status().domain(), vg::Status::Code::InvalidArgument);
-}
-
-// A physical device that *supports* a feature says nothing about whether the
-// creator *enabled* it on the logical device, and Vulkan offers no query for
-// the latter. Every Vulkan 1.3 device supports dynamicRendering, so verifying
-// against support alone would let a compute-focused embedder (one that left
-// VkPhysicalDeviceVulkan13Features zeroed) adopt cleanly and then hit
-// VUID-vkCmdBeginRendering-dynamicRendering-06446 on every frame. adopt must
-// reject the undeclared case instead.
-TEST_F(DeviceTest, AdoptRejectsUndeclaredCoreFeatures) {
-  vg::AdoptedDevice base =
-      borrow_device(instance_->handle(), physical_, *device_);
-
-  vg::AdoptedDevice no_timeline = base;
-  no_timeline.enabled_timeline_semaphore = false;
-  auto without_timeline = vg::Device::adopt(no_timeline, vg::DeviceConfig{});
-  ASSERT_FALSE(without_timeline.ok());
-  EXPECT_EQ(without_timeline.status().domain(), vg::Status::Code::Unsupported);
-
-  vg::AdoptedDevice no_dynamic = base;
-  no_dynamic.enabled_dynamic_rendering = false;
-  auto without_dynamic = vg::Device::adopt(no_dynamic, vg::DeviceConfig{});
-  ASSERT_FALSE(without_dynamic.ok());
-  EXPECT_EQ(without_dynamic.status().domain(), vg::Status::Code::Unsupported);
-
-  // Core 1.0 features are declaration-checked the same way: request one the
-  // creator did not declare as enabled and adopt refuses, even though the
-  // physical device supports it.
-  VkPhysicalDeviceFeatures supported{};
-  vkGetPhysicalDeviceFeatures(physical_, &supported);
-  if (supported.fillModeNonSolid == VK_TRUE) {
-    vg::DeviceConfig config;
-    config.features.fillModeNonSolid = VK_TRUE;
-    auto undeclared = vg::Device::adopt(base, config);  // enabled_features = {}
-    ASSERT_FALSE(undeclared.ok());
-    EXPECT_EQ(undeclared.status().domain(), vg::Status::Code::Unsupported);
-
-    // Declared: the same config now adopts.
-    vg::AdoptedDevice declared = base;
-    declared.enabled_features.fillModeNonSolid = VK_TRUE;
-    auto ok = vg::Device::adopt(declared, config);
-    EXPECT_TRUE(ok.ok()) << ok.status().message();
-  }
-}
-
-TEST_F(DeviceTest, AdoptBorrowsSharedDeviceWithoutOwningIt) {
-  // Borrow the fixture's live device by its raw handles — the shared-VkDevice
-  // interop case. A default config needs no device extensions, so no
-  // enabled-extension declaration is required; the two version-core feature
-  // bits must still be declared (Device::create enabled both).
-  vg::AdoptedDevice adopted;
-  adopted.instance = instance_->handle();
-  adopted.physical_device = physical_;
-  adopted.device = device_->handle();
-  adopted.graphics_family = device_->graphics_family();
-  adopted.graphics_queue = device_->graphics_queue();
-  adopted.enabled_timeline_semaphore = true;
-  adopted.enabled_dynamic_rendering = true;
-
+// The shared-device seam: the renderer adopts a device another library made,
+// held to its own requirements, and leaves it alive when it goes.
+TEST_F(DeviceTest, AdoptBorrowsASharedDeviceWithoutOwningIt) {
   {
-    auto borrowed = vg::Device::adopt(adopted, vg::DeviceConfig{});
+    auto borrowed = vg::Device::adopt(borrow_device(*instance_, *device_),
+                                      vg::device_requirements());
     ASSERT_TRUE(borrowed.ok()) << borrowed.status().message();
     EXPECT_FALSE(borrowed.value().owns_device());
     EXPECT_EQ(borrowed.value().handle(), device_->handle());
-    // It owns its own command pool on the shared device, distinct from the
-    // owner's.
-    EXPECT_NE(borrowed.value().command_pool(), VK_NULL_HANDLE);
-    EXPECT_NE(borrowed.value().command_pool(), device_->command_pool());
-    // Fully usable: records + submits on the shared queue.
-    vg::Status s = borrowed.value().submit_single_time([](VkCommandBuffer) {});
+    EXPECT_EQ(borrowed.value().queue(), device_->queue());
+    // Fully usable: records + submits on the shared queue, under its lock.
+    const vg::Status s =
+        borrowed.value().submit_single_time([](VkCommandBuffer) {});
     EXPECT_TRUE(s.ok()) << s.message();
   }  // borrowed destructs here — it must NOT destroy the underlying VkDevice.
 
   // The owner's device is still valid: a second submit proves the adopted
   // wrapper left it intact (a double-free trips the sanitizer job; a
   // use-after-free would fail this submit).
-  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  const vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(after.ok()) << after.message();
 }
 
-TEST(DeviceRequirementsTest, DedupsExtensionsAndPassesFeatureChain) {
-  // needs_external_memory implies the two fd extensions; a caller that ALSO
-  // lists one must not produce a duplicate (vkCreateDevice rejects duplicate
-  // extension names). features and feature_chain pass through for the embedder.
-  int chain_sentinel = 0;
-  vg::DeviceConfig config;
-  config.needs_external_memory = true;
-  config.extra_device_extensions = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-                                    "VK_KHR_shader_clock"};
-  config.features.samplerAnisotropy = VK_TRUE;
-  config.feature_chain = &chain_sentinel;
-
-  vg::DeviceRequirements reqs = vg::Device::requirements(config);
-  size_t fd_count = 0;
-  for (const char* name : reqs.device_extensions) {
-    if (std::strcmp(name, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) == 0) {
-      ++fd_count;
-    }
-  }
-  EXPECT_EQ(fd_count, 1u);  // implied once, the caller's duplicate dropped
-  EXPECT_EQ(reqs.features.samplerAnisotropy, VK_TRUE);
-  EXPECT_EQ(reqs.feature_chain, &chain_sentinel);
+// A share that did not enable what the renderer needs is refused, naming it,
+// rather than failing later inside a pass.
+TEST_F(DeviceTest, AdoptRefusesAShareWithoutDynamicRendering) {
+  vg::AdoptedDevice adopted = borrow_device(*instance_, *device_);
+  adopted.enabled_features.dynamic_rendering = false;
+  auto borrowed = vg::Device::adopt(adopted, vg::device_requirements());
+  ASSERT_FALSE(borrowed.ok());
+  EXPECT_EQ(borrowed.status().domain(), vg::Status::Code::Unsupported)
+      << borrowed.status().message();
 }
 
-TEST_F(DeviceTest, AdoptRejectsNeedsPresentWithoutPresentQueue) {
-  vg::AdoptedDevice adopted =
-      borrow_device(instance_->handle(), physical_, *device_);
-  vg::DeviceConfig config;
-  config.needs_present = true;  // but adopted.has_present stays false
-  auto result = vg::Device::adopt(adopted, config);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
-}
+// gfx's entry points hold a device they did not make to the renderer's floor,
+// rather than record barriers its queue may not support or passes it did not
+// enable dynamic rendering for.
+TEST_F(ForeignDeviceTest, RendererEntryPointsRefuseIt) {
+  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
-TEST_F(DeviceTest, AdoptRejectsHasPresentWithoutPresentQueue) {
-  vg::AdoptedDevice adopted =
-      borrow_device(instance_->handle(), physical_, *device_);
-  adopted.has_present = true;
-  adopted.present_queue = VK_NULL_HANDLE;  // inconsistent with has_present
-  auto result = vg::Device::adopt(adopted, vg::DeviceConfig{});
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
-}
+  auto batch = vg::UploadBatch::begin(*device_, allocator.value());
+  ASSERT_FALSE(batch.ok());
+  EXPECT_EQ(batch.status().domain(), vg::Status::Code::Unsupported)
+      << batch.status().message();
 
-TEST_F(DeviceTest, AdoptRejectsGraphicsFamilyOutOfRange) {
-  vg::AdoptedDevice adopted =
-      borrow_device(instance_->handle(), physical_, *device_);
-  adopted.graphics_family = 10000;  // past any real family count
-  auto result = vg::Device::adopt(adopted, vg::DeviceConfig{});
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
-}
+  const std::uint32_t word = 0;
+  vg::BufferUploadDesc desc;
+  desc.data = &word;
+  desc.size = sizeof(word);
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  auto buffer = vg::upload_buffer(*device_, allocator.value(), desc);
+  ASSERT_FALSE(buffer.ok());
+  EXPECT_EQ(buffer.status().domain(), vg::Status::Code::Unsupported);
 
-TEST_F(DeviceTest, AdoptRejectsUndeclaredRequiredExtension) {
-  // needs_present requires VK_KHR_swapchain be declared enabled; a borrow that
-  // declares no enabled extensions is rejected before any device is touched.
-  vg::AdoptedDevice adopted =
-      borrow_device(instance_->handle(), physical_, *device_);
-  adopted.has_present = true;
-  // adopt cannot verify present-capability without a surface, so reuse the
-  // graphics queue/family as the present one for this rejection test.
-  adopted.present_queue = device_->graphics_queue();
-  adopted.present_family = device_->graphics_family();
-  vg::DeviceConfig config;
-  config.needs_present = true;
-  auto result = vg::Device::adopt(adopted, config);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vg::Status::Code::Unsupported);
-}
-
-TEST_F(DeviceTest, AdoptMoveConstructTransfersBorrowWithoutOwning) {
-  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
-  {
-    auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
-    ASSERT_TRUE(adopted.ok()) << adopted.status().message();
-    vg::Device src = std::move(adopted).value();
-    ASSERT_FALSE(src.owns_device());
-    const VkCommandPool src_pool = src.command_pool();
-
-    vg::Device moved(std::move(src));
-    EXPECT_FALSE(moved.owns_device());
-    EXPECT_EQ(moved.handle(), device_->handle());
-    EXPECT_EQ(moved.command_pool(), src_pool);  // pool ownership transferred
-    // The moved-from source is empty AND reset to the owns_device_ default, so
-    // its destructor is a no-op (the recurring "forgot a scalar" miss).
-    EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-    EXPECT_TRUE(src.owns_device());           // NOLINT(bugprone-use-after-move)
-  }  // moved (non-owning) frees only its pool; src is a no-op.
-  // The fixture device survived — the adopted wrapper never owned it.
-  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
-  EXPECT_TRUE(after.ok()) << after.message();
-}
-
-TEST_F(DeviceTest, AdoptMoveAssignOverOwnedDeviceLeavesSourceEmpty) {
-  // Move an ADOPTED (borrowed) device over a live OWNED one: the owned VkDevice
-  // is destroyed, and the result is non-owning — it must not later destroy the
-  // borrowed fixture device (the destroy()-then-adopt path double-frees live).
-  auto owned =
-      vg::Device::create(instance_->handle(), physical_, vg::DeviceConfig{});
-  ASSERT_TRUE(owned.ok()) << owned.status().message();
-  vg::Device dst = std::move(owned).value();
-
-  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
-  {
-    auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
-    ASSERT_TRUE(adopted.ok()) << adopted.status().message();
-    vg::Device src = std::move(adopted).value();
-
-    dst = std::move(src);  // frees dst's owned VkDevice, adopts src's borrow
-    EXPECT_FALSE(dst.owns_device());
-    EXPECT_EQ(dst.handle(), device_->handle());
-    EXPECT_EQ(src.handle(), VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
-    EXPECT_TRUE(src.owns_device());           // NOLINT(bugprone-use-after-move)
-  }
-  // dst (non-owning) leaves the fixture device intact; prove it still submits.
-  vg::Status after = device_->submit_single_time([](VkCommandBuffer) {});
-  EXPECT_TRUE(after.ok()) << after.message();
-}
-
-TEST_F(DeviceTest, AdoptSelfMoveIsSafe) {
-  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
-  auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
-  ASSERT_TRUE(adopted.ok()) << adopted.status().message();
-  vg::Device device = std::move(adopted).value();
-
-  // Pointer-laundered so -Wself-move stays quiet under -Werror.
-  vg::Device* alias = &device;
-  device = std::move(*alias);
-  EXPECT_FALSE(device.owns_device());
-  EXPECT_EQ(device.handle(), device_->handle());
-  // Still fully usable (and still borrowing, not owning).
-  vg::Status s = device.submit_single_time([](VkCommandBuffer) {});
-  EXPECT_TRUE(s.ok()) << s.message();
-}
-
-TEST_F(DeviceTest, AdoptSubmitsUnderSharedQueueMutex) {
-  // A shared-queue borrow: submits run under the provided mutex. Exercise the
-  // lock path (submit_single_time -> queue_submit) and the queue-scoped
-  // wait_idle path with a non-null submit_mutex.
-  std::mutex shared;
-  vg::AdoptedDevice a = borrow_device(instance_->handle(), physical_, *device_);
-  a.submit_mutex = &shared;
-  auto adopted = vg::Device::adopt(a, vg::DeviceConfig{});
-  ASSERT_TRUE(adopted.ok()) << adopted.status().message();
-  EXPECT_EQ(adopted.value().submit_mutex(), &shared);
-
-  vg::Status submitted =
-      adopted.value().submit_single_time([](VkCommandBuffer) {});
-  EXPECT_TRUE(submitted.ok()) << submitted.message();
-  vg::Status idled = adopted.value().wait_idle();
-  EXPECT_TRUE(idled.ok()) << idled.message();
+  auto profiler = vg::Profiler::create(*device_);
+  ASSERT_FALSE(profiler.ok());
+  EXPECT_EQ(profiler.status().domain(), vg::Status::Code::Unsupported)
+      << profiler.status().message();
 }

@@ -65,32 +65,34 @@ Result<WindowedApp> WindowedApp::create(const WindowedAppConfig& config,
   // allocator), so each must be created at its resting place, never moved
   // afterwards. A failure at any step returns through VG_ASSIGN and the
   // partially built State unwinds in reverse member order.
+  //
+  // The renderer's floor, whatever config.device holds (see HeadlessApp), and
+  // presentation: a windowed app always presents.
+  VG_ASSIGN(DeviceRequirements reqs,
+            merge(device_requirements(), config.device));
+  reqs.needs_present = true;
+
   auto state = std::make_unique<State>();
 
   InstanceConfig instance_config;
   instance_config.app_name = config.app_name;
   instance_config.enable_validation = config.enable_validation;
-  instance_config.extra_instance_extensions = config.instance_extensions;
+  instance_config.extensions = config.instance_extensions;
   VG_ASSIGN(Instance instance, Instance::create(instance_config));
   state->instance.emplace(std::move(instance));
 
   VG_TRY(make_surface(*state, state->instance->handle(), create_surface,
                       "WindowedApp::create"));
 
-  // One surface threads through selection, DeviceConfig::needs_present, and
-  // Device::create, so the three stay consistent by construction.
-  VG_ASSIGN(VkPhysicalDevice physical,
-            state->instance->select_physical_device(state->surface.handle()));
-  DeviceConfig device_config = config.device;
-  device_config.needs_present = true;
-  // The device-level debug-utils table can only be loaded when the *instance*
-  // enabled VK_EXT_debug_utils; without this every label and object name on the
-  // resulting device is a silent no-op, so a capture of a validation-enabled
-  // app would show no pass markers at all.
-  device_config.enable_debug_utils = state->instance->debug_utils_enabled();
-  VG_ASSIGN(Device device,
-            Device::create(state->instance_handle, physical, device_config,
-                           state->surface.handle()));
+  // One surface and one set of requirements thread through selection and
+  // Device::create, so the device chosen presents to this surface and is one
+  // the create accepts. The device learns from the instance whether
+  // VK_EXT_debug_utils was enabled, so labels work or no-op.
+  VG_ASSIGN(
+      PhysicalDeviceInfo physical,
+      state->instance->select_physical_device(reqs, state->surface.handle()));
+  VG_ASSIGN(Device device, Device::create(*state->instance, physical, reqs,
+                                          state->surface.handle()));
   state->device.emplace(std::move(device));
 
   VG_TRY(finish_bring_up(*state, config));
@@ -110,11 +112,15 @@ Result<WindowedApp> WindowedApp::adopt(const AdoptedDevice& adopted,
   // queue families, extensions, features -- but those can only run later.
   if (adopted.instance == VK_NULL_HANDLE ||
       adopted.physical_device == VK_NULL_HANDLE ||
-      adopted.device == VK_NULL_HANDLE ||
-      adopted.graphics_queue == VK_NULL_HANDLE) {
+      adopted.device == VK_NULL_HANDLE || adopted.queue == VK_NULL_HANDLE) {
     return Status::invalid_argument(
-        "WindowedApp::adopt: instance, physical device, device, and graphics "
-        "queue must be non-null");
+        "WindowedApp::adopt: instance, physical device, device, and queue "
+        "must be non-null");
+  }
+  if (adopted.instance_api_version == 0) {
+    return Status::invalid_argument(
+        "WindowedApp::adopt: instance_api_version must be set to the version "
+        "the instance was created with");
   }
   // A windowed app must present, so refuse a compute-only share rather than
   // let it fail deeper as a missing present queue.
@@ -123,6 +129,10 @@ Result<WindowedApp> WindowedApp::adopt(const AdoptedDevice& adopted,
         "WindowedApp::adopt: adopted device must carry a present queue "
         "(set has_present and present_queue)");
   }
+  // The share is held to the renderer's floor, as create() builds to it.
+  VG_ASSIGN(DeviceRequirements reqs,
+            merge(device_requirements(), config.device));
+  reqs.needs_present = true;
 
   auto state = std::make_unique<State>();
 
@@ -132,13 +142,10 @@ Result<WindowedApp> WindowedApp::adopt(const AdoptedDevice& adopted,
   VG_TRY(make_surface(*state, adopted.instance, create_surface,
                       "WindowedApp::adopt"));
 
-  // No physical-device selection: the embedder already chose one.
-  DeviceConfig device_config = config.device;
-  device_config.needs_present = true;
-  // The instance is the embedder's, so its debug-utils state cannot be queried
-  // here -- it is declared on the share instead.
-  device_config.enable_debug_utils = adopted.enabled_debug_utils;
-  VG_ASSIGN(Device device, Device::adopt(adopted, device_config));
+  // No physical-device selection: the embedder already chose one. The
+  // instance is the embedder's, so its debug-utils state is declared on the
+  // share (AdoptedDevice::enabled_debug_utils).
+  VG_ASSIGN(Device device, Device::adopt(adopted, reqs));
   state->device.emplace(std::move(device));
 
   // create() gets this by construction -- it picks the present family *for*
