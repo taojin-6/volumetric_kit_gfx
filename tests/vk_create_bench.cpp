@@ -12,7 +12,13 @@
 //   vg_vk_create_bench --copies K [cycles]
 //       K processes at once, each running `cycles` cycles; prints the
 //       machine-wide rate of create/destroy cycles per second
+//   vg_vk_create_bench --leak-check [--layers] [cycles]
+//       `cycles` cycles in one process (default 100), printing the process's
+//       open file descriptors, threads and resident memory every 10 cycles,
+//       and the VkResult of the first call that fails; --layers enables
+//       VK_LAYER_KHRONOS_validation, as the validating test fixtures do
 
+#include <dirent.h>
 #include <spawn.h>
 #include <sys/wait.h>
 
@@ -22,9 +28,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 extern char** environ;
@@ -61,6 +69,14 @@ struct Phases {
 
 // One cycle: everything a GPU test's fixture does to get a device and give
 // it back. Returns false (after printing why) on a Vulkan failure.
+bool g_layers = false;  // --layers: enable the validation layer
+
+void report_failure(const char* call, VkResult result) {
+  std::fprintf(stderr, "bench: %s failed: %s (%d)\n", call,
+               std::string(volumetric_kit::core::to_string(result)).c_str(),
+               static_cast<int>(result));
+}
+
 bool one_cycle(Phases& t) {
   uint32_t count = 0;
   vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
@@ -83,11 +99,17 @@ bool one_cycle(Phases& t) {
     ici.enabledExtensionCount = 1;
     ici.ppEnabledExtensionNames = &portability_ext;
   }
+  const char* layer = "VK_LAYER_KHRONOS_validation";
+  if (g_layers) {
+    ici.enabledLayerCount = 1;
+    ici.ppEnabledLayerNames = &layer;
+  }
 
   Clock::time_point start = Clock::now();
   VkInstance instance = VK_NULL_HANDLE;
-  if (vkCreateInstance(&ici, nullptr, &instance) != VK_SUCCESS) {
-    std::fprintf(stderr, "bench: vkCreateInstance failed\n");
+  const VkResult instance_result = vkCreateInstance(&ici, nullptr, &instance);
+  if (instance_result != VK_SUCCESS) {
+    report_failure("vkCreateInstance", instance_result);
     return false;
   }
   t.instance.push_back(ms_since(start));
@@ -149,8 +171,9 @@ bool one_cycle(Phases& t) {
 
   start = Clock::now();
   VkDevice device = VK_NULL_HANDLE;
-  if (vkCreateDevice(gpu, &dci, nullptr, &device) != VK_SUCCESS) {
-    std::fprintf(stderr, "bench: vkCreateDevice failed\n");
+  const VkResult device_result = vkCreateDevice(gpu, &dci, nullptr, &device);
+  if (device_result != VK_SUCCESS) {
+    report_failure("vkCreateDevice", device_result);
     vkDestroyInstance(instance, nullptr);
     return false;
   }
@@ -200,6 +223,51 @@ int run_cycles(int cycles, const char* label) {
   return 0;
 }
 
+// What the process holds now: open file descriptors (via /dev/fd, on Linux
+// and macOS), and threads and resident memory from /proc where it exists.
+std::string process_usage() {
+  int fds = -1;
+  if (DIR* dir = opendir("/dev/fd")) {
+    fds = 0;
+    while (readdir(dir) != nullptr) {
+      ++fds;
+    }
+    closedir(dir);
+    fds -= 3;  // ".", "..", and the descriptor this listing holds open
+  }
+  std::string threads = "?";
+  std::string rss = "?";
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.rfind("Threads:", 0) == 0) {
+      threads = line.substr(line.find_first_not_of(" \t", 8));
+    } else if (line.rfind("VmRSS:", 0) == 0) {
+      rss = line.substr(line.find_first_not_of(" \t", 6));
+    }
+  }
+  return "fds " + std::to_string(fds) + ", threads " + threads + ", rss " + rss;
+}
+
+int run_leak_check(int cycles) {
+  std::printf("bench: before any cycle: %s\n", process_usage().c_str());
+  Phases t;
+  for (int i = 1; i <= cycles; ++i) {
+    if (!one_cycle(t)) {
+      std::printf("bench: cycle %d FAILED (see above); %s\n", i,
+                  process_usage().c_str());
+      std::fflush(stdout);
+      return 1;
+    }
+    if (i % 10 == 0) {
+      std::printf("bench: after %3d cycles: %s\n", i, process_usage().c_str());
+    }
+  }
+  std::printf("bench: all %d cycles succeeded\n", cycles);
+  std::fflush(stdout);
+  return 0;
+}
+
 int run_copies(const char* self, int copies, int cycles) {
   const std::string cycles_arg = std::to_string(cycles);
   std::vector<pid_t> children;
@@ -238,6 +306,14 @@ int run_copies(const char* self, int copies, int cycles) {
 int main(int argc, char** argv) {
   if (argc >= 4 && std::strcmp(argv[1], "--child") == 0) {
     return run_cycles(std::atoi(argv[2]), argv[3]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--leak-check") == 0) {
+    int next = 2;
+    if (argc > next && std::strcmp(argv[next], "--layers") == 0) {
+      g_layers = true;
+      ++next;
+    }
+    return run_leak_check(argc > next ? std::atoi(argv[next]) : 100);
   }
   if (argc >= 3 && std::strcmp(argv[1], "--copies") == 0) {
     const int cycles = argc >= 4 ? std::atoi(argv[3]) : 10;

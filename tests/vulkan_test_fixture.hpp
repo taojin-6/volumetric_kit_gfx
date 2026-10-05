@@ -38,6 +38,7 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
@@ -84,7 +85,13 @@ class VulkanDeviceTest : public ::testing::Test {
     shader_accesses.reset();
     sync.reset();
     if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+      // TEMPORARY (draft PR): name the VkResult, to explain the skips.
+      const auto result = vkc::vk_result(instance.status());
+      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message()
+                   << " ("
+                   << (result ? std::string(vkc::to_string(*result))
+                              : std::string("no VkResult"))
+                   << ")";
     }
     instance_.emplace(std::move(instance).value());
 
