@@ -15,8 +15,8 @@
 #include <utility>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -175,7 +175,7 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator, {kSize, kSize});
 
-  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -232,7 +232,7 @@ TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
   vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_depth_target(allocator, {kSize, kSize});
 
-  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

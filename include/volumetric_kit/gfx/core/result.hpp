@@ -104,7 +104,7 @@ using core::vk_result;
 ///          `VK_SUBOPTIMAL_KHR`, `VK_INCOMPLETE`, `VK_NOT_READY`, and
 ///          `VK_TIMEOUT` -- as a failure to early-return. For a call that can
 ///          return more than one success code (e.g. `vkAcquireNextImageKHR`),
-///          hand-roll the check as @ref Fence::wait does.
+///          hand-roll the check as `core::Fence::wait` does.
 ///
 /// @code
 /// VG_VK_TRY(vkCreateDevice(phys, &ci, nullptr, &dev_));

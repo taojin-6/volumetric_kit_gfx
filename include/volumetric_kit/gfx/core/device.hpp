@@ -48,7 +48,7 @@ using core::merge;
 /// @brief The requirements the renderer brings to a device.
 ///
 /// Vulkan 1.3 on a graphics queue, with `dynamicRendering` (every pass records
-/// `vkCmdBeginRendering`) and `timelineSemaphore` (@ref TimelineSemaphore).
+/// `vkCmdBeginRendering`) and `timelineSemaphore` (`core::TimelineSemaphore`).
 /// Set `needs_present` for a swapchain -- the core then requires a present
 /// queue for the surface and enables `VK_KHR_swapchain` -- and add extensions
 /// or features a technique needs (`fillModeNonSolid` for a wireframe

@@ -16,9 +16,9 @@
 
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -126,7 +126,7 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
   void render_mesh(vg::OffscreenTarget& target,
                    const vg::GraphicsPipeline& pipeline, VkBuffer vbuf,
                    VkBuffer ibuf, uint32_t count) {
-    auto pool = vg::CommandPool::create(device(), device_->queue_family());
+    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -273,7 +273,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
       build_pipeline(target.value().layout(), vert, frag);
   ASSERT_TRUE(pipeline.valid());
 
-  auto pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -409,9 +409,9 @@ vg::GraphicsPipeline build_mesh_pipeline(
 
 // Built from the shader pair that reflects a descriptor set (mesh_mvp.vert
 // declares set 0, a uniform buffer) rather than the set-less triangle pair,
-// because the owned std::vector<DescriptorSetLayout> is the member a defaulted
-// move-assign would clear on self-move -- while the two self-guarded
-// UniqueHandle members kept valid() and handle() intact, hiding it.
+// because the owned std::vector<core::DescriptorSetLayout> is the member a
+// defaulted move-assign would clear on self-move -- while the two self-guarded
+// core::UniqueHandle members kept valid() and handle() intact, hiding it.
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
@@ -440,7 +440,7 @@ TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   // ...and still be live objects: allocating a set from the layout would be a
   // use-after-free if the self-move had destroyed it.
   const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
-  auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+  auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
   ASSERT_TRUE(set.ok()) << set.status().message();
@@ -643,13 +643,13 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   ASSERT_NE(pipeline.descriptor_set_layout(0), VK_NULL_HANDLE);
 
   const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
-  auto pool = vg::DescriptorPool::create(device(), &pool_size, 1, 1);
+  auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
   ASSERT_TRUE(set.ok()) << set.status().message();
   set.value().write_uniform_buffer(0, ubo.handle(), 0, sizeof(mvp));
 
-  auto cmd_pool = vg::CommandPool::create(device(), device_->queue_family());
+  auto cmd_pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(cmd_pool.ok()) << cmd_pool.status().message();
   auto cmd = cmd_pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

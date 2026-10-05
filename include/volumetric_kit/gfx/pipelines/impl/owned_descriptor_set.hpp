@@ -12,7 +12,7 @@
 #include <utility>
 
 #include "volumetric_kit/core/vulkan/buffer.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -38,7 +38,7 @@ Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
                                                VkDeviceSize size);
 
 /// @brief Owns the one-set descriptor resources the PBR set-0 / set-1 bindings
-///        share: a one-set @ref DescriptorPool, the @ref DescriptorSet it
+///        share: a one-set `core::DescriptorPool`, the `core::DescriptorSet` it
 ///        allocates, and a share of the uniform buffer bound at binding 0.
 ///
 /// An internal building block for @ref PbrScene and @ref PbrMaterial that
@@ -50,9 +50,9 @@ Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
 /// @ref write_uniform, or one block of the factor buffer every material of a
 /// @ref PbrMaterial::create_all call shares. The owner then writes its
 /// combined-image-samplers into @ref set. The set is a borrowed handle freed
-/// with the pool, so the move pair nulls it and zeroes the bound range — a
-/// moved-from object is fully empty and its accessors stay consistent with
-/// @ref valid.
+/// with the pool, so the move pair empties it, nulls its cached handle and
+/// zeroes the bound range — a moved-from object is fully empty and its
+/// accessors stay consistent with @ref valid.
 ///
 /// @code
 /// VG_ASSIGN(OwnedDescriptorSet owned,
@@ -86,29 +86,24 @@ class OwnedDescriptorSet {
 
   ~OwnedDescriptorSet() = default;
 
-  // Hand-written so the borrowed set_ handle and the bound range are cleared on
-  // the moved-from object (pool_/ubo_ null themselves); inline so the owning
-  // types keep `= default` moves. See the class brief.
+  // Hand-written so the borrowed set_, its cached handle and the bound range
+  // are cleared on the moved-from object (pool_/ubo_ null themselves); inline
+  // so the owning types keep `= default` moves. See the class brief.
   OwnedDescriptorSet(OwnedDescriptorSet&& other) noexcept
       : pool_(std::move(other.pool_)),
-        set_(other.set_),
+        set_(std::exchange(other.set_, core::DescriptorSet{})),
+        handle_(std::exchange(other.handle_, VK_NULL_HANDLE)),
         ubo_(std::move(other.ubo_)),
-        offset_(other.offset_),
-        range_(other.range_) {
-    other.set_ = DescriptorSet{};
-    other.offset_ = 0;
-    other.range_ = 0;
-  }
+        offset_(std::exchange(other.offset_, 0)),
+        range_(std::exchange(other.range_, 0)) {}
   OwnedDescriptorSet& operator=(OwnedDescriptorSet&& other) noexcept {
     if (this != &other) {
       pool_ = std::move(other.pool_);
-      set_ = other.set_;
+      set_ = std::exchange(other.set_, core::DescriptorSet{});
+      handle_ = std::exchange(other.handle_, VK_NULL_HANDLE);
       ubo_ = std::move(other.ubo_);
-      offset_ = other.offset_;
-      range_ = other.range_;
-      other.set_ = DescriptorSet{};
-      other.offset_ = 0;
-      other.range_ = 0;
+      offset_ = std::exchange(other.offset_, 0);
+      range_ = std::exchange(other.range_, 0);
     }
     return *this;
   }
@@ -146,17 +141,22 @@ class OwnedDescriptorSet {
                      VkDeviceSize size) const;
 
   /// @return The descriptor set, for binding and for writing image samplers.
-  const DescriptorSet& set() const noexcept { return set_; }
+  const core::DescriptorSet& set() const noexcept { return set_; }
 
-  /// @return The set's `VkDescriptorSet` handle (`VK_NULL_HANDLE` when empty).
-  VkDescriptorSet descriptor_set() const noexcept { return set_.handle(); }
+  /// @return The set's `VkDescriptorSet` handle (`VK_NULL_HANDLE` when empty),
+  ///         without asking @ref set whether its pool is alive: this owns the
+  ///         pool, so the set lives exactly as long as the bundle is valid.
+  VkDescriptorSet descriptor_set() const noexcept { return handle_; }
 
   /// @return `true` if this owns a built set.
   bool valid() const noexcept { return pool_.valid(); }
 
  private:
-  DescriptorPool pool_;  // one-set pool that owns set_'s lifetime
-  DescriptorSet set_;  // the allocated set: UBO at binding 0 + the owner's maps
+  core::DescriptorPool pool_;  // one-set pool that owns set_'s lifetime
+  core::DescriptorSet set_;    // the allocated set: UBO at binding 0 + the maps
+  // set_'s handle, cached: binding it per draw then skips set_'s check of a
+  // pool this bundle owns.
+  VkDescriptorSet handle_ = VK_NULL_HANDLE;
   std::shared_ptr<const core::Buffer> ubo_;  // the buffer binding 0 reads
   VkDeviceSize offset_ = 0;  // where binding 0's range starts in ubo_
   VkDeviceSize range_ = 0;   // binding 0's length; 0 until bound

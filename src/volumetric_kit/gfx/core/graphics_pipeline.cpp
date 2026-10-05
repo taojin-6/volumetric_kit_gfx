@@ -9,7 +9,7 @@
 
 namespace volumetric_kit::gfx {
 
-// The move/destroy lifecycle lives in UniqueHandle (see unique_handle.hpp);
+// The move/destroy lifecycle lives in the core's UniqueHandle;
 // here we only validate, assemble the create-info, build the layout + pipeline,
 // and hand them over.
 
@@ -150,13 +150,13 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
         "same (set, binding) with different descriptor types or array sizes");
   }
 
-  std::vector<DescriptorSetLayout> set_layouts;
+  std::vector<core::DescriptorSetLayout> set_layouts;
   std::vector<VkDescriptorSetLayout> set_layout_handles;
   set_layouts.reserve(bindings_per_set.size());
   set_layout_handles.reserve(bindings_per_set.size());
   for (const std::vector<VkDescriptorSetLayoutBinding>& bindings :
        bindings_per_set) {
-    auto set_layout = DescriptorSetLayout::create(
+    auto set_layout = core::DescriptorSetLayout::create(
         device, bindings.data(), static_cast<uint32_t>(bindings.size()));
     if (!set_layout) {
       return set_layout.status();
@@ -191,8 +191,8 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   }
   VkPipelineLayout layout = VK_NULL_HANDLE;
   VG_VK_TRY(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout));
-  UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> owned_layout(device,
-                                                                       layout);
+  core::UniqueHandle<VkPipelineLayout, vkDestroyPipelineLayout> owned_layout(
+      device, layout);
 
   VkPipelineShaderStageCreateInfo stages[2]{};
   stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -314,7 +314,7 @@ Result<GraphicsPipeline> GraphicsPipeline::create(
   result.set_layouts_ = std::move(set_layouts);
   result.layout_ = std::move(owned_layout);
   result.pipeline_ =
-      UniqueHandle<VkPipeline, vkDestroyPipeline>(device, pipeline);
+      core::UniqueHandle<VkPipeline, vkDestroyPipeline>(device, pipeline);
   return result;
 }
 

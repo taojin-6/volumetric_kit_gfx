@@ -8,6 +8,7 @@
 #include <cmath>
 #include <utility>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -235,17 +236,39 @@ TEST_F(ProfilerTest, ScopeOpenAtEndFrameStillResolves) {
   EXPECT_EQ(m.sections[0].has_gpu, profiler.gpu_timing());
 }
 
-// A null stage name must not reach vkCmdBeginDebugUtilsLabelEXT (pLabelName
-// must be non-null); the label is skipped and the submit still succeeds even
-// with debug-utils active.
-TEST_F(ProfilerTest, GpuScopeNullNameEmitsNoLabel) {
+// A published row's name is never null (core::StageRow), so a stage opened
+// without one is recorded as "(unnamed)" -- which also keeps a null off
+// vkCmdBeginDebugUtilsLabelEXT, whose pLabelName must be non-null, so the
+// submit succeeds with debug-utils and validation active. The rows then fold
+// into the core's StageMetrics, which aborts on a null name.
+TEST_F(ProfilerTest, NullNameStageIsRecordedUnnamed) {
   vg::Profiler profiler = make_profiler();
   run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
-    auto s = profiler.gpu_scope(cmd, nullptr);
+    auto gpu = profiler.gpu_scope(cmd, nullptr);
   });
-  run_frame(profiler, 0, [&](VkCommandBuffer) {});
-
+  run_frame(profiler, 0,
+            [&](VkCommandBuffer) { auto cpu = profiler.cpu_scope(nullptr); });
   ASSERT_EQ(profiler.metrics().sections.size(), 1u);
+  EXPECT_STREQ(profiler.metrics().sections[0].name, "(unnamed)");
+
+  run_frame(profiler, 0, [&](VkCommandBuffer) {});
+  ASSERT_EQ(profiler.metrics().sections.size(), 1u);
+  EXPECT_STREQ(profiler.metrics().sections[0].name, "(unnamed)");
+
+  vkc::StageMetrics stages;
+  for (const vkc::StageRow& row : profiler.metrics().sections) {
+    stages.add_cpu(row.name, row.cpu_ms);
+  }
+  EXPECT_EQ(stages.rows().size(), 1u);
+}
+
+// The pool holds frames_in_flight * max_gpu_sections_per_frame * 2 queries; a
+// product past 32 bits (here wrapping to 2) is refused rather than sizing a
+// pool smaller than the ranges the slots index.
+TEST_F(ProfilerTest, CreateRejectsQueryCountOverflow) {
+  auto result = vg::Profiler::create(*device_, make_config(3, 0x2AAAAAABu));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
 // --- move-only contract: Profiler ------------------------------------------

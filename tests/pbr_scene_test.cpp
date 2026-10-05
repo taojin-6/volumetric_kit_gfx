@@ -14,10 +14,10 @@
 #include <glm/vec3.hpp>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
@@ -145,7 +145,7 @@ class PbrSubmitTest : public PbrSceneTest {
   // command buffer, outside any render pass -- enough for the set-0 bind under
   // test, and legal on its own when submit() correctly records nothing.
   void record_submit(const pipelines::PbrFrame& frame) {
-    auto pool = vg::CommandPool::create(device(), device_->queue_family());
+    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();

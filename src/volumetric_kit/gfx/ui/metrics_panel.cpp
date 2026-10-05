@@ -40,7 +40,7 @@ void draw_metrics_panel(const FrameMetrics& metrics, const char* title,
       ImGui::TableSetupColumn("CPU ms");
       ImGui::TableSetupColumn("GPU ms");
       ImGui::TableHeadersRow();
-      for (const FrameMetrics::Section& section : metrics.sections) {
+      for (const core::StageRow& section : metrics.sections) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(section.name != nullptr ? section.name : "");

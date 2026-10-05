@@ -43,12 +43,14 @@ Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
   const VkDescriptorPoolSize sizes[2] = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sampler_count}};
-  VG_ASSIGN(DescriptorPool pool, DescriptorPool::create(device, sizes, 2, 1));
-  VG_ASSIGN(DescriptorSet set, pool.allocate(layout));
+  VG_ASSIGN(core::DescriptorPool pool,
+            core::DescriptorPool::create(device, sizes, 2, 1));
+  VG_ASSIGN(core::DescriptorSet set, pool.allocate(layout));
 
   OwnedDescriptorSet owned;
   owned.pool_ = std::move(pool);
-  owned.set_ = set;
+  owned.handle_ = set.handle();
+  owned.set_ = std::move(set);
   return owned;
 }
 

@@ -28,6 +28,10 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — Sync, descriptors and queries come from volumetric_kit_core.** gfx's
+  fences, semaphores, descriptor objects, command pools and buffers, query pool and
+  `UniqueHandle` are gone; gfx uses the core's. The profiler times frames on the core's
+  `QueryPool`, and `FrameMetrics` holds the core's `StageRow`s. See the dated entry below.
 - **2026-10-04 — gfx names the core's types as the core does** (`core::Buffer`, `vkc::Buffer`
   outside gfx), with no aliases of its own: one name per type across the family. See
   "Memory comes from volumetric_kit_core", below.
@@ -80,6 +84,61 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-04 — Sync, descriptors and queries come from volumetric_kit_core
+
+The last of gfx's copies of the core's vulkan tier are gone (stage 2c): its
+`Fence`, `Semaphore`, `TimelineSemaphore`, `DescriptorSetLayout`,
+`DescriptorPool`, `DescriptorSet`, `CommandPool`, `CommandBuffer`,
+`QueryPool` and `UniqueHandle`, with their headers and tests. gfx uses the
+core's, named as the core names them ("Memory comes from volumetric_kit_core",
+below), and the core's tests cover them. What stays in gfx is graphics-only:
+the swapchain and frame loop, render targets, graphics pipelines, samplers,
+uploads and the frames-in-flight profiler.
+
+- **The core's types differ from gfx's in ways callers see.**
+  - Each is default-constructible. gfx's `QueryPool` was not, so the
+    profiler held it in an `std::optional`; it now holds the pool directly.
+    The frame loop's `std::optional<CommandPool>` goes too, though gfx's
+    `CommandPool` was default-constructible and never needed it.
+  - `TimelineSemaphore::create` takes the `Device`, so it can refuse one
+    that did not enable timeline semaphores.
+  - A `DescriptorSet` reads as empty once its pool is destroyed, and its
+    copies share a write count; gfx keeps every set beside its pool, so none
+    observes a dead pool. Wrapping a raw set
+    (`DescriptorSet(VkDevice, VkDescriptorSet)`) allocates that shared state,
+    so the constructor is no longer `noexcept`.
+  - `DescriptorSet::write_*` aborts (`VKC_CHECK`) on a null `VkBuffer` or
+    `VkImageView`, where gfx's passed it to Vulkan. A null descriptor is
+    valid only under `VK_EXT_robustness2`'s `nullDescriptor`, which the core
+    does not enable, so clearing a binding that way no longer goes through
+    the core's set; a caller that enables the feature itself writes the null
+    descriptor with `vkUpdateDescriptorSets`.
+  - `QueryPool::create` takes only `VK_QUERY_TYPE_TIMESTAMP` and
+    `VK_QUERY_TYPE_OCCLUSION`, and refuses every other type
+    (`Status::Code::Unsupported`); gfx's accepted any `VkQueryType`. A
+    pipeline-statistics pool is a raw `vkCreateQueryPool` until the core
+    takes the type.
+- **The profiler stays gfx's, on the core's `QueryPool`.** The core's
+  DECISIONS.md rebuilds the profiler on its `QueryPool` and `GpuTimer`. The
+  frames-in-flight shape -- a slot's timestamps read when the slot recurs,
+  after its fence -- is the profiler's own, and the core's `QueryPool`
+  already gives it range-checked commands and reads, so it times on that pool
+  with the core's `timestamp_delta` / `ticks_to_ms`. The `GpuTimer`, built for
+  spans read the moment a blocking submit returns, would add a window per
+  slot without changing what the profiler measures; a `TODO:` in
+  `profiler.cpp` marks moving onto it if the core gives it such a window.
+- **`FrameMetrics` holds the core's `StageRow`s.** `FrameMetrics::Section`
+  had the same four fields, so `sections` is a `std::vector<core::StageRow>`
+  and recon's stage timings and gfx's frame share one row type, as the core's
+  DECISIONS.md asks. The frame totals (`cpu_frame_ms`, `fps`, memory) stay
+  gfx's. A `StageRow`'s name is never null, and the core's `StageMetrics`
+  aborts on a null one, so the profiler records a scope opened with a null
+  name as `"(unnamed)"` and labels it so, rather than publish a row a
+  consumer cannot fold into its stage table.
+- **`ShaderModule` stays gfx's, over the core's.** The core's module declares
+  no interface; gfx's holds one and adds the spirv-cross reflection its
+  pipelines build their layouts from.
 
 ## 2026-10-04 — Memory comes from volumetric_kit_core
 
@@ -162,7 +221,8 @@ gfx makes is the type recon binds, and the reverse.
   check did not justify maintaining a benchmark executable, an A/B script and
   CI steps.
 
-Still open: descriptors, sync and the query pool (stage 2c).
+Still open: descriptors, sync and the query pool (stage 2c), since landed
+("Sync, descriptors and queries come from volumetric_kit_core", above).
 
 ## 2026-10-04 — The device comes from volumetric_kit_core
 
@@ -213,8 +273,9 @@ and the reverse.
 
 Still open: the allocator, buffers, images (`Texture` becoming the core's
 `Image`), descriptors, sync and the query pool (stages 2b and 2c), and
-re-measuring frame times as the core's allocator changes placement. The memory
-half has since landed ("Memory comes from volumetric_kit_core", above).
+re-measuring frame times as the core's allocator changes placement. Both
+stages have since landed ("Memory comes from volumetric_kit_core" and "Sync,
+descriptors and queries come from volumetric_kit_core", above).
 
 ## 2026-10-04 — Vulkan headers come from the system
 
@@ -313,8 +374,9 @@ graphics-only parts (swapchain, render targets, graphics pipelines, samplers,
 the frames-in-flight profiler) staying here; `Texture` becoming the core's
 `Image`; and re-measuring frame times, as the core's allocator places memory
 differently (`DeviceOnly` never falls back to host memory, and per-frame
-uniforms become `DeviceMapped` or batch-uploaded `DeviceOnly`). The device and
-memory have since moved (the dated entries above).
+uniforms become `DeviceMapped` or batch-uploaded `DeviceOnly`). All of it has
+since moved: the device, then memory, then descriptors, sync and the query pool
+(the dated entries above).
 
 ## 2026-10-02 — Shared agent guidance
 

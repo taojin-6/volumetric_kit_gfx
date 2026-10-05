@@ -12,11 +12,11 @@
 #include <optional>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/command_buffer.hpp"
-#include "volumetric_kit/gfx/core/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/command_buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/sync.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
@@ -222,14 +222,13 @@ class VG_WINDOWING_API FrameLoop {
 
   const Device* device_ = nullptr;  // borrowed; outlives this
   Swapchain* swapchain_ = nullptr;  // borrowed; outlives this
-  // Optional only because CommandPool is create-only (no public default ctor);
-  // declared before the buffers it owns so they free back before it is
+  // Declared before the buffers it owns so they free back before it is
   // destroyed.
-  std::optional<CommandPool> pool_;
-  std::vector<CommandBuffer> command_buffers_;  // per slot (N)
-  std::vector<Semaphore> image_available_;      // per slot (N)
-  std::vector<Fence> in_flight_;                // per slot (N)
-  std::vector<Semaphore> render_finished_;      // per swapchain image (M)
+  core::CommandPool pool_;
+  std::vector<core::CommandBuffer> command_buffers_;  // per slot (N)
+  std::vector<core::Semaphore> image_available_;      // per slot (N)
+  std::vector<core::Fence> in_flight_;                // per slot (N)
+  std::vector<core::Semaphore> render_finished_;      // per swapchain image (M)
   // Per image (M): the in-flight fence of the slot that last rendered to it, so
   // a re-acquired image still in use is waited on before reuse. Non-owning.
   std::vector<VkFence> images_in_flight_;

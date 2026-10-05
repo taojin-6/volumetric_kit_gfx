@@ -29,6 +29,40 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **sync, descriptors, commands and queries are volumetric_kit_core's.**
+  gfx's `Fence`, `Semaphore`, `TimelineSemaphore`, `DescriptorSetLayout`,
+  `DescriptorPool`, `DescriptorSet`, `CommandPool`, `CommandBuffer`,
+  `QueryPool` and `UniqueHandle` are gone, with their headers. Migrating:
+  - `vg::Fence` and the rest → `vkc::` (`volumetric_kit::core::`), from the
+    core's `volumetric_kit/core/vulkan/sync.hpp`, `descriptor.hpp`,
+    `command_pool.hpp`, `command_buffer.hpp`, `query_pool.hpp` and
+    `unique_handle.hpp`, which replace gfx's headers of the same names.
+  - `TimelineSemaphore::create(device.handle(), v)` →
+    `create(device, v)`: it takes the `Device`, and refuses one that did not
+    enable timeline semaphores.
+  - A `DescriptorSet` reads as empty (`handle()` null) once its pool is
+    destroyed; keep the pool alive while the set is used, as before.
+  - `DescriptorSet::write_*` aborts on a null `VkBuffer` or `VkImageView`
+    instead of passing it to Vulkan. To clear a binding under
+    `VK_EXT_robustness2`'s `nullDescriptor`, call `vkUpdateDescriptorSets`
+    directly. `DescriptorSet(VkDevice, VkDescriptorSet)` is no longer
+    `noexcept`.
+  - `QueryPool::create` accepts only `VK_QUERY_TYPE_TIMESTAMP` and
+    `VK_QUERY_TYPE_OCCLUSION`; any other type (pipeline statistics, say)
+    returns `Status::Code::Unsupported`. Create such a pool with
+    `vkCreateQueryPool`.
+  - `FrameMetrics::Section` → `vkc::StageRow` (the same four fields), from
+    the core's base tier. `vg::ticks_to_ms` / `timestamp_delta` →
+    `vkc::ticks_to_ms` / `timestamp_delta`, from
+    `volumetric_kit/core/vulkan/gpu_timer.hpp`.
+  - `Profiler::cpu_scope` / `gpu_scope` record a null name as `"(unnamed)"`,
+    as a `StageRow`'s name is never null; a null-named GPU scope now carries
+    that debug-utils label instead of none.
+  - `Profiler::create` refuses a `ProfilerConfig` whose
+    `frames_in_flight * max_gpu_sections_per_frame * 2` does not fit in
+    32 bits (`Status::Code::InvalidArgument`), where it sized a wrapped,
+    too-small timestamp pool.
+  - `ShaderModule` and its reflection stay gfx's, now over the core's module.
 - `core`: **memory is volumetric_kit_core's.** gfx's API takes and returns the
   core's `Allocator`, `Buffer` and `Image` (`volumetric_kit::core`, which the
   family aliases `vkc`), so buffers and images pass to recon unchanged; gfx

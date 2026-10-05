@@ -11,9 +11,9 @@
 #include <cstdint>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/shader.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
@@ -39,11 +39,13 @@ struct ReflectedResource {
 /// @brief Owns a `VkShaderModule` compiled from SPIR-V words and the descriptor
 ///        interface reflected from it.
 ///
-/// A module is a thin wrapper around the SPIR-V handed to pipeline creation; a
-/// pipeline copies what it needs at build time, so the module can be destroyed
-/// once every pipeline using it has been created. @ref create also reflects the
-/// SPIR-V (via spirv-cross) into the @ref ReflectedResource list and
-/// push-constant size a pipeline turns into descriptor-set + pipeline layouts.
+/// The module itself is the core's `core::ShaderModule`, which declares no
+/// interface (the core's pipelines declare their layouts); this adds the
+/// reflection gfx's pipelines build their layouts from. A pipeline copies what
+/// it needs at build time, so the module can be destroyed once every pipeline
+/// using it has been created. @ref create reflects the SPIR-V (via spirv-cross)
+/// into the @ref ReflectedResource list and push-constant size a pipeline turns
+/// into descriptor-set + pipeline layouts.
 /// A default-constructed `ShaderModule` is empty (`valid()` is false) and safe
 /// to move-assign into.
 ///
@@ -84,7 +86,7 @@ class VG_CORE_API ShaderModule {
   ShaderModule& operator=(const ShaderModule&) = delete;
 
   /// @return The underlying `VkShaderModule` (`VK_NULL_HANDLE` when empty).
-  VkShaderModule handle() const noexcept { return module_.get(); }
+  VkShaderModule handle() const noexcept { return module_.handle(); }
 
   /// @return `true` if this owns a module.
   bool valid() const noexcept { return module_.valid(); }
@@ -103,7 +105,7 @@ class VG_CORE_API ShaderModule {
   uint32_t push_constant_size() const noexcept { return push_constant_size_; }
 
  private:
-  UniqueHandle<VkShaderModule, vkDestroyShaderModule> module_;
+  core::ShaderModule module_;
   std::vector<ReflectedResource> resources_;
   uint32_t push_constant_size_ = 0;
   VkShaderStageFlagBits stage_ = VK_SHADER_STAGE_ALL;

@@ -30,18 +30,20 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   loop.device_ = &device;
   loop.swapchain_ = &swapchain;
 
-  VG_ASSIGN(CommandPool pool,
-            CommandPool::create(device.handle(), device.queue_family()));
+  VG_ASSIGN(core::CommandPool pool,
+            core::CommandPool::create(device.handle(), device.queue_family()));
   loop.pool_ = std::move(pool);
 
   // Per frame-in-flight slot: a command buffer, an image-available semaphore,
   // and an in-flight fence (created signaled so the first wait does not block).
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VG_ASSIGN(CommandBuffer cmd, loop.pool_->allocate_primary());
+    VG_ASSIGN(core::CommandBuffer cmd, loop.pool_.allocate_primary());
     loop.command_buffers_.push_back(std::move(cmd));
-    VG_ASSIGN(Semaphore available, Semaphore::create(device.handle()));
+    VG_ASSIGN(core::Semaphore available,
+              core::Semaphore::create(device.handle()));
     loop.image_available_.push_back(std::move(available));
-    VG_ASSIGN(Fence fence, Fence::create(device.handle(), /*signaled=*/true));
+    VG_ASSIGN(core::Fence fence,
+              core::Fence::create(device.handle(), /*signaled=*/true));
     loop.in_flight_.push_back(std::move(fence));
   }
 
@@ -77,7 +79,8 @@ Status FrameLoop::ensure_image_sync() {
   render_finished_.clear();
   render_finished_.reserve(image_count);
   for (uint32_t i = 0; i < image_count; ++i) {
-    VG_ASSIGN(Semaphore finished, Semaphore::create(device_->handle()));
+    VG_ASSIGN(core::Semaphore finished,
+              core::Semaphore::create(device_->handle()));
     render_finished_.push_back(std::move(finished));
   }
   images_in_flight_.assign(image_count, VK_NULL_HANDLE);
@@ -366,8 +369,8 @@ Status FrameLoop::recover_slot(uint32_t slot) {
   // begin_frame fails cleanly instead of blocking forever in
   // in_flight_[slot].wait(). The acquire semaphore may stay signaled, but only
   // when the queue is already broken, where the next frame errors out anyway.
-  VG_ASSIGN(Fence resignaled,
-            Fence::create(device_->handle(), /*signaled=*/true));
+  VG_ASSIGN(core::Fence resignaled,
+            core::Fence::create(device_->handle(), /*signaled=*/true));
   // images_in_flight_ caches this slot's fence *by raw handle* -- in as many
   // entries as the slot has been acquired for -- and does not own it. Scrub
   // those entries before the assignment below destroys the old fence, or the
@@ -436,7 +439,7 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
     // while our command buffers still reference it.)
     drain();
     command_buffers_.clear();
-    pool_.reset();
+    pool_ = core::CommandPool{};
 
     device_ = other.device_;
     swapchain_ = other.swapchain_;

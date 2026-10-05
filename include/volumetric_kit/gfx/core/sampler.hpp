@@ -7,9 +7,9 @@
 /// @brief A `VkSampler`: the filtering and addressing state a shader reads a
 ///        texture through.
 
+#include "volumetric_kit/core/vulkan/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/unique_handle.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
@@ -20,6 +20,15 @@ namespace volumetric_kit::gfx {
 /// (linear min/mag with linear blending between mip levels) over the whole mip
 /// chain, with `REPEAT` wrapping on every axis. Override per field for, e.g.,
 /// `NEAREST` filtering or `CLAMP_TO_EDGE` wrapping.
+///
+/// @code
+/// SamplerDesc desc;  // trilinear, REPEAT
+/// desc.mag_filter = VK_FILTER_NEAREST;  // crisp texels up close
+/// desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+/// desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+/// desc.max_lod = 0.0f;  // the base level only
+/// Result<Sampler> sampler = Sampler::create(device.handle(), desc);
+/// @endcode
 struct SamplerDesc {
   VkFilter mag_filter = VK_FILTER_LINEAR;  ///< Filter when magnifying.
   VkFilter min_filter = VK_FILTER_LINEAR;  ///< Filter when minifying.
@@ -45,7 +54,7 @@ struct SamplerDesc {
 // maxSamplerAnisotropy limit, so create() would take the Device (for its caps),
 // not a raw VkDevice.
 
-/// @brief Owns a `VkSampler` and frees it via @ref UniqueHandle.
+/// @brief Owns a `VkSampler` and frees it via `core::UniqueHandle`.
 ///
 /// A sampler is a pure device object (no backing memory), independent of any
 /// one texture: bind it alongside a sampled `core::Image` in a descriptor set.
@@ -87,7 +96,7 @@ class VG_CORE_API Sampler {
  private:
   Sampler() = default;
 
-  UniqueHandle<VkSampler, vkDestroySampler> handle_;
+  core::UniqueHandle<VkSampler, vkDestroySampler> handle_;
 };
 
 }  // namespace volumetric_kit::gfx

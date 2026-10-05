@@ -7,7 +7,7 @@
 
 namespace volumetric_kit::gfx {
 
-// The move/destroy lifecycle lives in UniqueHandle (see unique_handle.hpp);
+// The move/destroy lifecycle lives in the core's UniqueHandle;
 // here we only validate, create the handle, and adopt it.
 
 Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
@@ -43,7 +43,8 @@ Result<Sampler> Sampler::create(VkDevice device, const SamplerDesc& desc) {
   VG_VK_TRY(vkCreateSampler(device, &info, nullptr, &handle));
 
   Sampler sampler;
-  sampler.handle_ = UniqueHandle<VkSampler, vkDestroySampler>(device, handle);
+  sampler.handle_ =
+      core::UniqueHandle<VkSampler, vkDestroySampler>(device, handle);
   return sampler;
 }
 
