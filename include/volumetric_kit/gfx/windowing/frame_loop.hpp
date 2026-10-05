@@ -67,7 +67,7 @@ struct Frame {
 ///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
 ///          the loop (it borrows both). Destruction drains the renderer's
-///          queues (@ref Device::wait_idle) to finish in-flight frames, so
+///          queues (`core::Device::wait_idle`) to finish in-flight frames, so
 ///          teardown is safe mid-flight; on a shared adopted device that waits
 ///          only on the renderer's queues, not a sibling library's. A profiler
 ///          attached via @ref set_profiler and
@@ -99,10 +99,10 @@ class VG_WINDOWING_API FrameLoop {
   ///                          (@ref device_requirements).
   /// @param swapchain         The swapchain to acquire from / present to.
   /// @param frames_in_flight  CPU-ahead depth (>= 1; 2 is the common default).
-  /// @return The loop on success, or a non-OK @ref Status (invalid argument for
-  ///         a zero count or empty swapchain; @ref Status::Code::Unsupported
-  ///         for a @p device without the renderer's requirements; otherwise a
-  ///         propagated failure).
+  /// @return The loop on success, or a non-OK `core::Status` (invalid argument
+  ///         for a zero count or empty swapchain;
+  ///         `core::Status::Code::Unsupported` for a @p device without the
+  ///         renderer's requirements; otherwise a propagated failure).
   static core::Result<FrameLoop> create(const core::Device& device,
                                         Swapchain& swapchain,
                                         uint32_t frames_in_flight = 2);
@@ -123,9 +123,9 @@ class VG_WINDOWING_API FrameLoop {
   /// @return The @ref Frame to record and pass to @ref end_frame; an *empty*
   ///         optional when nothing can render this tick (minimized window, or
   ///         the surface is still settling after a rebuild) — poll/wait for
-  ///         events and call again; a non-OK @ref Status only for hard failures
-  ///         (device loss, a failed rebuild or recreate hook) — do not retry
-  ///         those.
+  ///         events and call again; a non-OK `core::Status` only for hard
+  ///         failures (device loss, a failed rebuild or recreate hook) — do not
+  ///         retry those.
   core::Result<std::optional<Frame>> begin_frame(VkExtent2D current_extent);
 
   /// @brief Register a hook run after every internal swapchain rebuild by the
@@ -140,10 +140,10 @@ class VG_WINDOWING_API FrameLoop {
   /// @brief Begin the next frame (raw protocol): wait this slot's fence,
   ///        acquire an image, begin its command buffer, and transition the
   ///        image into `COLOR_ATTACHMENT_OPTIMAL`.
-  /// @return The @ref Frame to record into; a non-OK @ref Status carrying
+  /// @return The @ref Frame to record into; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` (recreate the swapchain and retry) or
-  ///         another failed `VkResult`; @ref Status::Code::InvalidArgument when
-  ///         the borrowed swapchain is empty (after a failed rebuild).
+  ///         another failed `VkResult`; `core::Status::Code::InvalidArgument`
+  ///         when the borrowed swapchain is empty (after a failed rebuild).
   /// @note A *successful* `begin_frame` must be paired with exactly one @ref
   ///       end_frame for the returned @ref Frame: the acquire signals this
   ///       slot's image-available semaphore, and only @ref end_frame consumes
@@ -159,12 +159,12 @@ class VG_WINDOWING_API FrameLoop {
   ///        `PRESENT_SRC`, end + submit its command buffer, present it, and
   ///        advance to the next slot.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
-  /// @return OK on success; a non-OK @ref Status carrying
+  /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
-  ///         rebuilds automatically) or another failed `VkResult`; @ref
-  ///         Status::Code::InvalidArgument when this loop is empty or @p frame
-  ///         did not come from its @ref begin_frame.
+  ///         rebuilds automatically) or another failed `VkResult`;
+  ///         `core::Status::Code::InvalidArgument` when this loop is empty or
+  ///         @p frame did not come from its @ref begin_frame.
   /// @note On a failure *before* the submit reaches the queue, the slot's sync
   ///       state is restored (a brief blocking submit) so the *slot* stays
   ///       reusable — but the image this frame acquired was never presented,
@@ -209,7 +209,7 @@ class VG_WINDOWING_API FrameLoop {
   // next begin_frame never blocks on it. Blocking; error-path only.
   core::Status recover_slot(uint32_t slot);
 
-  // Drain the renderer's own queues (@ref Device::wait_idle: graphics, and
+  // Drain the renderer's own queues (`core::Device::wait_idle`: graphics, and
   // present when distinct) so teardown cannot free command buffers / semaphores
   // the GPU still references. Waiting the queues (not this loop's fences) still
   // covers a present that reported out-of-date and left a render-finished

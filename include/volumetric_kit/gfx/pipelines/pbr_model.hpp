@@ -136,9 +136,9 @@ class VG_PIPELINES_API PbrModel {
   ///                   skipped; empty meshes stay as skipped draws; a model
   ///                   with no meshes yields a valid model with zero draws.
   /// @pre @p device holds a live `VkDevice` and @p pipeline is `valid()` --
-  ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
-  ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The model on success, or a non-OK @ref Status (a backend
+  ///      validated before Vulkan is touched, otherwise a non-OK `core::Status`
+  ///      with domain `core::Status::Code::InvalidArgument`.
+  /// @return The model on success, or a non-OK `core::Status` (a backend
   ///         Status from the upload, sampler, or material step).
   static core::Result<PbrModel> create(const core::Device& device,
                                        core::Allocator& allocator,

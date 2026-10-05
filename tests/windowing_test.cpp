@@ -636,9 +636,6 @@ TEST_F(WindowingTest, DestructionDrainsInFlightFrames) {
   }
 }
 
-// Acquire / present / recreate on an empty swapchain (default-constructed,
-// moved-from, or after a failed rebuild) fail with InvalidArgument instead of
-// dereferencing null handles. Needs no instance/device, so it runs everywhere.
 // A stale swapchain -- out of date, or suboptimal -- is a cue to recreate, read
 // back from the backend status the present returned; any other failure is not.
 TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
@@ -652,6 +649,9 @@ TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
   EXPECT_FALSE(win::swapchain_stale(vkc::Status{}));
 }
 
+// Acquire / present / recreate on an empty swapchain (default-constructed,
+// moved-from, or after a failed rebuild) fail with InvalidArgument instead of
+// dereferencing null handles. Needs no instance/device, so it runs everywhere.
 TEST(SwapchainEmpty, OperationsFailCleanly) {
   win::Swapchain sc;
   auto acquired = sc.acquire_next_image(VK_NULL_HANDLE);

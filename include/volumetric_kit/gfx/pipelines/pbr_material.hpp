@@ -76,8 +76,9 @@ struct PbrMaterialDesc {
 /// descs[0].base_color = base_view;  // ... the other four maps + sampler
 /// VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
 /// VKC_ASSIGN(std::vector<pipelines::PbrMaterial> materials,
-///           pipelines::PbrMaterial::create_all(
-///               device.handle(), batch, pbr.descriptor_set_layout(1), descs));
+///            pipelines::PbrMaterial::create_all(
+///                device.handle(), batch, pbr.descriptor_set_layout(1),
+///                descs));
 /// VKC_TRY(batch.finish());  // the factors are in place; draw the materials
 /// @endcode
 class VG_PIPELINES_API PbrMaterial {
@@ -105,10 +106,10 @@ class VG_PIPELINES_API PbrMaterial {
   /// @pre @p device and @p material_layout are non-`VK_NULL_HANDLE`, @p descs
   ///      is non-empty, and every view in each desc plus its sampler is
   ///      non-`VK_NULL_HANDLE` — validated before Vulkan is touched,
-  ///      otherwise a non-OK @ref Status with domain
-  ///      @ref Status::Code::InvalidArgument.
+  ///      otherwise a non-OK `core::Status` with domain
+  ///      `core::Status::Code::InvalidArgument`.
   /// @return The materials, parallel to @p descs, on success; or a non-OK
-  ///         @ref Status: a backend Status from pool / set allocation, or
+  ///         `core::Status`: a backend Status from pool / set allocation, or
   ///         what @ref UploadBatch::add_buffer returns.
   /// @warning Keep the materials alive until @p batch's
   ///          @ref UploadBatch::finish returns (see the class warning).
@@ -127,7 +128,7 @@ class VG_PIPELINES_API PbrMaterial {
   ///                        @ref PbrPipeline::descriptor_set_layout(1).
   /// @param desc            Factors plus the five map views + sampler.
   /// @pre As for @ref create_all.
-  /// @return The material on success, or a non-OK @ref Status as
+  /// @return The material on success, or a non-OK `core::Status` as
   ///         @ref create_all returns; a failed call leaves @p batch
   ///         unchanged.
   /// @warning Keep the material alive until @p batch's

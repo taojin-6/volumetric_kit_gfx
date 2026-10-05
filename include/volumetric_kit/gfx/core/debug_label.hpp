@@ -16,8 +16,8 @@
 /// a handle a readable name in a capture.
 ///
 /// Every entry point routes through a @ref DebugUtilsTable, which
-/// @ref debug_utils loads from a @ref Device. When the extension is not enabled
-/// the table is inactive, and every operation here compiles to a
+/// @ref debug_utils loads from a `core::Device`. When the extension is not
+/// enabled the table is inactive, and every operation here compiles to a
 /// branch-to-noop — no labels are emitted and no error is raised.
 
 #include <cstdint>

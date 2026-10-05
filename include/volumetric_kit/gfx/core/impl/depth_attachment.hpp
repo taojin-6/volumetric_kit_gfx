@@ -25,8 +25,8 @@ namespace volumetric_kit::gfx {
 ///                 the caller gates on that first).
 /// @param context  Caller name prefixed onto the message (e.g.
 ///                 `"Swapchain::create"`).
-/// @return OK for a depth-only format; @ref Status::Code::InvalidArgument if it
-///         carries no depth aspect; @ref Status::Code::Unsupported if it
+/// @return OK for a depth-only format; `core::Status::Code::InvalidArgument` if
+///         it carries no depth aspect; `core::Status::Code::Unsupported` if it
 ///         carries a stencil aspect.
 ///
 /// RenderTarget renders depth through `DEPTH_ATTACHMENT_OPTIMAL`, valid for a

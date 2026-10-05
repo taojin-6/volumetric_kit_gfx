@@ -38,8 +38,8 @@ struct DebugUtilsTable {
   /// @param device  The logical device to resolve against.
   /// @param instance_debug_utils_enabled  Whether `VK_EXT_debug_utils` is
   ///        enabled on the instance the device belongs to (see
-  ///        @ref Instance::debug_utils_enabled). When false, no entry point can
-  ///        be resolved, so the load returns an all-null table immediately.
+  ///        `core::Instance::debug_utils_enabled`). When false, no entry point
+  ///        can be resolved, so the load returns an all-null table immediately.
   /// @return A fully resolved table, or an all-null one when the extension is
   ///         disabled or any single fetch returns null (partial resolution is
   ///         treated as unavailable rather than left half-populated).

@@ -19,21 +19,22 @@
 
 namespace example {
 
+namespace vkc = volumetric_kit::core;
+
 /// @brief A @ref volumetric_kit::gfx::app::WindowedApp surface factory that
 ///        creates the `VkSurfaceKHR` for @p window via
 ///        `glfwCreateWindowSurface` on the app's instance.
 /// @param window  The GLFW window to present into; must outlive the app.
-/// @return A factory returning the surface, or a backend @ref
-///         volumetric_kit::core::Status when GLFW fails to create one.
+/// @return A factory returning the surface, or a backend `vkc::Status` when
+///         GLFW fails to create one.
 inline volumetric_kit::gfx::app::WindowedApp::SurfaceFactory
 glfw_surface_factory(GLFWwindow* window) {
-  return [window](VkInstance instance)
-             -> volumetric_kit::core::Result<VkSurfaceKHR> {
+  return [window](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     const VkResult result =
         glfwCreateWindowSurface(instance, window, nullptr, &surface);
     if (result != VK_SUCCESS) {
-      return volumetric_kit::core::vk_error(result, "glfwCreateWindowSurface");
+      return vkc::vk_error(result, "glfwCreateWindowSurface");
     }
     return surface;
   };

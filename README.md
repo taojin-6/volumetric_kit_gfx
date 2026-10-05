@@ -57,17 +57,18 @@ target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
 gfx's errors (`Status`, `Result`, `VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`) and
-log sink are [volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s
-base tier, and its instance, device, allocator, buffers and images, Vulkan
-umbrella header, `VkResult` bridge, format helpers and shader build functions
-are the core's vulkan tier, which gfx's API names as the core does
-(`volumetric_kit::core::`, `vkc::` by convention); both are fetched pinned by commit and linked PUBLIC, so a
-`Status`, a device or a buffer passes between gfx, recon and calib unchanged
-and one `set_log_handler` routes all three. An installed gfx carries
-the core beside it and re-finds it; an application that also fetches recon
-declares `volumetric_kit_core` first to pick one pin for both, at or after
-gfx's and with the core's vulkan tier on (`VKC_WITH_VULKAN`), which gfx checks
-at configure. Build against a local core checkout with
+log sink are
+[volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s base
+tier, and its instance, device, allocator, buffers and images, Vulkan umbrella
+header, `VkResult` bridge, format helpers and shader build functions are the
+core's vulkan tier, which gfx's API names as the core does
+(`volumetric_kit::core::`, `vkc::` by convention); both are fetched pinned by
+commit and linked PUBLIC, so a `Status`, a device or a buffer passes between
+gfx, recon and calib unchanged and one `set_log_handler` routes all three. An
+installed gfx carries the core beside it and re-finds it; an application that
+also fetches recon declares `volumetric_kit_core` first to pick one pin for
+both, at or after gfx's and with the core's vulkan tier on (`VKC_WITH_VULKAN`),
+which gfx checks at configure. Build against a local core checkout with
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
 gfx compiles against the system's Vulkan headers -- 1.3.204 or newer, 1.3.208

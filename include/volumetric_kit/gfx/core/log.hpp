@@ -12,7 +12,7 @@
 /// its own handler with the core's `set_log_handler` and receives each message
 /// with its level and source. gfx's messages carry the
 /// source @ref kLogSource, so the default sink keeps printing `[vg <level>]`.
-/// Contract failures are the exception: a failed @ref VKC_CHECK, or reading the
+/// Contract failures are the exception: a failed `VKC_CHECK`, or reading the
 /// value of an error `Result`, is reported by the core with source `"core"`
 /// (`[core error] contract check failed: ...`), so a handler that routes by
 /// source sees gfx's contract failures under `"core"`.

@@ -75,8 +75,8 @@ class VG_CORE_API Sampler {
   /// @param device  The logical device that owns the sampler.
   /// @param desc    Filtering, mip, and addressing state (defaults to trilinear
   ///                + REPEAT; see @ref SamplerDesc).
-  /// @return The sampler on success, or a non-OK @ref Status: @ref
-  ///         Status::Code::InvalidArgument for a null @p device or a
+  /// @return The sampler on success, or a non-OK `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` for a null @p device or a
   ///         `desc.max_lod < desc.min_lod`; otherwise a backend Status
   ///         carrying the `VkResult` if `vkCreateSampler` fails.
   static core::Result<Sampler> create(VkDevice device,

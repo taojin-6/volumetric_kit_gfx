@@ -80,9 +80,9 @@ class VG_PIPELINES_API PbrScene {
   /// @pre @p device and @p scene_layout are non-`VK_NULL_HANDLE`, every view
   ///      in @p desc plus @p desc.sampler is non-`VK_NULL_HANDLE`, and
   ///      @p frames_in_flight >= 1 — validated before Vulkan is touched,
-  ///      otherwise a non-OK @ref Status with domain
-  ///      @ref Status::Code::InvalidArgument.
-  /// @return The scene on success, or a non-OK @ref Status (a backend
+  ///      otherwise a non-OK `core::Status` with domain
+  ///      `core::Status::Code::InvalidArgument`.
+  /// @return The scene on success, or a non-OK `core::Status` (a backend
   ///         Status from buffer / pool / set allocation).
   static core::Result<PbrScene> create(VkDevice device,
                                        core::Allocator& allocator,

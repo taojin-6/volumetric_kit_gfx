@@ -60,13 +60,13 @@ struct WindowedAppConfig {
   ///       floor in whatever this holds, so a field here can only add to it,
   ///       and set `needs_present`: a windowed app always presents. Labels and
   ///       object names follow the instance -- the one @ref WindowedApp::create
-  ///       builds, or @ref AdoptedDevice::enabled_debug_utils for an adopted
+  ///       builds, or `core::AdoptedDevice::enabled_debug_utils` for an adopted
   ///       device.
   core::DeviceRequirements device = device_requirements();
 };
 
-/// @brief Owns the whole windowed bring-up chain — @ref Instance,
-///        @ref windowing::Surface, @ref Device, `core::Allocator`,
+/// @brief Owns the whole windowed bring-up chain — `core::Instance`,
+///        @ref windowing::Surface, `core::Device`, `core::Allocator`,
 ///        @ref windowing::Swapchain, @ref windowing::FrameLoop — created in
 ///        one call and destroyed in reverse order, with the surface threaded
 ///        consistently through device selection,
@@ -99,8 +99,10 @@ struct WindowedAppConfig {
 ///       VkSurfaceKHR surface = VK_NULL_HANDLE;
 ///       const VkResult r =
 ///           glfwCreateWindowSurface(instance, window, nullptr, &surface);
-///       if (r != VK_SUCCESS) return core::vk_error(r,
-///       "glfwCreateWindowSurface"); return surface;
+///       if (r != VK_SUCCESS) {
+///         return core::vk_error(r, "glfwCreateWindowSurface");
+///       }
+///       return surface;
 ///     });
 /// if (!app) return app.status();
 /// while (running) {
@@ -120,7 +122,7 @@ class VG_APP_API WindowedApp {
  public:
   /// @brief Creates the `VkSurfaceKHR` on the instance the app just built.
   ///        Called once by @ref create; the app adopts (and later destroys)
-  ///        the returned handle. Return a non-OK @ref Status when the window
+  ///        the returned handle. Return a non-OK `core::Status` when the window
   ///        system fails to create one.
   using SurfaceFactory = std::function<core::Result<VkSurfaceKHR>(VkInstance)>;
 
@@ -136,11 +138,11 @@ class VG_APP_API WindowedApp {
   ///                        preferences, and frames-in-flight depth.
   /// @param create_surface  Window-system callback producing the surface;
   ///                        must be callable.
-  /// @return The app on success, or the first failing step's @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a null @p create_surface,
-  ///         a factory that returns `VK_NULL_HANDLE`, or a zero
-  ///         `config.frames_in_flight`; @ref Status::Code::Unsupported when no
-  ///         present-capable device qualifies; otherwise the propagated
+  /// @return The app on success, or the first failing step's `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` for a null
+  ///         @p create_surface, a factory that returns `VK_NULL_HANDLE`, or a
+  ///         zero `config.frames_in_flight`; `core::Status::Code::Unsupported`
+  ///         when no present-capable device qualifies; otherwise the propagated
   ///         failure.
   static core::Result<WindowedApp> create(const WindowedAppConfig& config,
                                           const SurfaceFactory& create_surface);
@@ -148,14 +150,13 @@ class VG_APP_API WindowedApp {
   /// @brief Run the same bring-up chain on a `VkDevice` the embedder created,
   ///        instead of building an instance and device of our own.
   ///
-  /// The windowed counterpart to @ref Device::adopt. An embedder that runs the
-  /// renderer alongside another Vulkan library builds **one** device from the
-  /// union of both libraries' requirements (`merge` of each one's, gfx's from
-  /// @ref device_requirements) and hands it to each;
-  /// this is how the renderer takes its share and still gets a swapchain and a
-  /// frame loop. Sharing one device is what lets the other library's
-  /// `VkBuffer`/`VkImage` be drawn directly, with no cross-device copy or
-  /// external-memory import.
+  /// The windowed counterpart to `core::Device::adopt`. An embedder that runs
+  /// the renderer alongside another Vulkan library builds **one** device from
+  /// the union of both libraries' requirements (`merge` of each one's, gfx's
+  /// from @ref device_requirements) and hands it to each; this is how the
+  /// renderer takes its share and still gets a swapchain and a frame loop.
+  /// Sharing one device is what lets the other library's `VkBuffer`/`VkImage`
+  /// be drawn directly, with no cross-device copy or external-memory import.
   ///
   /// Everything before the surface is borrowed: the instance, physical device,
   /// logical device, and queues in @p adopted are **not** owned and are never
@@ -167,7 +168,7 @@ class VG_APP_API WindowedApp {
   ///                 must be the version the instance was created with.
   ///                 `queue` is the renderer's graphics queue, and
   ///                 `has_present` must be set with a valid `present_queue`: a
-  ///                 windowed app must present, so unlike @ref Device::adopt
+  ///                 windowed app must present, so unlike `core::Device::adopt`
   ///                 this cannot be a compute-only share. Set `submit_mutex`
   ///                 (and `present_mutex`) when a queue is shared with another
   ///                 library. The share is held to the renderer's floor merged
@@ -176,17 +177,17 @@ class VG_APP_API WindowedApp {
   ///                 and `instance_extensions` are ignored -- the embedder
   ///                 already created the instance those configure.
   /// @param create_surface  As @ref create; called with `adopted.instance`.
-  /// @return The app on success, or the first failing step's @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a null handle, an unset
+  /// @return The app on success, or the first failing step's `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` for a null handle, an unset
   ///         `instance_api_version` or no present queue in @p adopted -- all
   ///         found before @p create_surface runs -- a null @p create_surface,
   ///         a factory returning `VK_NULL_HANDLE`, or a zero
-  ///         `config.frames_in_flight`; @ref Status::Code::Unsupported when
+  ///         `config.frames_in_flight`; `core::Status::Code::Unsupported` when
   ///         `present_family` cannot actually present to the surface
   ///         @p create_surface returned (@ref create chooses that family *for*
   ///         its surface and so cannot hit this; a device built before any
   ///         window existed picked it blind); otherwise the propagated failure
-  ///         (including @ref Device::adopt's verification that the device
+  ///         (including `core::Device::adopt`'s verification that the device
   ///         carries what the renderer needs).
   ///
   /// @warning `adopted.instance`, `physical_device`, `device`, its queues,
@@ -205,16 +206,16 @@ class VG_APP_API WindowedApp {
   /// @brief Begin the next frame via the loop's windowed protocol (rebuilds
   ///        the swapchain on resize/staleness, skips ticks while minimized).
   /// @param current_extent  The window's current framebuffer extent.
-  /// @return As @ref windowing::FrameLoop::begin_frame; @ref
-  ///         Status::Code::InvalidArgument on an empty app.
+  /// @return As @ref windowing::FrameLoop::begin_frame;
+  ///         `core::Status::Code::InvalidArgument` on an empty app.
   core::Result<std::optional<windowing::Frame>> begin_frame(
       VkExtent2D current_extent);
 
   /// @brief Submit + present the frame from @ref begin_frame.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return As @ref windowing::FrameLoop::end_frame (classify staleness with
-  ///         @ref windowing::swapchain_stale); @ref
-  ///         Status::Code::InvalidArgument on an empty app.
+  ///         @ref windowing::swapchain_stale);
+  ///         `core::Status::Code::InvalidArgument` on an empty app.
   core::Status end_frame(const windowing::Frame& frame);
 
   /// @brief Register the loop's post-rebuild hook (see @ref
@@ -237,14 +238,15 @@ class VG_APP_API WindowedApp {
   ///        teardown wait: call it after the render loop so resources created
   ///        after the app (which destruct before it) are no longer
   ///        GPU-referenced. Queue-scoped, not device-wide (see
-  ///        @ref Device::wait_idle), so it is safe on a shared adopted device.
-  /// @return OK once idle; @ref Status::Code::InvalidArgument on an empty
+  ///        `core::Device::wait_idle`), so it is safe on a shared adopted
+  ///        device.
+  /// @return OK once idle; `core::Status::Code::InvalidArgument` on an empty
   ///         app, or the failed `VkResult`.
   core::Status wait_idle() const;
 
   /// @return The owned instance. @pre @ref valid, **and** this app came from
   ///         @ref create -- an app from @ref adopt borrows its instance and
-  ///         holds no @ref Instance object, so asking one for it is a
+  ///         holds no `core::Instance` object, so asking one for it is a
   ///         programmer error and aborts (`VKC_CHECK`) rather than handing back
   ///         a reference to nothing. Use @ref instance_handle when the app may
   ///         be either, or when only the handle is wanted.

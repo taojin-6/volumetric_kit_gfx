@@ -32,7 +32,7 @@ namespace volumetric_kit::gfx::pipelines {
 /// @param allocator  Allocates it.
 /// @param size       Bytes; non-zero, a multiple of 4 and at most 65536, the
 ///                   bounds of `vkCmdUpdateBuffer`.
-/// @return The buffer, or @ref Status::Code::InvalidArgument for a size
+/// @return The buffer, or `core::Status::Code::InvalidArgument` for a size
 ///         outside those bounds, or the allocator's failure.
 core::Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
                                                      VkDeviceSize size);
@@ -56,9 +56,9 @@ core::Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
 ///
 /// @code
 /// VKC_ASSIGN(OwnedDescriptorSet owned,
-///           OwnedDescriptorSet::create(device, layout, 3));
+///            OwnedDescriptorSet::create(device, layout, 3));
 /// VKC_ASSIGN(core::Buffer ubo,
-///           make_frame_uniform_buffer(allocator, sizeof(Block)));
+///            make_frame_uniform_buffer(allocator, sizeof(Block)));
 /// owned.bind_uniform(std::make_shared<core::Buffer>(std::move(ubo)), 0,
 ///                    sizeof(Block));
 /// owned.write_uniform(cmd, &block, sizeof(block));  // before rendering
@@ -78,7 +78,7 @@ class OwnedDescriptorSet {
   /// @param sampler_count Combined-image-sampler capacity to reserve (>= 1).
   /// @pre @p device and @p layout are non-`VK_NULL_HANDLE` (the typed caller
   ///      validates its own views/sampler first).
-  /// @return The bundle on success, or a non-OK @ref Status from pool / set
+  /// @return The bundle on success, or a non-OK `core::Status` from pool / set
   ///         allocation.
   static core::Result<OwnedDescriptorSet> create(VkDevice device,
                                                  VkDescriptorSetLayout layout,

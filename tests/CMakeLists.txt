@@ -31,8 +31,8 @@ target_link_libraries(vg_version_test PRIVATE volumetric_kit::gfx_core
 vg_target_warnings(vg_version_test)
 vg_discover_tests(vg_version_test)
 
-# core tier: Result/Status + FrameMetrics (CPU-only) + Instance/Device (GPU;
-# skips when no device).
+# core tier: FrameMetrics (CPU-only) + Instance/Device (GPU; skips when no
+# device).
 add_executable(
   vg_core_test
   frame_metrics_test.cpp

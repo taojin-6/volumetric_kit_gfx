@@ -25,8 +25,9 @@ repos:
 
   # Enforce the Vulkan-include umbrella: first-party code includes
   # volumetric_kit_core's "volumetric_kit/core/vulkan/vulkan.hpp", never
-  # <vulkan/...> directly. The core's umbrella owns the loader/dispatch choice (link-time loader today; volk later) and the oldest
-  # Vulkan headers the family supports, so no gfx source can bypass either.
+  # <vulkan/...> directly. The core's umbrella owns the loader/dispatch choice
+  # (link-time loader today; volk later) and the oldest Vulkan headers the
+  # family supports, so no gfx source can bypass either.
   # Fails if any tracked C / C++ / CUDA / Obj-C++ source includes a <vulkan/...>
   # path. The pattern is anchored to the start of a line (after optional
   # whitespace) so it matches real `#include` directives, not the path quoted

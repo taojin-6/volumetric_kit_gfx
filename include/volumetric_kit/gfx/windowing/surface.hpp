@@ -49,9 +49,9 @@ class VG_WINDOWING_API Surface {
   /// @brief Create a windowless surface via `VK_EXT_headless_surface`.
   /// @param instance  An instance created with `VK_EXT_headless_surface`
   ///                  enabled.
-  /// @return The surface on success; @ref Status::Code::Unsupported when the
+  /// @return The surface on success; `core::Status::Code::Unsupported` when the
   ///         extension is unavailable (e.g. MoltenVK), or a backend
-  ///         @ref Status carrying the `VkResult`.
+  ///         `core::Status` carrying the `VkResult`.
   static core::Result<Surface> headless(VkInstance instance);
 
   /// @return The owned `VkSurfaceKHR` (`VK_NULL_HANDLE` when empty).

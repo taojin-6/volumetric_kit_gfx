@@ -63,9 +63,10 @@ struct ImageUploadDesc {
   uint32_t mip_levels = 1;
   /// Build a full mip chain by halving linear blits down from mip 0. Requires a
   /// format that supports linear blit and linear filtering, or the upload
-  /// returns @ref Status::Code::Unsupported; only available for a single-layer,
-  /// single-source-mip image (`array_layers == 1 && mip_levels == 1`). When
-  /// false, exactly the supplied @ref mip_levels are uploaded.
+  /// returns `core::Status::Code::Unsupported`; only available for a
+  /// single-layer, single-source-mip image
+  /// (`array_layers == 1 && mip_levels == 1`). When false, exactly the supplied
+  /// @ref mip_levels are uploaded.
   bool generate_mips = false;
 };
 
@@ -127,9 +128,9 @@ class VG_CORE_API UploadBatch {
   ///                   outlive the batch.
   /// @param allocator  Allocates each add's staging buffer and destination
   ///                   resource; must outlive the batch.
-  /// @return The open batch; @ref Status::Code::Unsupported naming the first
+  /// @return The open batch; `core::Status::Code::Unsupported` naming the first
   ///         renderer requirement @p device did not enable; or
-  ///         @ref Status::Code::InvalidArgument for a moved-from @p device.
+  ///         `core::Status::Code::InvalidArgument` for a moved-from @p device.
   /// @note One batch is used from one thread at a time. Batches on different
   ///       threads may share a device: @ref finish records on a command pool
   ///       no other submit holds and serializes only the queue submit.
@@ -153,9 +154,9 @@ class VG_CORE_API UploadBatch {
   ///         until then: nothing has transitioned it. Once finish returns OK
   ///         it is in `SHADER_READ_ONLY_OPTIMAL`; record that with
   ///         `set_layout`, as the core's `Image` asks of whoever submits a
-  ///         transition. Or a non-OK @ref Status: @ref
-  ///         Status::Code::InvalidArgument when the batch is empty (not begun,
-  ///         moved-from, or already finished), plus everything @ref
+  ///         transition. Or a non-OK `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` when the batch is empty (not
+  ///         begun, moved-from, or already finished), plus everything @ref
   ///         upload_texture rejects.
   /// @warning Keep the returned texture alive at least until @ref finish
   ///          returns: the recorded upload writes into it, so destroying it
@@ -172,11 +173,11 @@ class VG_CORE_API UploadBatch {
   /// add leaves the batch open and unchanged, with nothing recorded.
   /// @param desc  Source bytes, byte length, and destination usage.
   /// @return The created buffer -- holding its bytes only after @ref finish
-  ///         returns OK -- or a non-OK @ref Status: @ref
-  ///         Status::Code::InvalidArgument when the batch is empty (not begun,
-  ///         moved-from, or already finished), `desc.data` is null, `desc.size`
-  ///         is zero, or `desc.usage` names no usage; otherwise a backend
-  ///         Status from buffer allocation.
+  ///         returns OK -- or a non-OK `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` when the batch is empty (not
+  ///         begun, moved-from, or already finished), `desc.data` is null,
+  ///         `desc.size` is zero, or `desc.usage` names no usage; otherwise a
+  ///         backend Status from buffer allocation.
   /// @warning Keep the returned buffer alive at least until @ref finish
   ///          returns: the recorded copy writes into it, so destroying it
   ///          earlier would submit against a freed buffer.
@@ -196,8 +197,8 @@ class VG_CORE_API UploadBatch {
   /// likewise still be written, so treat the device as lost before freeing
   /// them.
   /// @return OK once every added texture is sampled-ready and every added
-  ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
-  ///         batch is empty or @ref poison ed, or a backend @ref Status
+  ///         buffer holds its bytes, `core::Status::Code::InvalidArgument` if
+  ///         the batch is empty or @ref poison ed, or a backend `core::Status`
   ///         from the record/submit/wait step.
   core::Status finish();
 
@@ -207,9 +208,9 @@ class VG_CORE_API UploadBatch {
   /// For a multi-resource caller (e.g. @ref pipelines::upload_mesh, which
   /// records two buffers) that has *dropped* a resource an earlier @ref add /
   /// @ref add_buffer already queued a copy into: the batch then holds a copy
-  /// into freed memory, so submitting would be a use-after-free.
-  /// Poisoning makes @ref finish return @ref Status::Code::InvalidArgument and
-  /// free the recorded work rather than submit it. A single failed @ref add /
+  /// into freed memory, so submitting would be a use-after-free. Poisoning
+  /// makes @ref finish return `core::Status::Code::InvalidArgument` and free
+  /// the recorded work rather than submit it. A single failed @ref add /
   /// @ref add_buffer records nothing and does *not* need this -- the batch
   /// stays usable; only a caller that drops an already-recorded resource does.
   void poison() noexcept;
@@ -252,25 +253,26 @@ class VG_CORE_API UploadBatch {
 /// @param desc       Source pixels, extent, format, and layer/mip options.
 /// @return The texture -- sampled-ready in `SHADER_READ_ONLY_OPTIMAL`, which
 ///         its `layout()` records, with a default view spanning all mips and
-///         layers -- or a non-OK @ref
-///         Status: @ref Status::Code::InvalidArgument for a zero extent,
+///         layers -- or a non-OK `core::Status`:
+///         `core::Status::Code::InvalidArgument` for a zero extent,
 ///         `VK_FORMAT_UNDEFINED`, null pixels, zero
 ///         `array_layers`/`mip_levels`, a `cube` that is not a square six-layer
 ///         image, more `mip_levels` than the extent's full chain,
-///         `generate_mips` combined with `array_layers > 1` or `mip_levels >
-///         1`, or a `desc.size` that does not match the packing contract (see
-///         @ref ImageUploadDesc); @ref Status::Code::Unsupported for an extent
-///         beyond the device's `maxImageDimension2D` (`maxImageDimensionCube`
-///         for cubes), more layers than `maxImageArrayLayers`, a
+///         `generate_mips` combined with `array_layers > 1` or
+///         `mip_levels > 1`, or a `desc.size` that does not match the packing
+///         contract (see @ref ImageUploadDesc);
+///         `core::Status::Code::Unsupported` for an extent beyond the device's
+///         `maxImageDimension2D` (`maxImageDimensionCube` for cubes), more
+///         layers than `maxImageArrayLayers`, a
 ///         compressed/multi-planar/depth-stencil format, a vendor or EXT
-///         extension's format, one whose view needs a sampler Y'CbCr
-///         conversion (RGBA 4PACK16), a format that cannot be sampled with
-///         optimal tiling, `generate_mips` on a format that cannot be
-///         linear-blitted, or a device that did not enable the renderer's
-///         requirements (@ref UploadBatch::begin); otherwise a backend Status
-///         from the staging-buffer, image, or submit step.
+///         extension's format, one whose view needs a sampler Y'CbCr conversion
+///         (RGBA 4PACK16), a format that cannot be sampled with optimal tiling,
+///         `generate_mips` on a format that cannot be linear-blitted, or a
+///         device that did not enable the renderer's requirements
+///         (@ref UploadBatch::begin); otherwise a backend Status from the
+///         staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
-///       per-frame one (see @ref Device::submit_single_time).
+///       per-frame one (see `core::Device::submit_single_time`).
 VG_CORE_API core::Result<core::Image> upload_texture(
     const core::Device& device, core::Allocator& allocator,
     const ImageUploadDesc& desc);
@@ -290,14 +292,14 @@ VG_CORE_API core::Result<core::Image> upload_texture(
 ///                   buffer may outlive it (see `core::Buffer`).
 /// @param desc       Source bytes, byte length, and destination usage.
 /// @return The buffer -- `core::MemoryUsage::DeviceOnly`, holding
-///         @p desc.size bytes of @p desc.data -- or a non-OK @ref Status: @ref
-///         Status::Code::InvalidArgument for null `data`, zero `size`, or a
-///         `usage` that names no usage; @ref Status::Code::Unsupported for a
-///         device that did not enable the renderer's requirements
+///         @p desc.size bytes of @p desc.data -- or a non-OK `core::Status`:
+///         `core::Status::Code::InvalidArgument` for null `data`, zero `size`,
+///         or a `usage` that names no usage; `core::Status::Code::Unsupported`
+///         for a device that did not enable the renderer's requirements
 ///         (@ref UploadBatch::begin); otherwise a backend Status from the
 ///         staging-buffer, destination, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
-///       per-frame one (see @ref Device::submit_single_time).
+///       per-frame one (see `core::Device::submit_single_time`).
 VG_CORE_API core::Result<core::Buffer> upload_buffer(
     const core::Device& device, core::Allocator& allocator,
     const BufferUploadDesc& desc);

@@ -81,8 +81,8 @@ inline bool swapchain_stale(const core::Status& status) noexcept {
 /// compatible after a resize. With @ref SwapchainConfig::depth_format set, the
 /// per-image depth attachments are likewise rebuilt (and re-transitioned into
 /// their attachment layout) on every @ref recreate. @ref acquire_next_image /
-/// @ref present surface `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK @ref Status
-/// whose @ref Status::code is that result, so the caller knows to @ref
+/// @ref present surface `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK `core::Status`
+/// whose `core::Status::code` is that result, so the caller knows to @ref
 /// recreate. A default-constructed `Swapchain` is empty (`valid()` is false).
 ///
 /// @warning The @p device and surface passed to @ref create must outlive the
@@ -114,16 +114,16 @@ class VG_WINDOWING_API Swapchain {
   ///                   the per-image depth attachments (and reallocates them on
   ///                   every @ref recreate). Borrowed; must outlive the
   ///                   swapchain. Unused for a color-only swapchain.
-  /// @return The swapchain on success, or a non-OK @ref Status:
+  /// @return The swapchain on success, or a non-OK `core::Status`:
   ///         a null @p surface, a non-present @p device, a non-depth
   ///         `config.depth_format`, or a set `config.depth_format` without an
-  ///         @p allocator returns @ref Status::Code::InvalidArgument; a surface
-  ///         with no formats / present modes, or a `config.depth_format` the
-  ///         device cannot render depth through (stencil aspect, or no
-  ///         optimal-tiling depth-attachment support), or a @p device that did
-  ///         not enable the renderer's requirements, returns
-  ///         @ref Status::Code::Unsupported; a failed Vulkan call carries its
-  ///         `VkResult`.
+  ///         @p allocator returns `core::Status::Code::InvalidArgument`; a
+  ///         surface with no formats / present modes, or a
+  ///         `config.depth_format` the device cannot render depth through
+  ///         (stencil aspect, or no optimal-tiling depth-attachment support),
+  ///         or a @p device that did not enable the renderer's requirements,
+  ///         returns `core::Status::Code::Unsupported`; a failed Vulkan call
+  ///         carries its `VkResult`.
   static core::Result<Swapchain> create(const core::Device& device,
                                         VkSurfaceKHR surface,
                                         const SwapchainConfig& config,
@@ -141,8 +141,9 @@ class VG_WINDOWING_API Swapchain {
   /// @param timeout_ns       Maximum wait, in nanoseconds.
   /// @return The acquired image index. `VK_SUBOPTIMAL_KHR` still returns an
   ///         index (render proceeds); `VK_ERROR_OUT_OF_DATE_KHR` returns a
-  ///         non-OK @ref Status carrying that code — @ref recreate and retry.
-  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
+  ///         non-OK `core::Status` carrying that code — @ref recreate and
+  ///         retry. An empty swapchain returns
+  ///         `core::Status::Code::InvalidArgument`.
   core::Result<uint32_t> acquire_next_image(VkSemaphore image_available,
                                             uint64_t timeout_ns = UINT64_MAX);
 
@@ -150,10 +151,10 @@ class VG_WINDOWING_API Swapchain {
   /// @param image_index     An index from @ref acquire_next_image.
   /// @param render_finished  Waited before presenting (signaled by the render
   ///                        submission).
-  /// @return OK on success; a non-OK @ref Status carrying
+  /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` when the
   ///         swapchain should be recreated, or another failed `VkResult`.
-  ///         An empty swapchain returns @ref Status::Code::InvalidArgument.
+  ///         An empty swapchain returns `core::Status::Code::InvalidArgument`.
   core::Status present(uint32_t image_index, VkSemaphore render_finished);
 
   /// @brief Rebuild the swapchain for @p extent (resize / out-of-date), keeping
@@ -163,15 +164,14 @@ class VG_WINDOWING_API Swapchain {
   /// @param extent  The new desired size (clamped/overridden as in @ref
   /// create).
   /// @return OK on success. A zero @p extent (minimized window) fails with
-  ///         @ref Status::Code::InvalidArgument *without touching the current
-  ///         swapchain*, which stays valid for a later retry. A failed rebuild
-  ///         (`vkCreateSwapchainKHR`, or the image-view creation that follows)
-  ///         empties the object (`valid()` false) but keeps its device /
-  ///         surface / format, so a later @ref recreate can retry it once the
-  ///         transient failure clears. Called on a moved-from or
+  ///         `core::Status::Code::InvalidArgument` *without touching the
+  ///         current swapchain*, which stays valid for a later retry. A failed
+  ///         rebuild (`vkCreateSwapchainKHR`, or the image-view creation that
+  ///         follows) empties the object (`valid()` false) but keeps its
+  ///         device / surface / format, so a later @ref recreate can retry it
+  ///         once the transient failure clears. Called on a moved-from or
   ///         default-constructed swapchain (no device to rebuild on), fails
-  ///         with
-  ///         @ref Status::Code::InvalidArgument.
+  ///         with `core::Status::Code::InvalidArgument`.
   core::Status recreate(VkExtent2D extent);
 
   /// @return The render target for swapchain image @p image_index.

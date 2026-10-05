@@ -34,8 +34,8 @@
 //    binary PPM. Headless, so it works where no display / screen-capture is
 //    available.
 
+// Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-// Vulkan and declares its helpers
 
 #include <GLFW/glfw3.h>
 

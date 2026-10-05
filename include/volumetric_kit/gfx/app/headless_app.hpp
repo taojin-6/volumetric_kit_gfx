@@ -44,7 +44,7 @@ struct HeadlessAppConfig {
   core::DeviceRequirements device = device_requirements();
 };
 
-/// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,
+/// @brief Owns the headless bring-up chain — `core::Instance`, `core::Device`,
 ///        `core::Allocator` — created in one call and destroyed in reverse
 ///        order. No surface, no present queue: it runs wherever a Vulkan
 ///        device exists (CI, batch jobs).
@@ -54,7 +54,7 @@ struct HeadlessAppConfig {
 ///
 /// @note Resources created *after* the app — targets, pipelines, uploads built
 ///       on @ref device / @ref allocator — destruct before it; make sure the
-///       GPU is done with them first (e.g. @ref Device::submit_single_time
+///       GPU is done with them first (e.g. `core::Device::submit_single_time`
 ///       already blocks until completion).
 ///
 /// @code
@@ -74,10 +74,10 @@ class VG_APP_API HeadlessApp {
   ///        @p config extensions) → physical-device selection (no surface) →
   ///        device (no present queue) → allocator.
   /// @param config  App identity and optional instance extensions.
-  /// @return The app on success, or the first failing step's @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a `config.device` with
+  /// @return The app on success, or the first failing step's `core::Status`:
+  ///         `core::Status::Code::InvalidArgument` for a `config.device` with
   ///         `needs_present` (before any Vulkan call);
-  ///         @ref Status::Code::Unsupported when no device qualifies;
+  ///         `core::Status::Code::Unsupported` when no device qualifies;
   ///         otherwise the propagated failure.
   static core::Result<HeadlessApp> create(const HeadlessAppConfig& config);
 

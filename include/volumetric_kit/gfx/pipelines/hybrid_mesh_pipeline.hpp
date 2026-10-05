@@ -110,9 +110,10 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///                format (the pipeline is depth-tested).
   /// @pre @p device is non-`VK_NULL_HANDLE`; @p layout carries a depth format
   ///      and at least one color attachment with a defined format.
-  /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
-  ///         Status::Code::InvalidArgument when @p layout has no depth format,
-  ///         or a backend Status from shader-module / pipeline creation).
+  /// @return The pipeline on success, or a non-OK `core::Status` (e.g.
+  ///         `core::Status::Code::InvalidArgument` when @p layout has no depth
+  ///         format, or a backend Status from shader-module / pipeline
+  ///         creation).
   static core::Result<HybridMeshPipeline> create(
       VkDevice device, const RenderTargetLayout& layout);
 

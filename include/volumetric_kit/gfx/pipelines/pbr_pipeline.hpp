@@ -64,10 +64,11 @@ class VG_PIPELINES_API PbrPipeline {
   /// @pre @p device is non-`VK_NULL_HANDLE`; @p layout carries a depth format
   ///      and at least one color attachment with a defined format. These are
   ///      validated before Vulkan is touched and otherwise yield a non-OK
-  ///      @ref Status with domain @ref Status::Code::InvalidArgument.
-  /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
-  ///         Status::Code::InvalidArgument when @p layout has no depth format,
-  ///         or a backend Status from shader-module / pipeline creation).
+  ///      `core::Status` with domain `core::Status::Code::InvalidArgument`.
+  /// @return The pipeline on success, or a non-OK `core::Status` (e.g.
+  ///         `core::Status::Code::InvalidArgument` when @p layout has no depth
+  ///         format, or a backend Status from shader-module / pipeline
+  ///         creation).
   static core::Result<PbrPipeline> create(VkDevice device,
                                           const RenderTargetLayout& layout);
 

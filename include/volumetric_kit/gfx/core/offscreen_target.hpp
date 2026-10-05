@@ -74,19 +74,20 @@ class VG_CORE_API OffscreenTarget {
   /// @brief Allocate the attachment image(s) and readback buffer for @p desc.
   /// @param allocator  Allocates the images and the readback buffer.
   /// @param desc       Extent, formats, and whether to allocate readback.
-  /// @return The target on success, or a non-OK @ref Status:
+  /// @return The target on success, or a non-OK `core::Status`:
   ///         - a zero @ref OffscreenTargetDesc::extent or a
   ///         `VK_FORMAT_UNDEFINED`
   ///           @ref OffscreenTargetDesc::color_format returns
-  ///           @ref Status::Code::InvalidArgument;
+  ///           `core::Status::Code::InvalidArgument`;
   ///         - a @ref OffscreenTargetDesc::readback request on a color format
   ///           a flat per-texel copy cannot size (compressed, multi-planar, or
   ///           a vendor or EXT extension's) returns
-  ///           @ref Status::Code::Unsupported;
+  ///           `core::Status::Code::Unsupported`;
   ///         - a non-depth @ref OffscreenTargetDesc::depth_format returns
-  ///           @ref Status::Code::InvalidArgument, and a combined depth/stencil
-  ///           one @ref Status::Code::Unsupported (depth-only for now);
-  ///         - a failed image/buffer allocation propagates its @ref Status.
+  ///           `core::Status::Code::InvalidArgument`, and a combined
+  ///           depth/stencil one `core::Status::Code::Unsupported` (depth-only
+  ///           for now);
+  ///         - a failed image/buffer allocation propagates its `core::Status`.
   static core::Result<OffscreenTarget> create(core::Allocator& allocator,
                                               const OffscreenTargetDesc& desc);
 
