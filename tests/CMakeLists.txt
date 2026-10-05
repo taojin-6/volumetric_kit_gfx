@@ -31,6 +31,13 @@ target_link_libraries(vg_version_test PRIVATE volumetric_kit::gfx_core
 vg_target_warnings(vg_version_test)
 vg_discover_tests(vg_version_test)
 
+# Temporary measurement (draft PR, not for merging): times the Vulkan calls a
+# GPU test makes. Not a test, so not discovered; tools/measure_vk_create.sh runs
+# it.
+add_executable(vg_vk_create_bench vk_create_bench.cpp)
+target_link_libraries(vg_vk_create_bench PRIVATE volumetric_kit::gfx_core)
+vg_target_warnings(vg_vk_create_bench)
+
 # core tier: FrameMetrics (CPU-only) + Instance/Device (GPU; skips when no
 # device).
 add_executable(

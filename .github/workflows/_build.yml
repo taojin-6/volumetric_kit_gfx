@@ -277,6 +277,13 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
 
+      # TEMPORARY (draft PR, not for merging): where a GPU test's start-up time
+      # goes. Informational only, so it cannot fail the leg.
+      - name: Measure Vulkan start-up cost (temporary)
+        if: steps.detect.outputs.present == 'true'
+        continue-on-error: true
+        run: bash tools/measure_vk_create.sh build
+
       # Nothing above compiles the *installed* tree, so an install-list mistake
       # -- shipping a header whose own #include was excluded -- reaches
       # consumers with CI green. Two cheap checks close that:
