@@ -85,30 +85,22 @@ target_include_directories(
 # enough for -Werror.
 target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
 
-# Compile gfx_core's own TUs against the pinned Vulkan-Headers +
-# Vulkan-Utility-Libraries (the vkuFormat* metadata in core/impl/vk_format.hpp),
-# not the system Vulkan headers: BEFORE so they win over the Vulkan::Headers
-# include the link below brings in, SYSTEM so their (generated-code) warnings
-# stay out of -Werror, and PRIVATE so only this library is repointed -- no
-# public header pulls vkuFormat*, so in-tree tests/examples and
-# installed-package consumers keep compiling against the system Vulkan::Headers
-# (the public API is ABI-stable across Vulkan versions). The system loader links
-# privately below; only the headers are vendored.
-target_include_directories(
-  gfx_core SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
-                                 "${VG_VULKAN_UTILITY_INCLUDE}")
-
 # Public deps are independently re-findable, so the installed package's
 # find_dependency() calls stay simple: volumetric_kit_core's base tier (Status /
-# Result / the log sink in every tier's signatures) and the Vulkan headers. The
-# Vulkan loader is PRIVATE: our implementation (VMA) links it, but it never
-# surfaces in the public API. glm is intentionally absent: no public gfx_core
-# header names a glm type (see the rationale at the top-level find_package site
-# in CMakeLists.txt).
+# Result / the log sink in every tier's signatures) and the system's Vulkan
+# headers, which every gfx TU compiles against. The Vulkan loader is PRIVATE:
+# our implementation (VMA) links it, but it never surfaces in the public API. So
+# is the core's vulkan tier for now: only the format metadata
+# (volumetric_kit/core/vulkan/format.hpp) is used, and no public header names
+# it. glm is intentionally absent: no public gfx_core header names a glm type
+# (see the rationale at the top-level find_package site in CMakeLists.txt).
+#
+# TODO: make volumetric_kit::core_vulkan PUBLIC when gfx_core's public API takes
+# the core's Device (DECISIONS.md, 2026-10-04, the stages still open).
 target_link_libraries(
   gfx_core
   PUBLIC volumetric_kit::core_base Vulkan::Headers
-  PRIVATE Vulkan::Vulkan)
+  PRIVATE volumetric_kit::core_vulkan Vulkan::Vulkan)
 
 # spirv-cross: SPIR-V reflection for descriptor-set layouts, used privately in
 # shader.cpp -- its headers/types never reach gfx_core's public API. SYSTEM-mark

@@ -8,8 +8,8 @@
 
 #include <vk_mem_alloc.h>
 
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -323,7 +323,7 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     view_info.image = image;
     view_info.viewType = view_type_for(desc.type, desc.array_layers, desc.cube);
     view_info.format = desc.format;
-    view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
+    view_info.subresourceRange.aspectMask = core::view_aspect(desc.format);
     view_info.subresourceRange.baseMipLevel = 0;
     view_info.subresourceRange.levelCount = desc.mip_levels;
     view_info.subresourceRange.baseArrayLayer = 0;

@@ -52,17 +52,12 @@ if(VG_INSTALL)
     # volumetric_kit/gfx/ui/CMakeLists.txt), so an installed copy would not
     # compile -- keep the tier out until gfx_ui is exported.
     REGEX "volumetric_kit/gfx/ui(/|$)" EXCLUDE
-    # impl/vk_format.hpp is internal (no public header includes it) and pulls
-    # the vendored <vulkan/utility/...> header that the package neither ships
-    # nor re-exports, so an installed copy would not compile -- keep it out.
-    PATTERN "vk_format.hpp" EXCLUDE
-    # impl/depth_attachment.hpp includes the excluded impl/vk_format.hpp, so an
-    # installed copy would not compile either. It is internal on the same terms
-    # (only offscreen_target.cpp and swapchain.cpp include it, both in-tree), so
-    # exclude it with its dependency rather than ship a broken header. Whenever
-    # a header is excluded here, every installed header that includes it must be
-    # excluded too -- the smoke check in .github/workflows/_build.yml compiles
-    # the installed tree to keep that honest.
+    # impl/depth_attachment.hpp is internal: only offscreen_target.cpp and
+    # swapchain.cpp include it, both in-tree, and it reaches the core's vulkan
+    # tier, which gfx links privately -- keep it out. Whenever a header is
+    # excluded here, every installed header that includes it must be excluded
+    # too -- the smoke check in .github/workflows/_build.yml compiles the
+    # installed tree to keep that honest.
     REGEX "volumetric_kit/gfx/core/impl/depth_attachment\\.hpp$" EXCLUDE
     # impl/vk_query.hpp is internal too ("Not a public header."); no installed
     # header includes it, so keep it out. The other impl/ headers ship because

@@ -28,6 +28,8 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — Vulkan headers come from the system**, as the core's do; the core's
+  `format.hpp` replaces Vulkan-Utility-Libraries. See the dated entry below.
 - **2026-10-04 — Error handling comes from `volumetric_kit_core`.** `Status`, `Result`,
   `VG_CHECK` and the log sink are the family's shared core's base tier; see the dated entry
   below for the `VkResult` bridge and the stages still to come.
@@ -62,6 +64,32 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-04 — Vulkan headers come from the system
+
+gfx compiles against the Vulkan headers `find_package(Vulkan)` finds, as the
+family's core does, settling the question its error-handling move left open
+(the core's DECISIONS.md, "Vulkan headers come from the system"). It no longer
+vendors Vulkan-Headers or Vulkan-Utility-Libraries.
+
+- **Only the format metadata needed them.** gfx used five `vkuFormat*`
+  helpers, and nothing newer than Vulkan 1.3 core and long-standing
+  extensions otherwise. Those helpers become the core's `format.hpp`:
+  `aspect_mask_for` → `core::view_aspect`, `texel_size` →
+  `core::texel_bytes`, and `format_has_depth` / `format_has_stencil` → the
+  core's. A vendor or EXT extension's format now reads as nothing, so an
+  offscreen readback or texture upload of one is refused rather than sized.
+- **The oldest supported headers are the core's: 1.3.204, and 1.3.208 on
+  Apple.** `core/vulkan.hpp` forwards to the core's umbrella, whose check
+  refuses older headers in every gfx translation unit; the Ubuntu 22.04 leg
+  builds on its system's 1.3.204.
+- **gfx turns the core's vulkan tier on**, and refuses to configure where a
+  parent made the core available without it, as recon does. `gfx_core` and
+  `gfx_windowing` link it PRIVATE while no public gfx header names a core
+  vulkan type; that changes when gfx's device moves onto the core's.
+- **An application decides the headers**, not gfx: one that wants a pin
+  points `Vulkan_INCLUDE_DIR` at it, for gfx, the core and every other
+  library alike.
 
 ## 2026-10-04 — Error handling comes from volumetric_kit_core
 
@@ -102,13 +130,12 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   dependencies, so a core FetchContent finds installed is visible to `src/`.
   `VG_INSTALL` turns the core's install rules on, never off: a sibling that
   installs (recon) needs them whichever project populates the core first.
-- **gfx's own build fetches only the base tier**, so the core's system Vulkan
-  headers never meet gfx's pinned Vulkan-Headers there. As a subproject, gfx
-  leaves the vulkan tier to a parent that turned it on for another sibling.
+- **gfx's own build fetched only the base tier**, so the core's system Vulkan
+  headers never met gfx's pinned Vulkan-Headers. Superseded: gfx now builds on
+  the system's headers and the core's vulkan tier ("Vulkan headers come from
+  the system", above).
 
-Still open, for the next stages: whether gfx adopts the system Vulkan headers
-or the core vendors gfx's pin (the core's "Vulkan headers for gfx" question);
-moving `gfx_core`'s instance, device, allocator, buffers, images, descriptors,
+Still open, for the next stages: moving `gfx_core`'s instance, device, allocator, buffers, images, descriptors,
 command pools, sync and query pool onto the core's vulkan tier, with gfx's
 graphics-only parts (swapchain, render targets, graphics pipelines, samplers,
 the frames-in-flight profiler) staying here; `Texture` becoming the core's

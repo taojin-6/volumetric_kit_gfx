@@ -83,8 +83,9 @@ endif()
 
 # volumetric_kit_core: gfx's Status / Result / VG_CHECK / log sink come from its
 # base tier (DECISIONS.md, 2026-10-04), so they are the same types recon and
-# calib use. A compiled library and a PUBLIC dependency of gfx_core, resolved
-# here rather than in third_party/: when FetchContent satisfies it with
+# calib use, and its vulkan tier supplies the format metadata gfx's image code
+# reads (format.hpp). A compiled library and a PUBLIC dependency of gfx_core,
+# resolved here rather than in third_party/: when FetchContent satisfies it with
 # find_package (FETCHCONTENT_TRY_FIND_PACKAGE_MODE), the imported
 # volumetric_kit::core_base and volumetric_kit_core_VERSION are visible only in
 # this directory and below. Pinned by commit, never main; an application that
@@ -94,14 +95,16 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin is main after core PR #10.
+# The pin is main after core PR #13, which settled that the family builds on the
+# system's Vulkan headers (the core's DECISIONS.md, "Vulkan headers come from
+# the system").
 #
 # TODO: pin a release tag once the core tags one (v0.1.0).
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 5292b63cce465b1d951af6eefcc7f43fb8d6da83)
+  GIT_TAG a60398b7aeb2cad722a3f79cb71696bda10fc054)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
@@ -109,14 +112,18 @@ FetchContent_Declare(
 if(VG_INSTALL)
   set(VKC_INSTALL ON)
 endif()
-# gfx uses only the base tier. Its own build leaves the vulkan tier off, so the
-# core's system Vulkan headers never meet gfx's pinned Vulkan-Headers. As a
-# subproject it defers to a parent that turned the tier on for another sibling
-# (recon); gfx's headers compile beside the core's vulkan ones.
-if(VG_IS_TOP_LEVEL OR NOT DEFINED VKC_WITH_VULKAN)
-  set(VKC_WITH_VULKAN OFF)
-endif()
+# gfx builds on the vulkan tier, so it asks for it; both compile against the
+# Vulkan headers find_package(Vulkan) found above.
+set(VKC_WITH_VULKAN ON)
 FetchContent_MakeAvailable(volumetric_kit_core)
+# The set() above is lost when calib or the application made the core available
+# first, without its vulkan tier.
+if(NOT TARGET volumetric_kit::core_vulkan)
+  message(
+    FATAL_ERROR
+      "gfx needs volumetric_kit_core's vulkan tier: set VKC_WITH_VULKAN ON "
+      "before the first FetchContent_MakeAvailable of the core")
+endif()
 
 # --- Dependencies + library --------------------------------------------------
 add_subdirectory(third_party)

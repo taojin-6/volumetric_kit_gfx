@@ -5,11 +5,11 @@
 
 #include <utility>
 
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -31,7 +31,7 @@ Result<OffscreenTarget> OffscreenTarget::create(
 
   VkDeviceSize readback_size = 0;
   if (desc.readback) {
-    const uint32_t texel = texel_size(desc.color_format);
+    const uint32_t texel = core::texel_bytes(desc.color_format);
     if (texel == 0) {
       return Status::unsupported(
           "OffscreenTarget::create: readback unsupported for this color "

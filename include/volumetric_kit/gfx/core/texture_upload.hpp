@@ -35,7 +35,7 @@ class Device;
 /// mip 1's, and so on. Mip `m` of a `w x h` image is
 /// `max(1, w >> m) x max(1, h >> m)` texels, so @ref size must equal the sum of
 /// every (mip, layer) subresource:
-/// `array_layers * sum_m(mip_width(m) * mip_height(m)) * texel_size(format)`.
+/// `array_layers * sum_m(mip_width(m) * mip_height(m)) * texel_bytes(format)`.
 ///
 /// The renderer's CPU image model (`assets::Image`) is deliberately
 /// GPU-API-free, so choosing the concrete @ref format -- and any RGB->RGBA

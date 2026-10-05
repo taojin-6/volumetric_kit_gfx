@@ -47,20 +47,13 @@ target_include_directories(
 
 # gfx_core is PUBLIC (its types appear in this tier's API); the Vulkan loader is
 # PRIVATE (this tier calls the WSI entry points -- vkCreateSwapchainKHR,
-# vkAcquireNextImageKHR, ... -- but never surfaces a loader symbol publicly).
+# vkAcquireNextImageKHR, ... -- but never surfaces a loader symbol publicly). So
+# is the core's vulkan tier: swapchain.cpp classifies the depth format through
+# its format.hpp (via core/impl/depth_attachment.hpp).
 target_link_libraries(
   gfx_windowing
   PUBLIC volumetric_kit::gfx_core Vulkan::Headers
-  PRIVATE Vulkan::Vulkan)
-
-# swapchain.cpp classifies the depth format through core/impl/vk_format.hpp
-# (vkuFormat*), so this tier's own TUs need the same pinned Vulkan-Headers +
-# Vulkan-Utility-Libraries repointing as gfx_core: BEFORE so they win over the
-# Vulkan::Headers include above, SYSTEM to keep vendored warnings out of
-# -Werror, and PRIVATE so nothing leaks to consumers.
-target_include_directories(
-  gfx_windowing SYSTEM BEFORE PRIVATE "${VG_VULKAN_HEADERS_INCLUDE}"
-                                      "${VG_VULKAN_UTILITY_INCLUDE}")
+  PRIVATE volumetric_kit::core_vulkan Vulkan::Vulkan)
 
 vg_target_warnings(gfx_windowing)
 

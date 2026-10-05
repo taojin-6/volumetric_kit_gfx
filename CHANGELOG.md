@@ -24,6 +24,16 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **gfx builds on the system's Vulkan headers**, as the family's core
+  does, and no longer vendors Vulkan-Headers or Vulkan-Utility-Libraries. The
+  core is pinned at its PR #13 with its vulkan tier on, whose `format.hpp`
+  replaces gfx's internal `vkuFormat*` helpers. Migrating:
+  - Vulkan headers 1.3.204 or newer are required, 1.3.208 on Apple; older ones
+    fail at configure or in `core/vulkan.hpp`, naming the version needed.
+  - An application that fetches the core before gfx sets `VKC_WITH_VULKAN ON`
+    first, or gfx refuses to configure.
+  - A texture upload or offscreen readback of a vendor or EXT extension's
+    format is refused (`Unsupported`); core and KHR formats are unchanged.
 - `core`: **error handling comes from `volumetric_kit_core`**, fetched pinned by
   commit, linked PUBLIC and re-found by the installed package. `vg::Status` and
   `vg::Result` are the core's types, so they pass to recon and calib unchanged.

@@ -1,19 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# Dependencies. System via find_package: the Vulkan loader (linked at runtime)
-# and glslc/glslangValidator (shader compilation) -- re-findable, keeping the
-# installed export clean (consumers find_dependency(Vulkan)). glm (camera tier)
-# is preferred from the system too (resolved at the top level), falling back to
-# a pinned vendored copy below when none is installed. Vendored via pinned
-# FetchContent: Vulkan-Headers + Vulkan-Utility-Libraries (the library compiles
-# against these for authoritative VkFormat metadata), VMA (header-only, built in
-# one gfx_core TU), spirv-cross (SPIR-V reflection; a static archive linked
-# privately into gfx_core), and googletest.
-#
-# The library compiles against the pinned Vulkan-Headers and links the system
-# loader -- this also pre-stages the header vendoring the iOS/Android work
-# needs.
+# Dependencies. System via find_package: the Vulkan headers and loader, and
+# glslc/glslangValidator (shader compilation) -- re-findable, keeping the
+# installed export clean (consumers find_dependency(Vulkan)). The library
+# compiles against the system's Vulkan headers, as the family's core does (its
+# DECISIONS.md, "Vulkan headers come from the system"), and takes its VkFormat
+# metadata from the core's format.hpp. glm (camera tier) is preferred from the
+# system too (resolved at the top level), falling back to a pinned vendored copy
+# below when none is installed. Vendored via pinned FetchContent: VMA
+# (header-only, built in one gfx_core TU), spirv-cross (SPIR-V reflection; a
+# static archive linked privately into gfx_core), and googletest.
 
 include(FetchContent)
 
@@ -29,29 +26,6 @@ FetchContent_Declare(
     https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
   GIT_TAG v3.4.0
   GIT_SHALLOW TRUE)
-
-# --- Vulkan-Headers + Vulkan-Utility-Libraries (authoritative VkFormat info) --
-# The library compiles against these *pinned* headers (the system loader still
-# links at runtime), so format metadata comes from Khronos' vkuFormat* helpers
-# -- one source of truth, complete as of its pinned tag -- rather than a
-# hand-maintained table. Fetched headers-only: SOURCE_SUBDIR names a nonexistent
-# dir so MakeAvailable populates the sources without running their CMakeLists,
-# which would otherwise redefine the Vulkan::Headers target that
-# find_package(Vulkan) already created. Pinned to the same vulkan-sdk tag as
-# spirv-cross. (The Ubuntu CI's libvulkan-dev carries neither the utility
-# headers nor recent format enums -- hence vendoring, not the system headers.)
-FetchContent_Declare(
-  VulkanHeaders
-  GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-  GIT_TAG vulkan-sdk-1.4.357.0
-  GIT_SHALLOW TRUE
-  SOURCE_SUBDIR _headers_only_)
-FetchContent_Declare(
-  VulkanUtilityLibraries
-  GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Utility-Libraries.git
-  GIT_TAG vulkan-sdk-1.4.357.0
-  GIT_SHALLOW TRUE
-  SOURCE_SUBDIR _headers_only_)
 
 # --- glm: header-only vector/matrix math (camera + assets tiers) --------------
 # Only vendored when the top level did not find a system glm. glm's CMake
@@ -94,12 +68,12 @@ FetchContent_Declare(
 # --- Dear ImGui: immediate-mode debug UI (ui tier; Vulkan backend only) -------
 # ImGui ships no root CMakeLists -- you compile its sources into your own
 # target. SOURCE_SUBDIR names a nonexistent dir so MakeAvailable only populates
-# the sources (no add_subdirectory), exactly as VulkanHeaders/tinygltf above;
-# the ui tier compiles imgui core + backends/imgui_impl_vulkan into a vendored
-# static lib (see src/.../ui/CMakeLists.txt). The GLFW platform backend
-# (imgui_impl_glfw) is deliberately NOT built here -- it stays in examples, so
-# this tier inherits the windowing tier's GLFW-free rule. Pinned to a tag whose
-# Vulkan backend supports dynamic rendering (the kit's only rendering path).
+# the sources (no add_subdirectory), exactly as tinygltf above; the ui tier
+# compiles imgui core + backends/imgui_impl_vulkan into a vendored static lib
+# (see src/.../ui/CMakeLists.txt). The GLFW platform backend (imgui_impl_glfw)
+# is deliberately NOT built here -- it stays in examples, so this tier inherits
+# the windowing tier's GLFW-free rule. Pinned to a tag whose Vulkan backend
+# supports dynamic rendering (the kit's only rendering path).
 FetchContent_Declare(
   imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -162,28 +136,20 @@ FetchContent_Declare(
   GIT_TAG vulkan-sdk-1.4.357.0
   GIT_SHALLOW TRUE)
 
-# VMA + the vendored Vulkan headers + tinygltf + spirv-cross + ImGui are all
-# needed by the library: spirv-cross backs gfx_core's SPIR-V reflection
-# (shader.cpp), and ImGui backs the ui tier's overlay (imgui_overlay.cpp).
-FetchContent_MakeAvailable(VulkanMemoryAllocator VulkanHeaders
-                           VulkanUtilityLibraries tinygltf spirv-cross imgui)
+# VMA + tinygltf + spirv-cross + ImGui are all needed by the library:
+# spirv-cross backs gfx_core's SPIR-V reflection (shader.cpp), and ImGui backs
+# the ui tier's overlay (imgui_overlay.cpp).
+FetchContent_MakeAvailable(VulkanMemoryAllocator tinygltf spirv-cross imgui)
 
 # glm only when no system copy was found (see the declaration guard above).
 if(NOT VG_HAVE_SYSTEM_GLM)
   FetchContent_MakeAvailable(glm)
 endif()
 
-# Expose the vendored header locations to the library target. VMA is implemented
-# in one TU; the Vulkan-Headers + Utility-Libraries dirs are what gfx_core
-# compiles against (see the BUILD_INTERFACE include in core/CMakeLists.txt).
+# Expose the vendored header location to the library target. VMA is implemented
+# in one TU (see the SYSTEM include in core/CMakeLists.txt).
 set(VG_VMA_INCLUDE_DIR
     "${vulkanmemoryallocator_SOURCE_DIR}/include"
-    PARENT_SCOPE)
-set(VG_VULKAN_HEADERS_INCLUDE
-    "${vulkanheaders_SOURCE_DIR}/include"
-    PARENT_SCOPE)
-set(VG_VULKAN_UTILITY_INCLUDE
-    "${vulkanutilitylibraries_SOURCE_DIR}/include"
     PARENT_SCOPE)
 
 # tinygltf + its bundled json/stb headers live in the repo root; the io tier

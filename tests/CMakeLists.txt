@@ -90,23 +90,14 @@ vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
 
 # gfx's headers beside the core's vulkan tier, whose vk_result.hpp the test
-# includes first -- the order in which their names clashed. gfx's build does not
-# build that tier, so core_vulkan_stub/ supplies the export header it would
-# generate; the test calls only the tier's inline functions. It needs the core's
-# sources, so it is left out when FetchContent found an installed core instead.
-if(EXISTS
-   "${volumetric_kit_core_SOURCE_DIR}/include/volumetric_kit/core/vulkan/vk_result.hpp"
-)
-  add_executable(vg_core_vulkan_tier_test core_vulkan_tier_test.cpp)
-  target_include_directories(
-    vg_core_vulkan_tier_test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/core_vulkan_stub"
-            "${volumetric_kit_core_SOURCE_DIR}/include")
-  target_link_libraries(vg_core_vulkan_tier_test
-                        PRIVATE volumetric_kit::gfx_windowing GTest::gtest_main)
-  vg_target_warnings(vg_core_vulkan_tier_test)
-  vg_discover_tests(vg_core_vulkan_tier_test)
-endif()
+# includes first -- the order in which their names clashed.
+add_executable(vg_core_vulkan_tier_test core_vulkan_tier_test.cpp)
+target_link_libraries(
+  vg_core_vulkan_tier_test
+  PRIVATE volumetric_kit::gfx_windowing volumetric_kit::core_vulkan
+          GTest::gtest_main)
+vg_target_warnings(vg_core_vulkan_tier_test)
+vg_discover_tests(vg_core_vulkan_tier_test)
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and

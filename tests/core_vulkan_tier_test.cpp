@@ -7,10 +7,6 @@
 // core::to_string in gfx's namespace took the tier's to_string(VkResult), which
 // clashed with gfx's, and swapchain_stale's unqualified vk_result(status) also
 // found the tier's by argument-dependent lookup on the Status.
-//
-// gfx's build does not build the core's vulkan tier, so core_vulkan_stub/
-// supplies the export header that tier would generate. This file calls only
-// the tier's inline functions, never into its library.
 
 #include <gtest/gtest.h>
 
