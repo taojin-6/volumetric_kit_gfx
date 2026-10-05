@@ -8,8 +8,8 @@
 
 #include <vk_mem_alloc.h>
 
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -288,6 +288,16 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
         "STORAGE, COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or "
         "INPUT_ATTACHMENT); set with_view = false for a transfer-only image");
   }
+  // A view of a multi-planar, 4:2:2 or RGBA 4PACK16 format must chain a sampler
+  // Y'CbCr conversion (VUID-VkImageViewCreateInfo-format-06415), which the
+  // default view does not.
+  // TODO: take a conversion in TextureDesc when a consumer samples video
+  // frames.
+  if (desc.with_view && core::format_needs_ycbcr_conversion(desc.format)) {
+    return Status::unsupported(
+        "with_view image format needs a sampler Y'CbCr conversion, which the "
+        "default view does not chain; set with_view = false");
+  }
 
   VkImageCreateInfo image_info{};
   image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -323,7 +333,7 @@ Result<Texture> Allocator::create_image(const TextureDesc& desc) {
     view_info.image = image;
     view_info.viewType = view_type_for(desc.type, desc.array_layers, desc.cube);
     view_info.format = desc.format;
-    view_info.subresourceRange.aspectMask = aspect_mask_for(desc.format);
+    view_info.subresourceRange.aspectMask = core::view_aspect(desc.format);
     view_info.subresourceRange.baseMipLevel = 0;
     view_info.subresourceRange.levelCount = desc.mip_levels;
     view_info.subresourceRange.baseArrayLayer = 0;

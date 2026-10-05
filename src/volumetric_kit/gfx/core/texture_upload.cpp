@@ -7,10 +7,10 @@
 #include <cstring>
 #include <utility>
 
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -180,13 +180,21 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   if (desc.pixels == nullptr) {
     return Status::invalid_argument("upload_texture: pixels must not be null");
   }
-  const uint32_t texel = texel_size(desc.format);
+  const uint32_t texel = core::texel_bytes(desc.format);
   if (texel == 0) {
-    // texel_size returns 0 for formats a flat per-texel copy cannot size:
-    // compressed, multi-planar, subsampled, or depth/stencil.
+    // texel_bytes returns 0 for formats a flat per-texel copy cannot size:
+    // compressed, multi-planar, subsampled, or depth/stencil -- and those of
+    // extensions other than KHR, which the core's table does not cover.
     return Status::unsupported(
         "upload_texture: format must be an uncompressed, single-plane color "
         "format");
+  }
+  if (core::format_needs_ycbcr_conversion(desc.format)) {
+    // The RGBA 4PACK16 formats are sized, but the sampled view the upload
+    // makes would need a sampler Y'CbCr conversion (see create_image).
+    return Status::unsupported(
+        "upload_texture: format needs a sampler Y'CbCr conversion to be "
+        "sampled");
   }
   if (desc.mip_levels > mip_levels_for(desc.extent)) {
     return Status::invalid_argument(

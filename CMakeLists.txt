@@ -56,8 +56,7 @@ set(VG_SANITIZE
 include(vg_warnings)
 include(vg_glm)
 include(vg_sanitizers)
-include(vg_shaders)
-include(vg_embed)
+include(vg_core)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets are visible to every
@@ -83,25 +82,30 @@ endif()
 
 # volumetric_kit_core: gfx's Status / Result / VG_CHECK / log sink come from its
 # base tier (DECISIONS.md, 2026-10-04), so they are the same types recon and
-# calib use. A compiled library and a PUBLIC dependency of gfx_core, resolved
-# here rather than in third_party/: when FetchContent satisfies it with
-# find_package (FETCHCONTENT_TRY_FIND_PACKAGE_MODE), the imported
-# volumetric_kit::core_base and volumetric_kit_core_VERSION are visible only in
-# this directory and below. Pinned by commit, never main; an application that
-# also fetches recon declares the core first, and FetchContent keeps the first
-# declaration of a name, so this pin then yields to the application's. Work on
-# both checkouts at once with
+# calib use. Its vulkan tier supplies the Vulkan umbrella header, the VkResult
+# bridge, the format metadata gfx's image code reads (format.hpp) and the shader
+# build functions (vkc_compile_shaders / vkc_embed_shaders). Both tiers are
+# compiled libraries and PUBLIC dependencies of gfx_core, resolved here rather
+# than in third_party/: when FetchContent satisfies them with find_package
+# (FETCHCONTENT_TRY_FIND_PACKAGE_MODE), the imported volumetric_kit::core_base
+# and volumetric_kit_core_VERSION are visible only in this directory and below.
+# Pinned by commit, never main; an application that also fetches recon declares
+# the core first, and FetchContent keeps the first declaration of a name, so
+# this pin then yields to the application's. Work on both checkouts at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin is main after core PR #10.
+# The pin is main after core PR #13, which settled that the family builds on the
+# system's Vulkan headers (the core's DECISIONS.md, "Vulkan headers come from
+# the system").
 #
 # TODO: pin a release tag once the core tags one (v0.1.0).
 include(FetchContent)
+set(VG_VKC_PIN a60398b7aeb2cad722a3f79cb71696bda10fc054)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 5292b63cce465b1d951af6eefcc7f43fb8d6da83)
+  GIT_TAG ${VG_VKC_PIN})
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
@@ -109,14 +113,13 @@ FetchContent_Declare(
 if(VG_INSTALL)
   set(VKC_INSTALL ON)
 endif()
-# gfx uses only the base tier. Its own build leaves the vulkan tier off, so the
-# core's system Vulkan headers never meet gfx's pinned Vulkan-Headers. As a
-# subproject it defers to a parent that turned the tier on for another sibling
-# (recon); gfx's headers compile beside the core's vulkan ones.
-if(VG_IS_TOP_LEVEL OR NOT DEFINED VKC_WITH_VULKAN)
-  set(VKC_WITH_VULKAN OFF)
-endif()
+# gfx builds on the vulkan tier, so it asks for it; both compile against the
+# Vulkan headers find_package(Vulkan) found above.
+set(VKC_WITH_VULKAN ON)
 FetchContent_MakeAvailable(volumetric_kit_core)
+# The pin and the set() above are lost when calib or the application made the
+# core available first, and FetchContent may have found an installed core.
+vg_require_core_vulkan(${VG_VKC_PIN})
 
 # --- Dependencies + library --------------------------------------------------
 add_subdirectory(third_party)

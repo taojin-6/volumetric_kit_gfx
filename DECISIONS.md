@@ -28,6 +28,10 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — Vulkan headers come from the system**, as the core's do; gfx builds on the
+  core's vulkan tier, linked PUBLIC, whose `format.hpp` replaces Vulkan-Utility-Libraries and
+  whose `VkResult` bridge and shader build functions replace gfx's copies. See the dated entry
+  below.
 - **2026-10-04 — Error handling comes from `volumetric_kit_core`.** `Status`, `Result`,
   `VG_CHECK` and the log sink are the family's shared core's base tier; see the dated entry
   below for the `VkResult` bridge and the stages still to come.
@@ -39,8 +43,11 @@ what has landed since then. Record amendments when a contract changes.
   (`VK_NO_PROTOTYPES`, global function pointers, per-platform init) isn't worth it while iOS/Android
   and CUDA interop are deferred. Because every call site includes only the umbrella header, adopting
   volk later (for iOS/Android loader portability or `volkLoadDevice` dispatch perf) is a non-breaking
-  change to that one header + the link line — not a one-way door. VMA uses the linked Vulkan
-  prototypes (`VMA_STATIC_VULKAN_FUNCTIONS`).
+  change at gfx's call sites — not a one-way door. VMA uses the linked Vulkan prototypes
+  (`VMA_STATIC_VULKAN_FUNCTIONS`). *Amended 2026-10-04:* gfx's umbrella now forwards to
+  volumetric_kit_core's (`volumetric_kit/core/vulkan/vulkan.hpp`), which makes the loader choice
+  for the whole family, so adopting volk is a change to the core's header plus the link lines
+  (the core's `TODO` marks it); see "Vulkan headers come from the system", below.
 - **2026-07-06 — Hybrid mesh pipeline (the `volumetric_kit_recon` color handoff).**
   `pipelines::HybridMeshPipeline` — the "mesh pipeline" the device-adopt decision anticipated —
   renders a world-space interleaved `assets::Vertex` mesh and chooses albedo *per fragment*: the
@@ -63,6 +70,52 @@ what has landed since then. Record amendments when a contract changes.
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
 
+## 2026-10-04 — Vulkan headers come from the system
+
+gfx compiles against the Vulkan headers `find_package(Vulkan)` finds, as the
+family's core does, settling the question its error-handling move left open
+(the core's DECISIONS.md, "Vulkan headers come from the system"). It no longer
+vendors Vulkan-Headers or Vulkan-Utility-Libraries.
+
+- **Only the format metadata needed them.** gfx used five `vkuFormat*`
+  helpers, and nothing newer than Vulkan 1.3 core and long-standing
+  extensions otherwise. Those helpers become the core's `format.hpp`:
+  `aspect_mask_for` → `core::view_aspect`, `texel_size` →
+  `core::texel_bytes`, and `format_has_depth` / `format_has_stencil` → the
+  core's. A vendor or EXT extension's format now reads as nothing, so an
+  offscreen readback or texture upload of one is refused rather than sized.
+- **The oldest supported headers are the core's: 1.3.204, and 1.3.208 on
+  Apple.** `core/vulkan.hpp` forwards to the core's umbrella, whose check
+  refuses older headers in every gfx translation unit; the Ubuntu 22.04 leg
+  builds on its system's 1.3.204.
+- **gfx turns the core's vulkan tier on and links it PUBLIC.** gfx's public
+  `core/vulkan.hpp` and `core/result.hpp` include the tier's headers, so a
+  consumer needs the tier whichever gfx type it names; `gfx_core` links it
+  PUBLIC and the installed package refuses a core built without it.
+- **gfx checks the core it got, not the one it asked for.** Its pin and
+  `VKC_WITH_VULKAN` yield to a project that made the core available first, and
+  FetchContent may find an installed core; the core's version does not advance
+  between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
+  to configure unless the tier is there and has `format.hpp`, the newest header
+  gfx needs, naming the pin and where the core came from; the package config
+  checks the same.
+- **The `VkResult` bridge and the shader build functions are the core's.**
+  `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
+  and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one
+  function however the two namespaces are brought into scope (the clash the
+  error-handling entry below worked around is gone). Shaders compile and embed
+  through `vkc_compile_shaders` / `vkc_embed_shaders` with `TARGET_ENV
+  vulkan1.3`, gfx's device floor, and `SYMBOL_PREFIX vg_`; gfx's
+  `vg_shaders.cmake`, `vg_embed.cmake` and `embed_spirv.cmake` are gone.
+- **A default view refuses a format that needs a Y'CbCr conversion**
+  (multi-planar, 4:2:2, RGBA 4PACK16; the core's
+  `format_needs_ycbcr_conversion`), as the core's `Image` does: `create_image`
+  with `with_view` and `upload_texture` return `Unsupported` instead of making
+  a view the spec forbids.
+- **An application decides the headers**, not gfx: one that wants a pin
+  points `Vulkan_INCLUDE_DIR` at it, for gfx, the core and every other
+  library alike.
+
 ## 2026-10-04 — Error handling comes from volumetric_kit_core
 
 gfx's `Status`, `Result`, `VG_CHECK` and log sink are volumetric_kit_core's
@@ -77,23 +130,24 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   carry source `"vg"`, so the default sink still prints `[vg <level>]`.
   Contract failures (`VG_CHECK`, reading an error `Result`) are the core's,
   with source `"core"`.
-- **The `VkResult` bridge stays in gfx for now.** The core's base tier
+- **The `VkResult` bridge stayed in gfx at first.** The core's base tier
   includes no GPU API: a failed Vulkan call is `Status::Code::Backend` with
-  the `VkResult` as its `detail()`. gfx keeps `vk_error`, `VG_VK_TRY`,
-  `to_string(VkResult)` and adds `vk_result(status)`, with the core's vulkan
-  tier's names, so adopting that tier replaces them with using-declarations.
-  `Status::Code::Vulkan`, `Status::error` and `Status::code()` are gone.
-- **The bridge compiles beside the core's vulkan tier**, which an application
-  using the core's compute tier includes too. gfx therefore names no
-  `to_string` of the core's (that would take the tier's `to_string(VkResult)`,
-  clashing with gfx's; argument-dependent lookup finds `to_string(Status::Code)`),
-  and gfx's own calls qualify `vk_result`, which the tier also defines.
-  `tests/core_vulkan_tier_test.cpp` includes the tier's header first.
+  the `VkResult` as its `detail()`. gfx kept `vk_error`, `VG_VK_TRY`,
+  `to_string(VkResult)` and added `vk_result(status)`, with the core's vulkan
+  tier's names, so adopting that tier would replace them with
+  using-declarations. `Status::Code::Vulkan`, `Status::error` and
+  `Status::code()` are gone. Superseded: they are now the tier's ("Vulkan
+  headers come from the system", above).
+- **The bridge compiled beside the core's vulkan tier**, which an application
+  using the core's compute tier includes too, by naming no `to_string` of the
+  core's and qualifying gfx's `vk_result` calls. Superseded with the bridge;
+  `tests/core_vulkan_tier_test.cpp` still includes the tier's header first.
 - **`vk_result` cannot tell Vulkan from CUDA.** recon's CUDA failures share
   `Code::Backend`, so it reads a `cudaError_t` as an unrelated `VkResult`; gfx
   asks it only of its own statuses. It does return empty for a detail wider
   than 32 bits, which would be undefined to convert. Recording the backend in
-  `Status` is the core's to decide, and its own `vk_result` has both gaps.
+  `Status` is the core's to decide, and its `vk_result`, now gfx's, has the
+  gap.
 - **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
   the core's `VKC_*` macros, so open branches merge cleanly and a check
   reports its condition unexpanded; a `TODO:` marks the rename, as recon has
@@ -102,13 +156,12 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   dependencies, so a core FetchContent finds installed is visible to `src/`.
   `VG_INSTALL` turns the core's install rules on, never off: a sibling that
   installs (recon) needs them whichever project populates the core first.
-- **gfx's own build fetches only the base tier**, so the core's system Vulkan
-  headers never meet gfx's pinned Vulkan-Headers there. As a subproject, gfx
-  leaves the vulkan tier to a parent that turned it on for another sibling.
+- **gfx's own build fetched only the base tier**, so the core's system Vulkan
+  headers never met gfx's pinned Vulkan-Headers. Superseded: gfx now builds on
+  the system's headers and the core's vulkan tier ("Vulkan headers come from
+  the system", above).
 
-Still open, for the next stages: whether gfx adopts the system Vulkan headers
-or the core vendors gfx's pin (the core's "Vulkan headers for gfx" question);
-moving `gfx_core`'s instance, device, allocator, buffers, images, descriptors,
+Still open, for the next stages: moving `gfx_core`'s instance, device, allocator, buffers, images, descriptors,
 command pools, sync and query pool onto the core's vulkan tier, with gfx's
 graphics-only parts (swapchain, render targets, graphics pipelines, samplers,
 the frames-in-flight profiler) staying here; `Texture` becoming the core's

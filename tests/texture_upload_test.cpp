@@ -270,6 +270,61 @@ TEST_F(TextureUploadTest, RejectsCompressedFormat) {
             vg::Status::Code::Unsupported);
 }
 
+// VK_FORMAT_R16G16_SFIXED5_NV (VK_NV_optical_flow), by value: the headers gfx
+// supports (1.3.204 on) need not name it. The core's format table covers core
+// Vulkan and KHR formats only, so a vendor format has no texel size.
+constexpr auto kVendorFormat = static_cast<VkFormat>(1000464000);
+
+TEST_F(TextureUploadTest, RejectsVendorExtensionFormat) {
+  std::array<std::uint8_t, 4> src{};
+  vg::ImageUploadDesc desc;
+  desc.extent = {1, 1};
+  desc.format = kVendorFormat;
+  desc.pixels = src.data();
+  desc.size = src.size();
+  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+            vg::Status::Code::Unsupported);
+}
+
+TEST_F(TextureUploadTest, RejectsFormatNeedingYcbcrConversion) {
+  // Sized at 8 bytes a texel, but its sampled view would need a sampler Y'CbCr
+  // conversion (VUID-VkImageViewCreateInfo-format-06415).
+  std::array<std::uint8_t, 8> src{};
+  vg::ImageUploadDesc desc;
+  desc.extent = {1, 1};
+  desc.format = VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16;
+  desc.pixels = src.data();
+  desc.size = src.size();
+  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+            vg::Status::Code::Unsupported);
+}
+
+// A core format whose value sits in the extension range (Vulkan 1.3's 4444
+// formats, from VK_EXT_4444_formats) is still sized: a wrong texel size would
+// fail the size check, and none would be refused as Unsupported.
+TEST_F(TextureUploadTest, UploadsCoreFormatFromTheExtensionRange) {
+  VkFormat format = VK_FORMAT_UNDEFINED;
+  for (const VkFormat candidate :
+       {VK_FORMAT_A4B4G4R4_UNORM_PACK16, VK_FORMAT_A4R4G4B4_UNORM_PACK16}) {
+    if (device_->caps().format_supports(candidate, VK_IMAGE_TILING_OPTIMAL,
+                                        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+      format = candidate;
+      break;
+    }
+  }
+  if (format == VK_FORMAT_UNDEFINED) {
+    GTEST_SKIP() << "device samples neither 4444 format";
+  }
+  std::array<std::uint8_t, 2 * 2 * 2> src{};
+  vg::ImageUploadDesc desc;
+  desc.extent = {2, 2};
+  desc.format = format;
+  desc.pixels = src.data();
+  desc.size = src.size();
+  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  EXPECT_TRUE(texture.ok()) << texture.status().message();
+}
+
 // --- Cube / array / pre-mipped uploads --------------------------------------
 
 TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {

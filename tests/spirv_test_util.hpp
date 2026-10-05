@@ -5,7 +5,7 @@
 
 /// @file spirv_test_util.hpp
 /// Loads compiled SPIR-V blobs for the GPU-touching tests. The shaders are
-/// compiled next to the test binary by vg_compile_shaders(); VG_SHADER_DIR (a
+/// compiled next to the test binary by vkc_compile_shaders(); VG_SHADER_DIR (a
 /// per-target compile definition) names the directory they land in.
 
 #include <gtest/gtest.h>
@@ -21,12 +21,12 @@
 #include "volumetric_kit/gfx/core/shader.hpp"
 
 // VG_SHADER_DIR is a per-target compile definition (see tests/CMakeLists.txt:
-// vg_compile_shaders + target_compile_definitions). Fail loudly with an
+// vkc_compile_shaders + target_compile_definitions). Fail loudly with an
 // actionable message if a target includes this header without defining it,
 // rather than emitting a confusing "undeclared identifier" inside spirv_path().
 #ifndef VG_SHADER_DIR
 #error \
-    "VG_SHADER_DIR must be defined to use spirv_test_util.hpp (add the test to vg_core_test or replicate its vg_compile_shaders + VG_SHADER_DIR wiring)"
+    "VG_SHADER_DIR must be defined to use spirv_test_util.hpp (add the test to vg_core_test or replicate its vkc_compile_shaders + VG_SHADER_DIR wiring)"
 #endif
 
 namespace vg_test {

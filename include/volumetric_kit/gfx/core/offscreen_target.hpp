@@ -77,7 +77,8 @@ class VG_CORE_API OffscreenTarget {
   ///           @ref OffscreenTargetDesc::color_format returns
   ///           @ref Status::Code::InvalidArgument;
   ///         - a @ref OffscreenTargetDesc::readback request on a color format
-  ///           whose texel size this kit does not yet know returns
+  ///           a flat per-texel copy cannot size (compressed, multi-planar, or
+  ///           a vendor or EXT extension's) returns
   ///           @ref Status::Code::Unsupported;
   ///         - a non-depth @ref OffscreenTargetDesc::depth_format returns
   ///           @ref Status::Code::InvalidArgument, and a combined depth/stencil

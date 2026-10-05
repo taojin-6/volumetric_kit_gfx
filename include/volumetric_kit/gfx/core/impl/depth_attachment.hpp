@@ -13,8 +13,8 @@
 #include <string>
 #include <string_view>
 
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/impl/vk_format.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
@@ -36,13 +36,13 @@ namespace volumetric_kit::gfx {
 /// render correctly.
 inline Status validate_depth_only_format(VkFormat format,
                                          std::string_view context) {
-  if (!format_has_depth(format)) {
+  if (!core::format_has_depth(format)) {
     return Status::invalid_argument(
         std::string(context) +
         ": depth_format must be a depth format (or VK_FORMAT_UNDEFINED for a "
         "color-only target)");
   }
-  if (format_has_stencil(format)) {
+  if (core::format_has_stencil(format)) {
     return Status::unsupported(
         std::string(context) +
         ": combined depth/stencil depth_format is not yet supported; use a "

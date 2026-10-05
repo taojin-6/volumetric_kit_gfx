@@ -108,11 +108,11 @@ Result<Device> Device::create([[maybe_unused]] VkInstance instance,
   // caps_ adopts the same data on the success path (no second round-trip).
   PhysicalDeviceInfo caps = PhysicalDeviceInfo::query(physical);
 
-  // Require a Vulkan 1.3 device: shaders target SPIR-V 1.6 (--target-env=
-  // vulkan1.3, see vg_shaders.cmake), and the TimelineSemaphore plumbing uses
-  // the 1.2 *core* entry points (vkSignalSemaphore, vkWaitSemaphores,
-  // vkGetSemaphoreCounterValue). The instance negotiates >= 1.1, which the
-  // features2 query below needs.
+  // Require a Vulkan 1.3 device: shaders target SPIR-V 1.6 (TARGET_ENV
+  // vulkan1.3, which gfx passes vkc_compile_shaders / vkc_embed_shaders), and
+  // the TimelineSemaphore plumbing uses the 1.2 *core* entry points
+  // (vkSignalSemaphore, vkWaitSemaphores, vkGetSemaphoreCounterValue). The
+  // instance negotiates >= 1.1, which the features2 query below needs.
   if (caps.properties().apiVersion < VK_API_VERSION_1_3) {
     return Status::unsupported("device does not support Vulkan 1.3");
   }

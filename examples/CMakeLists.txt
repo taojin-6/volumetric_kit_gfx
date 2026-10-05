@@ -25,8 +25,13 @@ target_link_libraries(example_01_triangle PRIVATE volumetric_kit::gfx_app glfw
                                                   Vulkan::Vulkan)
 vg_target_warnings(example_01_triangle)
 
-vg_compile_shaders(
-  example_01_triangle OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
+vkc_compile_shaders(
+  example_01_triangle
+  OUTPUT_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/triangle.vert"
   "${PROJECT_SOURCE_DIR}/shaders/triangle.frag")
 target_compile_definitions(
@@ -85,8 +90,13 @@ vg_target_warnings(example_03_model)
 
 # The model technique now ships embedded in gfx_pipelines (PbrPipeline); the
 # example only compiles the skybox shaders it still loads from disk.
-vg_compile_shaders(
-  example_03_model OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders" SHADERS
+vkc_compile_shaders(
+  example_03_model
+  OUTPUT_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/skybox.vert"
   "${PROJECT_SOURCE_DIR}/shaders/skybox.frag")
 target_compile_definitions(

@@ -35,7 +35,7 @@ class Device;
 /// mip 1's, and so on. Mip `m` of a `w x h` image is
 /// `max(1, w >> m) x max(1, h >> m)` texels, so @ref size must equal the sum of
 /// every (mip, layer) subresource:
-/// `array_layers * sum_m(mip_width(m) * mip_height(m)) * texel_size(format)`.
+/// `array_layers * sum_m(mip_width(m) * mip_height(m)) * texel_bytes(format)`.
 ///
 /// The renderer's CPU image model (`assets::Image`) is deliberately
 /// GPU-API-free, so choosing the concrete @ref format -- and any RGB->RGBA
@@ -240,8 +240,10 @@ class VG_CORE_API UploadBatch {
 ///         @ref ImageUploadDesc); @ref Status::Code::Unsupported for an extent
 ///         beyond the device's `maxImageDimension2D` (`maxImageDimensionCube`
 ///         for cubes), more layers than `maxImageArrayLayers`, a
-///         compressed/multi-planar/depth-stencil format, a format that cannot
-///         be sampled with optimal tiling, or `generate_mips` on a format that
+///         compressed/multi-planar/depth-stencil format, a vendor or EXT
+///         extension's format, one whose view needs a sampler Y'CbCr
+///         conversion (RGBA 4PACK16), a format that cannot be sampled with
+///         optimal tiling, or `generate_mips` on a format that
 ///         cannot be linear-blitted; otherwise a backend Status from the
 ///         staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the

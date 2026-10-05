@@ -4,22 +4,23 @@
 #pragma once
 
 /// @file result.hpp
-/// @brief gfx's error handling: volumetric_kit_core's `Status` and `Result`,
-///        named in this namespace, and the bridge from a failed `VkResult`.
+/// @brief gfx's error handling: volumetric_kit_core's `Status`, `Result` and
+///        bridge from a failed `VkResult`, named in this namespace.
 ///
 /// gfx defines no error types of its own. It uses the family's shared ones,
 /// from volumetric_kit_core's base tier (DECISIONS.md, 2026-10-04, "Error
 /// handling comes from volumetric_kit_core"), so a `Status` from gfx is the
 /// same type as one from recon or calib and passes between them unchanged. The
-/// using-declarations below let gfx and its consumers keep writing `Status` and
-/// `Result<T>` in this namespace.
+/// `VkResult` bridge is the core's vulkan tier's. The using-declarations below
+/// let gfx and its consumers keep writing `Status`, `Result<T>`, `vk_error`,
+/// `vk_result` and `to_string` in this namespace.
 ///
 /// No exceptions cross the API boundary: mobile consumers build with
 /// `-fno-exceptions`. Fallible calls return `Status` or `Result<T>`, both
 /// `[[nodiscard]]`. `Status` is backend-neutral: a failed Vulkan call is a
 /// backend status, `Status::Code::Backend` with the `VkResult` as its
 /// `detail()`, made by @ref vk_error or @ref VG_VK_TRY and read back by
-/// @ref vk_result. Name a domain with the core's `to_string`, unqualified:
+/// @ref vk_result. Name a domain or a `VkResult` with `to_string`:
 /// `to_string(status.domain())`. Reading the value of an error `Result` is a
 /// programmer error and aborts. The full contract is in the core's
 /// `volumetric_kit/core/base/result.hpp`.
@@ -30,82 +31,25 @@
 /// Device& device = r.value();  // safe: guarded by the !r check above
 /// @endcode
 
-#include <cstdint>
-#include <limits>
-#include <optional>
-#include <string>
-#include <string_view>
-
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
-#include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
 using core::Result;
 using core::Status;
-// Not `using core::to_string`: where the core's vulkan tier is included first,
-// that would also name its to_string(VkResult), which clashes with gfx's below.
-// An unqualified call still finds to_string(Status::Code) by argument-dependent
-// lookup.
-
-// TODO: take vk_error, vk_result, to_string(VkResult) and VG_VK_TRY from the
-// core's vulkan tier (volumetric_kit/core/vulkan/vk_result.hpp, the same
-// names) once gfx adopts that tier; until then gfx keeps them, as the core's
-// base tier includes no GPU API. The core's vk_result needs this one's range
-// check first.
-
-/// @brief Wrap a failed `VkResult` as a backend @ref Status.
-/// @param result  What the failed Vulkan call returned.
-/// @param what    Context for the message, e.g. the failing call.
-/// @pre @p result is not `VK_SUCCESS`: a success code is no failure, and
-///      `Status::backend_error` aborts on one.
-/// @return A non-OK `Status`, domain `Status::Code::Backend`, whose
-///         `detail()` is @p result.
-inline Status vk_error(VkResult result, std::string_view what) {
-  return Status::backend_error(static_cast<std::int64_t>(result),
-                               std::string(what));
-}
-
-/// @brief The `VkResult` a backend @ref Status carries.
-/// @param status  Any status.
-/// @return Its `detail()` as a `VkResult` when its domain is
-///         `Status::Code::Backend` and the detail fits in 32 bits; empty
-///         otherwise, success included.
-///
-/// The domain does not say *which* backend failed: recon's CUDA failures are
-/// backend statuses too, whose `cudaError_t` detail this reads as an unrelated
-/// `VkResult` (`cudaErrorMemoryAllocation`, 2, as `VK_TIMEOUT`). Ask it only of
-/// a status from a Vulkan call, as every backend status gfx returns is.
-///
-/// Where the core's vulkan tier is included too, argument-dependent lookup on
-/// the `Status` also finds the core's `vk_result`, so an unqualified call is
-/// ambiguous: qualify it, as below.
-///
-/// @code
-/// const Status s = swapchain.present(queue);
-/// if (gfx::vk_result(s) == VK_ERROR_OUT_OF_DATE_KHR) recreate();
-/// @endcode
-inline std::optional<VkResult> vk_result(const Status& status) noexcept {
-  // TODO: return empty for a CUDA status once the core's Status records which
-  // backend failed; the core's own vk_result has the same gap.
-  const std::int64_t detail = status.detail();
-  // A detail wider than VkResult's 32 bits is no VkResult, and converting it to
-  // the enum would be undefined.
-  if (status.domain() != Status::Code::Backend ||
-      detail < std::numeric_limits<std::int32_t>::min() ||
-      detail > std::numeric_limits<std::int32_t>::max()) {
-    return std::nullopt;
-  }
-  return static_cast<VkResult>(detail);
-}
-
-/// @brief Human-readable name for a `VkResult` (e.g. "VK_ERROR_DEVICE_LOST").
-/// @param result  Any `VkResult`.
-/// @return A static `string_view`; unrecognized codes yield
-///         "VK_RESULT_UNKNOWN".
-VG_CORE_API std::string_view to_string(VkResult result) noexcept;
+// The core's VkResult bridge (volumetric_kit/core/vulkan/vk_result.hpp), under
+// gfx's names: vk_error(result, what) wraps a failed VkResult as a backend
+// Status, vk_result(status) reads it back -- empty unless the domain is Backend
+// and the detail fits VkResult's 32 bits -- and to_string names a VkResult or a
+// Status::Code. vk_result cannot tell a Vulkan status from a CUDA one, which
+// shares the Backend domain: ask it only of a status from a Vulkan call, as
+// every backend status gfx returns is.
+using core::to_string;
+using core::vk_error;
+using core::vk_result;
 
 }  // namespace volumetric_kit::gfx
 
@@ -146,11 +90,10 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 /// @endcode
 #define VG_ASSIGN VKC_ASSIGN
 
-/// @brief Evaluate a raw `VkResult` and early-return a backend `Status` on
-///        failure.
-/// @param expr  An expression yielding a `VkResult`. The expression text is
-///              stringified (via `#expr`) as the error context, so the failing
-///              call names itself -- no separate message argument.
+/// @brief gfx's name for the core's `VKC_VK_TRY`, used as `VG_VK_TRY(expr)`:
+///        evaluate an expression yielding a raw `VkResult` and early-return
+///        a backend `Status` unless it is `VK_SUCCESS`. The expression's text
+///        becomes the failure's message, so the failing call names itself.
 ///
 /// @warning Valid only for calls whose sole success code is `VK_SUCCESS`: it
 ///          treats every other code -- including the positive success codes
@@ -162,10 +105,4 @@ VG_CORE_API std::string_view to_string(VkResult result) noexcept;
 /// @code
 /// VG_VK_TRY(vkCreateDevice(phys, &ci, nullptr, &dev_));
 /// @endcode
-#define VG_VK_TRY(expr)                                      \
-  do {                                                       \
-    const VkResult _vg_vk = (expr);                          \
-    if (_vg_vk != VK_SUCCESS) {                              \
-      return ::volumetric_kit::gfx::vk_error(_vg_vk, #expr); \
-    }                                                        \
-  } while (0)
+#define VG_VK_TRY VKC_VK_TRY

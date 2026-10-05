@@ -620,6 +620,20 @@ TEST_F(AllocatorTest, ViewIncompatibleUsageWithViewIsRejected) {
   EXPECT_EQ(texture.status().domain(), vg::Status::Code::InvalidArgument);
 }
 
+// VUID-VkImageViewCreateInfo-format-06415: a view of a multi-planar format must
+// chain a sampler Y'CbCr conversion, which the default view does not -- refuse
+// it before touching VMA rather than create an invalid view.
+TEST_F(AllocatorTest, YcbcrFormatWithViewIsUnsupported) {
+  vg::TextureDesc desc;
+  desc.extent = {16, 16};
+  desc.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  auto texture = allocator_->create_image(desc);
+  ASSERT_FALSE(texture.ok());
+  EXPECT_EQ(texture.status().domain(), vg::Status::Code::Unsupported);
+}
+
 TEST_F(AllocatorTest, SequentialWriteMappedBufferRoundTrips) {
   vg::BufferDesc desc;
   desc.size = 64;

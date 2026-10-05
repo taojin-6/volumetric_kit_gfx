@@ -134,7 +134,7 @@ jobs:
           # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
           ok=0
           for attempt in 1 2 3; do
-            # spirv-tools provides spirv-val: vg_compile_shaders runs it only
+            # spirv-tools provides spirv-val: vkc_compile_shaders runs it only
             # when present, so without it this leg compiles SPIR-V it never
             # validates and the check exists on Linux alone.
             if brew install cmake molten-vk glfw glm \
