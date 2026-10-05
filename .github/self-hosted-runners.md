@@ -5,10 +5,11 @@ Scripts: `.github/setup-mac-runner.sh` (macOS), `.github/teardown-runners.sh`
 
 The three Ubuntu legs of `ci.yml` run on a self-hosted runner labelled
 `vk-linux-gpu`, each in an OS-matched container (`ubuntu:22.04` / `:24.04` /
-`:26.04`) with the host GPU passed through via `--gpus all`. macOS, `lint`, and
-`sanitizers` stay on GitHub-hosted runners (the sanitizers job deliberately runs
-on lavapipe — ASan/LSan against the proprietary NVIDIA driver report
-driver-internal allocations as false leaks).
+`:26.04`) with the host GPU passed through via `--gpus all`. The macOS legs run
+natively on self-hosted Macs labelled `mac` (`setup-mac-runner.sh`). `lint`,
+`sanitizers` and the `required` gate stay on GitHub-hosted runners (the
+sanitizers job deliberately runs on lavapipe — ASan/LSan against the
+proprietary NVIDIA driver report driver-internal allocations as false leaks).
 
 A self-hosted runner takes **one job at a time**, so to run the legs in parallel
 you register **several runner instances** on the box, all sharing the
@@ -67,8 +68,10 @@ for i in $(seq 1 "$N"); do
   dir=~/ci-runners/volumetric_kit_gfx/runner-$i
   mkdir -p "$dir" && tar xzf ~/ci-runners/actions-runner.tar.gz -C "$dir"
   ( cd "$dir"
-    # Loaded into every job on this runner -> caps cmake/ctest fan-out so the
-    # parallel legs share the cores instead of each grabbing all of them.
+    # Loaded into every job run directly on this runner -> caps cmake/ctest
+    # fan-out so the parallel legs share the cores instead of each grabbing all
+    # of them. It does NOT reach a job container: ci.yml repeats the values in
+    # each Ubuntu leg's container env, so keep the two in step.
     printf 'CMAKE_BUILD_PARALLEL_LEVEL=%s\nCTEST_PARALLEL_LEVEL=%s\n' "$THREADS" "$THREADS" > .env
     ./config.sh --unattended --url "$URL" --token "$TOKEN" \
       --labels vk-linux-gpu --name "$(hostname)-$i" --work _work   # do NOT sudo config.sh

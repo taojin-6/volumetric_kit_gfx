@@ -30,17 +30,21 @@ jobs:
       # `runner.os`, so the macOS leg's Homebrew/MoltenVK path is unchanged and
       # only the Ubuntu legs use a container image; NVIDIA_DRIVER_CAPABILITIES=all
       # makes the toolkit mount the Vulkan ICD + graphics libs for those.
+      # The build and test fan-out is set in the container env, too: a runner's
+      # .env reaches jobs run directly on it (the Mac) but not a job container,
+      # where ctest would otherwise run the suite one test at a time. 4 matches
+      # the .env the runner setup writes (6 runners x 4 threads per box).
       matrix:
         include:
           - os: ubuntu-22.04
             runner: vk-linux-gpu
-            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
           - os: ubuntu-24.04
             runner: vk-linux-gpu
-            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
           - os: ubuntu-26.04
             runner: vk-linux-gpu
-            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
           - os: macos-26
             runner: mac
             container: ''
