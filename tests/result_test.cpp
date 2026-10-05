@@ -21,13 +21,13 @@
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 
-// A Status from gfx passes to recon or calib unchanged: it is the core's type,
-// and gfx's VkResult bridge is the core's functions, not a copy of them.
+// A Status from gfx passes to recon or calib unchanged: it is the core's type.
+// That gfx's VkResult bridge is the core's functions, not a copy, is checked
+// in core_vulkan_tier_test.cpp, where a copy would make an unqualified call
+// ambiguous.
 TEST(Status, IsTheCoresType) {
   static_assert(std::is_same_v<vg::Status, vkc::Status>);
   static_assert(std::is_same_v<vg::Result<int>, vkc::Result<int>>);
-  static_assert(&vg::vk_error == &vkc::vk_error);
-  static_assert(&vg::vk_result == &vkc::vk_result);
   EXPECT_EQ(to_string(vg::Status::Code::Backend), "Backend");
   EXPECT_EQ(vg::to_string(vg::Status::Code::Backend), "Backend");
 }
