@@ -17,11 +17,13 @@
 //   example_03_model --model Helmet.glb    # any glTF-Sample-Assets model
 //   example_03_model --frames 3            # render N frames, then exit
 //   example_03_model --model m.glb --screenshot out.ppm   # headless still
+//   example_03_model --grid 8              # an 8x8 grid of cubes
+//   example_03_model --bench 500 --width 1920 --height 1080   # frame times
 //
 // Controls (windowed, interactive by default): left-drag orbits, right/middle-
 // drag pans, wheel zooms, WASDQE flies (Q/E down/up), Shift moves faster.
 //
-// Two render paths share the model load + upload + draw recording, each with
+// Three render paths share the model load + upload + draw recording, each with
 // its bring-up collapsed into one app-tier call:
 //  * Windowed (default): app::WindowedApp (instance -> surface -> device ->
 //    swapchain -> frame loop), driven by mouse + keyboard (a deterministic
@@ -33,12 +35,18 @@
 //    frame into an OffscreenTarget (color + depth + readback) and writes a
 //    binary PPM. Headless, so it works where no display / screen-capture is
 //    available.
+//  * --bench: the headless setup, rendering N frames of a turntable with one
+//    frame in flight and reporting the median, 95th percentile and mean GPU
+//    time of each pass and wall time of each frame. No present paces it; run
+//    a Release build.
 
 #include "volumetric_kit/gfx/core/vulkan.hpp"  // before GLFW, so glfw3.h sees
 // Vulkan and declares its helpers
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -162,8 +170,50 @@ assets::Model make_cube() {
   return model;
 }
 
-// Load `model_path` (or the built-in cube when null); null `*ok` on failure.
-assets::Model load_model_or_cube(const char* model_path, bool* ok) {
+// A `grid` x `grid` field of cubes, each its own mesh and material, so every
+// draw binds its own material set and factor uniform buffer: more draws and
+// per-draw state than the one cube, for --bench.
+assets::Model make_cube_grid(uint32_t grid) {
+  const assets::Mesh cube = make_cube().meshes[0];
+  assets::Model model;
+  const float half = (static_cast<float>(grid) - 1.0f) * 0.5f;
+  for (uint32_t z = 0; z < grid; ++z) {
+    for (uint32_t x = 0; x < grid; ++x) {
+      const auto index = static_cast<uint32_t>(model.meshes.size());
+      const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(grid);
+      const float v = (static_cast<float>(z) + 0.5f) / static_cast<float>(grid);
+      assets::Material material;
+      material.base_color_factor = glm::vec4(u, 0.5f, v, 1.0f);
+      material.metallic_factor = u;
+      material.roughness_factor = 0.2f + 0.8f * v;
+      model.materials.push_back(material);
+
+      assets::Mesh mesh = cube;
+      mesh.material = index;
+      model.meshes.push_back(std::move(mesh));
+
+      assets::Node node;
+      node.mesh = index;
+      node.mesh_count = 1;
+      node.transform[3] =
+          glm::vec4((static_cast<float>(x) - half) * 1.5f, 0.0f,
+                    (static_cast<float>(z) - half) * 1.5f, 1.0f);
+      model.scene.roots.push_back(
+          static_cast<uint32_t>(model.scene.nodes.size()));
+      model.scene.nodes.push_back(std::move(node));
+    }
+  }
+  return model;
+}
+
+// Load `model_path`, or build a `grid` x `grid` field of cubes when `grid` is
+// non-zero, or the built-in cube; null `*ok` on failure.
+assets::Model load_model_or_cube(const char* model_path, uint32_t grid,
+                                 bool* ok) {
+  if (model_path == nullptr && grid > 0) {
+    std::printf("03_model: showing a %ux%u grid of cubes\n", grid, grid);
+    return make_cube_grid(grid);
+  }
   if (model_path == nullptr) {
     std::printf("03_model: no --model given; showing the built-in cube\n");
     return make_cube();
@@ -513,8 +563,8 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
-int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
-                   uint32_t height) {
+int run_screenshot(const char* model_path, uint32_t grid, const char* out_path,
+                   uint32_t width, uint32_t height) {
   // The whole headless bring-up (instance -> device -> allocator, no surface,
   // no present queue) in one call.
   vg::app::HeadlessAppConfig app_config;
@@ -528,7 +578,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   vg::app::HeadlessApp app = std::move(created).value();
 
   bool ok = true;
-  const assets::Model model = load_model_or_cube(model_path, &ok);
+  const assets::Model model = load_model_or_cube(model_path, grid, &ok);
   if (!ok) {
     return 1;
   }
@@ -627,6 +677,206 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   return 0;
 }
 
+// --- Benchmark path: time N headless frames ----------------------------------
+
+// The median, 95th percentile and mean of `samples` (sorted in place).
+struct Summary {
+  double median = 0.0;
+  double p95 = 0.0;
+  double mean = 0.0;
+};
+
+Summary summarize(std::vector<double>& samples) {
+  Summary s;
+  if (samples.empty()) {
+    return s;
+  }
+  std::sort(samples.begin(), samples.end());
+  const size_t n = samples.size();
+  s.median =
+      n % 2 == 1 ? samples[n / 2] : (samples[n / 2 - 1] + samples[n / 2]) * 0.5;
+  s.p95 = samples[std::min(n - 1, (n * 95 + 99) / 100 - 1)];
+  double sum = 0.0;
+  for (const double v : samples) {
+    sum += v;
+  }
+  s.mean = sum / static_cast<double>(n);
+  return s;
+}
+
+// Render `frames` frames of a turntable into an offscreen target with no
+// window, so no present or vsync paces them, and print the median, 95th
+// percentile and mean of each GPU pass and of the whole frame. Run in a
+// Release build without validation. One frame is in flight: each is recorded,
+// submitted and waited for, so its wall time is recording, submission and GPU
+// time together, and the profiler resolves its timestamps before the next.
+// A GPU that writes timestamps only at render-pass boundaries reports the
+// passes inside the one pass as near zero; the frame row still holds there.
+int run_bench(const assets::Model& model, uint32_t frames, uint32_t width,
+              uint32_t height) {
+  vg::app::HeadlessAppConfig app_config;
+  app_config.app_name = "03_model";
+  auto created = vg::app::HeadlessApp::create(app_config);
+  if (!created.ok()) {
+    std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
+    return 1;
+  }
+  vg::app::HeadlessApp app = std::move(created).value();
+
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(app.device().physical_device(), &props);
+  const vg::PhysicalDeviceInfo& caps = app.device().caps();
+  std::printf(
+      "03_model bench: %s (unified memory: %s, device-mapped memory: %s)\n",
+      props.deviceName, caps.unified_memory() ? "yes" : "no",
+      caps.device_mapped_memory() ? "yes" : "no");
+
+  const Bounds bounds = compute_bounds(model);
+  camera::CameraRig rig;
+  frame_camera(rig, bounds);
+
+  vg::OffscreenTargetDesc target_desc;
+  target_desc.extent = {width, height};
+  target_desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;
+  target_desc.depth_format = kDepthFormat;
+  target_desc.readback = false;
+  auto target = vg::OffscreenTarget::create(app.allocator(), target_desc);
+  if (!target.ok()) {
+    std::fprintf(stderr, "offscreen: %s\n", target.status().message().c_str());
+    return 1;
+  }
+  auto pipeline = pipelines::PbrPipeline::create(app.device().handle(),
+                                                 target.value().layout());
+  if (!pipeline.ok()) {
+    std::fprintf(stderr, "pipeline: %s\n", pipeline.status().message().c_str());
+    return 1;
+  }
+  auto gpu_model = pipelines::PbrModel::create(app.device(), app.allocator(),
+                                               pipeline.value(), model);
+  if (!gpu_model.ok()) {
+    std::fprintf(stderr, "model: %s\n", gpu_model.status().message().c_str());
+    return 1;
+  }
+  auto ibl = pipelines::bake_ibl(app.device(), app.allocator(), sky_color);
+  if (!ibl.ok()) {
+    std::fprintf(stderr, "ibl: %s\n", ibl.status().message().c_str());
+    return 1;
+  }
+  bool ok = true;
+  pipelines::PbrScene scene =
+      make_pbr_scene(app.device(), app.allocator(), pipeline.value(),
+                     ibl.value(), /*frames_in_flight=*/1, &ok);
+  if (!ok) {
+    return 1;
+  }
+  Skybox skybox =
+      setup_skybox(app.device(), app.allocator(), target.value().layout(), &ok);
+  if (!ok) {
+    return 1;
+  }
+
+  vg::ProfilerConfig profiler_config;
+  profiler_config.frames_in_flight = 1;
+  auto profiler = vg::Profiler::create(app.device(), profiler_config);
+  if (!profiler.ok()) {
+    std::fprintf(stderr, "profiler: %s\n", profiler.status().message().c_str());
+    return 1;
+  }
+  if (!profiler.value().gpu_timing()) {
+    std::fprintf(stderr,
+                 "bench: the queue has no timestamps; GPU times are not "
+                 "measurable here\n");
+    return 1;
+  }
+
+  const uint32_t warmup = std::max(10u, frames / 10);
+  const size_t draws = gpu_model.value().draws().size();
+  std::printf(
+      "03_model bench: %ux%u, %zu draw(s), %u frame(s) after %u warm-up\n",
+      width, height, draws, frames, warmup);
+
+  const char* const kPasses[] = {"frame", "skybox", "pbr"};
+  std::vector<double> gpu[3];
+  std::vector<double> wall;
+  const VkExtent2D extent{width, height};
+  // One frame past the last measured one, so the profiler resolves it.
+  const uint32_t total = warmup + frames + 1;
+  for (uint32_t i = 0; i < total; ++i) {
+    rig.orbit(0.0075f, 0.0f);
+    const std::pair<float, float> clip = fit_clip(bounds, rig.position());
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    const glm::mat4 view_proj =
+        rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
+    scene.set_camera(0, rig.position(), ibl.value().prefilter_max_lod);
+
+    const auto start = std::chrono::steady_clock::now();
+    const vg::Status recorded =
+        app.device().submit_single_time([&](VkCommandBuffer cmd) {
+          // Resolves the previous frame, which has completed.
+          profiler.value().begin_frame(0, cmd);
+          {
+            vg::Profiler::Scope frame_scope =
+                profiler.value().gpu_scope(cmd, "frame");
+            target.value().prepare(cmd);
+            vg::RenderTargetBeginInfo begin;
+            begin.clear_color = background();
+            const vg::RenderTarget rt = target.value().target();
+            rt.begin(cmd, begin);
+            {
+              vg::Profiler::Scope skybox_scope =
+                  profiler.value().gpu_scope(cmd, "skybox");
+              record_skybox(cmd, extent, skybox, view_proj, rig.position());
+            }
+            pipelines::PbrFrame frame;
+            frame.extent = extent;
+            frame.view_proj = view_proj;
+            frame.scene = &scene;
+            frame.draws = gpu_model.value().draws().data();
+            frame.draw_count = static_cast<uint32_t>(draws);
+            {
+              vg::Profiler::Scope pbr_scope =
+                  profiler.value().gpu_scope(cmd, "pbr");
+              pipeline.value().submit(cmd, frame);
+            }
+            rt.end(cmd);
+          }
+          profiler.value().end_frame();
+        });
+    const auto stop = std::chrono::steady_clock::now();
+    if (!recorded.ok()) {
+      std::fprintf(stderr, "render: %s\n", recorded.message().c_str());
+      return 1;
+    }
+
+    // begin_frame above resolved frame i - 1; keep it once past the warm-up.
+    if (i > warmup) {
+      for (const vg::FrameMetrics::Section& section :
+           profiler.value().metrics().sections) {
+        for (size_t p = 0; p < 3; ++p) {
+          if (section.has_gpu && std::strcmp(section.name, kPasses[p]) == 0) {
+            gpu[p].push_back(section.gpu_ms);
+          }
+        }
+      }
+    }
+    if (i >= warmup && i < warmup + frames) {
+      wall.push_back(
+          std::chrono::duration<double, std::milli>(stop - start).count());
+    }
+  }
+
+  std::printf("  %-12s %10s %10s %10s\n", "ms", "median", "p95", "mean");
+  for (size_t p = 0; p < 3; ++p) {
+    const Summary s = summarize(gpu[p]);
+    std::printf("  gpu %-8s %10.3f %10.3f %10.3f\n", kPasses[p], s.median,
+                s.p95, s.mean);
+  }
+  const Summary s = summarize(wall);
+  std::printf("  %-12s %10.3f %10.3f %10.3f\n", "wall frame", s.median, s.p95,
+              s.mean);
+  return 0;
+}
+
 // --- Interactive camera input: map mouse + keyboard onto CameraRig verbs -----
 
 // Per-window input state, registered as the GLFW user pointer so the scroll
@@ -722,7 +972,8 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
 // this returns, before main() tears GLFW down. Interactive by default; with
 // max_frames >= 0 it runs a deterministic turntable and exits (for CI).
-int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
+int run_windowed(GLFWwindow* window, const char* model_path, uint32_t grid,
+                 int max_frames) {
   uint32_t glfw_ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
@@ -750,7 +1001,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   vg::app::WindowedApp app = std::move(created).value();
 
   bool ok = true;
-  const assets::Model model = load_model_or_cube(model_path, &ok);
+  const assets::Model model = load_model_or_cube(model_path, grid, &ok);
   if (!ok) {
     return 1;
   }
@@ -996,6 +1247,8 @@ int main(int argc, char** argv) {
   const char* screenshot_path = nullptr;
   uint32_t width = 1024;
   uint32_t height = 720;
+  uint32_t grid = 0;          // 0: the --model, or the built-in cube
+  uint32_t bench_frames = 0;  // 0: no benchmark
   for (int i = 1; i < argc; ++i) {
     const bool has_value = i + 1 < argc;
     if (std::strcmp(argv[i], "--model") == 0 && has_value) {
@@ -1012,6 +1265,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--height: invalid value '%s'\n", argv[i]);
         return 2;
       }
+    } else if (std::strcmp(argv[i], "--grid") == 0 && has_value) {
+      if (!parse_uint(argv[++i], &grid) || grid > 256) {
+        std::fprintf(stderr, "--grid: invalid value '%s'\n", argv[i]);
+        return 2;
+      }
+    } else if (std::strcmp(argv[i], "--bench") == 0 && has_value) {
+      if (!parse_uint(argv[++i], &bench_frames)) {
+        std::fprintf(stderr, "--bench: invalid value '%s'\n", argv[i]);
+        return 2;
+      }
     } else if (std::strcmp(argv[i], "--frames") == 0 && has_value) {
       char* end = nullptr;
       const long value = std::strtol(argv[++i], &end, 10);
@@ -1023,16 +1286,26 @@ int main(int argc, char** argv) {
     } else {
       std::fprintf(
           stderr,
-          "usage: %s [--model <file.gltf|.glb>] [--frames N]\n"
-          "          [--screenshot <out.ppm> [--width W] [--height H]]\n",
+          "usage: %s [--model <file.gltf|.glb> | --grid K] [--frames N]\n"
+          "          [--screenshot <out.ppm> [--width W] [--height H]]\n"
+          "          [--bench N [--width W] [--height H]]\n",
           argv[0]);
       return 2;
     }
   }
 
+  // Headless timing: no window, no GLFW -- render N frames and report times.
+  // Without a --model or --grid, it times a 32x32 grid of cubes.
+  if (bench_frames > 0) {
+    bool ok = true;
+    const assets::Model model = load_model_or_cube(
+        model_path, model_path == nullptr && grid == 0 ? 32 : grid, &ok);
+    return ok ? run_bench(model, bench_frames, width, height) : 1;
+  }
+
   // Headless still: no window, no GLFW -- render one frame and write a PPM.
   if (screenshot_path != nullptr) {
-    return run_screenshot(model_path, screenshot_path, width, height);
+    return run_screenshot(model_path, grid, screenshot_path, width, height);
   }
 
   if (glfwInit() != GLFW_TRUE) {
@@ -1054,7 +1327,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const int rc = run_windowed(window, model_path, max_frames);
+  const int rc = run_windowed(window, model_path, grid, max_frames);
 
   glfwDestroyWindow(window);
   glfwTerminate();
