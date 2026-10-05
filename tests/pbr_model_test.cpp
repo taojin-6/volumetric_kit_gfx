@@ -312,13 +312,18 @@ TEST_F(PbrModelTest, RejectsInvalidPipeline) {
 }
 
 TEST_F(PbrModelTest, RejectsNullDevice) {
-  // A moved-from Device is the only way to hold one with a null handle.
-  vkc::Device stolen = std::move(*device_);
-  auto made = pipelines::PbrModel::create(*device_, *allocator_, *pipeline_,
+  // A moved-from Device is the only way to hold one with a null handle. Take
+  // it from a device of the test's own: the fixture's is shared.
+  auto made_device =
+      vkc::Device::create(*instance_, caps_, vg::device_requirements());
+  ASSERT_TRUE(made_device.ok()) << made_device.status().message();
+  vkc::Device own = std::move(made_device).value();
+  const vkc::Device taken = std::move(own);
+  const vkc::Device& null_device = own;  // NOLINT(bugprone-use-after-move)
+  auto made = pipelines::PbrModel::create(null_device, *allocator_, *pipeline_,
                                           one_mesh_model());
   EXPECT_FALSE(made.ok());
   EXPECT_EQ(made.status().domain(), vkc::Status::Code::InvalidArgument);
-  *device_ = std::move(stolen);  // restore for TearDown
 }
 
 TEST_F(PbrModelTest, MoveLeavesSourceEmpty) {

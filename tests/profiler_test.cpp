@@ -26,32 +26,11 @@ vg::ProfilerConfig make_config(uint32_t frames, uint32_t max_gpu_sections) {
 
 class ProfilerTest : public VulkanDeviceTest {
  protected:
-  // Build the instance/device with debug-utils enabled (and validation as the
-  // label-balance backstop), so gpu_scope's label emit/close path is exercised;
-  // the core's instance continues debug-utils-only where the layer is
-  // unavailable. Overrides VulkanDeviceTest::SetUp, which enables validation
-  // only on request.
-  void SetUp() override {
-    vkc::InstanceConfig icfg;
-    icfg.enable_validation = true;
-    icfg.request_debug_utils = true;
-    auto instance = vkc::Instance::create(icfg);
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-    }
-    instance_.emplace(std::move(instance).value());
-
-    const vkc::DeviceRequirements reqs = requirements();
-    auto physical = instance_->select_physical_device(reqs);
-    if (!physical.ok()) {
-      GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
-    }
-    caps_ = physical.value();
-
-    auto device = vkc::Device::create(*instance_, caps_, reqs);
-    ASSERT_TRUE(device.ok()) << device.status().message();
-    device_.emplace(std::move(device).value());
-  }
+  // Validation as the label-balance backstop, on the instance's debug-utils
+  // (which every fixture instance requests), so gpu_scope's label emit/close
+  // path is exercised; the core's instance continues debug-utils-only where
+  // the layer is unavailable.
+  bool wants_validation() const override { return true; }
 
   vg::Profiler make_profiler(uint32_t frames = 1, uint32_t max_gpu = 8) {
     auto result = vg::Profiler::create(*device_, make_config(frames, max_gpu));

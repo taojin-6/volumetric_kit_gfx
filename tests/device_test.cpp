@@ -28,7 +28,9 @@ using DeviceTest = VulkanDeviceTest;
 // might hand gfx one made for recon.
 class ForeignDeviceTest : public VulkanDeviceTest {
  protected:
-  vkc::DeviceRequirements requirements() const override { return {}; }
+  std::optional<vkc::DeviceRequirements> custom_requirements() const override {
+    return vkc::DeviceRequirements{};
+  }
 };
 
 // Borrow a live device on its queue, declaring what Device::create enabled

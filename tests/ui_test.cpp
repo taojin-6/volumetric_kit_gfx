@@ -87,7 +87,9 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
 // dynamic rendering, which the backend's pipeline is built for) is refused.
 class ImGuiOverlayForeignDeviceTest : public VulkanDeviceTest {
  protected:
-  vkc::DeviceRequirements requirements() const override { return {}; }
+  std::optional<vkc::DeviceRequirements> custom_requirements() const override {
+    return vkc::DeviceRequirements{};
+  }
 };
 
 TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
