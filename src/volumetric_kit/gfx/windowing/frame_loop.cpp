@@ -27,7 +27,7 @@ Result<FrameLoop> FrameLoop::create(const Device& device, Swapchain& swapchain,
   loop.swapchain_ = &swapchain;
 
   VG_ASSIGN(CommandPool pool,
-            CommandPool::create(device.handle(), device.graphics_family()));
+            CommandPool::create(device.handle(), device.queue_family()));
   loop.pool_ = std::move(pool);
 
   // Per frame-in-flight slot: a command buffer, an image-available semaphore,

@@ -143,8 +143,7 @@ TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
   // Signal the fence with an empty submit, then poll releases the deleter.
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          fence.value().handle()),
+  ASSERT_EQ(vkQueueSubmit(device_->queue(), 1, &submit, fence.value().handle()),
             VK_SUCCESS);
   ASSERT_TRUE(fence.value().wait().ok());
 
@@ -176,8 +175,8 @@ TEST_F(RetireQueueTest, PollReleasesOnlyReadyFenceEntries) {
   // since `retire` is destroyed before it).
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  ASSERT_EQ(vkQueueSubmit(device_->graphics_queue(), 1, &submit,
-                          deferred.value().handle()),
-            VK_SUCCESS);
+  ASSERT_EQ(
+      vkQueueSubmit(device_->queue(), 1, &submit, deferred.value().handle()),
+      VK_SUCCESS);
   ASSERT_TRUE(deferred.value().wait().ok());
 }

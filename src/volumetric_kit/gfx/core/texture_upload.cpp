@@ -366,24 +366,19 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
 
 Result<UploadBatch> UploadBatch::begin(const Device& device,
                                        Allocator& allocator) {
-  // One primary command buffer from the device's shared graphics pool -- the
-  // same pool Device::submit_single_time allocates from (and the same
-  // external-synchronization caveat; see the class docs).
-  VkCommandBufferAllocateInfo alloc_info{};
-  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  alloc_info.commandPool = device.command_pool();
-  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  alloc_info.commandBufferCount = 1;
-  VkCommandBuffer raw = VK_NULL_HANDLE;
-  VG_VK_TRY(vkAllocateCommandBuffers(device.handle(), &alloc_info, &raw));
-
-  // Owned immediately, so every failure path below frees it back to the pool.
-  CommandBuffer cmd(device.handle(), device.command_pool(), raw);
+  // One primary command buffer from a transient pool of the batch's own, so
+  // batches on different threads never share a pool (which Vulkan requires be
+  // externally synchronized). A failure below frees whatever was made.
+  VG_ASSIGN(CommandPool pool,
+            CommandPool::create(device.handle(), device.queue_family(),
+                                VK_COMMAND_POOL_CREATE_TRANSIENT_BIT));
+  VG_ASSIGN(CommandBuffer cmd, pool.allocate_primary());
   VG_TRY(cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
 
   UploadBatch batch;
   batch.device_ = &device;
   batch.allocator_ = &allocator;
+  batch.pool_ = std::move(pool);
   batch.cmd_ = std::move(cmd);
   return batch;
 }
@@ -393,6 +388,7 @@ UploadBatch::~UploadBatch() = default;
 UploadBatch::UploadBatch(UploadBatch&& other) noexcept
     : device_(other.device_),
       allocator_(other.allocator_),
+      pool_(std::move(other.pool_)),
       cmd_(std::move(other.cmd_)),
       staging_(std::move(other.staging_)),
       poisoned_(other.poisoned_) {
@@ -405,10 +401,12 @@ UploadBatch::UploadBatch(UploadBatch&& other) noexcept
 UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   if (this != &other) {
     // The member moves free this batch's current command buffer and staging
-    // buffers (nothing was submitted, so freeing them is always safe).
+    // buffers (nothing was submitted, so freeing them is always safe) -- the
+    // command buffer first, while the pool it came from still exists.
     device_ = other.device_;
     allocator_ = other.allocator_;
     cmd_ = std::move(other.cmd_);
+    pool_ = std::move(other.pool_);
     staging_ = std::move(other.staging_);
     poisoned_ = other.poisoned_;
     other.device_ = nullptr;
@@ -534,6 +532,7 @@ Status UploadBatch::finish() {
   // buffer alive until the fence wait proves the GPU is done -- they are freed
   // on scope exit, error paths included.
   const Device* device = device_;
+  CommandPool pool = std::move(pool_);  // before cmd: destroyed after it
   CommandBuffer cmd = std::move(cmd_);
   std::vector<Buffer> staging = std::move(staging_);
   device_ = nullptr;
@@ -541,9 +540,9 @@ Status UploadBatch::finish() {
   staging_.clear();
 
   VG_TRY(cmd.end());
-  // One submit + fence wait, shared with Device::submit_single_time. The
-  // moved-out cmd and staging buffers stay alive on the stack until it returns
-  // (the GPU is then done reading them), error paths included.
+  // One submit + fence wait under the device's queue lock. The moved-out pool,
+  // cmd and staging buffers stay alive on the stack until it returns (the GPU
+  // is then done reading them), error paths included.
   return device->submit_and_wait(cmd.handle());
 }
 

@@ -16,14 +16,19 @@
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
+#include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
-class Device;
+using core::Device;
 
 /// @brief A CPU pixel buffer plus the options for uploading it into a sampled
 ///        texture (2D, 2D array, or cubemap; single-mip, pre-mipped, or
@@ -112,20 +117,19 @@ class VG_CORE_API UploadBatch {
   /// @brief Construct an empty batch (owns nothing; `valid()` is false).
   UploadBatch() noexcept = default;
 
-  /// @brief Open a batch: allocate a primary command buffer from @p device's
-  ///        graphics pool and start recording.
-  /// @param device     Supplies the command pool and, at @ref finish, the
-  ///                   graphics queue; must outlive the batch.
+  /// @brief Open a batch: allocate a primary command buffer from a command pool
+  ///        of the batch's own, on @p device's queue family, and start
+  ///        recording.
+  /// @param device     Supplies the queue family and, at @ref finish, the
+  ///                   queue; must outlive the batch.
   /// @param allocator  Allocates each add's staging buffer and destination
   ///                   resource; must outlive the batch and everything it
   ///                   returned.
   /// @return The open batch, or a backend @ref Status if the command
   ///         buffer could not be allocated or begun.
-  /// @note Not internally synchronized: like @ref Device::submit_single_time,
-  ///       the batch records on the device's shared graphics pool and submits
-  ///       on its queue, both of which Vulkan requires be externally
-  ///       synchronized. Serialize batches against other users of that
-  ///       pool/queue.
+  /// @note One batch is used from one thread at a time. Batches on different
+  ///       threads record on pools of their own, and @ref finish submits
+  ///       through `Device::submit_and_wait`, which serializes the queue.
   static Result<UploadBatch> begin(const Device& device, Allocator& allocator);
 
   ~UploadBatch();
@@ -203,6 +207,9 @@ class VG_CORE_API UploadBatch {
  private:
   const Device* device_ = nullptr;
   Allocator* allocator_ = nullptr;
+  // The batch's own transient pool, declared before cmd_ so the command buffer
+  // is freed back to it before it is destroyed.
+  CommandPool pool_;
   CommandBuffer cmd_;
   // Each add()/add_buffer()'s staging buffer, kept alive until finish()'s
   // fence proves the GPU is done reading them (or until an unfinished batch

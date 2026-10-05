@@ -27,7 +27,7 @@ namespace volumetric_kit::gfx {
 ///
 /// @code
 /// Result<CommandPool> pool =
-///     CommandPool::create(device.handle(), device.graphics_family());
+///     CommandPool::create(device.handle(), device.queue_family());
 /// if (!pool) return pool.status();
 /// Result<CommandBuffer> cmd = pool.value().allocate_primary();
 /// @endcode
@@ -45,6 +45,8 @@ class VG_CORE_API CommandPool {
       VkCommandPoolCreateFlags flags =
           VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 
+  /// @brief Construct an empty pool; @ref valid is false.
+  CommandPool() noexcept = default;
   ~CommandPool() = default;
   CommandPool(CommandPool&& other) noexcept;
   CommandPool& operator=(CommandPool&& other) noexcept;
@@ -68,8 +70,6 @@ class VG_CORE_API CommandPool {
   Result<CommandBuffer> allocate_primary();
 
  private:
-  CommandPool() = default;
-
   UniqueHandle<VkCommandPool, vkDestroyCommandPool> pool_;
   uint32_t queue_family_ = 0;
 };

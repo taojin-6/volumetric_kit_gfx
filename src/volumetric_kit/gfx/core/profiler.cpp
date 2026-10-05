@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
@@ -163,10 +164,10 @@ Result<Profiler> Profiler::create(const Device& device,
   auto impl = std::make_unique<Impl>();
   impl->frames_in_flight = config.frames_in_flight;
   impl->max_gpu_sections = config.max_gpu_sections_per_frame;
-  impl->valid_bits = device.graphics_timestamp_valid_bits();
+  impl->valid_bits = device.timestamp_valid_bits();
   impl->gpu_timing = impl->valid_bits != 0;
   impl->ts_period_ns = device.caps().limits().timestampPeriod;
-  impl->table = device.debug_utils();
+  impl->table = debug_utils(device);
   impl->slots.resize(config.frames_in_flight);
 
   // The timestamp pool exists only where timing is supported; without it every

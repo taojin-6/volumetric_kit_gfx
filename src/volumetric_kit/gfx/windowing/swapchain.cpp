@@ -27,7 +27,7 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
   if (!device.has_present()) {
     return Status::invalid_argument(
         "Swapchain::create: device has no present queue (set "
-        "DeviceConfig::needs_present)");
+        "DeviceRequirements::needs_present)");
   }
   if (config.depth_format != VK_FORMAT_UNDEFINED) {
     if (allocator == nullptr) {
@@ -148,7 +148,7 @@ Status Swapchain::build(VkExtent2D desired) {
   info.imageArrayLayers = 1;
   info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-  const uint32_t graphics = device_->graphics_family();
+  const uint32_t graphics = device_->queue_family();
   const uint32_t present = device_->present_family();
   const std::array<uint32_t, 2> families = {graphics, present};
   if (graphics != present) {

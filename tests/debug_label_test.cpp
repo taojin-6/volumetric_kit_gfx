@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 
+#include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
@@ -16,15 +17,14 @@ namespace vg = volumetric_kit::gfx;
 
 // A self-contained instance + device with VK_EXT_debug_utils opted in, so the
 // resolved table is active wherever the extension is present (and inactive,
-// with every label a clean no-op, where it is not). The shared
-// VulkanDeviceTest fixture builds its instance with a default config (no
-// debug-utils), so this suite stands up its own to exercise the active path —
-// while still asserting the no-op behaviour holds when the extension is absent.
+// with every label a clean no-op, where it is not). This suite stands up its
+// own, preferring validation, to exercise the active path — while still
+// asserting the no-op behaviour holds when the extension is absent.
 class DebugLabelTest : public ::testing::Test {
  protected:
   void SetUp() override {
     vg::InstanceConfig instance_config;
-    instance_config.enable_debug_utils = true;  // active emit path everywhere
+    instance_config.request_debug_utils = true;  // active emit path everywhere
     // Prefer validation: on the Linux sanitizers job it is the detector that
     // catches an unbalanced / double-end label (ASan/UBSan cannot — it is a
     // Vulkan API misuse, not a memory error). Where the layer is missing or
@@ -42,25 +42,26 @@ class DebugLabelTest : public ::testing::Test {
     }
     instance_.emplace(std::move(instance).value());
 
-    auto physical = instance_->select_physical_device();
+    const vg::DeviceRequirements reqs = vg::device_requirements();
+    auto physical = instance_->select_physical_device(reqs);
     if (!physical.ok()) {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
-    physical_ = physical.value();
-
-    vg::DeviceConfig device_config;
-    // Thread the instance's decision through: the device-level entry points can
-    // only resolve when the instance enabled the extension.
-    device_config.enable_debug_utils = instance_->debug_utils_enabled();
-    auto device =
-        vg::Device::create(instance_->handle(), physical_, device_config);
+    // The device learns from the instance whether the extension is enabled:
+    // its entry points only resolve then.
+    auto device = vg::Device::create(*instance_, physical.value(), reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
+    // A pool of the test's own: a real handle to name.
+    auto pool =
+        vg::CommandPool::create(device_->handle(), device_->queue_family());
+    ASSERT_TRUE(pool.ok()) << pool.status().message();
+    pool_.emplace(std::move(pool).value());
   }
 
   std::optional<vg::Instance> instance_;
-  VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   std::optional<vg::Device> device_;
+  std::optional<vg::CommandPool> pool_;
 };
 
 }  // namespace
@@ -69,7 +70,8 @@ class DebugLabelTest : public ::testing::Test {
 // enabled VK_EXT_debug_utils (which itself depends on the extension being
 // present on the loader). This is the single wiring invariant.
 TEST_F(DebugLabelTest, TableActiveMatchesInstanceFlag) {
-  EXPECT_EQ(device_->debug_utils().active(), instance_->debug_utils_enabled());
+  EXPECT_EQ(vg::debug_utils(*device_).active(),
+            instance_->debug_utils_enabled());
 }
 
 // A null label name leaves the scope inert even on the active path:
@@ -78,14 +80,14 @@ TEST_F(DebugLabelTest, TableActiveMatchesInstanceFlag) {
 // optional). Without the guard this would emit a label the validation layer
 // rejects; here active() must report false whether or not the table is live.
 TEST_F(DebugLabelTest, NullNameLeavesScopeInert) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
   vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope scope(cmd, table, nullptr);
     EXPECT_FALSE(scope.active());
   });
   EXPECT_TRUE(status.ok()) << status.message();
 
-  vg::QueueLabelScope queue_scope(device_->graphics_queue(), table, nullptr);
+  vg::QueueLabelScope queue_scope(device_->queue(), table, nullptr);
   EXPECT_FALSE(queue_scope.active());
 }
 
@@ -97,12 +99,11 @@ TEST_F(DebugLabelTest, NullNameLeavesScopeInert) {
 // SetUp, not by these flag assertions — there is no in-process API to capture
 // an emitted label and assert on it directly.
 TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
 
-  // A real handle to name: the device's own command pool.
+  // A real handle to name: the test's command pool.
   vg::set_object_name(device_->handle(), table, VK_OBJECT_TYPE_COMMAND_POOL,
-                      reinterpret_cast<uint64_t>(device_->command_pool()),
-                      "test pool");
+                      reinterpret_cast<uint64_t>(pool_->handle()), "test pool");
 
   const float color[4] = {0.2f, 0.4f, 0.8f, 1.0f};
   vg::Status record_status =
@@ -123,8 +124,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
   // Queue label around an empty submit: open a region on the graphics queue,
   // submit a no-op one-time buffer through the device helper, then close it.
   {
-    vg::QueueLabelScope queue_scope(device_->graphics_queue(), table, "frame",
-                                    color);
+    vg::QueueLabelScope queue_scope(device_->queue(), table, "frame", color);
     EXPECT_EQ(queue_scope.active(), table.active());
     vg::Status submit_status =
         device_->submit_single_time([](VkCommandBuffer) {});
@@ -138,7 +138,7 @@ TEST_F(DebugLabelTest, EmitsLabelsAndObjectNameWithoutError) {
 // validation error / double-end. We assert the flag transition; the validation
 // layer (when present on the sanitizers job) catches an actual double-end.
 TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
   vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope source(cmd, table, "region");
     const bool was_active = source.active();
@@ -156,7 +156,7 @@ TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
 // first and `dst` last, so dst's self-end (top of the label stack) and the
 // final destruction stay strictly nested for the validation layer.
 TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
   vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope src(cmd, table, "src region");
     vg::DebugLabelScope dst(cmd, table, "dst region");
@@ -172,7 +172,7 @@ TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
 // self-move: pointer-laundered to dodge -Wself-move under -Werror. The scope
 // keeps its state and emits exactly one End at exit.
 TEST_F(DebugLabelTest, DebugLabelSelfMoveIsSafe) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
   vg::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
     vg::DebugLabelScope scope(cmd, table, "region");
     const bool was_active = scope.active();
@@ -187,8 +187,8 @@ TEST_F(DebugLabelTest, DebugLabelSelfMoveIsSafe) {
 // QueueLabelScope move-construct: same inert-source contract as the command
 // scope, on the queue entry points.
 TEST_F(DebugLabelTest, QueueLabelMoveConstructLeavesSourceInert) {
-  const vg::DebugUtilsTable& table = device_->debug_utils();
-  vg::QueueLabelScope source(device_->graphics_queue(), table, "queue region");
+  const vg::DebugUtilsTable table = vg::debug_utils(*device_);
+  vg::QueueLabelScope source(device_->queue(), table, "queue region");
   const bool was_active = source.active();
 
   vg::QueueLabelScope moved(std::move(source));

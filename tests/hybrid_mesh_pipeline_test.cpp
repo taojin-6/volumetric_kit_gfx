@@ -379,7 +379,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
       return {};
     }
 
-    auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+    auto pool = vg::CommandPool::create(device(), device_->queue_family());
     EXPECT_TRUE(pool.ok()) << pool.status().message();
     if (!pool.ok()) {
       return {};

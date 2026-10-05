@@ -175,7 +175,7 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   vg::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator, {kSize, kSize});
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -232,7 +232,7 @@ TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
   vg::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_depth_target(allocator, {kSize, kSize});
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

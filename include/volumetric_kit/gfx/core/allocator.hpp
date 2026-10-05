@@ -15,9 +15,13 @@
 #include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
-class Device;
+using core::Device;
 
 /// @brief Usage and budget, in bytes, for a single Vulkan memory heap.
 ///

@@ -29,15 +29,16 @@ struct HeadlessAppConfig {
   /// InstanceConfig::enable_validation).
   bool enable_validation = false;
   /// Extra instance extensions to enable (see @ref
-  /// InstanceConfig::extra_instance_extensions). None are needed for plain
-  /// offscreen rendering.
+  /// InstanceConfig::extensions). None are needed for plain offscreen
+  /// rendering.
   std::vector<const char*> instance_extensions;
-  /// Device features / extra extensions / feature chain to enable — the escape
-  /// hatch for anything the facade does not surface directly.
-  /// @note @ref HeadlessApp::create overwrites `enable_debug_utils`, deriving
-  ///       it from the instance it just built (the only correct source);
-  ///       `needs_present` stays false, as a headless app has no surface.
-  DeviceConfig device{};
+  /// What the device must provide: the renderer's floor
+  /// (@ref device_requirements) plus any features, extensions or feature chain
+  /// the application adds -- the escape hatch for anything the facade does not
+  /// surface directly. Selection and creation both use it. `needs_present`
+  /// must stay false, as a headless app has no surface. Labels and object
+  /// names follow the instance, which requests `VK_EXT_debug_utils`.
+  DeviceRequirements device = device_requirements();
 };
 
 /// @brief Owns the headless bring-up chain — @ref Instance, @ref Device,

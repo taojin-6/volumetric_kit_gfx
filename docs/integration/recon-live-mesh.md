@@ -120,10 +120,13 @@ renderer adopted** (PR #85). gfx binds their handles directly — no external-me
 import, no staging copy. This is the same-API case the device-adopt decision
 anticipated (none of the CUDA/Metal interop machinery applies).
 
-**The embedder must declare what it enabled.** `AdoptedDevice` carries an
-`enabled_*` block — extensions, `enabled_features`, `enabled_timeline_semaphore`,
-`enabled_dynamic_rendering` — and `Device::adopt` verifies the renderer's
-requirements against *that declaration*, not against physical-device support.
+**The embedder must declare what it enabled.** `AdoptedDevice` — the shared
+core's, the one type recon and gfx both adopt — carries `enabled_extensions`
+and `enabled_features` (the core 1.0 features plus `timeline_semaphore`,
+`scalar_block_layout` and `dynamic_rendering`), and `Device::adopt` verifies the
+renderer's requirements (`device_requirements()`) against *that declaration*,
+not against physical-device support. volumetric_kit_core's `SharedDevice` builds
+the one device from both libraries' requirements and fills the declaration.
 Support is not evidence of enablement: every Vulkan 1.3 physical device reports
 `dynamicRendering` whether or not the logical device turned it on, so a
 compute-focused bootstrap that leaves `VkPhysicalDeviceVulkan13Features` zeroed

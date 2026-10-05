@@ -16,10 +16,14 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
 class Allocator;
-class Device;
+using core::Device;
 
 namespace windowing {
 
@@ -102,7 +106,7 @@ class VG_WINDOWING_API Swapchain {
 
   /// @brief Create a swapchain on @p surface.
   /// @param device     A device created with present support
-  ///                   (`DeviceConfig::needs_present`).
+  ///                   (`DeviceRequirements::needs_present`).
   /// @param surface    The surface to present to.
   /// @param config     Size, format/present-mode preferences, and the optional
   ///                   depth attachment format.

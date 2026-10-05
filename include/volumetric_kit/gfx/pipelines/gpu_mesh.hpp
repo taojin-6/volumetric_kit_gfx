@@ -13,9 +13,13 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 class Allocator;
-class Device;
+using core::Device;
 class UploadBatch;
 namespace assets {
 struct Mesh;

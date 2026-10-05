@@ -80,12 +80,12 @@ Result<ImGuiOverlay> ImGuiOverlay::create(const Device& device,
   init.Instance = instance;
   init.PhysicalDevice = device.physical_device();
   init.Device = device.handle();
-  init.QueueFamily = device.graphics_family();
+  init.QueueFamily = device.queue_family();
   // The backend submits on this queue itself when it (re)creates a texture (the
   // font atlas on first render): a private command buffer + blocking submit,
   // not the caller's. render() takes the device's submit_mutex around that call
   // so a shared (adopted) queue stays externally synchronized.
-  init.Queue = device.graphics_queue();
+  init.Queue = device.queue();
   init.DescriptorPoolSize = kDescriptorPoolSize;  // backend creates+owns it
   init.MinImageCount = config.min_image_count;
   init.ImageCount = config.image_count;

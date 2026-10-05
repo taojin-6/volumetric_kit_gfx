@@ -26,6 +26,11 @@ VkDebugUtilsLabelEXT make_label(const char* name, const float color[4]) {
 
 }  // namespace
 
+DebugUtilsTable debug_utils(const Device& device) {
+  return DebugUtilsTable::load(device.handle(),
+                               device.debug_labels_available());
+}
+
 DebugLabelScope::DebugLabelScope(VkCommandBuffer cmd,
                                  const DebugUtilsTable& table, const char* name,
                                  const float color[4]) noexcept {

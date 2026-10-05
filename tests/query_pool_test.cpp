@@ -149,7 +149,7 @@ TEST_F(QueryPoolTest, ResetWriteSubmitReadBack) {
   // carry no signal, so skip before recording anything; some devices (e.g.
   // certain MoltenVK configs) report zero.
   const uint32_t valid_bits = graphics_timestamp_valid_bits(
-      device_->physical_device(), device_->graphics_family());
+      device_->physical_device(), device_->queue_family());
   if (valid_bits == 0) {
     GTEST_SKIP() << "graphics queue reports timestampValidBits == 0; ticks "
                     "carry no signal on this device";
@@ -158,7 +158,7 @@ TEST_F(QueryPoolTest, ResetWriteSubmitReadBack) {
   vg::QueryPool pool = make_pool(device(), /*count=*/2);
 
   vg::CommandPool cmd_pool =
-      std::move(vg::CommandPool::create(device(), device_->graphics_family()))
+      std::move(vg::CommandPool::create(device(), device_->queue_family()))
           .value();
   auto cmd = cmd_pool.allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

@@ -18,9 +18,13 @@
 
 struct ImGuiContext;
 
+namespace volumetric_kit::core {
+class Device;
+}  // namespace volumetric_kit::core
+
 namespace volumetric_kit::gfx {
 
-class Device;
+using core::Device;
 
 namespace ui {
 

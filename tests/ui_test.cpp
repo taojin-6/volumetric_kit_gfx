@@ -187,7 +187,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(
       ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
 
-  auto pool = vg::CommandPool::create(device(), device_->graphics_family());
+  auto pool = vg::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();

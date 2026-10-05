@@ -27,13 +27,12 @@ class ProfilerTest : public VulkanDeviceTest {
  protected:
   // Build the instance/device with debug-utils enabled (and validation as the
   // label-balance backstop), so gpu_scope's label emit/close path is exercised;
-  // fall back to debug-utils-only, then plain, where a layer or the extension
-  // is unavailable. Overrides VulkanDeviceTest::SetUp, whose default configs
-  // leave debug-utils off.
+  // fall back to debug-utils-only where the layer is unavailable. Overrides
+  // VulkanDeviceTest::SetUp, which enables validation only on request.
   void SetUp() override {
     vg::InstanceConfig icfg;
     icfg.enable_validation = true;
-    icfg.enable_debug_utils = true;
+    icfg.request_debug_utils = true;
     auto instance = vg::Instance::create(icfg);
     if (!instance.ok()) {
       icfg.enable_validation = false;
@@ -44,15 +43,15 @@ class ProfilerTest : public VulkanDeviceTest {
     }
     instance_.emplace(std::move(instance).value());
 
-    auto physical = instance_->select_physical_device();
+    const vg::DeviceRequirements reqs = requirements();
+    auto physical = instance_->select_physical_device(reqs);
     if (!physical.ok()) {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
-    physical_ = physical.value();
+    caps_ = physical.value();
+    physical_ = caps_.handle();
 
-    vg::DeviceConfig dcfg;
-    dcfg.enable_debug_utils = instance_->debug_utils_enabled();
-    auto device = vg::Device::create(instance_->handle(), physical_, dcfg);
+    auto device = vg::Device::create(*instance_, caps_, reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
   }
@@ -83,8 +82,7 @@ class ProfilerTest : public VulkanDeviceTest {
 // is the single wiring invariant the rest of the GPU path keys off.
 TEST_F(ProfilerTest, GpuTimingMatchesDeviceCapability) {
   vg::Profiler profiler = make_profiler();
-  EXPECT_EQ(profiler.gpu_timing(),
-            device_->graphics_timestamp_valid_bits() != 0);
+  EXPECT_EQ(profiler.gpu_timing(), device_->timestamp_valid_bits() != 0);
 }
 
 // The published snapshot lags the in-flight depth: with one slot, the frame
