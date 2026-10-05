@@ -282,7 +282,11 @@ jobs:
         continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: tools/bench_ab.sh "$BASE_SHA" build
+        run: |
+          # In a container the job runs as root over a checkout the runner's
+          # user owns, which git refuses to read without this.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          tools/bench_ab.sh "$BASE_SHA" build
 
       # Nothing above compiles the *installed* tree, so an install-list mistake
       # -- shipping a header whose own #include was excluded -- reaches
