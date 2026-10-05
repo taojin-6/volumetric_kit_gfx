@@ -12,13 +12,21 @@ namespace volumetric_kit::gfx::camera {
 
 ImageView2D::ImageView2D(glm::vec2 image_size, glm::vec2 viewport_origin,
                          glm::vec2 viewport_size) noexcept
-    : viewport_origin_(viewport_origin), viewport_size_(viewport_size) {
+    : viewport_origin_(viewport_origin),
+      viewport_size_(glm::max(viewport_size, glm::vec2{0.0f, 0.0f})) {
   set_image_size(image_size);
 }
 
 void ImageView2D::set_viewport(glm::vec2 origin, glm::vec2 size) noexcept {
   viewport_origin_ = origin;
   viewport_size_ = glm::max(size, glm::vec2{0.0f, 0.0f});
+  // A larger viewport raises the fit, and with it the scale of a zoom
+  // relative to the fit, which may then pass max_scale_. An empty one (a
+  // minimized window) has no fit to clamp against: keep the zoom for when it
+  // grows again.
+  if (fit_scale() > 0.0f) {
+    zoom_ = clamp_zoom(zoom_);
+  }
 }
 
 void ImageView2D::set_image_size(glm::vec2 size) noexcept {
@@ -55,7 +63,8 @@ void ImageView2D::pan(glm::vec2 delta) noexcept {
 
 void ImageView2D::set_zoom_limits(float min_zoom, float max_scale) noexcept {
   if (min_zoom > 0.0f) {
-    min_zoom_ = min_zoom;
+    // The fit is always allowed, so the smallest zoom is at most 1.
+    min_zoom_ = std::min(min_zoom, 1.0f);
   }
   if (max_scale > 0.0f) {
     max_scale_ = max_scale;
@@ -87,11 +96,12 @@ float ImageView2D::fit_scale() const noexcept {
 }
 
 float ImageView2D::clamp_zoom(float zoom) const noexcept {
-  // The largest zoom reaches max_scale_ texels per pixel, but never forbids
-  // the fit itself, which a small image in a large viewport exceeds.
+  // The largest zoom reaches max_scale_ pixels per texel, but never forbids
+  // the fit itself, which a small image in a large viewport exceeds; nor does
+  // the smallest, which set_zoom_limits keeps at most 1.
   const float fit = fit_scale();
   const float max_zoom = fit > 0.0f ? std::max(1.0f, max_scale_ / fit) : 1.0f;
-  return std::clamp(zoom, std::min(min_zoom_, 1.0f), max_zoom);
+  return std::clamp(zoom, min_zoom_, max_zoom);
 }
 
 }  // namespace volumetric_kit::gfx::camera

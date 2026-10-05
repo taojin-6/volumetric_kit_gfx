@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#version 450
+
+// A test producer (image_pipeline_test): one invocation per 32-bit word of a
+// storage buffer, writing the pushed value -- a compute-stage writer of an
+// ImagePipeline source plane, which the update's own barriers must order.
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Words {
+  uint words[];
+};
+
+layout(push_constant) uniform Push {
+  uint value;
+}
+pc;
+
+void main() { words[gl_GlobalInvocationID.x] = pc.value; }

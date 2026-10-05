@@ -20,8 +20,9 @@
 /// just without teeth; CI (lavapipe + the layer) gets them. The plain device
 /// tests leave wants_validation() at its default (false) and are unaffected. A
 /// fixture whose tests hinge on the barriers between recorded commands also
-/// overrides wants_sync_validation(). A fixture that needs more of the device
-/// overrides requirements().
+/// overrides wants_sync_validation(), and one whose shaders write what its
+/// barriers guard overrides wants_shader_access_validation(). A fixture that
+/// needs more of the device overrides requirements().
 
 #include <gtest/gtest.h>
 
@@ -56,6 +57,11 @@ class VulkanDeviceTest : public ::testing::Test {
   // reads when the instance is created; a layer too old to read it runs
   // without it.
   virtual bool wants_sync_validation() const { return false; }
+  // On top of wants_sync_validation(): have it track the memory shaders
+  // access through their descriptors, from the SPIR-V. Without it the layer
+  // (1.4.363) reports no hazard against a compute shader's storage-buffer
+  // write. Off by default, as the layer warns it can report false positives.
+  virtual bool wants_shader_access_validation() const { return false; }
   // What the fixture's device must provide; the renderer's floor by default.
   virtual vkc::DeviceRequirements requirements() const {
     return vg::device_requirements();
@@ -65,11 +71,18 @@ class VulkanDeviceTest : public ::testing::Test {
     vkc::InstanceConfig icfg;
     icfg.enable_validation = wants_validation();
     std::optional<ScopedEnv> sync;
+    std::optional<ScopedEnv> shader_accesses;
     if (wants_validation() && wants_sync_validation()) {
       sync.emplace("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true");
+      if (wants_shader_access_validation()) {
+        shader_accesses.emplace(
+            "VK_KHRONOS_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC", "true");
+      }
     }
     auto instance = vkc::Instance::create(icfg);
-    sync.reset();  // read at instance creation; keep it from later instances
+    // Read at instance creation; keep them from later instances.
+    shader_accesses.reset();
+    sync.reset();
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }

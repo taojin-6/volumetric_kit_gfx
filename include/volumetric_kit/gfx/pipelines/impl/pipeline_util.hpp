@@ -53,4 +53,26 @@ inline bool is_srgb_attachment(VkFormat format) {
   }
 }
 
+/// @brief Whether a color-attachment format stores floating-point values: a
+///        target that holds linear light, as an HDR or offscreen one does.
+///
+/// Lists the float formats a color attachment can have; the 64-bit ones and
+/// `E5B9G9R9` cannot be rendered to, so they are not listed.
+/// @param format  A color-attachment format.
+/// @return `true` for an `_SFLOAT` or `_UFLOAT` attachment format.
+inline bool is_float_attachment(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_R16_SFLOAT:
+    case VK_FORMAT_R16G16_SFLOAT:
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+    case VK_FORMAT_R32_SFLOAT:
+    case VK_FORMAT_R32G32_SFLOAT:
+    case VK_FORMAT_R32G32B32A32_SFLOAT:
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+      return true;
+    default:
+      return false;
+  }
+}
+
 }  // namespace volumetric_kit::gfx::pipelines

@@ -73,6 +73,34 @@ TEST(ImageView2DTest, ResizeKeepsTheCenterAndScalesWithTheViewport) {
   expect_near(view.image_to_target(center), {125.0f, 125.0f});
 }
 
+// The zoom is relative to the fit, so a larger window raises the scale: at the
+// limit it is reduced to stay there, and a zoom-in then never zooms out.
+TEST(ImageView2DTest, ResizeKeepsTheScaleWithinTheLimit) {
+  ImageView2D view({1000.0f, 1000.0f}, {0.0f, 0.0f}, {500.0f, 500.0f});
+  view.zoom_about({250.0f, 250.0f}, 1000.0f);
+  EXPECT_FLOAT_EQ(view.scale(), 64.0f);  // the default max_scale
+  EXPECT_FLOAT_EQ(view.zoom(), 128.0f);
+
+  view.set_viewport({0.0f, 0.0f}, {1000.0f, 1000.0f});
+  EXPECT_FLOAT_EQ(view.scale(), 64.0f);
+  EXPECT_FLOAT_EQ(view.zoom(), 64.0f);
+  view.zoom_about({500.0f, 500.0f}, 1.1f);
+  EXPECT_FLOAT_EQ(view.scale(), 64.0f);
+
+  // Minimized and restored, the zoom is kept.
+  view.set_viewport({0.0f, 0.0f}, {0.0f, 0.0f});
+  view.set_viewport({0.0f, 0.0f}, {1000.0f, 1000.0f});
+  EXPECT_FLOAT_EQ(view.zoom(), 64.0f);
+}
+
+// A negative size from the constructor counts as 0, as from set_viewport:
+// a zero scale, never a negative (mirroring) one.
+TEST(ImageView2DTest, ANegativeViewportIsEmpty) {
+  const ImageView2D view({64.0f, 64.0f}, {0.0f, 0.0f}, {-1.0f, 720.0f});
+  EXPECT_FLOAT_EQ(view.viewport_size().x, 0.0f);
+  EXPECT_FLOAT_EQ(view.scale(), 0.0f);
+}
+
 TEST(ImageView2DTest, AnEmptyViewportHasZeroScaleAndMapsToTheCenter) {
   ImageView2D view({64.0f, 64.0f}, {0.0f, 0.0f}, {128.0f, 128.0f});
   view.set_viewport({0.0f, 0.0f}, {0.0f, 0.0f});  // minimized
@@ -89,6 +117,15 @@ TEST(ImageView2DTest, ZoomIsClampedToTheLimits) {
   EXPECT_FLOAT_EQ(view.scale(), 8.0f);
   view.zoom_about({50.0f, 50.0f}, 1e-4f);
   EXPECT_FLOAT_EQ(view.zoom(), 0.5f);
+}
+
+// The fit is always allowed: a smallest zoom above 1 acts as 1.
+TEST(ImageView2DTest, AMinZoomAboveOneActsAsOne) {
+  ImageView2D view({100.0f, 100.0f}, {0.0f, 0.0f}, {100.0f, 100.0f});
+  view.set_zoom_limits(2.0f, 8.0f);
+  view.zoom_about({50.0f, 50.0f}, 4.0f);
+  view.zoom_about({50.0f, 50.0f}, 1e-4f);
+  EXPECT_FLOAT_EQ(view.zoom(), 1.0f);
 }
 
 TEST(ImageView2DTest, AFitBeyondMaxScaleIsStillAllowed) {

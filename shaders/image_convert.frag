@@ -16,7 +16,7 @@
 // with filtering, to bring it up to luma resolution.
 
 layout(set = 0, binding = 0) uniform sampler2D plane0;  // color, grey, ramp or luma
-layout(set = 0, binding = 1) uniform sampler2D plane1;  // NV12 CbCr; else plane0 again
+layout(set = 0, binding = 1) uniform sampler2D plane1;  // NV12 CbCr; else plane0, nearest
 
 // Mirrors ConvertPush in image_pipeline.cpp (std430, 48 bytes).
 layout(push_constant) uniform Push {
@@ -55,7 +55,9 @@ vec3 ramp(float t) {
               vec3(0.10, 0.88, 0.45), vec3(0.96, 0.80, 0.15),
               vec3(0.64, 0.04, 0.01));
   float x = clamp(t, 0.0, 1.0) * 4.0;
-  int i = min(int(x), 3);
+  // Clamped on both sides: the caller screens out NaN, whose clamp and int()
+  // are undefined, but the index must stay in bounds whatever it is given.
+  int i = clamp(int(x), 0, 3);
   return mix(stops[i], stops[i + 1], x - float(i));
 }
 
@@ -83,7 +85,8 @@ void main() {
 
   if (pc.mapping == kRamp) {
     float value = sample0.r * pc.value_scale;
-    if (pc.zero_is_empty != 0u && value == 0.0) {
+    // A float map's NaN is "no data" whatever zero_is_empty says.
+    if (isnan(value) || (pc.zero_is_empty != 0u && value == 0.0)) {
       out_color = vec4(0.0, 0.0, 0.0, 1.0);
       return;
     }
@@ -101,7 +104,8 @@ void main() {
               pc.chroma_size;
     rgb = ycbcr_to_rgb(sample0.r, textureLod(plane1, at, 0.0).rg);
   } else if (pc.mapping == kGrey) {
-    rgb = vec3(clamp(sample0.r, 0.0, 1.0));
+    // NaN, which only R32_SFLOAT holds, shows black: its clamp is undefined.
+    rgb = vec3(isnan(sample0.r) ? 0.0 : clamp(sample0.r, 0.0, 1.0));
   } else {
     rgb = clamp(sample0.rgb, 0.0, 1.0);
   }

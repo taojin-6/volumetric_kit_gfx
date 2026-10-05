@@ -137,10 +137,17 @@ ringing the device-adopt entry lists stays open for the mesh atlas.)
 decode. Memory: about 4/3 x 4 bytes per texel for the display image (44 MB for
 4K) plus the planes (12 MB for 4K NV12). An odd dimension's blit drops its
 last row or column's share at each level, as floor halving does everywhere in
-Vulkan. A producer's plane must have finished, and be readable from the
-renderer's queue family (`CONCURRENT`, or written on it), before the update is
-submitted -- `ImagePlane` states it. Synchronization validation checks the
-pipeline's barriers in its tests, catching a missing read-after-write or
+Vulkan. A producer's plane must be readable from the renderer's queue family
+(`CONCURRENT`, or written on it), and its writes must come before the copy:
+recorded earlier on the renderer's queue, or fenced or semaphore-waited from
+another -- `ImagePlane` states it. Since the update cannot know which stage
+wrote a plane, its copies wait for every earlier write on the queue, and every
+later command waits for its copies, so a producer can refill a plane with no
+barrier of its own; letting a plane name its writer's stage would narrow the
+first wait. Each update waits only for *fragment-shader* reads of the display
+image before overwriting it, so a reader in another stage synchronizes
+itself (`ImageTexture::display` states it). Synchronization validation checks
+the pipeline's barriers in its tests, catching a missing read-after-write or
 write-after-write dependency, but it does not flag a missing write-after-read
 wait before a transition from `UNDEFINED`, so those stages rest on review.
 

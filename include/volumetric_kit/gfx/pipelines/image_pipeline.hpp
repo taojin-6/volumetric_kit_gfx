@@ -101,12 +101,19 @@ struct ImageTextureDesc {
 /// The plane is copied from its top-left corner, so an image may be larger
 /// than the picture, as a decoder's padded surface is. The copy reads it on
 /// the queue the update is submitted to, so:
-/// - its writes must have **finished** before that submission -- a fence
-///   waited on, or the writer's own earlier submission on the same queue;
+/// - its writes must come **before** the copy: recorded earlier on that
+///   queue -- in the same command buffer or an earlier submission, which the
+///   update's barrier waits for -- or done on another queue: a fence waited
+///   on, or a semaphore the update's submission waits on at the `TRANSFER`
+///   stage;
 /// - it must be readable from that queue's family: created `CONCURRENT`
 ///   across the producer's and the renderer's families, or written on the
 ///   renderer's family (MoltenVK gives two libraries different families);
 /// - and it must outlive the update's execution, not merely its recording.
+///
+/// Every command recorded on the queue after the update waits for the copy,
+/// so a producer on that queue may write the next picture into the plane
+/// with no barrier of its own.
 struct ImagePlane {
   /// An image: 2D, single-sample, with `TRANSFER_SRC` usage, in the layout
   /// its `layout()` records -- `GENERAL` or `TRANSFER_SRC_OPTIMAL` -- and a
@@ -148,7 +155,8 @@ struct ImageUpdate {
   /// @ref ramp_min (a smaller value reverses the ramp).
   float ramp_max = 255.0f;
   /// Show a stored 0 as black rather than as the ramp's color for it, as
-  /// "no data" in a depth map.
+  /// "no data" in a depth map. An `R32_SFLOAT` NaN is shown black either way
+  /// (and so is one shown through @ref ImageMapping::Grey).
   bool zero_is_empty = true;
   /// The Y'CbCr matrix's red weight: BT.601 0.299, BT.709 0.2126.
   float kr = 0.299f;
@@ -213,7 +221,10 @@ class VG_PIPELINES_API ImageTexture {
   /// @return The texture, holding no picture until its first update; or
   ///         `core::Status::Code::InvalidArgument` for an empty @p pipeline,
   ///         a zero extent, an extent beyond the device's
-  ///         `maxImageDimension2D`, or a format the mapping does not take;
+  ///         `maxImageDimension2D`, `maxFramebufferWidth` /
+  ///         `maxFramebufferHeight` or `maxViewportDimensions` (the update
+  ///         renders the whole picture), or a format the mapping does not
+  ///         take;
   ///         `core::Status::Code::Unsupported` when the device cannot sample
   ///         or copy into a plane's format; or a backend failure.
   static core::Result<ImageTexture> create(const ImagePipeline& pipeline,
@@ -234,9 +245,15 @@ class VG_PIPELINES_API ImageTexture {
   uint32_t mip_levels() const noexcept {
     return display_.valid() ? display_.mip_levels() : 0;
   }
-  /// @return The display image: `R8G8B8A8_SRGB`, every mip level.
+  /// @return The display image: `R8G8B8A8_SRGB`, every mip level, in
+  ///         `SHADER_READ_ONLY_OPTIMAL` once updated. Each update waits only
+  ///         for fragment-shader reads of it on the same queue before
+  ///         overwriting it: a reader in another stage (a compute or vertex
+  ///         shader) or on another queue must be ordered before the next
+  ///         update by the caller.
   const core::Image& display() const noexcept { return display_; }
-  /// @return Whether an update has been recorded, so draws have a picture.
+  /// @return Whether an update has been recorded -- recorded, not executed:
+  ///         see @ref ImagePipeline::record_update -- so draws have a picture.
   bool has_picture() const noexcept { return has_picture_; }
   /// @return `true` if this owns a texture.
   bool valid() const noexcept { return display_.valid(); }
@@ -310,8 +327,9 @@ struct ImageFrame {
 ///
 /// A source updated every frame is updated and drawn in the same command
 /// buffer; a still image is updated once and drawn every frame. Images draw
-/// opaque, depth-untested, in draw-list order, and a draw writes the image's
-/// own sRGB bytes to a `_UNORM` target as to an `_SRGB` one.
+/// opaque, depth-untested, in draw-list order. A draw writes the image's own
+/// sRGB bytes to a `_UNORM` target as to an `_SRGB` one, and linear light to
+/// a float target, which holds it for a later tonemap or encode.
 ///
 /// @warning The @p device passed to @ref create must outlive the pipeline
 ///          and every texture made for it.
@@ -330,6 +348,8 @@ struct ImageFrame {
 /// images.submit(cmd, {extent, &draw, 1});
 /// target.end(cmd);
 /// @endcode
+// TODO: blending -- a Color source's alpha, or a draw's opacity -- so an
+// image can be laid over the scene; images draw opaque until then.
 class VG_PIPELINES_API ImagePipeline {
  public:
   /// @brief Construct an empty pipeline (owns nothing; `valid()` is false).
@@ -338,11 +358,12 @@ class VG_PIPELINES_API ImagePipeline {
   /// @brief Build the pipelines for drawing into targets of @p layout.
   /// @param device  The device; it must have enabled the renderer's
   ///                requirements (@ref device_requirements).
-  /// @param layout  The target's format/sample signature: at least one color
+  /// @param layout  The target's format/sample signature: exactly one color
   ///                attachment, single-sample. A depth format is allowed and
   ///                left untested.
   /// @return The pipeline, or `core::Status::Code::InvalidArgument` for a
-  ///         layout without a color attachment or with multisampling;
+  ///         layout with no color attachment or more than one, or with
+  ///         multisampling;
   ///         `core::Status::Code::Unsupported` for a device without the
   ///         renderer's requirements or that cannot render, blit and filter
   ///         `R8G8B8A8_SRGB`; or a backend failure.
@@ -364,6 +385,10 @@ class VG_PIPELINES_API ImagePipeline {
   /// Records into @p cmd and submits nothing; draws recorded after it, in
   /// this or a later submission on the same queue, show the new picture. On
   /// an error nothing is recorded and the texture keeps its last picture.
+  ///
+  /// The texture takes the picture as recorded, so @p cmd must run before
+  /// any later draw of the texture does: if it is reset or dropped instead,
+  /// record another update before drawing the texture again.
   /// @param cmd      A command buffer in the recording state, outside a
   ///                 rendering scope, for a graphics queue of the device.
   /// @param texture  The texture to fill; made for this pipeline.

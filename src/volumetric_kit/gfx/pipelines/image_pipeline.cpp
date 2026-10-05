@@ -225,22 +225,6 @@ core::Status check_plane(const ImagePlane& plane, uint32_t p, VkFormat format,
   return core::Status{};
 }
 
-// One whole-image barrier on a single-level plane copy.
-void plane_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout old_layout,
-                   VkImageLayout new_layout, VkPipelineStageFlags src_stage,
-                   VkPipelineStageFlags dst_stage, VkAccessFlags src_access,
-                   VkAccessFlags dst_access) {
-  ImageBarrierDesc b;
-  b.image = image;
-  b.src_stage = src_stage;
-  b.dst_stage = dst_stage;
-  b.src_access = src_access;
-  b.dst_access = dst_access;
-  b.old_layout = old_layout;
-  b.new_layout = new_layout;
-  cmd_image_barrier(cmd, b);
-}
-
 core::Result<ShaderModule> embedded_module(VkDevice device,
                                            const unsigned char* spv,
                                            std::size_t size) {
@@ -273,6 +257,13 @@ core::Result<ImagePipeline> ImagePipeline::create(
       layout.color_formats[0] == VK_FORMAT_UNDEFINED) {
     return core::Status::invalid_argument(
         "ImagePipeline::create: the layout has no color attachment");
+  }
+  // The draw writes location 0 alone, and a pipeline writes every attachment
+  // it declares: further attachments would be left undefined under each image.
+  if (layout.color_count > 1) {
+    return core::Status::invalid_argument(
+        "ImagePipeline::create: the layout has more than one color "
+        "attachment");
   }
   if (layout.samples != VK_SAMPLE_COUNT_1_BIT) {
     return core::Status::invalid_argument(
@@ -309,13 +300,17 @@ core::Result<ImagePipeline> ImagePipeline::create(
   VKC_ASSIGN(GraphicsPipeline convert,
              GraphicsPipeline::create(vk, convert_desc));
 
-  // The draw renders into the caller's target; its fragment stage encodes for
-  // a _UNORM attachment 0 and leaves an _SRGB one to the hardware.
-  const VkBool32 srgb_target =
-      is_srgb_attachment(layout.color_formats[0]) ? VK_TRUE : VK_FALSE;
+  // The draw renders into the caller's target. Its fragment stage encodes
+  // sRGB itself for a _UNORM attachment, which stores what it is given; an
+  // _SRGB attachment encodes on write, and a float one holds linear light.
+  const VkFormat target_format = layout.color_formats[0];
+  const VkBool32 encode_srgb =
+      !is_srgb_attachment(target_format) && !is_float_attachment(target_format)
+          ? VK_TRUE
+          : VK_FALSE;
   const VkSpecializationMapEntry spec_entry{0, 0, sizeof(VkBool32)};
-  const VkSpecializationInfo spec{1, &spec_entry, sizeof(srgb_target),
-                                  &srgb_target};
+  const VkSpecializationInfo spec{1, &spec_entry, sizeof(encode_srgb),
+                                  &encode_srgb};
   GraphicsPipelineDesc draw_desc;
   draw_desc.vertex_shader = &draw_vert;
   draw_desc.fragment_shader = &draw_frag;
@@ -429,18 +424,47 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
         "kb > 0 and kr + kb < 1");
   }
 
-  // 1. Copy each source plane into the texture's copy of it. The copy's
-  //    previous contents are discarded, but the previous update's convert
-  //    pass may still be reading them: wait for its fragment stage.
+  // 1. Copy each source plane into the texture's copy of it. The sources may
+  //    have been written by anything earlier on this queue -- a producer's
+  //    pass in this or an earlier submission -- so the copies wait for every
+  //    earlier write and see its results.
+  // TODO: let a plane name its writer's stage and access, to wait for less
+  // than all earlier work.
+  VkMemoryBarrier written{};
+  written.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  written.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+  written.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &written, 0,
+                       nullptr, 0, nullptr);
+
+  // The plane copies' previous contents are discarded, but the previous
+  // update's convert pass may still be reading them: wait for its fragment
+  // stage.
+  std::array<ImageBarrierDesc, 2> to_copy{};
+  std::array<ImageBarrierDesc, 2> to_read{};
+  for (uint32_t p = 0; p < formats.count; ++p) {
+    to_copy[p].image = texture.planes_[p].handle();
+    to_copy[p].src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    to_copy[p].dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    to_copy[p].dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_copy[p].old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_copy[p].new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    to_read[p].image = texture.planes_[p].handle();
+    to_read[p].src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    to_read[p].dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    to_read[p].src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_read[p].dst_access = VK_ACCESS_SHADER_READ_BIT;
+    to_read[p].old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_read[p].new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  }
+  cmd_image_barriers(cmd, to_copy.data(), formats.count);
+
   for (uint32_t p = 0; p < formats.count; ++p) {
     const ImagePlane& plane = update.planes[p];
     const VkImage dst = texture.planes_[p].handle();
     const VkExtent2D size = plane_extent(extent, p);
-    plane_barrier(cmd, dst, VK_IMAGE_LAYOUT_UNDEFINED,
-                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                  VK_ACCESS_TRANSFER_WRITE_BIT);
     if (plane.image != nullptr) {
       VkImageCopy region{};
       region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -457,12 +481,15 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
       vkCmdCopyBufferToImage(cmd, plane.buffer->handle(), dst,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     }
-    plane_barrier(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT,
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
   }
+  cmd_image_barriers(cmd, to_read.data(), formats.count);
+
+  // And every later command on the queue waits for the copies, so a producer
+  // may write the next picture into a source without a barrier of its own: an
+  // execution dependency settles write-after-read.
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                       nullptr, 0, nullptr);
 
   // 2. Convert into level 0 of the display image. Its old contents are
   //    discarded; earlier draws sampling it and the earlier chain's blits
@@ -606,10 +633,19 @@ core::Result<ImageTexture> ImageTexture::create(const ImagePipeline& pipeline,
   if (desc.extent.width == 0 || desc.extent.height == 0) {
     return core::Status::invalid_argument("ImageTexture::create: zero extent");
   }
-  const uint32_t max_dim = device.caps().limits().maxImageDimension2D;
-  if (desc.extent.width > max_dim || desc.extent.height > max_dim) {
+  // The convert pass renders level 0 whole, so the extent must fit a
+  // framebuffer and a viewport as well as an image.
+  const VkPhysicalDeviceLimits& limits = device.caps().limits();
+  const uint32_t max_width =
+      std::min({limits.maxImageDimension2D, limits.maxFramebufferWidth,
+                limits.maxViewportDimensions[0]});
+  const uint32_t max_height =
+      std::min({limits.maxImageDimension2D, limits.maxFramebufferHeight,
+                limits.maxViewportDimensions[1]});
+  if (desc.extent.width > max_width || desc.extent.height > max_height) {
     return core::Status::invalid_argument(
-        "ImageTexture::create: extent beyond maxImageDimension2D");
+        "ImageTexture::create: extent beyond the device's image, framebuffer "
+        "or viewport limits");
   }
   VKC_ASSIGN(const PlaneFormats formats, plane_formats(desc));
 
@@ -665,15 +701,17 @@ core::Result<ImageTexture> ImageTexture::create(const ImagePipeline& pipeline,
   VKC_ASSIGN(
       texture.convert_set_,
       texture.pool_.allocate(pipeline.convert_.descriptor_set_layout(0)));
-  // Binding 1 is NV12's chroma; other sources bind plane 0 again, as every
-  // binding the shader declares must hold a descriptor.
-  const core::Image& chroma =
-      formats.count > 1 ? texture.planes_[1] : texture.planes_[0];
+  // Binding 1 is NV12's chroma, filtered. Other sources bind plane 0 again,
+  // as every binding the shader declares must hold a descriptor -- with the
+  // nearest sampler, since their formats need not support linear filtering
+  // and the shader's (unreached) sample of binding 1 still counts as a use.
+  const bool nv12 = formats.count > 1;
   texture.convert_set_.write_combined_image_sampler(
       0, texture.planes_[0].view(), pipeline.texel_sampler_->handle(),
       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   texture.convert_set_.write_combined_image_sampler(
-      1, chroma.view(), pipeline.chroma_sampler_->handle(),
+      1, texture.planes_[nv12 ? 1 : 0].view(),
+      (nv12 ? pipeline.chroma_sampler_ : pipeline.texel_sampler_)->handle(),
       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   const VkSampler draw_samplers[2] = {pipeline.nearest_sampler_->handle(),

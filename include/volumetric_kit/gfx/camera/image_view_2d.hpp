@@ -22,7 +22,8 @@ namespace volumetric_kit::gfx::camera {
 ///
 /// The state is a zoom relative to the fit and the image point at the
 /// viewport's center, so resizing the viewport (@ref set_viewport) keeps what
-/// is shown and scales it with the window -- a fitted view stays fitted.
+/// is shown and scales it with the window -- a fitted view stays fitted --
+/// up to the largest scale allowed.
 /// Zoom 1 fits the whole image in the viewport with its aspect kept.
 ///
 /// Coordinates follow Vulkan's: image texel `(i, j)` covers
@@ -49,15 +50,20 @@ class VG_CAMERA_API ImageView2D {
   /// @brief A view of @p image_size fitted to the viewport, centered.
   /// @param image_size       The image's size in texels; positive.
   /// @param viewport_origin  The viewport's top-left corner, in target pixels.
-  /// @param viewport_size    The viewport's size, in target pixels.
+  /// @param viewport_size    The viewport's size, in target pixels; negative
+  ///                         components count as 0.
   ImageView2D(glm::vec2 image_size, glm::vec2 viewport_origin,
               glm::vec2 viewport_size) noexcept;
 
   /// @brief Move or resize the viewport, keeping the zoom (relative to the
   ///        fit) and the image point at its center.
+  ///
+  /// A zoom whose scale would pass the largest allowed
+  /// (@ref set_zoom_limits) in the new viewport is reduced to it.
   /// @param origin  The viewport's top-left corner, in target pixels.
-  /// @param size    Its size, in target pixels; a zero size (a minimized
-  ///                window) gives a zero @ref scale until it grows again.
+  /// @param size    Its size, in target pixels; negative components count as
+  ///                0. A zero size (a minimized window) gives a zero
+  ///                @ref scale until it grows again, and keeps the zoom.
   void set_viewport(glm::vec2 origin, glm::vec2 size) noexcept;
 
   /// @brief Show another image, fitted.
@@ -79,10 +85,14 @@ class VG_CAMERA_API ImageView2D {
   /// @param delta  The move, in target pixels: a drag's.
   void pan(glm::vec2 delta) noexcept;
 
-  /// @brief Bound how far @ref zoom_about zooms.
-  /// @param min_zoom   The smallest zoom, relative to the fit; positive.
+  /// @brief Bound how far @ref zoom_about zooms. The fit (zoom 1) is always
+  ///        allowed, whatever the limits.
+  /// @param min_zoom   The smallest zoom, relative to the fit; positive. A
+  ///                   value above 1 acts as 1; a non-positive one leaves the
+  ///                   limit unchanged.
   /// @param max_scale  The largest scale, in target pixels per texel; a fit
-  ///                   larger than it is still allowed.
+  ///                   larger than it is still allowed. A non-positive value
+  ///                   leaves the limit unchanged.
   void set_zoom_limits(float min_zoom, float max_scale) noexcept;
 
   /// @return Target pixels per texel (0 for an empty viewport).

@@ -12,10 +12,11 @@
 
 layout(set = 0, binding = 0) uniform sampler2D display;
 
-// Supplied by ImagePipeline::create: whether color attachment 0 encodes sRGB
-// on write. A UNORM target is given the encoding itself, so either kind of
-// target stores the image's own sRGB bytes.
-layout(constant_id = 0) const bool kSrgbTarget = false;
+// Supplied by ImagePipeline::create: whether this stage encodes sRGB itself.
+// A UNORM target is given the encoding, so it stores the image's own sRGB
+// bytes as an _SRGB target (which encodes on write) does; a float target
+// holds linear light, and so is given the samples as they are.
+layout(constant_id = 0) const bool kEncodeSrgb = true;
 
 layout(location = 0) in vec2 frag_uv;
 layout(location = 0) out vec4 out_color;
@@ -28,5 +29,5 @@ vec3 linear_to_srgb(vec3 c) {
 
 void main() {
   vec3 color = texture(display, frag_uv).rgb;
-  out_color = vec4(kSrgbTarget ? color : linear_to_srgb(color), 1.0);
+  out_color = vec4(kEncodeSrgb ? linear_to_srgb(color) : color, 1.0);
 }

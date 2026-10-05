@@ -4,10 +4,11 @@
 // ImagePipeline and ImageTexture: creation and update validation, move
 // semantics, and end-to-end offscreen draws read back -- texel-exact
 // magnification, mip chains that average in linear light, each mapping (color,
-// grey, ramp, NV12 with its siting), buffer and image planes, clipping, and an
-// update / draw / update / draw sequence in one command buffer. Runs under the
-// validation layer with synchronization validation. Skips when the runner
-// exposes no Vulkan device.
+// grey, ramp, NV12 with its siting), float sources and targets, buffer and
+// padded image planes, clipping, a producer writing a plane on the same queue,
+// and an update / draw / update / draw sequence in one command buffer. Runs
+// under the validation layer with synchronization validation. Skips when the
+// runner exposes no Vulkan device.
 
 #include <gtest/gtest.h>
 
@@ -17,16 +18,20 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
 
 #include <glm/vec2.hpp>
 
+#include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/mip_chain.hpp"
@@ -50,13 +55,15 @@ vg::RenderTargetLayout color_layout(VkFormat format) {
   return layout;
 }
 
-// A readback: RGBA bytes, row-major, of a `width`-wide target.
+// A readback: the texels, row-major, of a `width`-wide target whose texels
+// are `texel` bytes -- RGBA8 unless the test asked for another format.
 struct Pixels {
   std::vector<uint8_t> bytes;
   uint32_t width = 0;
+  uint32_t texel = 4;
 
   const uint8_t* at(uint32_t x, uint32_t y) const {
-    return &bytes[(static_cast<size_t>(y) * width + x) * 4];
+    return &bytes[(static_cast<size_t>(y) * width + x) * texel];
   }
 };
 
@@ -101,6 +108,8 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
   // The update's barriers -- plane copies, the convert pass, the chain, the
   // draws -- are what these tests exercise, so missing ones must be reported.
   bool wants_sync_validation() const override { return true; }
+  // And a producer's compute shader writes a plane the update copies.
+  bool wants_shader_access_validation() const override { return true; }
 
   void SetUp() override {
     VulkanDeviceTest::SetUp();
@@ -134,12 +143,15 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
                         : pipelines::ImageTexture{};
   }
 
-  // A device-only buffer holding `bytes`, readable by a transfer.
-  vkc::Buffer source_buffer(const std::vector<uint8_t>& bytes) {
+  // A device-only buffer holding `bytes`, readable by a transfer (and usable
+  // as `usage` says).
+  vkc::Buffer source_buffer(
+      const std::vector<uint8_t>& bytes,
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT) {
     vg::BufferUploadDesc desc;
     desc.data = bytes.data();
     desc.size = bytes.size();
-    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.usage = usage;
     auto buffer = vg::upload_buffer(*device_, *allocator_, desc);
     EXPECT_TRUE(buffer.ok()) << buffer.status().message();
     return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
@@ -237,13 +249,14 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
       return {};
     }
 
+    const uint32_t texel = vkc::texel_bytes(format);
     std::vector<Pixels> out;
     for (const vg::OffscreenTarget& target : targets) {
       const auto* px = static_cast<const uint8_t*>(target.pixels());
       out.push_back(
-          {std::vector<uint8_t>(
-               px, px + static_cast<size_t>(extent.width) * extent.height * 4),
-           extent.width});
+          {std::vector<uint8_t>(px, px + static_cast<size_t>(extent.width) *
+                                             extent.height * texel),
+           extent.width, texel});
     }
     return out;
   }
@@ -292,6 +305,16 @@ TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithoutColor) {
 TEST_F(ImagePipelineDeviceTest, CreateRejectsAMultisampledLayout) {
   vg::RenderTargetLayout layout = color_layout(kUnorm);
   layout.samples = VK_SAMPLE_COUNT_4_BIT;
+  auto pipeline = pipelines::ImagePipeline::create(*device_, layout);
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+// The draw writes one attachment; more would be left undefined under it.
+TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithSeveralColors) {
+  vg::RenderTargetLayout layout = color_layout(kUnorm);
+  layout.color_formats[1] = kUnorm;
+  layout.color_count = 2;
   auto pipeline = pipelines::ImagePipeline::create(*device_, layout);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
@@ -356,8 +379,12 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
   const vkc::Buffer r16 = source_buffer(std::vector<uint8_t>(4 * 4 * 2, 0));
   const vkc::Buffer rgba = source_buffer(std::vector<uint8_t>(4 * 4 * 4, 0));
   const vkc::Buffer r8 = source_buffer(std::vector<uint8_t>(4 * 4, 0));
-  const vkc::Image wrong_format =
+  vkc::Image r8_image =
       source_image(VK_FORMAT_R8_UNORM, {4, 4}, std::vector<uint8_t>(16, 0));
+  const vkc::Image still_sampled =
+      source_image(VK_FORMAT_R8_UNORM, {4, 4}, std::vector<uint8_t>(16, 0));
+  vkc::Image r8_small =
+      source_image(VK_FORMAT_R8_UNORM, {2, 2}, std::vector<uint8_t>(4, 0));
 
   auto pool = vkc::CommandPool::create(device(), device_->queue_family());
   ASSERT_TRUE(pool.ok());
@@ -366,6 +393,9 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
   ASSERT_TRUE(
       cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
   const VkCommandBuffer raw = cmd.value().handle();
+  // Copyable, as a producer would leave them; still_sampled is not.
+  ready_for_copy(raw, r8_image);
+  ready_for_copy(raw, r8_small);
 
   auto rejected = [&](pipelines::ImageTexture& texture,
                       const pipelines::ImageUpdate& update, const char* what) {
@@ -379,7 +409,7 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
 
   pipelines::ImageUpdate both;
   both.planes[0].buffer = &r16;
-  both.planes[0].image = &wrong_format;
+  both.planes[0].image = &r8_image;
   rejected(grey, both, "an image and a buffer");
 
   pipelines::ImageUpdate extra;
@@ -401,9 +431,18 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
   short_rows.planes[0].row_length = 3;
   rejected(grey, short_rows, "rows shorter than the picture");
 
-  pipelines::ImageUpdate wrong_image;
-  wrong_image.planes[0].image = &wrong_format;  // R8, still SHADER_READ
-  rejected(grey, wrong_image, "an image of the wrong format and layout");
+  // Each image check alone: every other property of the image is right.
+  pipelines::ImageUpdate wrong_format;
+  wrong_format.planes[0].image = &r8_image;  // R8 for an R16 texture
+  rejected(grey, wrong_format, "an image of the wrong format");
+
+  pipelines::ImageUpdate wrong_layout;
+  wrong_layout.planes[0].image = &still_sampled;  // R8, but SHADER_READ
+  rejected(ramp, wrong_layout, "an image in a layout a copy cannot read");
+
+  pipelines::ImageUpdate too_small;
+  too_small.planes[0].image = &r8_small;  // 2 x 2 for a 4 x 4 texture
+  rejected(ramp, too_small, "an image smaller than the picture");
 
   pipelines::ImageUpdate linear_srgb;
   linear_srgb.planes[0].buffer = &rgba;
@@ -613,6 +652,56 @@ TEST_F(ImagePipelineDeviceTest, RampMapsItsBoundsAndShowsZeroAsEmpty) {
   expect_rgb(px.at(28, 4), 163, 10, 3, 2, "ramp_max: the last stop");
 }
 
+// An R32_SFLOAT map ramps its values as they are, and shows NaN -- a float
+// map's usual "no data" -- as black, not as an undefined stop.
+TEST_F(ImagePipelineDeviceTest, RampReadsFloatsAndShowsNanAsEmpty) {
+  const pipelines::ImagePipeline pipeline = make_pipeline();
+  pipelines::ImageTexture texture = make_texture(
+      pipeline, {4, 1}, pipelines::ImageMapping::Ramp, VK_FORMAT_R32_SFLOAT);
+  ASSERT_TRUE(texture.valid());
+  const std::vector<float> depth = {std::numeric_limits<float>::quiet_NaN(),
+                                    1.0f, 3.0f, 5.0f};
+  std::vector<uint8_t> bytes(depth.size() * sizeof(float));
+  std::memcpy(bytes.data(), depth.data(), bytes.size());
+  const vkc::Buffer buffer = source_buffer(bytes);
+  pipelines::ImageUpdate update;
+  update.planes[0].buffer = &buffer;
+  update.ramp_min = 1.0f;
+  update.ramp_max = 5.0f;
+  update.zero_is_empty = false;
+
+  const Pixels px = update_and_draw(pipeline, texture, update,
+                                    {draw_of(texture, {32, 8}, 8.0f)}, {32, 8});
+  ASSERT_EQ(px.bytes.size(), 32u * 8 * 4);
+  expect_rgb(px.at(4, 4), 0, 0, 0, 0, "NaN");
+  expect_rgb(px.at(12, 4), 48, 18, 59, 2, "ramp_min: the first stop");
+  expect_rgb(px.at(20, 4), 26, 224, 115, 2, "the middle: the third stop");
+  expect_rgb(px.at(28, 4), 163, 10, 3, 2, "ramp_max: the last stop");
+}
+
+// A float target holds linear light: it is given the samples as they are,
+// not sRGB-encoded as a _UNORM target is. sRGB 128 is linear 0.2159.
+TEST_F(ImagePipelineDeviceTest, AFloatTargetReceivesLinearLight) {
+  constexpr VkFormat kFloat = VK_FORMAT_R32G32B32A32_SFLOAT;
+  const pipelines::ImagePipeline pipeline = make_pipeline(kFloat);
+  ASSERT_TRUE(pipeline.valid());
+  pipelines::ImageTexture texture = make_texture(
+      pipeline, {2, 2}, pipelines::ImageMapping::Grey, VK_FORMAT_R8_UNORM);
+  const vkc::Buffer buffer = source_buffer(std::vector<uint8_t>(4, 128));
+  pipelines::ImageUpdate update;
+  update.planes[0].buffer = &buffer;
+
+  const Pixels px =
+      update_and_draw(pipeline, texture, update,
+                      {draw_of(texture, {2, 2}, 1.0f)}, {2, 2}, kFloat);
+  ASSERT_EQ(px.bytes.size(), 2u * 2 * 16);
+  float rgba[4] = {};
+  std::memcpy(rgba, px.at(1, 1), sizeof(rgba));
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NEAR(rgba[c], 0.2159f, 0.005f) << "channel " << c;
+  }
+}
+
 // NV12 from two image planes, as a decoder leaves them: BT.601 full-range
 // red, and limited-range mid grey.
 TEST_F(ImagePipelineDeviceTest, Nv12ConvertsWithItsMatrixAndRange) {
@@ -712,6 +801,86 @@ TEST_F(ImagePipelineDeviceTest, BufferPlanesHonorOffsetAndRowLength) {
   EXPECT_NEAR(px.at(1, 0)[0], 40, 1);
   EXPECT_NEAR(px.at(0, 1)[0], 60, 1);
   EXPECT_NEAR(px.at(1, 1)[0], 80, 1);
+}
+
+// An image plane larger than the picture, as a decoder's padded surface is:
+// only its top-left corner is copied.
+TEST_F(ImagePipelineDeviceTest,
+       ImagePlanesLargerThanThePictureGiveTheirCorner) {
+  const pipelines::ImagePipeline pipeline = make_pipeline();
+  pipelines::ImageTexture texture = make_texture(
+      pipeline, {2, 2}, pipelines::ImageMapping::Grey, VK_FORMAT_R8_UNORM);
+  vkc::Image padded = source_image(VK_FORMAT_R8_UNORM, {4, 3},
+                                   {20, 40, 9, 9,  //
+                                    60, 80, 9, 9,  //
+                                    9, 9, 9, 9});
+  pipelines::ImageUpdate update;
+  update.planes[0].image = &padded;
+  const Pixels px = update_and_draw(
+      pipeline, texture, update, {draw_of(texture, {2, 2}, 1.0f)}, {2, 2},
+      kUnorm, [&](VkCommandBuffer cmd) { ready_for_copy(cmd, padded); });
+  ASSERT_EQ(px.bytes.size(), 16u);
+  EXPECT_NEAR(px.at(0, 0)[0], 20, 1);
+  EXPECT_NEAR(px.at(1, 0)[0], 40, 1);
+  EXPECT_NEAR(px.at(0, 1)[0], 60, 1);
+  EXPECT_NEAR(px.at(1, 1)[0], 80, 1);
+}
+
+// A producer on the same queue -- a compute pass, a stage none of the update's
+// other barriers reach -- writes the plane just before the update, with no
+// barrier of its own, and writes the next picture just after: the update
+// waits for the first write, and the second waits for the copy.
+// Synchronization validation reports either hazard, and the picture is the
+// first write's.
+TEST_F(ImagePipelineDeviceTest, UpdatesOrderAProducerOnTheSameQueue) {
+  const std::vector<uint32_t> spv =
+      vg_test::load_spirv(vg_test::spirv_path("write_words.comp.spv"));
+  ASSERT_FALSE(spv.empty());
+  vkc::ComputeKernel write_words;
+  vkc::KernelSetBuilder builder(*device_);
+  const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                 sizeof(uint32_t)};
+  const vkc::Status added =
+      builder.add(write_words, "write_words",
+                  reinterpret_cast<const unsigned char*>(spv.data()),
+                  spv.size() * sizeof(uint32_t), 1, &push);
+  ASSERT_TRUE(added.ok()) << added.message();
+  auto kernel_pool = builder.build();
+  ASSERT_TRUE(kernel_pool.ok()) << kernel_pool.status().message();
+
+  const pipelines::ImagePipeline pipeline = make_pipeline();
+  pipelines::ImageTexture texture = make_texture(
+      pipeline, {4, 4}, pipelines::ImageMapping::Grey, VK_FORMAT_R8_UNORM);
+  const vkc::Buffer buffer = source_buffer(
+      std::vector<uint8_t>(16, 0),
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+  write_words.set.write_storage_buffer(0, buffer.handle(), 0, VK_WHOLE_SIZE);
+  pipelines::ImageUpdate update;
+  update.planes[0].buffer = &buffer;
+
+  // Four invocations, one per 32-bit word of the 4 x 4 R8 plane.
+  const auto produce = [&](VkCommandBuffer cmd, uint32_t value) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      write_words.pipeline.handle());
+    const VkDescriptorSet set = write_words.set.handle();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            write_words.pipeline.layout(), 0, 1, &set, 0,
+                            nullptr);
+    vkCmdPushConstants(cmd, write_words.pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(value), &value);
+    vkCmdDispatch(cmd, 4, 1, 1);
+  };
+  Pass pass;
+  pass.before = [&](VkCommandBuffer cmd) {
+    produce(cmd, 0x80808080u);
+    const vkc::Status s = pipeline.record_update(cmd, texture, update);
+    EXPECT_TRUE(s.ok()) << s.message();
+    produce(cmd, 0xFFFFFFFFu);
+  };
+  pass.draws = {draw_of(texture, {4, 4}, 1.0f)};
+  const std::vector<Pixels> px = render_passes(pipeline, {pass}, {4, 4});
+  ASSERT_EQ(px.size(), 1u);
+  expect_rgb(px[0].at(2, 2), 128, 128, 128, 1, "the first write");
 }
 
 // Draws are clipped to their viewport; a texture never updated, and a
