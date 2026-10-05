@@ -13,16 +13,17 @@ include(GoogleTest)
 # stricter line for its own leg (hard-fail when no device comes up); this is the
 # reporting half of the same policy.
 #
-# CMake >= 3.26's GoogleTest module sets the property itself, and passing it
-# again there emits a malformed duplicate -- so supply it only below that, which
-# the project's 3.21 floor still allows.
+# CMake's GoogleTest module sets that property itself on every test it
+# discovers, in every version since before the project's 3.21 floor (3.20's
+# GoogleTestAddTests.cmake already does), so pass nothing of our own. A second
+# SKIP_REGULAR_EXPRESSION is worse than redundant: before 3.26 the module hands
+# the properties through a macro, which re-parses them, so "\\[  SKIPPED \\]"
+# arrives as the character class "[  SKIPPED ]". That matches nearly any output,
+# and as the last value set it overrode the module's correct one: on Ubuntu
+# 22.04's CMake 3.22 every test, passing or failing, was reported "Skipped".
+# From 3.26 a second one is a malformed duplicate.
 function(vg_discover_tests target)
-  if(CMAKE_VERSION VERSION_LESS 3.26)
-    gtest_discover_tests(${target} ${ARGN} PROPERTIES SKIP_REGULAR_EXPRESSION
-                                                      "\\[  SKIPPED \\]")
-  else()
-    gtest_discover_tests(${target} ${ARGN})
-  endif()
+  gtest_discover_tests(${target} ${ARGN})
 endfunction()
 
 add_executable(vg_version_test version_test.cpp)
