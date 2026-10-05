@@ -20,6 +20,7 @@ target_sources(
   PRIVATE gpu_mesh.cpp
           hybrid_mesh_pipeline.cpp
           ibl.cpp
+          image_pipeline.cpp
           live_mesh.cpp
           owned_descriptor_set.cpp
           pbr_material.cpp
@@ -97,6 +98,22 @@ vkc_embed_shaders(
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
+
+# --- Embedded 2D image shaders ----------------------------------------------
+# ImagePipeline embeds its two stages: image_convert.{vert,frag} turns a source
+# picture into display color, image_draw.{vert,frag} draws it into the target
+# (image_pipeline.cpp #includes image_{convert,draw}_{vert,frag}.spv.hpp).
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/image_convert.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/image_convert.frag"
+  "${PROJECT_SOURCE_DIR}/shaders/image_draw.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/image_draw.frag")
 
 vg_target_warnings(gfx_pipelines)
 

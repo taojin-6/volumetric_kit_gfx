@@ -17,6 +17,10 @@ what has landed since then. Record amendments when a contract changes.
   native-Metal iOS backend is a *fallback only*, gated on an iPad validation spike.
 - **Compute stays CUDA (desktop) + Metal (Apple)** — NOT unified to Vulkan compute. The renderer
   meets compute at a thin external-memory interop layer (`vg::interop::{Cuda,Metal}ExternalMemory`).
+  *Amended 2026-10-05:* superseded for the family. Its compute is Vulkan compute on a `VkDevice`
+  shared with the renderer (the device-adopt entry below; volumetric_kit_core's vulkan tier), with
+  CUDA added per kernel where profiling shows a need and native Metal deferred. The interop layer
+  remains for those; `pipelines::ImagePipeline` takes a Vulkan producer's pictures by copy.
 - **A `VkDevice` may be created *or adopted*.** The device — volumetric_kit_core's since
   2026-10-04 (below) — accepts one the embedder already created: non-owning
   `Device::adopt(AdoptedDevice, DeviceRequirements)` alongside `Device::create`, verifying the
@@ -79,6 +83,12 @@ what has landed since then. Record amendments when a contract changes.
   draw + pixel readback under validation. A vertex-color/atlas mesh pipeline is a broadly-useful
   renderer feature, so the siblings stay independent — gfx gains a capability, not a dependency on
   recon.
+- **2026-10-05 — 2D images are converted, then mip-mapped, then drawn.**
+  `pipelines::ImagePipeline` copies a picture's planes into an `ImageTexture`, renders them to
+  display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
+  a color ramp), rebuilds its mip chain with halving blits that average in linear light, and draws
+  it trilinearly into rectangles of any target; `camera::ImageView2D` holds the pan-and-zoom
+  mapping. See the dated entry below.
 - **2026-08-03 — `pipelines::LiveMesh`, the indirect-draw half of the live zero-copy path.**
   A borrowed vertex/index/indirect buffer triple drawn with `vkCmdDrawIndexedIndirect`, so a mesh
   whose index count changes per frame draws with no CPU round trip. `HybridMeshDraw::geometry` is a
@@ -88,6 +98,55 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-05 — 2D images: convert, then mip, then draw
+
+**The technique.** `pipelines::ImagePipeline` draws 2D pictures -- camera
+frames, depth and error maps -- into rectangles of any render target, beside
+the mesh pipelines; it is the image-grid pipeline the roadmap planned. Per
+picture an `ImageTexture` holds copies of the source's planes and an
+`R8G8B8A8_SRGB` display image with its full mip chain. `record_update` copies
+the planes in, renders them to display color in level 0 (the sRGB decode,
+NV12's Y'CbCr matrix and chroma siting, or a color ramp), and rebuilds the
+chain with halving linear blits (`cmd_generate_mips`, which `UploadBatch` now
+shares); `submit` samples it trilinearly, magnifying nearest or linear per
+draw. `camera::ImageView2D` holds the pan-and-zoom mapping that draws, overlays
+and picking share, in framebuffer pixels.
+
+**Why convert before the chain.** A shrunken image must show the average of
+what the viewer would see at full size. Every mapping is nonlinear -- sRGB,
+the Y'CbCr matrix and its clamp, the ramp -- so averaging source values and
+converting the average would not give that. The display image is `_SRGB`, so
+the blits, which sample and write as shaders do, decode, average in linear
+light and re-encode: a one-texel black-and-white checkerboard shrinks to 188,
+not the 128 of averaging encoded bytes (`MipsAverageInLinearLight`). The
+level is chosen per pixel by the hardware from the drawn size, so window
+resizes, zoom and display scaling need nothing from the host, and the chain is
+rebuilt on every update, so a live stream's mips are never stale.
+
+**Why copy the planes in.** A producer's picture then need only be copyable: a
+decoder's imported surface may carry `TRANSFER_SRC` alone, and a buffer
+(NVDEC's pictures, recon's frame prep) cannot be sampled as an image at all.
+The copies give the texture descriptor sets made once, so a stream allocates
+nothing per frame; and since a texture's updates and draws run on one queue,
+each update's barriers order it after the earlier draws still reading it --
+one texture per stream, with no ring per frame in flight. (The per-slot
+ringing the device-adopt entry lists stays open for the mesh atlas.)
+
+**What it costs.** One device-to-device copy per update, small beside the
+decode. Memory: about 4/3 x 4 bytes per texel for the display image (44 MB for
+4K) plus the planes (12 MB for 4K NV12). An odd dimension's blit drops its
+last row or column's share at each level, as floor halving does everywhere in
+Vulkan. A producer's plane must have finished, and be readable from the
+renderer's queue family (`CONCURRENT`, or written on it), before the update is
+submitted -- `ImagePlane` states it. Synchronization validation checks the
+pipeline's barriers in its tests, catching a missing read-after-write or
+write-after-write dependency, but it does not flag a missing write-after-read
+wait before a transition from `UNDEFINED`, so those stages rest on review.
+
+**Not yet.** A ui-tier helper that shows a texture in an ImGui panel
+(`ImGui_ImplVulkan_AddTexture` over `display()`); overlays beyond ImGui's draw
+lists; I420 and other planar layouts; blending, as images draw opaque.
 
 ## 2026-10-05 — gfx writes the core's types and macros under the core's names
 

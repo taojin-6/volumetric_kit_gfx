@@ -32,4 +32,25 @@ inline void set_full_viewport_scissor(VkCommandBuffer cmd, VkExtent2D extent) {
   vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
+/// @brief Whether a color-attachment format encodes sRGB on write.
+///
+/// Only the 8-bit sRGB formats can be color attachments; the compressed ones
+/// cannot, so they are not listed.
+/// @param format  A color-attachment format.
+/// @return `true` for an `_SRGB` attachment format.
+inline bool is_srgb_attachment(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_R8_SRGB:
+    case VK_FORMAT_R8G8_SRGB:
+    case VK_FORMAT_R8G8B8_SRGB:
+    case VK_FORMAT_B8G8R8_SRGB:
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+    case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+      return true;
+    default:
+      return false;
+  }
+}
+
 }  // namespace volumetric_kit::gfx::pipelines

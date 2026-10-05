@@ -102,3 +102,13 @@ vkc_compile_shaders(
 target_compile_definitions(
   example_03_model
   PRIVATE VG_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
+
+# 04_image: a 2D image (a zone plate) drawn through pipelines::ImagePipeline and
+# panned / zoomed with camera::ImageView2D; the picture is re-converted from a
+# device buffer every frame, as a live stream would be. Its shaders are embedded
+# in gfx_pipelines; it records no vkCmd* of its own.
+add_executable(example_04_image 04_image/main.cpp)
+target_link_libraries(
+  example_04_image PRIVATE volumetric_kit::gfx_app volumetric_kit::gfx_camera
+                           volumetric_kit::gfx_pipelines glfw)
+vg_target_warnings(example_04_image)
