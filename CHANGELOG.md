@@ -22,6 +22,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - GLSL→SPIR-V build step: `vg_compile_shaders()` (in `cmake/vg_shaders.cmake`) compiles
   shaders via glslc/glslangValidator; the first shaders are `shaders/triangle.{vert,frag}`.
 
+- `example_03_model --bench N` times N headless frames -- GPU time of the frame
+  and each pass, and wall time -- over a `--grid K` field of cubes, each its own
+  mesh and material. `tools/bench_ab.sh <base>` compares a base commit against
+  the tree, alternating the two builds, and CI posts that comparison for a pull
+  request on its Release Ubuntu 24.04 and macOS legs.
+
 ### Changed
 
 - `core`: **the instance and device are volumetric_kit_core's.** `vg::Instance`,

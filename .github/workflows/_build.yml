@@ -267,6 +267,23 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
 
+      # Frame times of the pull request's base against its head, in the job
+      # summary: the core's DECISIONS.md asks the renderer to re-measure when
+      # memory placement changes, and a discrete GPU is where placement shows.
+      # Release only, on one Ubuntu leg -- the three share one GPU -- and the
+      # Mac. The two builds alternate run by run, so the other legs' load falls
+      # on both. It informs review and never fails the build.
+      - name: Frame-time benchmark (base against head)
+        if: >-
+          steps.detect.outputs.present == 'true'
+          && matrix.build_type == 'Release'
+          && github.event_name == 'pull_request'
+          && (inputs.os == 'ubuntu-24.04' || runner.os == 'macOS')
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/bench_ab.sh "$BASE_SHA" build
+
       # Nothing above compiles the *installed* tree, so an install-list mistake
       # -- shipping a header whose own #include was excluded -- reaches
       # consumers with CI green. Two cheap checks close that:

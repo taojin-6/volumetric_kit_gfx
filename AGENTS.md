@@ -151,6 +151,9 @@ git -C "$gfx_root" diff --check
   no build is needed. Hooks can be scoped with `pre-commit run --files`.
 - GPU tests can skip when no Vulkan device is present. Report actual GPU
   coverage separately from host-only success. Sanitizer CI requires lavapipe.
+- A change that moves memory or GPU work reports frame times before and after:
+  `tools/bench_ab.sh <base>` times `example_03_model --bench` on both,
+  alternating, and CI posts the same comparison for a pull request.
 - `VG_WITH_GLFW` gates examples, not library windowing. `VG_WITH_CUDA` is
   reserved until its interop implementation is wired; verify current CMake.
 
