@@ -7,12 +7,12 @@
 /// @brief A headless render target: a device-local color image (with an
 ///        optional depth image) and a host-visible readback buffer.
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
 class Allocator;
@@ -57,7 +57,7 @@ struct OffscreenTargetDesc {
 ///          of device teardown.
 ///
 /// @code
-/// Result<OffscreenTarget> rt = OffscreenTarget::create(
+/// core::Result<OffscreenTarget> rt = OffscreenTarget::create(
 ///     allocator, {.extent = {1280, 720}, .color_format = kFormat});
 /// if (!rt) return rt.status();
 /// rt.value().prepare(cmd);              // attachments -> attachment layouts
@@ -87,8 +87,8 @@ class VG_CORE_API OffscreenTarget {
   ///           @ref Status::Code::InvalidArgument, and a combined depth/stencil
   ///           one @ref Status::Code::Unsupported (depth-only for now);
   ///         - a failed image/buffer allocation propagates its @ref Status.
-  static Result<OffscreenTarget> create(core::Allocator& allocator,
-                                        const OffscreenTargetDesc& desc);
+  static core::Result<OffscreenTarget> create(core::Allocator& allocator,
+                                              const OffscreenTargetDesc& desc);
 
   ~OffscreenTarget() = default;
   OffscreenTarget(OffscreenTarget&&) noexcept = default;

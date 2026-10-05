@@ -10,9 +10,10 @@
 #include <vector>
 
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 
 namespace volumetric_kit::gfx {
@@ -116,14 +117,14 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
 // @p src, written once front-to-back (write-combined where the device has it)
 // -- the single recipe both add() (pixels) and add_buffer() (bytes) stage their
 // source through.
-Result<core::Buffer> make_staging(core::Allocator& allocator, const void* src,
-                                  VkDeviceSize size) {
+core::Result<core::Buffer> make_staging(core::Allocator& allocator,
+                                        const void* src, VkDeviceSize size) {
   core::BufferDesc desc;
   desc.size = size;
   desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
   desc.memory = core::MemoryUsage::Staging;
   desc.host_access = core::HostAccess::SequentialWrite;
-  VG_ASSIGN(core::Buffer staging, allocator.create_buffer(desc));
+  VKC_ASSIGN(core::Buffer staging, allocator.create_buffer(desc));
   std::memcpy(staging.mapped(), src, size);
   return staging;
 }
@@ -136,18 +137,19 @@ struct UploadPlan {
 
 // Validate `desc` against the device and fill `plan` -- everything that must
 // hold before any staging buffer or image is created.
-Status plan_upload(const Device& device, const ImageUploadDesc& desc,
-                   UploadPlan* plan) {
+core::Status plan_upload(const core::Device& device,
+                         const ImageUploadDesc& desc, UploadPlan* plan) {
   if (desc.extent.width == 0 || desc.extent.height == 0) {
-    return Status::invalid_argument("upload_texture: extent must be non-zero");
+    return core::Status::invalid_argument(
+        "upload_texture: extent must be non-zero");
   }
   if (desc.array_layers == 0 || desc.mip_levels == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: array_layers and mip_levels must be non-zero");
   }
   if (desc.cube &&
       (desc.array_layers != 6 || desc.extent.width != desc.extent.height)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: a cube upload needs array_layers == 6 and a square "
         "extent");
   }
@@ -155,7 +157,7 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   // and on top of caller-supplied base mips; today generation is single-layer
   // and single-source-mip only.
   if (desc.generate_mips && (desc.array_layers > 1 || desc.mip_levels > 1)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: generate_mips requires array_layers == 1 and "
         "mip_levels == 1");
   }
@@ -165,42 +167,43 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   if (desc.extent.width > max_dim || desc.extent.height > max_dim) {
     // Bounds the image well below INT32_MAX too, so the int32 mip-extent math
     // in the blit path never sees a negative dimension.
-    return Status::unsupported(
+    return core::Status::unsupported(
         desc.cube ? "upload_texture: extent exceeds the device's "
                     "maxImageDimensionCube limit"
                   : "upload_texture: extent exceeds the device's "
                     "maxImageDimension2D limit");
   }
   if (desc.array_layers > limits.maxImageArrayLayers) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "upload_texture: array_layers exceeds the device's "
         "maxImageArrayLayers limit");
   }
   if (desc.format == VK_FORMAT_UNDEFINED) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: format must not be VK_FORMAT_UNDEFINED");
   }
   if (desc.pixels == nullptr) {
-    return Status::invalid_argument("upload_texture: pixels must not be null");
+    return core::Status::invalid_argument(
+        "upload_texture: pixels must not be null");
   }
   const uint32_t texel = core::texel_bytes(desc.format);
   if (texel == 0) {
     // texel_bytes returns 0 for formats a flat per-texel copy cannot size:
     // compressed, multi-planar, subsampled, or depth/stencil -- and those of
     // extensions other than KHR, which the core's table does not cover.
-    return Status::unsupported(
+    return core::Status::unsupported(
         "upload_texture: format must be an uncompressed, single-plane color "
         "format");
   }
   if (core::format_needs_ycbcr_conversion(desc.format)) {
     // The RGBA 4PACK16 formats are sized, but the sampled view the upload
     // makes would need a sampler Y'CbCr conversion (see create_image).
-    return Status::unsupported(
+    return core::Status::unsupported(
         "upload_texture: format needs a sampler Y'CbCr conversion to be "
         "sampled");
   }
   if (desc.mip_levels > mip_levels_for(desc.extent)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: mip_levels exceeds the full mip chain for extent");
   }
   // The packing contract (see ImageUploadDesc): tightly packed subresources,
@@ -212,7 +215,7 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   }
   const VkDeviceSize expected = texels_per_layer * texel * desc.array_layers;
   if (desc.size != expected) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_texture: size must equal the tightly packed mip-major, "
         "layer-minor pixel total (see ImageUploadDesc)");
   }
@@ -227,7 +230,7 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
   // so this SAMPLED gate implies them. Re-check here if that gate is relaxed.
   if (!device.caps().format_supports(desc.format, VK_IMAGE_TILING_OPTIMAL,
                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "upload_texture: format does not support sampling (SAMPLED_IMAGE) with "
         "optimal tiling");
   }
@@ -245,12 +248,12 @@ Status plan_upload(const Device& device, const ImageUploadDesc& desc,
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
     if (!device.caps().format_supports(desc.format, VK_IMAGE_TILING_OPTIMAL,
                                        kBlitNeeded)) {
-      return Status::unsupported(
+      return core::Status::unsupported(
           "upload_texture: generate_mips needs a format that supports linear "
           "blit (BLIT_SRC | BLIT_DST | SAMPLED_IMAGE_FILTER_LINEAR)");
     }
   }
-  return Status{};
+  return core::Status{};
 }
 
 // Blit mip 0 down a freshly copied single-layer chain, moving each finished
@@ -367,13 +370,13 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
 
 }  // namespace
 
-Result<UploadBatch> UploadBatch::begin(const Device& device,
-                                       core::Allocator& allocator) {
+core::Result<UploadBatch> UploadBatch::begin(const core::Device& device,
+                                             core::Allocator& allocator) {
   // A device made for another library may lack what the batch's barriers and
   // the renderer's later reads of its resources need -- a graphics queue
   // above all. Nothing is allocated until an add, nor recorded until finish().
-  VG_TRY(device.check_enabled(device_requirements())
-             .with_context("UploadBatch::begin"));
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("UploadBatch::begin"));
 
   UploadBatch batch;
   batch.device_ = &device;
@@ -414,17 +417,17 @@ UploadBatch& UploadBatch::operator=(UploadBatch&& other) noexcept {
   return *this;
 }
 
-Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
+core::Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
   if (!valid()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "UploadBatch::add on an empty batch (begin one first; a batch is "
         "one-shot after finish)");
   }
   UploadPlan plan;
-  VG_TRY(plan_upload(*device_, desc, &plan));
+  VKC_TRY(plan_upload(*device_, desc, &plan));
 
-  VG_ASSIGN(core::Buffer staging,
-            make_staging(*allocator_, desc.pixels, desc.size));
+  VKC_ASSIGN(core::Buffer staging,
+             make_staging(*allocator_, desc.pixels, desc.size));
 
   // Destination: device-local sampled image. SAMPLED to read it in shaders,
   // TRANSFER_DST for the staging copy, and TRANSFER_SRC so the mip-chain blits
@@ -443,7 +446,7 @@ Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   // It records UNDEFINED, the layout its contents are in until finish()
   // submits the transitions; the caller records SHADER_READ_ONLY_OPTIMAL then.
-  VG_ASSIGN(core::Image texture, allocator_->create_image(image_desc));
+  VKC_ASSIGN(core::Image texture, allocator_->create_image(image_desc));
 
   // Everything that can fail has, so a failed add above leaves the batch
   // unchanged and usable. The handles and the desc's shape are copied: the
@@ -456,25 +459,28 @@ Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
   return texture;
 }
 
-Result<core::Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
+core::Result<core::Buffer> UploadBatch::add_buffer(
+    const BufferUploadDesc& desc) {
   if (!valid()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "UploadBatch::add_buffer on an empty batch (begin one first; a batch "
         "is one-shot after finish)");
   }
   if (desc.data == nullptr) {
-    return Status::invalid_argument("upload_buffer: data must not be null");
+    return core::Status::invalid_argument(
+        "upload_buffer: data must not be null");
   }
   if (desc.size == 0) {
-    return Status::invalid_argument("upload_buffer: size must be non-zero");
+    return core::Status::invalid_argument(
+        "upload_buffer: size must be non-zero");
   }
   if (desc.usage == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "upload_buffer: usage must name at least one buffer usage");
   }
 
-  VG_ASSIGN(core::Buffer staging,
-            make_staging(*allocator_, desc.data, desc.size));
+  VKC_ASSIGN(core::Buffer staging,
+             make_staging(*allocator_, desc.data, desc.size));
 
   // Destination: device-only memory, TRANSFER_DST for the staging copy plus
   // the caller's usage.
@@ -482,7 +488,7 @@ Result<core::Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
   dst_desc.size = desc.size;
   dst_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | desc.usage;
   dst_desc.memory = core::MemoryUsage::DeviceOnly;
-  VG_ASSIGN(core::Buffer buffer, allocator_->create_buffer(dst_desc));
+  VKC_ASSIGN(core::Buffer buffer, allocator_->create_buffer(dst_desc));
 
   // Everything that can fail has, so a failed add above leaves the batch
   // unchanged and usable.
@@ -516,9 +522,10 @@ Result<core::Buffer> UploadBatch::add_buffer(const BufferUploadDesc& desc) {
 
 void UploadBatch::poison() noexcept { poisoned_ = true; }
 
-Status UploadBatch::finish() {
+core::Status UploadBatch::finish() {
   if (!valid()) {
-    return Status::invalid_argument("UploadBatch::finish on an empty batch");
+    return core::Status::invalid_argument(
+        "UploadBatch::finish on an empty batch");
   }
   if (poisoned_) {
     // A caller dropped a resource an earlier add queued a copy into (see
@@ -526,7 +533,7 @@ Status UploadBatch::finish() {
     // work instead of submitting it -- moving into a temporary frees the
     // commands + staging on return, and never submits.
     UploadBatch discard(std::move(*this));
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "UploadBatch::finish on a poisoned batch: an added resource was "
         "dropped "
         "before finish, so a recorded copy would reference freed memory; begin "
@@ -534,7 +541,7 @@ Status UploadBatch::finish() {
   }
   // Move the owned state into locals first: whatever happens below, the batch
   // ends empty (one-shot).
-  const Device* device = device_;
+  const core::Device* device = device_;
   std::vector<std::function<void(VkCommandBuffer)>> records =
       std::move(records_);
   auto staging =
@@ -558,27 +565,27 @@ Status UploadBatch::finish() {
       std::move(staging));
 }
 
-Result<core::Image> upload_texture(const Device& device,
-                                   core::Allocator& allocator,
-                                   const ImageUploadDesc& desc) {
+core::Result<core::Image> upload_texture(const core::Device& device,
+                                         core::Allocator& allocator,
+                                         const ImageUploadDesc& desc) {
   // The one-texture batch: exactly the shared validate/record path, one
   // submit, one fence wait. A failed add leaves the batch to its destructor,
   // which discards the never-submitted command buffer.
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(core::Image texture, batch.add(desc));
-  VG_TRY(batch.finish());
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(core::Image texture, batch.add(desc));
+  VKC_TRY(batch.finish());
   texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return texture;
 }
 
-Result<core::Buffer> upload_buffer(const Device& device,
-                                   core::Allocator& allocator,
-                                   const BufferUploadDesc& desc) {
+core::Result<core::Buffer> upload_buffer(const core::Device& device,
+                                         core::Allocator& allocator,
+                                         const BufferUploadDesc& desc) {
   // The one-buffer batch: shared validate/record path, one submit, one fence
   // wait (see upload_texture).
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-  VG_ASSIGN(core::Buffer buffer, batch.add_buffer(desc));
-  VG_TRY(batch.finish());
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(core::Buffer buffer, batch.add_buffer(desc));
+  VKC_TRY(batch.finish());
   return buffer;
 }
 

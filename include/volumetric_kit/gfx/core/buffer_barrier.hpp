@@ -7,8 +7,8 @@
 /// @brief Record a buffer memory barrier — the buffer counterpart of
 ///        @ref cmd_image_barrier.
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -50,7 +50,7 @@ struct BufferBarrierDesc {
 /// @brief Record the buffer memory barrier described by @p desc.
 /// @param cmd   A command buffer in the recording state.
 /// @param desc  The buffer, execution/memory scopes, and byte range to order.
-/// @pre `desc.buffer != VK_NULL_HANDLE` (checked with `VG_CHECK`), and the
+/// @pre `desc.buffer != VK_NULL_HANDLE` (checked with `VKC_CHECK`), and the
 ///      range lies within the buffer.
 VG_CORE_API void cmd_buffer_barrier(VkCommandBuffer cmd,
                                     const BufferBarrierDesc& desc);

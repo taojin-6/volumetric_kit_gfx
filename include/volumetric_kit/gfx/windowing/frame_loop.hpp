@@ -12,12 +12,12 @@
 #include <optional>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
 namespace volumetric_kit::core {
@@ -26,9 +26,6 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 class Profiler;
 
 namespace windowing {
@@ -87,7 +84,7 @@ struct Frame {
 ///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   f.target->end(f.cmd);
-///   Status end = loop.value().end_frame(f);
+///   core::Status end = loop.value().end_frame(f);
 ///   if (!end.ok() && !swapchain_stale(end)) return fail(end);
 /// }
 /// @endcode
@@ -106,8 +103,9 @@ class VG_WINDOWING_API FrameLoop {
   ///         a zero count or empty swapchain; @ref Status::Code::Unsupported
   ///         for a @p device without the renderer's requirements; otherwise a
   ///         propagated failure).
-  static Result<FrameLoop> create(const Device& device, Swapchain& swapchain,
-                                  uint32_t frames_in_flight = 2);
+  static core::Result<FrameLoop> create(const core::Device& device,
+                                        Swapchain& swapchain,
+                                        uint32_t frames_in_flight = 2);
 
   ~FrameLoop();
   FrameLoop(FrameLoop&& other) noexcept;
@@ -128,7 +126,7 @@ class VG_WINDOWING_API FrameLoop {
   ///         events and call again; a non-OK @ref Status only for hard failures
   ///         (device loss, a failed rebuild or recreate hook) — do not retry
   ///         those.
-  Result<std::optional<Frame>> begin_frame(VkExtent2D current_extent);
+  core::Result<std::optional<Frame>> begin_frame(VkExtent2D current_extent);
 
   /// @brief Register a hook run after every internal swapchain rebuild by the
   ///        extent-taking @ref begin_frame, before the next acquire — rebuild
@@ -137,7 +135,7 @@ class VG_WINDOWING_API FrameLoop {
   ///                  aborts the frame and surfaces from @ref begin_frame.
   ///                  Whatever it captures must outlive the loop. Pass an empty
   ///                  function to detach.
-  void set_recreate_callback(std::function<Status(VkExtent2D)> callback);
+  void set_recreate_callback(std::function<core::Status(VkExtent2D)> callback);
 
   /// @brief Begin the next frame (raw protocol): wait this slot's fence,
   ///        acquire an image, begin its command buffer, and transition the
@@ -155,7 +153,7 @@ class VG_WINDOWING_API FrameLoop {
   ///       restored (a brief blocking submit) before the error returns.
   /// @note Adapts automatically when @ref Swapchain::recreate changes the image
   ///       count: the per-image sync objects are rebuilt to match on entry.
-  Result<Frame> begin_frame();
+  core::Result<Frame> begin_frame();
 
   /// @brief End the frame from @ref begin_frame: transition the image to
   ///        `PRESENT_SRC`, end + submit its command buffer, present it, and
@@ -176,7 +174,7 @@ class VG_WINDOWING_API FrameLoop {
   ///       failures will exhaust the acquirable images. A failed present
   ///       already submitted the frame: the slot advances normally and only the
   ///       presentation is reported.
-  Status end_frame(const Frame& frame);
+  core::Status end_frame(const Frame& frame);
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
   ///        `nullptr`.
@@ -202,14 +200,14 @@ class VG_WINDOWING_API FrameLoop {
   // when the swapchain handle changed — i.e. after a Swapchain::recreate
   // produced a fresh chain (see last_swapchain_). A no-op (one handle
   // comparison) on the common path.
-  Status ensure_image_sync();
+  core::Status ensure_image_sync();
 
   // Restore a slot whose acquire signal was never consumed (a failure between
   // acquire and submit): drain image_available_[slot] with an empty submit and
   // re-signal the slot fence. If the drain cannot even be issued (the queue is
   // failing), the fence is instead replaced with a fresh signaled one so the
   // next begin_frame never blocks on it. Blocking; error-path only.
-  Status recover_slot(uint32_t slot);
+  core::Status recover_slot(uint32_t slot);
 
   // Drain the renderer's own queues (@ref Device::wait_idle: graphics, and
   // present when distinct) so teardown cannot free command buffers / semaphores
@@ -220,8 +218,8 @@ class VG_WINDOWING_API FrameLoop {
   // are unreportable from the destructor and moot on a lost device.
   void drain() noexcept;
 
-  const Device* device_ = nullptr;  // borrowed; outlives this
-  Swapchain* swapchain_ = nullptr;  // borrowed; outlives this
+  const core::Device* device_ = nullptr;  // borrowed; outlives this
+  Swapchain* swapchain_ = nullptr;        // borrowed; outlives this
   // Declared before the buffers it owns so they free back before it is
   // destroyed.
   core::CommandPool pool_;
@@ -243,7 +241,7 @@ class VG_WINDOWING_API FrameLoop {
   // and whether a stale acquire/present or a resize armed a rebuild. Resize is
   // detected against Swapchain::requested_extent() (the pre-clamp requested
   // size), so a request the surface pins does not rebuild every tick.
-  std::function<Status(VkExtent2D)> recreate_callback_;
+  std::function<core::Status(VkExtent2D)> recreate_callback_;
   bool needs_recreate_ = false;
 };
 

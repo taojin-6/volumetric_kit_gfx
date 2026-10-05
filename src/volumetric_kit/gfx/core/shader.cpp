@@ -76,18 +76,20 @@ void collect(const spirv_cross::Compiler& comp,
 
 }  // namespace
 
-Result<ShaderModule> ShaderModule::create(VkDevice device, const uint32_t* code,
-                                          size_t size_bytes) {
+core::Result<ShaderModule> ShaderModule::create(VkDevice device,
+                                                const uint32_t* code,
+                                                size_t size_bytes) {
   // Validate before touching Vulkan, so misuse is caught even without a
   // device: SPIR-V is a stream of 32-bit words, so the byte size must be a
   // non-zero multiple of 4.
   if (code == nullptr || size_bytes == 0 || size_bytes % 4 != 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "ShaderModule::create: code must be non-null with a non-zero, "
         "4-byte-aligned size");
   }
   if (device == VK_NULL_HANDLE) {
-    return Status::invalid_argument("ShaderModule::create: device is null");
+    return core::Status::invalid_argument(
+        "ShaderModule::create: device is null");
   }
 
   // Reflect the descriptor interface before creating the device handle: it
@@ -122,14 +124,14 @@ Result<ShaderModule> ShaderModule::create(VkDevice device, const uint32_t* code,
           static_cast<uint32_t>(comp.get_declared_struct_size(t));
     }
   } catch (const std::exception& e) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         std::string("ShaderModule::create: SPIR-V reflection failed: ") +
         e.what());
   }
 
   ShaderModule shader;
-  VG_ASSIGN(shader.module_,
-            core::ShaderModule::create(device, code, size_bytes));
+  VKC_ASSIGN(shader.module_,
+             core::ShaderModule::create(device, code, size_bytes));
   shader.resources_ = std::move(resources);
   shader.push_constant_size_ = push_constant_size;
   shader.stage_ = stage;

@@ -11,10 +11,10 @@
 #include <memory>
 #include <utility>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::core {
 class Allocator;
@@ -34,8 +34,8 @@ namespace volumetric_kit::gfx::pipelines {
 ///                   bounds of `vkCmdUpdateBuffer`.
 /// @return The buffer, or @ref Status::Code::InvalidArgument for a size
 ///         outside those bounds, or the allocator's failure.
-Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
-                                               VkDeviceSize size);
+core::Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
+                                                     VkDeviceSize size);
 
 /// @brief Owns the one-set descriptor resources the PBR set-0 / set-1 bindings
 ///        share: a one-set `core::DescriptorPool`, the `core::DescriptorSet` it
@@ -55,9 +55,9 @@ Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
 /// accessors stay consistent with @ref valid.
 ///
 /// @code
-/// VG_ASSIGN(OwnedDescriptorSet owned,
+/// VKC_ASSIGN(OwnedDescriptorSet owned,
 ///           OwnedDescriptorSet::create(device, layout, 3));
-/// VG_ASSIGN(core::Buffer ubo,
+/// VKC_ASSIGN(core::Buffer ubo,
 ///           make_frame_uniform_buffer(allocator, sizeof(Block)));
 /// owned.bind_uniform(std::make_shared<core::Buffer>(std::move(ubo)), 0,
 ///                    sizeof(Block));
@@ -80,9 +80,9 @@ class OwnedDescriptorSet {
   ///      validates its own views/sampler first).
   /// @return The bundle on success, or a non-OK @ref Status from pool / set
   ///         allocation.
-  static Result<OwnedDescriptorSet> create(VkDevice device,
-                                           VkDescriptorSetLayout layout,
-                                           uint32_t sampler_count);
+  static core::Result<OwnedDescriptorSet> create(VkDevice device,
+                                                 VkDescriptorSetLayout layout,
+                                                 uint32_t sampler_count);
 
   ~OwnedDescriptorSet() = default;
 

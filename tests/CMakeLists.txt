@@ -35,7 +35,6 @@ vg_discover_tests(vg_version_test)
 # skips when no device).
 add_executable(
   vg_core_test
-  result_test.cpp
   frame_metrics_test.cpp
   device_test.cpp
   debug_label_test.cpp
@@ -85,15 +84,6 @@ target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
                                                 GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
-
-# gfx's headers beside the core's vulkan tier, whose vk_result.hpp the test
-# includes first -- the order in which their names once clashed. gfx_core brings
-# the tier.
-add_executable(vg_core_vulkan_tier_test core_vulkan_tier_test.cpp)
-target_link_libraries(vg_core_vulkan_tier_test
-                      PRIVATE volumetric_kit::gfx_windowing GTest::gtest_main)
-vg_target_warnings(vg_core_vulkan_tier_test)
-vg_discover_tests(vg_core_vulkan_tier_test)
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and

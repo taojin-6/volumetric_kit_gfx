@@ -92,7 +92,7 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   ASSERT_TRUE(recorded.ok()) << recorded.message();
 }
 
-// new_layout has no valid default: cmd_image_barrier VG_CHECKs it rather than
+// new_layout has no valid default: cmd_image_barrier VKC_CHECKs it rather than
 // silently recording an UNDEFINED -> UNDEFINED no-op. The check fires before
 // any Vulkan call, so no device is needed; the "DeathTest" suffix runs it
 // isolated.
@@ -101,7 +101,7 @@ TEST(ImageBarrierDeathTest, RejectsUnsetNewLayout) {
   vg::ImageBarrierDesc desc;
   EXPECT_DEATH(
       {
-        vg::set_log_handler({});  // route the abort message to stderr
+        vkc::set_log_handler({});  // route the abort message to stderr
         vg::cmd_image_barrier(VK_NULL_HANDLE, desc);
       },
       "new_layout must be set");

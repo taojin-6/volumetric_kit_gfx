@@ -39,7 +39,7 @@ TEST_F(SamplerTest, CreatesWithCustomDesc) {
 
 TEST_F(SamplerTest, CreateRejectsNullDevice) {
   EXPECT_EQ(vg::Sampler::create(VK_NULL_HANDLE).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(SamplerTest, CreateRejectsMaxLodBelowMinLod) {
@@ -47,7 +47,7 @@ TEST_F(SamplerTest, CreateRejectsMaxLodBelowMinLod) {
   desc.min_lod = 4.0f;
   desc.max_lod = 1.0f;  // empty LOD range — rejected up front
   EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(SamplerTest, CreateRejectsNanLod) {
@@ -56,7 +56,7 @@ TEST_F(SamplerTest, CreateRejectsNanLod) {
   // max_lod < min_lod test; the explicit isnan check must catch it.
   desc.min_lod = std::numeric_limits<float>::quiet_NaN();
   EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(SamplerTest, MoveLeavesSourceEmpty) {

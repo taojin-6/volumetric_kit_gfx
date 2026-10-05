@@ -7,8 +7,8 @@
 /// @brief RAII owner of a `VkSurfaceKHR` — the window-system handle a
 ///        @ref Swapchain presents to.
 
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
 namespace volumetric_kit::gfx::windowing {
@@ -52,7 +52,7 @@ class VG_WINDOWING_API Surface {
   /// @return The surface on success; @ref Status::Code::Unsupported when the
   ///         extension is unavailable (e.g. MoltenVK), or a backend
   ///         @ref Status carrying the `VkResult`.
-  static Result<Surface> headless(VkInstance instance);
+  static core::Result<Surface> headless(VkInstance instance);
 
   /// @return The owned `VkSurfaceKHR` (`VK_NULL_HANDLE` when empty).
   VkSurfaceKHR handle() const noexcept { return surface_; }

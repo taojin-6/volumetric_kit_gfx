@@ -20,8 +20,10 @@
 #include <vector>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
@@ -76,11 +78,11 @@ class WindowingTest : public ::testing::Test {
     if (!instance_has_headless_surface()) {
       GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
     }
-    vg::InstanceConfig icfg;
+    vkc::InstanceConfig icfg;
     icfg.enable_validation = true;
     icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-    auto instance = vg::Instance::create(icfg);
+    auto instance = vkc::Instance::create(icfg);
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -96,7 +98,7 @@ class WindowingTest : public ::testing::Test {
     }
     surface_ = std::move(surface).value();
 
-    vg::DeviceRequirements reqs = vg::device_requirements();
+    vkc::DeviceRequirements reqs = vg::device_requirements();
     reqs.needs_present = true;
     auto physical = instance_->select_physical_device(reqs, surface_.handle());
     if (!physical.ok()) {
@@ -104,8 +106,8 @@ class WindowingTest : public ::testing::Test {
                    << physical.status().message();
     }
 
-    auto device = vg::Device::create(*instance_, physical.value(), reqs,
-                                     surface_.handle());
+    auto device = vkc::Device::create(*instance_, physical.value(), reqs,
+                                      surface_.handle());
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
 
@@ -166,7 +168,7 @@ class WindowingTest : public ::testing::Test {
     auto sc = win::Swapchain::create(*device_, surface, cfg);
     EXPECT_TRUE(sc.ok()) << sc.status().message();
     // Return empty on failure rather than aborting via Result::value()
-    // (VG_CHECK): callers assert on validity, so the test fails cleanly.
+    // (VKC_CHECK): callers assert on validity, so the test fails cleanly.
     return sc.ok() ? std::move(sc).value() : win::Swapchain{};
   }
 
@@ -186,7 +188,7 @@ class WindowingTest : public ::testing::Test {
 
   // Drive `count` clear-only frames through the loop. A fixed headless extent
   // never goes out of date, so any non-OK status is a real failure.
-  vg::Status run_frames(win::FrameLoop& loop, int count) {
+  vkc::Status run_frames(win::FrameLoop& loop, int count) {
     for (int i = 0; i < count; ++i) {
       auto frame = loop.begin_frame();
       if (!frame.ok()) {
@@ -197,7 +199,7 @@ class WindowingTest : public ::testing::Test {
       begin.clear_color.float32[3] = 1.0f;
       frame.value().target->begin(frame.value().cmd, begin);
       frame.value().target->end(frame.value().cmd);
-      vg::Status end = loop.end_frame(frame.value());
+      vkc::Status end = loop.end_frame(frame.value());
       if (!end.ok()) {
         return end;
       }
@@ -205,9 +207,9 @@ class WindowingTest : public ::testing::Test {
     return {};
   }
 
-  std::optional<vg::Instance> instance_;
+  std::optional<vkc::Instance> instance_;
   win::Surface surface_;
-  std::optional<vg::Device> device_;
+  std::optional<vkc::Device> device_;
   // Declared after device_ so reverse member-destruction tears the allocator
   // down before the device it wraps.
   std::optional<vkc::Allocator> allocator_;
@@ -247,7 +249,7 @@ TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
   ASSERT_TRUE(loop.ok()) << loop.status().message();
   EXPECT_EQ(loop.value().frames_in_flight(), 2u);
 
-  const vg::Status status = run_frames(loop.value(), /*count=*/8);
+  const vkc::Status status = run_frames(loop.value(), /*count=*/8);
   EXPECT_TRUE(status.ok()) << status.message();
 
   vkDeviceWaitIdle(device_->handle());
@@ -374,9 +376,9 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
   ASSERT_TRUE(sc.valid());
   const VkSwapchainKHR before = sc.handle();
 
-  const vg::Status zero = sc.recreate({0, 0});
+  const vkc::Status zero = sc.recreate({0, 0});
   EXPECT_FALSE(zero.ok());
-  EXPECT_EQ(zero.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(zero.domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_TRUE(sc.valid());
   EXPECT_EQ(sc.handle(), before);  // untouched, not rebuilt
   EXPECT_EQ(sc.extent().width, 256u);
@@ -452,7 +454,7 @@ TEST_F(WindowingTest, DepthSwapchainRejectsMissingAllocator) {
   cfg.depth_format = VK_FORMAT_D32_SFLOAT;
   auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
   ASSERT_FALSE(sc.ok());
-  EXPECT_EQ(sc.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // A combined depth/stencil depth_format is rejected as Unsupported (rendering
@@ -464,7 +466,7 @@ TEST_F(WindowingTest, DepthSwapchainRejectsStencilFormat) {
   auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
                                    &allocator_.value());
   ASSERT_FALSE(sc.ok());
-  EXPECT_EQ(sc.status().domain(), vg::Status::Code::Unsupported);
+  EXPECT_EQ(sc.status().domain(), vkc::Status::Code::Unsupported);
 }
 
 // A non-depth depth_format is rejected as InvalidArgument (a color format has
@@ -476,7 +478,7 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
   auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
                                    &allocator_.value());
   ASSERT_FALSE(sc.ok());
-  EXPECT_EQ(sc.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
@@ -498,7 +500,7 @@ TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   win::Swapchain stolen = std::move(sc);
   auto frame = loop.value().begin_frame();
   ASSERT_FALSE(frame.ok());
-  EXPECT_EQ(frame.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(frame.status().domain(), vkc::Status::Code::InvalidArgument);
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -529,7 +531,7 @@ TEST_F(WindowingTest, ManagedBeginFrameSkipsAndRebuilds) {
   loop.value().set_recreate_callback([&](VkExtent2D extent) {
     ++callback_runs;
     callback_extent = extent;
-    return vg::Status{};
+    return vkc::Status{};
   });
 
   // Zero extent: a skipped tick — no acquire, no rebuild.
@@ -577,12 +579,12 @@ TEST_F(WindowingTest, ManagedBeginFramePropagatesCallbackFailure) {
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
   loop.value().set_recreate_callback([](VkExtent2D) {
-    return vg::Status::out_of_memory("test: depth rebuild failed");
+    return vkc::Status::out_of_memory("test: depth rebuild failed");
   });
 
   auto resized = loop.value().begin_frame(VkExtent2D{320, 240});
   ASSERT_FALSE(resized.ok());
-  EXPECT_EQ(resized.status().domain(), vg::Status::Code::OutOfMemory);
+  EXPECT_EQ(resized.status().domain(), vkc::Status::Code::OutOfMemory);
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -599,7 +601,7 @@ TEST_F(WindowingTest, MovedFrameLoopKeepsRunningRecreateCallback) {
   created.value().set_recreate_callback([&](VkExtent2D extent) {
     ++callback_runs;
     callback_extent = extent;
-    return vg::Status{};
+    return vkc::Status{};
   });
 
   // Move-construct after the hook is set; the moved-to loop must carry it.
@@ -637,17 +639,30 @@ TEST_F(WindowingTest, DestructionDrainsInFlightFrames) {
 // Acquire / present / recreate on an empty swapchain (default-constructed,
 // moved-from, or after a failed rebuild) fail with InvalidArgument instead of
 // dereferencing null handles. Needs no instance/device, so it runs everywhere.
+// A stale swapchain -- out of date, or suboptimal -- is a cue to recreate, read
+// back from the backend status the present returned; any other failure is not.
+TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
+  EXPECT_TRUE(win::swapchain_stale(
+      vkc::vk_error(VK_ERROR_OUT_OF_DATE_KHR, "vkQueuePresentKHR")));
+  EXPECT_TRUE(win::swapchain_stale(
+      vkc::vk_error(VK_SUBOPTIMAL_KHR, "vkQueuePresentKHR")));
+  EXPECT_FALSE(win::swapchain_stale(
+      vkc::vk_error(VK_ERROR_DEVICE_LOST, "vkQueuePresentKHR")));
+  EXPECT_FALSE(win::swapchain_stale(vkc::Status::invalid_argument("bad")));
+  EXPECT_FALSE(win::swapchain_stale(vkc::Status{}));
+}
+
 TEST(SwapchainEmpty, OperationsFailCleanly) {
   win::Swapchain sc;
   auto acquired = sc.acquire_next_image(VK_NULL_HANDLE);
   ASSERT_FALSE(acquired.ok());
-  EXPECT_EQ(acquired.status().domain(), vg::Status::Code::InvalidArgument);
-  const vg::Status presented = sc.present(0, VK_NULL_HANDLE);
+  EXPECT_EQ(acquired.status().domain(), vkc::Status::Code::InvalidArgument);
+  const vkc::Status presented = sc.present(0, VK_NULL_HANDLE);
   ASSERT_FALSE(presented.ok());
-  EXPECT_EQ(presented.domain(), vg::Status::Code::InvalidArgument);
-  const vg::Status recreated = sc.recreate({256, 256});
+  EXPECT_EQ(presented.domain(), vkc::Status::Code::InvalidArgument);
+  const vkc::Status recreated = sc.recreate({256, 256});
   ASSERT_FALSE(recreated.ok());
-  EXPECT_EQ(recreated.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(recreated.domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // end_frame on an empty loop (default-constructed or moved-from) fails with
@@ -658,9 +673,9 @@ TEST(SwapchainEmpty, OperationsFailCleanly) {
 TEST(FrameLoopEmpty, EndFrameFailsCleanly) {
   win::FrameLoop loop;
   ASSERT_FALSE(loop.valid());
-  const vg::Status ended = loop.end_frame(win::Frame{});
+  const vkc::Status ended = loop.end_frame(win::Frame{});
   ASSERT_FALSE(ended.ok());
-  EXPECT_EQ(ended.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(WindowingTest, SwapchainMoveLeavesSourceEmpty) {

@@ -21,10 +21,10 @@
 #include <cstdint>
 #include <memory>
 
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
 class Allocator;
@@ -32,10 +32,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 
 /// @brief Construction parameters for a @ref Profiler.
 struct ProfilerConfig {
@@ -74,7 +70,7 @@ struct ProfilerConfig {
 /// @code
 /// ProfilerConfig cfg;
 /// cfg.frames_in_flight = 2;
-/// Result<Profiler> r = Profiler::create(device, cfg);
+/// core::Result<Profiler> r = Profiler::create(device, cfg);
 /// if (!r) return r.status();
 /// Profiler& profiler = r.value();
 /// profiler.set_memory_source(&allocator);  // optional memory figures
@@ -136,8 +132,8 @@ class VG_CORE_API Profiler {
   ///         @ref Status::Code::Unsupported for a @p device without the
   ///         renderer's requirements; otherwise a propagated failure from
   ///         creating the timestamp pool.
-  static Result<Profiler> create(const Device& device,
-                                 const ProfilerConfig& config = {});
+  static core::Result<Profiler> create(const core::Device& device,
+                                       const ProfilerConfig& config = {});
 
   ~Profiler();
   Profiler(Profiler&& other) noexcept;

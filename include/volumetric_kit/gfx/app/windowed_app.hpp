@@ -15,13 +15,15 @@
 #include <string_view>
 #include <vector>
 
+#include "volumetric_kit/core/base/check.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/export.hpp"
-#include "volumetric_kit/gfx/core/check.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
@@ -60,7 +62,7 @@ struct WindowedAppConfig {
   ///       object names follow the instance -- the one @ref WindowedApp::create
   ///       builds, or @ref AdoptedDevice::enabled_debug_utils for an adopted
   ///       device.
-  DeviceRequirements device = device_requirements();
+  core::DeviceRequirements device = device_requirements();
 };
 
 /// @brief Owns the whole windowed bring-up chain — @ref Instance,
@@ -93,12 +95,12 @@ struct WindowedAppConfig {
 /// config.instance_extensions.assign(exts, exts + ext_count);
 /// config.swapchain.extent = {1280, 720};
 /// auto app = app::WindowedApp::create(
-///     config, [&](VkInstance instance) -> Result<VkSurfaceKHR> {
+///     config, [&](VkInstance instance) -> core::Result<VkSurfaceKHR> {
 ///       VkSurfaceKHR surface = VK_NULL_HANDLE;
 ///       const VkResult r =
 ///           glfwCreateWindowSurface(instance, window, nullptr, &surface);
-///       if (r != VK_SUCCESS) return vk_error(r, "glfwCreateWindowSurface");
-///       return surface;
+///       if (r != VK_SUCCESS) return core::vk_error(r,
+///       "glfwCreateWindowSurface"); return surface;
 ///     });
 /// if (!app) return app.status();
 /// while (running) {
@@ -109,10 +111,10 @@ struct WindowedAppConfig {
 ///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   f.target->end(f.cmd);
-///   Status end = app.value().end_frame(f);
+///   core::Status end = app.value().end_frame(f);
 ///   if (!end.ok() && !windowing::swapchain_stale(end)) return fail(end);
 /// }
-/// VG_TRY(app.value().wait_idle());  // locals made after the app die first
+/// VKC_TRY(app.value().wait_idle());  // locals made after the app die first
 /// @endcode
 class VG_APP_API WindowedApp {
  public:
@@ -120,7 +122,7 @@ class VG_APP_API WindowedApp {
   ///        Called once by @ref create; the app adopts (and later destroys)
   ///        the returned handle. Return a non-OK @ref Status when the window
   ///        system fails to create one.
-  using SurfaceFactory = std::function<Result<VkSurfaceKHR>(VkInstance)>;
+  using SurfaceFactory = std::function<core::Result<VkSurfaceKHR>(VkInstance)>;
 
   /// @brief Construct an empty app (owns nothing; `valid()` is false).
   WindowedApp() = default;
@@ -140,8 +142,8 @@ class VG_APP_API WindowedApp {
   ///         `config.frames_in_flight`; @ref Status::Code::Unsupported when no
   ///         present-capable device qualifies; otherwise the propagated
   ///         failure.
-  static Result<WindowedApp> create(const WindowedAppConfig& config,
-                                    const SurfaceFactory& create_surface);
+  static core::Result<WindowedApp> create(const WindowedAppConfig& config,
+                                          const SurfaceFactory& create_surface);
 
   /// @brief Run the same bring-up chain on a `VkDevice` the embedder created,
   ///        instead of building an instance and device of our own.
@@ -190,9 +192,9 @@ class VG_APP_API WindowedApp {
   /// @warning `adopted.instance`, `physical_device`, `device`, its queues,
   ///          `submit_mutex` and `present_mutex` must all outlive the returned
   ///          app.
-  static Result<WindowedApp> adopt(const AdoptedDevice& adopted,
-                                   const WindowedAppConfig& config,
-                                   const SurfaceFactory& create_surface);
+  static core::Result<WindowedApp> adopt(const core::AdoptedDevice& adopted,
+                                         const WindowedAppConfig& config,
+                                         const SurfaceFactory& create_surface);
 
   ~WindowedApp() = default;
   WindowedApp(WindowedApp&& other) noexcept = default;
@@ -205,7 +207,7 @@ class VG_APP_API WindowedApp {
   /// @param current_extent  The window's current framebuffer extent.
   /// @return As @ref windowing::FrameLoop::begin_frame; @ref
   ///         Status::Code::InvalidArgument on an empty app.
-  Result<std::optional<windowing::Frame>> begin_frame(
+  core::Result<std::optional<windowing::Frame>> begin_frame(
       VkExtent2D current_extent);
 
   /// @brief Submit + present the frame from @ref begin_frame.
@@ -213,14 +215,14 @@ class VG_APP_API WindowedApp {
   /// @return As @ref windowing::FrameLoop::end_frame (classify staleness with
   ///         @ref windowing::swapchain_stale); @ref
   ///         Status::Code::InvalidArgument on an empty app.
-  Status end_frame(const windowing::Frame& frame);
+  core::Status end_frame(const windowing::Frame& frame);
 
   /// @brief Register the loop's post-rebuild hook (see @ref
   ///        windowing::FrameLoop::set_recreate_callback). No-op on an empty
   ///        app.
   /// @param callback  Receives the rebuilt swapchain's extent; whatever it
   ///                  captures must stay alive while attached.
-  void set_recreate_callback(std::function<Status(VkExtent2D)> callback);
+  void set_recreate_callback(std::function<core::Status(VkExtent2D)> callback);
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
   ///        `nullptr` (see @ref windowing::FrameLoop::set_profiler). No-op on
@@ -238,25 +240,25 @@ class VG_APP_API WindowedApp {
   ///        @ref Device::wait_idle), so it is safe on a shared adopted device.
   /// @return OK once idle; @ref Status::Code::InvalidArgument on an empty
   ///         app, or the failed `VkResult`.
-  Status wait_idle() const;
+  core::Status wait_idle() const;
 
   /// @return The owned instance. @pre @ref valid, **and** this app came from
   ///         @ref create -- an app from @ref adopt borrows its instance and
   ///         holds no @ref Instance object, so asking one for it is a
-  ///         programmer error and aborts (`VG_CHECK`) rather than handing back
+  ///         programmer error and aborts (`VKC_CHECK`) rather than handing back
   ///         a reference to nothing. Use @ref instance_handle when the app may
   ///         be either, or when only the handle is wanted.
-  Instance& instance() noexcept {
-    VG_CHECK(state_->instance.has_value(),
-             "WindowedApp::instance: this app was adopted and borrows its "
-             "instance; use instance_handle()");
+  core::Instance& instance() noexcept {
+    VKC_CHECK(state_->instance.has_value(),
+              "WindowedApp::instance: this app was adopted and borrows its "
+              "instance; use instance_handle()");
     return *state_->instance;
   }
   /// @copydoc instance
-  const Instance& instance() const noexcept {
-    VG_CHECK(state_->instance.has_value(),
-             "WindowedApp::instance: this app was adopted and borrows its "
-             "instance; use instance_handle()");
+  const core::Instance& instance() const noexcept {
+    VKC_CHECK(state_->instance.has_value(),
+              "WindowedApp::instance: this app was adopted and borrows its "
+              "instance; use instance_handle()");
     return *state_->instance;
   }
   /// @return The `VkInstance` this app renders on, however it was obtained --
@@ -266,9 +268,9 @@ class VG_APP_API WindowedApp {
     return state_->instance_handle;
   }
   /// @return The owned device. @pre @ref valid.
-  Device& device() noexcept { return *state_->device; }
+  core::Device& device() noexcept { return *state_->device; }
   /// @copydoc device
-  const Device& device() const noexcept { return *state_->device; }
+  const core::Device& device() const noexcept { return *state_->device; }
   /// @return The owned allocator. @pre @ref valid.
   core::Allocator& allocator() noexcept { return *state_->allocator; }
   /// @copydoc allocator
@@ -301,10 +303,11 @@ class VG_APP_API WindowedApp {
   // swapchain -> frame loop). The instance is a parameter rather than something
   // make_surface reads back out of a half-built `state`, so there is no order
   // in which a caller can reach it before it is set.
-  static Status make_surface(State& state, VkInstance instance,
-                             const SurfaceFactory& create_surface,
-                             std::string_view who);
-  static Status finish_bring_up(State& state, const WindowedAppConfig& config);
+  static core::Status make_surface(State& state, VkInstance instance,
+                                   const SurfaceFactory& create_surface,
+                                   std::string_view who);
+  static core::Status finish_bring_up(State& state,
+                                      const WindowedAppConfig& config);
 
   // The chain lives behind one pointer because the later members borrow the
   // earlier ones by address (the loop points at the swapchain and device, the
@@ -316,12 +319,12 @@ class VG_APP_API WindowedApp {
   // default constructor.
   struct State {
     // Set only on the create path; empty when the instance is the embedder's.
-    std::optional<Instance> instance;
+    std::optional<core::Instance> instance;
     // The instance in use either way, so accessors and the surface work
     // without branching on which path built this app.
     VkInstance instance_handle = VK_NULL_HANDLE;
     windowing::Surface surface;
-    std::optional<Device> device;
+    std::optional<core::Device> device;
     std::optional<core::Allocator> allocator;
     windowing::Swapchain swapchain;
     windowing::FrameLoop frame_loop;

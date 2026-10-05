@@ -3,7 +3,7 @@
 
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
-#include "volumetric_kit/gfx/core/check.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -26,10 +26,10 @@ RenderTarget::RenderTarget(VkExtent2D extent,
                            uint32_t color_count, VkSampleCountFlagBits samples,
                            const RenderTargetAttachment* depth)
     : extent_(extent), color_count_(color_count), samples_(samples) {
-  VG_CHECK(color != nullptr && color_count > 0,
-           "RenderTarget needs at least one color attachment");
-  VG_CHECK(color_count <= RenderTargetLayout::kMaxColorAttachments,
-           "RenderTarget color count exceeds kMaxColorAttachments");
+  VKC_CHECK(color != nullptr && color_count > 0,
+            "RenderTarget needs at least one color attachment");
+  VKC_CHECK(color_count <= RenderTargetLayout::kMaxColorAttachments,
+            "RenderTarget color count exceeds kMaxColorAttachments");
   for (uint32_t i = 0; i < color_count; ++i) {
     color_[i] = color[i];
   }
@@ -51,7 +51,7 @@ RenderTargetLayout RenderTarget::layout() const noexcept {
 
 void RenderTarget::begin(VkCommandBuffer cmd,
                          const RenderTargetBeginInfo& info) const {
-  VG_CHECK(valid(), "RenderTarget::begin on an empty target");
+  VKC_CHECK(valid(), "RenderTarget::begin on an empty target");
 
   std::array<VkRenderingAttachmentInfo,
              RenderTargetLayout::kMaxColorAttachments>

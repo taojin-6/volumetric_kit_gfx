@@ -31,7 +31,7 @@ namespace volumetric_kit::gfx::assets {
 /// if (auto model = io::load_gltf("scene.glb", &err)) {
 ///   for (const assets::Mesh& m : model->meshes) upload(m);  // GPU tier
 /// } else {
-///   log_message(LogLevel::Error, err);
+///   log_message(core::LogLevel::Error, err);
 /// }
 /// @endcode
 struct Model {

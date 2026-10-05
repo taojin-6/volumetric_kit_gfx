@@ -5,9 +5,9 @@
 
 #include <utility>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
-#include "volumetric_kit/gfx/core/check.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -22,10 +22,10 @@ constexpr VkPipelineStageFlags kUniformStages =
 
 }  // namespace
 
-Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
-                                               VkDeviceSize size) {
+core::Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
+                                                     VkDeviceSize size) {
   if (size == 0 || size % 4 != 0 || size > kMaxUpdateBytes) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "make_frame_uniform_buffer: size must be a non-zero multiple of 4, at "
         "most 65536 bytes");
   }
@@ -37,15 +37,15 @@ Result<core::Buffer> make_frame_uniform_buffer(core::Allocator& allocator,
   return allocator.create_buffer(desc);
 }
 
-Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
+core::Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
     VkDevice device, VkDescriptorSetLayout layout, uint32_t sampler_count) {
   // One-set pool: the UBO + the owner's combined-image-samplers.
   const VkDescriptorPoolSize sizes[2] = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sampler_count}};
-  VG_ASSIGN(core::DescriptorPool pool,
-            core::DescriptorPool::create(device, sizes, 2, 1));
-  VG_ASSIGN(core::DescriptorSet set, pool.allocate(layout));
+  VKC_ASSIGN(core::DescriptorPool pool,
+             core::DescriptorPool::create(device, sizes, 2, 1));
+  VKC_ASSIGN(core::DescriptorSet set, pool.allocate(layout));
 
   OwnedDescriptorSet owned;
   owned.pool_ = std::move(pool);
@@ -56,10 +56,10 @@ Result<OwnedDescriptorSet> OwnedDescriptorSet::create(
 
 void OwnedDescriptorSet::bind_uniform(std::shared_ptr<const core::Buffer> ubo,
                                       VkDeviceSize offset, VkDeviceSize range) {
-  VG_CHECK(valid() && ubo != nullptr && ubo->valid() && range != 0 &&
-               offset <= ubo->size() && range <= ubo->size() - offset,
-           "OwnedDescriptorSet::bind_uniform: an empty set, or a range "
-           "outside the buffer");
+  VKC_CHECK(valid() && ubo != nullptr && ubo->valid() && range != 0 &&
+                offset <= ubo->size() && range <= ubo->size() - offset,
+            "OwnedDescriptorSet::bind_uniform: an empty set, or a range "
+            "outside the buffer");
   set_.write_uniform_buffer(0, ubo->handle(), offset, range);
   ubo_ = std::move(ubo);
   offset_ = offset;
@@ -68,13 +68,13 @@ void OwnedDescriptorSet::bind_uniform(std::shared_ptr<const core::Buffer> ubo,
 
 void OwnedDescriptorSet::write_uniform(VkCommandBuffer cmd, const void* data,
                                        VkDeviceSize size) const {
-  VG_CHECK(cmd != VK_NULL_HANDLE,
-           "OwnedDescriptorSet::write_uniform: the write is recorded, so it "
-           "needs the command buffer");
-  VG_CHECK(valid() && ubo_ != nullptr && size % 4 == 0 && size <= range_ &&
-               size <= kMaxUpdateBytes,
-           "OwnedDescriptorSet::write_uniform: an empty set, or a size that "
-           "is not a multiple of 4 within the bound range");
+  VKC_CHECK(cmd != VK_NULL_HANDLE,
+            "OwnedDescriptorSet::write_uniform: the write is recorded, so it "
+            "needs the command buffer");
+  VKC_CHECK(valid() && ubo_ != nullptr && size % 4 == 0 && size <= range_ &&
+                size <= kMaxUpdateBytes,
+            "OwnedDescriptorSet::write_uniform: an empty set, or a size that "
+            "is not a multiple of 4 within the bound range");
   // Earlier work in the queue may still read the range -- a pass recorded
   // after a previous write -- or still be writing it: order the update after
   // both.

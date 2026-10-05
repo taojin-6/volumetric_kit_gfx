@@ -7,7 +7,7 @@
 /// @brief A borrowed, per-frame-variable triangle mesh drawn indirectly -- the
 ///        `volumetric_kit_recon` live zero-copy handoff.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::gfx::pipelines {

@@ -12,8 +12,8 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -98,22 +98,23 @@ PbrMaterialDesc pbr_material_desc(const assets::Material& material) {
   return desc;
 }
 
-Result<PbrModel> PbrModel::create(const Device& device,
-                                  core::Allocator& allocator,
-                                  const PbrPipeline& pipeline,
-                                  const assets::Model& model) {
+core::Result<PbrModel> PbrModel::create(const core::Device& device,
+                                        core::Allocator& allocator,
+                                        const PbrPipeline& pipeline,
+                                        const assets::Model& model) {
   if (device.handle() == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrModel::create: device must hold a live VkDevice");
   }
   if (!pipeline.valid()) {
-    return Status::invalid_argument("PbrModel::create: pipeline must be valid");
+    return core::Status::invalid_argument(
+        "PbrModel::create: pipeline must be valid");
   }
 
   PbrModel out;
 
   // Shared sampler for every material map.
-  VG_ASSIGN(Sampler sampler, Sampler::create(device.handle()));
+  VKC_ASSIGN(Sampler sampler, Sampler::create(device.handle()));
   out.sampler_.emplace(std::move(sampler));
 
   // One batch for the whole model -- every mesh's vertex/index buffers, the
@@ -121,7 +122,7 @@ Result<PbrModel> PbrModel::create(const Device& device,
   // into a single submit. A failure below returns without finishing: the batch
   // (and its pending copies into any dropped resources) is discarded, never
   // submitted.
-  VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
 
   // Upload every non-empty mesh; the vector is parallel to model.meshes so a
   // DrawItem's mesh index addresses it directly (empty meshes stay a default,
@@ -132,7 +133,7 @@ Result<PbrModel> PbrModel::create(const Device& device,
     if (mesh.vertices.empty() || mesh.indices.empty()) {
       continue;
     }
-    VG_ASSIGN(GpuMesh gpu, upload_mesh(batch, mesh));
+    VKC_ASSIGN(GpuMesh gpu, upload_mesh(batch, mesh));
     out.meshes_[i] = std::move(gpu);
   }
 
@@ -147,9 +148,9 @@ Result<PbrModel> PbrModel::create(const Device& device,
   fallback_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   fallback_desc.pixels = white_px;
   fallback_desc.size = sizeof(white_px);
-  VG_ASSIGN(core::Image white_tex, batch.add(fallback_desc));
+  VKC_ASSIGN(core::Image white_tex, batch.add(fallback_desc));
   fallback_desc.pixels = flat_px;
-  VG_ASSIGN(core::Image flat_tex, batch.add(fallback_desc));
+  VKC_ASSIGN(core::Image flat_tex, batch.add(fallback_desc));
   const size_t white = out.textures_.size();
   out.textures_.push_back(std::move(white_tex));
   const size_t flat = out.textures_.size();
@@ -185,7 +186,7 @@ Result<PbrModel> PbrModel::create(const Device& device,
     desc.pixels = rgba.data();
     desc.size = rgba.size();
     desc.generate_mips = true;
-    VG_ASSIGN(core::Image tex, batch.add(desc));
+    VKC_ASSIGN(core::Image tex, batch.add(desc));
     image_tex[i] = out.textures_.size();
     out.textures_.push_back(std::move(tex));
   }
@@ -238,14 +239,14 @@ Result<PbrModel> PbrModel::create(const Device& device,
   }
 
   // Every material's factors share one UBO, uploaded on the batch by one copy.
-  VG_ASSIGN(
+  VKC_ASSIGN(
       std::vector<PbrMaterial> materials,
       PbrMaterial::create_all(device.handle(), batch, material_layout, descs));
   out.materials_ = std::move(materials);
 
   // Submit every queued upload at once; the meshes are draw-ready, the
   // textures sampled-ready and the factors in place when this returns.
-  VG_TRY(batch.finish());
+  VKC_TRY(batch.finish());
   for (core::Image& texture : out.textures_) {
     texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }

@@ -7,10 +7,10 @@
 /// @brief A `VkSampler`: the filtering and addressing state a shader reads a
 ///        texture through.
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/unique_handle.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -27,7 +27,7 @@ namespace volumetric_kit::gfx {
 /// desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 /// desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 /// desc.max_lod = 0.0f;  // the base level only
-/// Result<Sampler> sampler = Sampler::create(device.handle(), desc);
+/// core::Result<Sampler> sampler = Sampler::create(device.handle(), desc);
 /// @endcode
 struct SamplerDesc {
   VkFilter mag_filter = VK_FILTER_LINEAR;  ///< Filter when magnifying.
@@ -64,7 +64,7 @@ struct SamplerDesc {
 ///          undefined behavior.
 ///
 /// @code
-/// Result<Sampler> sampler = Sampler::create(device.handle());
+/// core::Result<Sampler> sampler = Sampler::create(device.handle());
 /// if (!sampler) return sampler.status();
 /// // ... bind sampler.value().handle() with a texture's view in a descriptor
 /// // set ...
@@ -79,7 +79,8 @@ class VG_CORE_API Sampler {
   ///         Status::Code::InvalidArgument for a null @p device or a
   ///         `desc.max_lod < desc.min_lod`; otherwise a backend Status
   ///         carrying the `VkResult` if `vkCreateSampler` fails.
-  static Result<Sampler> create(VkDevice device, const SamplerDesc& desc = {});
+  static core::Result<Sampler> create(VkDevice device,
+                                      const SamplerDesc& desc = {});
 
   ~Sampler() = default;
   Sampler(Sampler&&) noexcept = default;

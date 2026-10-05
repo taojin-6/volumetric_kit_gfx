@@ -127,14 +127,14 @@ TEST_F(BufferBarrierTest, OrdersACopyChainThroughTheGpu) {
   EXPECT_EQ(std::memcmp(got, src.data(), src.size()), 0);
 }
 
-// A null buffer is a caller bug cmd_buffer_barrier VG_CHECKs rather than
+// A null buffer is a caller bug cmd_buffer_barrier VKC_CHECKs rather than
 // handing to the driver. The check fires before any Vulkan call, so no device
 // is needed; the "DeathTest" suffix runs it isolated.
 TEST(BufferBarrierDeathTest, RejectsNullBuffer) {
   vg::BufferBarrierDesc desc;  // buffer defaults to VK_NULL_HANDLE
   EXPECT_DEATH(
       {
-        vg::set_log_handler({});  // route the abort message to stderr
+        vkc::set_log_handler({});  // route the abort message to stderr
         vg::cmd_buffer_barrier(VK_NULL_HANDLE, desc);
       },
       "buffer must be set");

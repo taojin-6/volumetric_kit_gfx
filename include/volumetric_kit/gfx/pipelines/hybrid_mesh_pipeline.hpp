@@ -14,10 +14,10 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 
@@ -91,7 +91,7 @@ enum HybridMeshFlags : uint32_t {
 /// @warning The @p device passed to @ref create must outlive the pipeline.
 ///
 /// @code
-/// Result<pipelines::HybridMeshPipeline> pipe =
+/// core::Result<pipelines::HybridMeshPipeline> pipe =
 ///     pipelines::HybridMeshPipeline::create(device, target.layout());
 /// if (!pipe) return pipe.status();
 /// // Allocate an atlas set against descriptor_set_layout(0), write the atlas
@@ -113,8 +113,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
   /// @return The pipeline on success, or a non-OK @ref Status (e.g. @ref
   ///         Status::Code::InvalidArgument when @p layout has no depth format,
   ///         or a backend Status from shader-module / pipeline creation).
-  static Result<HybridMeshPipeline> create(VkDevice device,
-                                           const RenderTargetLayout& layout);
+  static core::Result<HybridMeshPipeline> create(
+      VkDevice device, const RenderTargetLayout& layout);
 
   ~HybridMeshPipeline() = default;
   HybridMeshPipeline(HybridMeshPipeline&&) noexcept = default;

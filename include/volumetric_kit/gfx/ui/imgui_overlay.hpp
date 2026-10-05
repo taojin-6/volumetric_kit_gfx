@@ -10,9 +10,9 @@
 
 #include <cstdint>
 
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/export.hpp"
 
 struct ImGuiContext;
@@ -22,10 +22,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 
 namespace ui {
 
@@ -112,8 +108,9 @@ class VG_UI_API ImGuiOverlay {
   ///         @ref Status::Code::Unsupported for a @p device without the
   ///         renderer's requirements; a backend @ref Status carrying the
   ///         `VkResult` if ImGui's Vulkan backend fails to initialize.
-  static Result<ImGuiOverlay> create(const Device& device, VkInstance instance,
-                                     const ImGuiOverlayConfig& config);
+  static core::Result<ImGuiOverlay> create(const core::Device& device,
+                                           VkInstance instance,
+                                           const ImGuiOverlayConfig& config);
 
   ~ImGuiOverlay();
   ImGuiOverlay(ImGuiOverlay&& other) noexcept;
@@ -161,7 +158,7 @@ class VG_UI_API ImGuiOverlay {
   ImGuiContext* context_ = nullptr;  ///< Owns the backend via its BackendData.
   /// Borrowed at @ref create; @ref render holds its @ref Device::submit_mutex
   /// around the backend's internal texture-upload submit.
-  const Device* device_ = nullptr;
+  const core::Device* device_ = nullptr;
 };
 
 }  // namespace ui

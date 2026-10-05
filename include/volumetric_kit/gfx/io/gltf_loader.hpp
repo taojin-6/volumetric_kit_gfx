@@ -27,7 +27,7 @@ namespace volumetric_kit::gfx::io {
 /// is chosen from the file extension.
 ///
 /// Error handling is by value -- the io tier does not depend on `core`, so it
-/// does not use `vg::Status`/`vg::Result`. A failed load returns
+/// does not use the core's `Status`/`Result`. A failed load returns
 /// `std::nullopt`; when @p error is non-null it receives a human-readable
 /// reason (parser error, unsupported feature, missing file). Warnings from the
 /// parser are not fatal and are not surfaced here.

@@ -13,7 +13,7 @@
 /// command/queue scope reads a resolved pointer instead of re-querying the
 /// loader. Not a public header.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 

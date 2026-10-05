@@ -9,8 +9,8 @@
 
 #include <cstdint>
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -74,7 +74,7 @@ struct ImageBarrierDesc {
 /// @pre `desc.image != VK_NULL_HANDLE`; `desc.old_layout` matches the
 ///      subresource range's current layout (or is `VK_IMAGE_LAYOUT_UNDEFINED`);
 ///      and `desc.new_layout` is a real target layout, not the placeholder
-///      `VK_IMAGE_LAYOUT_UNDEFINED` default (checked with `VG_CHECK`).
+///      `VK_IMAGE_LAYOUT_UNDEFINED` default (checked with `VKC_CHECK`).
 VG_CORE_API void cmd_image_barrier(VkCommandBuffer cmd,
                                    const ImageBarrierDesc& desc);
 

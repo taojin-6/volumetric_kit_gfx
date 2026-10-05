@@ -15,21 +15,17 @@
 #include <functional>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 
 /// @brief A CPU pixel buffer plus the options for uploading it into a sampled
 ///        texture (2D, 2D array, or cubemap; single-mip, pre-mipped, or
@@ -108,13 +104,13 @@ struct BufferUploadDesc {
 ///          hold undefined contents.
 ///
 /// @code
-/// Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
+/// core::Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
 /// if (!batch) return batch.status();
-/// Result<core::Image> albedo = batch.value().add(albedo_desc);
+/// core::Result<core::Image> albedo = batch.value().add(albedo_desc);
 /// if (!albedo) return albedo.status();
-/// Result<core::Buffer> vertices = batch.value().add_buffer(vertex_desc);
+/// core::Result<core::Buffer> vertices = batch.value().add_buffer(vertex_desc);
 /// if (!vertices) return vertices.status();
-/// VG_TRY(batch.value().finish());  // one submit; resources now GPU-ready
+/// VKC_TRY(batch.value().finish());  // one submit; resources now GPU-ready
 /// albedo.value().set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 /// @endcode
 class VG_CORE_API UploadBatch {
@@ -137,8 +133,8 @@ class VG_CORE_API UploadBatch {
   /// @note One batch is used from one thread at a time. Batches on different
   ///       threads may share a device: @ref finish records on a command pool
   ///       no other submit holds and serializes only the queue submit.
-  static Result<UploadBatch> begin(const Device& device,
-                                   core::Allocator& allocator);
+  static core::Result<UploadBatch> begin(const core::Device& device,
+                                         core::Allocator& allocator);
 
   ~UploadBatch();
   UploadBatch(UploadBatch&& other) noexcept;
@@ -164,7 +160,7 @@ class VG_CORE_API UploadBatch {
   /// @warning Keep the returned texture alive at least until @ref finish
   ///          returns: the recorded upload writes into it, so destroying it
   ///          earlier would submit against a freed image.
-  Result<core::Image> add(const ImageUploadDesc& desc);
+  core::Result<core::Image> add(const ImageUploadDesc& desc);
 
   /// @brief Create a device-only buffer for @p desc and queue its upload on
   ///        the batch.
@@ -184,7 +180,7 @@ class VG_CORE_API UploadBatch {
   /// @warning Keep the returned buffer alive at least until @ref finish
   ///          returns: the recorded copy writes into it, so destroying it
   ///          earlier would submit against a freed buffer.
-  Result<core::Buffer> add_buffer(const BufferUploadDesc& desc);
+  core::Result<core::Buffer> add_buffer(const BufferUploadDesc& desc);
 
   /// @brief Submit the batch and block until the GPU completes it.
   ///
@@ -203,7 +199,7 @@ class VG_CORE_API UploadBatch {
   ///         buffer holds its bytes, @ref Status::Code::InvalidArgument if the
   ///         batch is empty or @ref poison ed, or a backend @ref Status
   ///         from the record/submit/wait step.
-  Status finish();
+  core::Status finish();
 
   /// @brief Mark the batch unfinishable: a subsequent @ref finish discards the
   ///        recorded work instead of submitting it.
@@ -223,7 +219,7 @@ class VG_CORE_API UploadBatch {
   bool valid() const noexcept { return device_ != nullptr; }
 
  private:
-  const Device* device_ = nullptr;
+  const core::Device* device_ = nullptr;
   core::Allocator* allocator_ = nullptr;
   // Each add()/add_buffer()'s commands, recorded in order into the command
   // buffer finish() submits. They name raw handles: the staging buffers below
@@ -275,9 +271,9 @@ class VG_CORE_API UploadBatch {
 ///         from the staging-buffer, image, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).
-VG_CORE_API Result<core::Image> upload_texture(const Device& device,
-                                               core::Allocator& allocator,
-                                               const ImageUploadDesc& desc);
+VG_CORE_API core::Result<core::Image> upload_texture(
+    const core::Device& device, core::Allocator& allocator,
+    const ImageUploadDesc& desc);
 
 /// @brief Upload @p desc.data into a new device-only `core::Buffer`, returning
 ///        once the copy has completed on the GPU.
@@ -302,8 +298,8 @@ VG_CORE_API Result<core::Image> upload_texture(const Device& device,
 ///         staging-buffer, destination, or submit step.
 /// @note Blocking and queue-serializing -- a setup/load-time path, never the
 ///       per-frame one (see @ref Device::submit_single_time).
-VG_CORE_API Result<core::Buffer> upload_buffer(const Device& device,
-                                               core::Allocator& allocator,
-                                               const BufferUploadDesc& desc);
+VG_CORE_API core::Result<core::Buffer> upload_buffer(
+    const core::Device& device, core::Allocator& allocator,
+    const BufferUploadDesc& desc);
 
 }  // namespace volumetric_kit::gfx

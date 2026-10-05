@@ -62,7 +62,7 @@ class TextureUploadTest : public VulkanDeviceTest {
       return {};
     }
     const VkBuffer dst = readback.value().handle();
-    const vg::Status recorded =
+    const vkc::Status recorded =
         device_->submit_single_time([&](VkCommandBuffer cmd) {
           vg::ImageBarrierDesc to_src;
           to_src.image = image;
@@ -213,7 +213,7 @@ TEST_F(TextureUploadTest, RejectsZeroExtent) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsExtentAboveDeviceLimit) {
@@ -226,7 +226,7 @@ TEST_F(TextureUploadTest, RejectsExtentAboveDeviceLimit) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::Unsupported);
+            vkc::Status::Code::Unsupported);
 }
 
 TEST_F(TextureUploadTest, RejectsUndefinedFormat) {
@@ -237,7 +237,7 @@ TEST_F(TextureUploadTest, RejectsUndefinedFormat) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsNullPixels) {
@@ -247,7 +247,7 @@ TEST_F(TextureUploadTest, RejectsNullPixels) {
   desc.pixels = nullptr;
   desc.size = 4;
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsSizeMismatch) {
@@ -258,7 +258,7 @@ TEST_F(TextureUploadTest, RejectsSizeMismatch) {
   desc.pixels = src.data();
   desc.size = src.size();  // 8 — wrong
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsCompressedFormat) {
@@ -270,7 +270,7 @@ TEST_F(TextureUploadTest, RejectsCompressedFormat) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::Unsupported);
+            vkc::Status::Code::Unsupported);
 }
 
 // VK_FORMAT_R16G16_SFIXED5_NV (VK_NV_optical_flow), by value: the headers gfx
@@ -286,7 +286,7 @@ TEST_F(TextureUploadTest, RejectsVendorExtensionFormat) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::Unsupported);
+            vkc::Status::Code::Unsupported);
 }
 
 TEST_F(TextureUploadTest, RejectsFormatNeedingYcbcrConversion) {
@@ -299,7 +299,7 @@ TEST_F(TextureUploadTest, RejectsFormatNeedingYcbcrConversion) {
   desc.pixels = src.data();
   desc.size = src.size();
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::Unsupported);
+            vkc::Status::Code::Unsupported);
 }
 
 // A core format whose value sits in the extension range (Vulkan 1.3's 4444
@@ -485,7 +485,7 @@ TEST_F(TextureUploadTest, RejectsCubeSizeMismatch) {
   desc.array_layers = 6;
   desc.cube = true;
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsCubeWithoutSixLayers) {
@@ -497,7 +497,7 @@ TEST_F(TextureUploadTest, RejectsCubeWithoutSixLayers) {
   desc.size = src.size();
   desc.cube = true;  // but array_layers stays 1
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsGenerateMipsOnArrayUpload) {
@@ -510,7 +510,7 @@ TEST_F(TextureUploadTest, RejectsGenerateMipsOnArrayUpload) {
   desc.array_layers = 2;
   desc.generate_mips = true;  // generation is single-layer only
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsGenerateMipsWithSuppliedMips) {
@@ -523,7 +523,7 @@ TEST_F(TextureUploadTest, RejectsGenerateMipsWithSuppliedMips) {
   desc.mip_levels = 2;        // pixels carry mips already...
   desc.generate_mips = true;  // ...so generating them too is contradictory
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, RejectsMipLevelsBeyondFullChain) {
@@ -535,7 +535,7 @@ TEST_F(TextureUploadTest, RejectsMipLevelsBeyondFullChain) {
   desc.size = src.size();
   desc.mip_levels = 4;
   EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 }
 
 // --- UploadBatch -------------------------------------------------------------
@@ -585,7 +585,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
     textures.push_back(std::move(texture).value());
   }
 
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
 
   // Each texture holds its own pixels -- proving per-texture copy routing.
@@ -605,13 +605,14 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
   const std::array<std::uint8_t, 16> px{};
   EXPECT_FALSE(batch.value().valid());
   EXPECT_EQ(batch.value().add(small_desc(px)).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
   EXPECT_EQ(batch.value()
                 .add_buffer(buffer_desc(px.data(), px.size()))
                 .status()
                 .domain(),
-            vg::Status::Code::InvalidArgument);
-  EXPECT_EQ(batch.value().finish().domain(), vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(batch.value().finish().domain(),
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
@@ -622,12 +623,12 @@ TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
   vg::ImageUploadDesc bad = small_desc(px);
   bad.size = 3;  // violates the packing contract
   EXPECT_EQ(batch.value().add(bad).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 
   // The failed add recorded nothing; the batch still uploads.
   auto texture = batch.value().add(small_desc(px));
   ASSERT_TRUE(texture.ok()) << texture.status().message();
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(texture.value().valid());
 }
@@ -644,7 +645,7 @@ TEST_F(TextureUploadTest, BatchMoveConstructLeavesSourceEmpty) {
   EXPECT_FALSE(batch.value().valid());  // NOLINT(bugprone-use-after-move)
 
   // The moved-into batch carried the recorded work: it still finishes.
-  const vg::Status finished = moved.finish();
+  const vkc::Status finished = moved.finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(texture.value().valid());
 }
@@ -711,16 +712,16 @@ TEST_F(TextureUploadTest, AddBufferRejectsInvalidDescs) {
 
   vg::BufferUploadDesc null_data = buffer_desc(nullptr, bytes.size());
   EXPECT_EQ(batch.value().add_buffer(null_data).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 
   vg::BufferUploadDesc zero_size = buffer_desc(bytes.data(), 0);
   EXPECT_EQ(batch.value().add_buffer(zero_size).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 
   vg::BufferUploadDesc zero_usage = buffer_desc(bytes.data(), bytes.size());
   zero_usage.usage = 0;
   EXPECT_EQ(batch.value().add_buffer(zero_usage).status().domain(),
-            vg::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
 
   // The failed adds recorded nothing; the batch still uploads.
   auto buffer =
@@ -754,7 +755,7 @@ TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
   // records the layout a successful finish leaves it in.
   EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
 
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_TRUE(buffer.value().valid());
@@ -819,8 +820,8 @@ TEST_F(TextureUploadTest, PoisonedBatchFinishDiscardsWithoutSubmitting) {
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
 
   batch.value().poison();
-  const vg::Status finished = batch.value().finish();
+  const vkc::Status finished = batch.value().finish();
   EXPECT_FALSE(finished.ok());
-  EXPECT_EQ(finished.domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(finished.domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_FALSE(batch.value().valid());  // discarded, one-shot
 }

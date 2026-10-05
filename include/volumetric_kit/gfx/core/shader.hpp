@@ -11,10 +11,10 @@
 #include <cstdint>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/shader.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -55,7 +55,7 @@ struct ReflectedResource {
 ///
 /// @code
 /// // `spirv` holds the compiled .spv as 32-bit words, loaded by the caller.
-/// Result<ShaderModule> vert = ShaderModule::create(
+/// core::Result<ShaderModule> vert = ShaderModule::create(
 ///     device, spirv.data(), spirv.size() * sizeof(uint32_t));
 /// if (!vert) return vert.status();
 /// // ... reference vert.value().handle() in a VkPipelineShaderStageCreateInfo
@@ -76,8 +76,9 @@ class VG_CORE_API ShaderModule {
   ///         before the device handle is created, so SPIR-V that spirv-cross
   ///         cannot parse also yields @ref Status::Code::InvalidArgument — even
   ///         a blob the driver might otherwise have accepted.
-  static Result<ShaderModule> create(VkDevice device, const uint32_t* code,
-                                     size_t size_bytes);
+  static core::Result<ShaderModule> create(VkDevice device,
+                                           const uint32_t* code,
+                                           size_t size_bytes);
 
   ~ShaderModule() = default;
   ShaderModule(ShaderModule&& other) noexcept;

@@ -8,7 +8,7 @@
 
 #include <glm/vec4.hpp>
 
-#include "volumetric_kit/gfx/core/check.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -22,32 +22,33 @@ struct SceneUbo {
 
 }  // namespace
 
-Result<PbrScene> PbrScene::create(VkDevice device, core::Allocator& allocator,
-                                  VkDescriptorSetLayout scene_layout,
-                                  const PbrSceneDesc& desc,
-                                  uint32_t frames_in_flight) {
+core::Result<PbrScene> PbrScene::create(VkDevice device,
+                                        core::Allocator& allocator,
+                                        VkDescriptorSetLayout scene_layout,
+                                        const PbrSceneDesc& desc,
+                                        uint32_t frames_in_flight) {
   if (device == VK_NULL_HANDLE || scene_layout == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrScene::create: device and scene_layout must be non-null");
   }
   if (desc.irradiance == VK_NULL_HANDLE || desc.prefilter == VK_NULL_HANDLE ||
       desc.brdf_lut == VK_NULL_HANDLE || desc.sampler == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrScene::create: all three IBL views and the sampler must be "
         "non-null");
   }
   if (frames_in_flight == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "PbrScene::create: frames_in_flight must be >= 1");
   }
 
   PbrScene scene;
   scene.slots_.reserve(frames_in_flight);
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VG_ASSIGN(OwnedDescriptorSet resources,
-              OwnedDescriptorSet::create(device, scene_layout, 3));
-    VG_ASSIGN(core::Buffer ubo,
-              make_frame_uniform_buffer(allocator, sizeof(SceneUbo)));
+    VKC_ASSIGN(OwnedDescriptorSet resources,
+               OwnedDescriptorSet::create(device, scene_layout, 3));
+    VKC_ASSIGN(core::Buffer ubo,
+               make_frame_uniform_buffer(allocator, sizeof(SceneUbo)));
     resources.bind_uniform(std::make_shared<core::Buffer>(std::move(ubo)), 0,
                            sizeof(SceneUbo));
 
@@ -73,9 +74,9 @@ void PbrScene::set_camera(VkCommandBuffer cmd, uint32_t slot,
                           const glm::vec3& eye, float prefilter_max_lod) const {
   // Checked before the slot, so a caller that would pass a null command buffer
   // learns it on the first call, whatever slot it names.
-  VG_CHECK(cmd != VK_NULL_HANDLE,
-           "PbrScene::set_camera: the write is recorded, so it needs the "
-           "frame's command buffer");
+  VKC_CHECK(cmd != VK_NULL_HANDLE,
+            "PbrScene::set_camera: the write is recorded, so it needs the "
+            "frame's command buffer");
   // Out-of-range slot is a no-op, mirroring descriptor_set()'s graceful degrade
   // rather than writing past the ring.
   if (slot >= slots_.size()) return;

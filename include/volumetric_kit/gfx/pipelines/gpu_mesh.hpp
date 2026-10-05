@@ -8,9 +8,9 @@
 
 #include <cstdint>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::core {
@@ -19,9 +19,6 @@ class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
-// "Memory comes from volumetric_kit_core").
-using core::Device;
 class UploadBatch;
 namespace assets {
 struct Mesh;
@@ -40,16 +37,16 @@ namespace volumetric_kit::gfx::pipelines {
 ///
 /// @code
 /// // Many meshes: record every upload into one batch, one submit total.
-/// Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
+/// core::Result<UploadBatch> batch = UploadBatch::begin(device, allocator);
 /// if (!batch) return batch.status();
 /// std::vector<pipelines::GpuMesh> meshes;
 /// for (const assets::Mesh& m : model.meshes) {
-///   Result<pipelines::GpuMesh> mesh =
+///   core::Result<pipelines::GpuMesh> mesh =
 ///       pipelines::upload_mesh(batch.value(), m);
 ///   if (!mesh) return mesh.status();
 ///   meshes.push_back(std::move(mesh).value());
 /// }
-/// VG_TRY(batch.value().finish());  // meshes now draw-ready
+/// VKC_TRY(batch.value().finish());  // meshes now draw-ready
 /// // ... bind a pipeline + descriptor sets, then per mesh:
 /// meshes[0].record_draw(cmd);
 /// @endcode
@@ -116,8 +113,8 @@ class VG_PIPELINES_API GpuMesh {
 ///          Status::Code::InvalidArgument) instead of submitting the dropped
 ///          vertex buffer's now-dangling copy. Discarding the batch directly
 ///          (destroy without finishing) is equally fine.
-VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
-                                             const assets::Mesh& mesh);
+VG_PIPELINES_API core::Result<GpuMesh> upload_mesh(UploadBatch& batch,
+                                                   const assets::Mesh& mesh);
 
 /// @brief Upload @p mesh's interleaved vertices + 32-bit indices into
 ///        device-local vertex/index buffers in one blocking submit.
@@ -134,8 +131,8 @@ VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
 ///         @ref Status::Code::InvalidArgument when @p mesh has no vertices or
 ///         indices; otherwise a backend Status from the buffer or
 ///         submit step.
-VG_PIPELINES_API Result<GpuMesh> upload_mesh(const Device& device,
-                                             core::Allocator& allocator,
-                                             const assets::Mesh& mesh);
+VG_PIPELINES_API core::Result<GpuMesh> upload_mesh(const core::Device& device,
+                                                   core::Allocator& allocator,
+                                                   const assets::Mesh& mesh);
 
 }  // namespace volumetric_kit::gfx::pipelines

@@ -34,9 +34,10 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/gfx/core/instance.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -56,18 +57,18 @@ class VulkanDeviceTest : public ::testing::Test {
   // without it.
   virtual bool wants_sync_validation() const { return false; }
   // What the fixture's device must provide; the renderer's floor by default.
-  virtual vg::DeviceRequirements requirements() const {
+  virtual vkc::DeviceRequirements requirements() const {
     return vg::device_requirements();
   }
 
   void SetUp() override {
-    vg::InstanceConfig icfg;
+    vkc::InstanceConfig icfg;
     icfg.enable_validation = wants_validation();
     std::optional<ScopedEnv> sync;
     if (wants_validation() && wants_sync_validation()) {
       sync.emplace("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true");
     }
-    auto instance = vg::Instance::create(icfg);
+    auto instance = vkc::Instance::create(icfg);
     sync.reset();  // read at instance creation; keep it from later instances
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
@@ -79,14 +80,14 @@ class VulkanDeviceTest : public ::testing::Test {
       install_validation_capture();
     }
 
-    const vg::DeviceRequirements reqs = requirements();
+    const vkc::DeviceRequirements reqs = requirements();
     auto physical = instance_->select_physical_device(reqs);
     if (!physical.ok()) {
       GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
     }
     caps_ = physical.value();
 
-    auto device = vg::Device::create(*instance_, caps_, reqs);
+    auto device = vkc::Device::create(*instance_, caps_, reqs);
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
   }
@@ -100,7 +101,7 @@ class VulkanDeviceTest : public ::testing::Test {
     // Restore the default sink -- the handler captures `this` -- and fail the
     // test on what the layer reported.
     if (capturing_) {
-      vg::set_log_handler({});
+      vkc::set_log_handler({});
       capturing_ = false;
     }
     const std::lock_guard<std::mutex> lock(validation_mutex_);
@@ -139,9 +140,9 @@ class VulkanDeviceTest : public ::testing::Test {
     ASSERT_TRUE(fence.value().wait().ok());
   }
 
-  std::optional<vg::Instance> instance_;
-  vg::PhysicalDeviceInfo caps_;
-  std::optional<vg::Device> device_;
+  std::optional<vkc::Instance> instance_;
+  vkc::PhysicalDeviceInfo caps_;
+  std::optional<vkc::Device> device_;
 
  private:
   // Sets an environment variable for its lifetime, then restores the value it
@@ -185,12 +186,12 @@ class VulkanDeviceTest : public ::testing::Test {
   // sink would print it.
   void install_validation_capture() {
     capturing_ = true;
-    vg::set_log_handler([this](vg::LogLevel level, std::string_view source,
-                               std::string_view message) {
-      if (source == "vulkan" && level == vg::LogLevel::Error) {
+    vkc::set_log_handler([this](vkc::LogLevel level, std::string_view source,
+                                std::string_view message) {
+      if (source == "vulkan" && level == vkc::LogLevel::Error) {
         const std::lock_guard<std::mutex> lock(validation_mutex_);
         validation_errors_.emplace_back(message);
-      } else if (level >= vg::LogLevel::Warning) {
+      } else if (level >= vkc::LogLevel::Warning) {
         std::fprintf(stderr, "[%.*s] %.*s\n", static_cast<int>(source.size()),
                      source.data(), static_cast<int>(message.size()),
                      message.data());

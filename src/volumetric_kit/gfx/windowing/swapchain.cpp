@@ -8,45 +8,48 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/gfx/core/check.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
 namespace volumetric_kit::gfx::windowing {
 
-Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
-                                    const SwapchainConfig& config,
-                                    core::Allocator* allocator) {
+core::Result<Swapchain> Swapchain::create(const core::Device& device,
+                                          VkSurfaceKHR surface,
+                                          const SwapchainConfig& config,
+                                          core::Allocator* allocator) {
   if (surface == VK_NULL_HANDLE) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::create: surface must be non-null");
   }
   if (!device.has_present()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::create: device has no present queue (set "
         "DeviceRequirements::needs_present)");
   }
   // A device made for another library may lack the renderer's floor, which
   // every frame recorded into this swapchain's images relies on.
-  VG_TRY(device.check_enabled(device_requirements())
-             .with_context("Swapchain::create"));
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("Swapchain::create"));
   if (config.depth_format != VK_FORMAT_UNDEFINED) {
     if (allocator == nullptr) {
-      return Status::invalid_argument(
+      return core::Status::invalid_argument(
           "Swapchain::create: depth_format requires an allocator to create "
           "the per-image depth attachments");
     }
     // Depth-only format check (shared with OffscreenTarget); the device-support
     // check below is swapchain-specific (it has the Device's caps to hand).
-    VG_TRY(
+    VKC_TRY(
         validate_depth_only_format(config.depth_format, "Swapchain::create"));
     if (!device.caps().format_supports(
             config.depth_format, VK_IMAGE_TILING_OPTIMAL,
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
-      return Status::unsupported(
+      return core::Status::unsupported(
           "Swapchain::create: depth_format has no optimal-tiling depth-stencil "
           "attachment support on this device");
     }
@@ -59,20 +62,21 @@ Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
       config.depth_format != VK_FORMAT_UNDEFINED ? allocator : nullptr;
   sc.depth_format_ = config.depth_format;
   sc.requested_min_image_count_ = config.min_image_count;
-  VG_TRY(sc.select_surface_properties(config));
-  VG_TRY(sc.build(config.extent));
+  VKC_TRY(sc.select_surface_properties(config));
+  VKC_TRY(sc.build(config.extent));
   return sc;
 }
 
-Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
+core::Status Swapchain::select_surface_properties(
+    const SwapchainConfig& config) {
   VkPhysicalDevice phys = device_->physical_device();
 
   // Enumerate via the shared vk_query idiom (count, then fill; VK_INCOMPLETE
   // tolerated) so this stays in lockstep with the instance/device enumerators.
-  VG_ASSIGN(std::vector<VkSurfaceFormatKHR> formats,
-            surface_formats(phys, surface_));
+  VKC_ASSIGN(std::vector<VkSurfaceFormatKHR> formats,
+             surface_formats(phys, surface_));
   if (formats.empty()) {
-    return Status::unsupported("Swapchain: surface reports no formats");
+    return core::Status::unsupported("Swapchain: surface reports no formats");
   }
   // Prefer the requested format + color space; else take the first supported.
   VkSurfaceFormatKHR chosen = formats[0];
@@ -86,10 +90,11 @@ Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
   format_ = chosen.format;
   color_space_ = chosen.colorSpace;
 
-  VG_ASSIGN(std::vector<VkPresentModeKHR> modes,
-            surface_present_modes(phys, surface_));
+  VKC_ASSIGN(std::vector<VkPresentModeKHR> modes,
+             surface_present_modes(phys, surface_));
   if (modes.empty()) {
-    return Status::unsupported("Swapchain: surface reports no present modes");
+    return core::Status::unsupported(
+        "Swapchain: surface reports no present modes");
   }
   // FIFO is guaranteed; upgrade to the preferred mode only if offered.
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
@@ -99,15 +104,15 @@ Status Swapchain::select_surface_properties(const SwapchainConfig& config) {
       break;
     }
   }
-  return Status{};
+  return core::Status{};
 }
 
-Status Swapchain::build(VkExtent2D desired) {
+core::Status Swapchain::build(VkExtent2D desired) {
   VkPhysicalDevice phys = device_->physical_device();
   VkDevice dev = device_->handle();
 
   VkSurfaceCapabilitiesKHR caps{};
-  VG_VK_TRY(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface_, &caps));
+  VKC_VK_TRY(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface_, &caps));
 
   // Honor the surface's fixed currentExtent when a window manager dictates one;
   // otherwise clamp the desired size to the supported range.
@@ -123,7 +128,7 @@ Status Swapchain::build(VkExtent2D desired) {
   if (extent.width == 0 || extent.height == 0) {
     // A minimized window reports a zero extent; nothing to build until
     // restored.
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::build: surface extent is zero (window minimized?)");
   }
 
@@ -206,7 +211,7 @@ Status Swapchain::build(VkExtent2D desired) {
     // (destroy_resources also zeroes extent_, keeping it consistent with
     // valid()). The surface/format config survives for a later recreate retry.
     destroy_resources();
-    return vk_error(created, "vkCreateSwapchainKHR");
+    return core::vk_error(created, "vkCreateSwapchainKHR");
   }
   // The old chain (now retired) and its views are dead; replace them.
   destroy_resources();
@@ -216,23 +221,23 @@ Status Swapchain::build(VkExtent2D desired) {
   // empty state (valid() == false) rather than leaving a half-built swapchain
   // with a stale extent and a partial target list. extent_ is committed only
   // once everything succeeds.
-  const Status images = create_image_resources(extent);
+  const core::Status images = create_image_resources(extent);
   if (!images.ok()) {
     destroy_resources();  // also zeroes extent_ / requested_extent_
     return images;
   }
   extent_ = extent;
   requested_extent_ = desired;
-  return Status{};
+  return core::Status{};
 }
 
-Status Swapchain::create_image_resources(VkExtent2D extent) {
+core::Status Swapchain::create_image_resources(VkExtent2D extent) {
   VkDevice dev = device_->handle();
 
   uint32_t count = 0;
-  VG_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, nullptr));
+  VKC_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, nullptr));
   images_.resize(count);
-  VG_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, images_.data()));
+  VKC_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, images_.data()));
 
   views_.reserve(count);
   depth_images_.reserve(depth_format_ != VK_FORMAT_UNDEFINED ? count : 0u);
@@ -245,7 +250,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     view_info.format = format_;
     view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView view = VK_NULL_HANDLE;
-    VG_VK_TRY(vkCreateImageView(dev, &view_info, nullptr, &view));
+    VKC_VK_TRY(vkCreateImageView(dev, &view_info, nullptr, &view));
     views_.push_back(view);
 
     // One depth attachment per image (not one shared image): frames in flight
@@ -256,8 +261,8 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // the swapchain having to know the loop's.
     RenderTargetAttachment depth_attachment{};
     if (depth_format_ != VK_FORMAT_UNDEFINED) {
-      VG_ASSIGN(core::Image depth,
-                make_depth_attachment(*allocator_, extent, depth_format_));
+      VKC_ASSIGN(core::Image depth,
+                 make_depth_attachment(*allocator_, extent, depth_format_));
       depth_attachment = {depth.handle(), depth.view(), depth_format_};
       depth_images_.push_back(std::move(depth));
     }
@@ -277,7 +282,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // a single blocking submit. The images then stay in that layout for their
     // lifetime — RenderTarget::begin declares it, and load-op clears rewrite
     // the contents each frame with no further transition.
-    VG_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
+    VKC_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
       for (const core::Image& depth : depth_images_) {
         ImageBarrierDesc to_depth;
         to_depth.image = depth.handle();
@@ -293,18 +298,18 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
       }
     }));
   }
-  return Status{};
+  return core::Status{};
 }
 
-Result<uint32_t> Swapchain::acquire_next_image(VkSemaphore image_available,
-                                               uint64_t timeout_ns) {
+core::Result<uint32_t> Swapchain::acquire_next_image(
+    VkSemaphore image_available, uint64_t timeout_ns) {
   if (!valid()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::acquire_next_image on an empty swapchain");
   }
   uint32_t index = 0;
   // vkAcquireNextImageKHR has several success codes, so it is checked by hand
-  // (VG_VK_TRY would treat SUBOPTIMAL as a failure). SUBOPTIMAL still yields a
+  // (VKC_VK_TRY would treat SUBOPTIMAL as a failure). SUBOPTIMAL still yields a
   // usable image; OUT_OF_DATE returns its code for the caller to recreate.
   const VkResult r =
       vkAcquireNextImageKHR(device_->handle(), swapchain_, timeout_ns,
@@ -312,12 +317,14 @@ Result<uint32_t> Swapchain::acquire_next_image(VkSemaphore image_available,
   if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
     return index;
   }
-  return vk_error(r, "vkAcquireNextImageKHR");
+  return core::vk_error(r, "vkAcquireNextImageKHR");
 }
 
-Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
+core::Status Swapchain::present(uint32_t image_index,
+                                VkSemaphore render_finished) {
   if (!valid()) {
-    return Status::invalid_argument("Swapchain::present on an empty swapchain");
+    return core::Status::invalid_argument(
+        "Swapchain::present on an empty swapchain");
   }
   VkPresentInfoKHR info{};
   info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -329,50 +336,50 @@ Status Swapchain::present(uint32_t image_index, VkSemaphore render_finished) {
   // Route through the device so a shared present queue holds the submit mutex.
   const VkResult r = device_->queue_present(info);
   if (r == VK_SUCCESS) {
-    return Status{};
+    return core::Status{};
   }
   // SUBOPTIMAL / OUT_OF_DATE flow back so the caller can recreate.
-  return vk_error(r, "vkQueuePresentKHR");
+  return core::vk_error(r, "vkQueuePresentKHR");
 }
 
-Status Swapchain::recreate(VkExtent2D extent) {
+core::Status Swapchain::recreate(VkExtent2D extent) {
   if (device_ == nullptr) {
     // Moved-from or default-constructed: no device/surface to rebuild on.
     // A swapchain that a failed build() emptied keeps its device + surface +
     // format, so it does NOT trip this guard — recreate can rebuild it once
     // the transient failure clears (that is the whole point of this path).
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::recreate on a moved-from or default-constructed swapchain");
   }
   if (extent.width == 0 || extent.height == 0) {
     // A minimized window: skip the device drain and leave the current
     // (out-of-date but presentable) chain in place until the window restores.
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "Swapchain::recreate: extent is zero (window minimized?)");
   }
   // Drain the renderer's queues before the rebuild retires the old images;
   // surface a device-loss rather than destroying resources the GPU may still
   // reference. Queue-scoped (not device-wide) so a shared adopted device does
   // not drain a sibling library's unrelated work.
-  VG_TRY(device_->wait_idle());
+  VKC_TRY(device_->wait_idle());
   return build(extent);
 }
 
 const RenderTarget& Swapchain::render_target(uint32_t image_index) const {
-  VG_CHECK(image_index < targets_.size(),
-           "Swapchain::render_target: image_index out of range");
+  VKC_CHECK(image_index < targets_.size(),
+            "Swapchain::render_target: image_index out of range");
   return targets_[image_index];
 }
 
 VkImage Swapchain::image(uint32_t image_index) const {
-  VG_CHECK(image_index < images_.size(),
-           "Swapchain::image: image_index out of range");
+  VKC_CHECK(image_index < images_.size(),
+            "Swapchain::image: image_index out of range");
   return images_[image_index];
 }
 
 VkImageView Swapchain::image_view(uint32_t image_index) const {
-  VG_CHECK(image_index < image_count(),
-           "Swapchain::image_view: image_index out of range");
+  VKC_CHECK(image_index < image_count(),
+            "Swapchain::image_view: image_index out of range");
   return views_[image_index];
 }
 

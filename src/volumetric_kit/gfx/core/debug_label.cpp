@@ -5,7 +5,7 @@
 
 #include <utility>
 
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 
 namespace volumetric_kit::gfx {
 namespace {
@@ -28,7 +28,7 @@ VkDebugUtilsLabelEXT make_label(const char* name, const float color[4]) {
 
 }  // namespace
 
-DebugUtilsTable debug_utils(const Device& device) {
+DebugUtilsTable debug_utils(const core::Device& device) {
   return DebugUtilsTable::load(device.handle(),
                                device.debug_labels_available());
 }

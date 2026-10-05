@@ -65,7 +65,7 @@ TEST_F(PbrPipelineTest, RejectsLayoutWithoutDepth) {
   layout.color_count = 1;  // no depth format -> depth-tested pipeline rejected
   auto pbr = pipelines::PbrPipeline::create(device(), layout);
   ASSERT_FALSE(pbr.ok());
-  EXPECT_EQ(pbr.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pbr.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrPipelineTest, MoveLeavesSourceEmpty) {

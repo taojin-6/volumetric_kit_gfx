@@ -56,11 +56,12 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
-gfx's `Status`, `Result`, `VG_CHECK` and log sink are
-[volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s base
-tier, and its instance, device, allocator, buffers and images, Vulkan umbrella
-header, `VkResult` bridge, format helpers and shader build functions are the
-core's vulkan tier; both are fetched pinned by commit and linked PUBLIC, so a
+gfx's errors (`Status`, `Result`, `VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`) and
+log sink are [volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s
+base tier, and its instance, device, allocator, buffers and images, Vulkan
+umbrella header, `VkResult` bridge, format helpers and shader build functions
+are the core's vulkan tier, which gfx's API names as the core does
+(`volumetric_kit::core::`, `vkc::` by convention); both are fetched pinned by commit and linked PUBLIC, so a
 `Status`, a device or a buffer passes between gfx, recon and calib unchanged
 and one `set_log_handler` routes all three. An installed gfx carries
 the core beside it and re-finds it; an application that also fetches recon

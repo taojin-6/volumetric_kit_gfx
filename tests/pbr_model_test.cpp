@@ -308,16 +308,16 @@ TEST_F(PbrModelTest, RejectsInvalidPipeline) {
   auto made = pipelines::PbrModel::create(*device_, *allocator_, empty,
                                           one_mesh_model());
   ASSERT_FALSE(made.ok());
-  EXPECT_EQ(made.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(made.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrModelTest, RejectsNullDevice) {
   // A moved-from Device is the only way to hold one with a null handle.
-  vg::Device stolen = std::move(*device_);
+  vkc::Device stolen = std::move(*device_);
   auto made = pipelines::PbrModel::create(*device_, *allocator_, *pipeline_,
                                           one_mesh_model());
   EXPECT_FALSE(made.ok());
-  EXPECT_EQ(made.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(made.status().domain(), vkc::Status::Code::InvalidArgument);
   *device_ = std::move(stolen);  // restore for TearDown
 }
 

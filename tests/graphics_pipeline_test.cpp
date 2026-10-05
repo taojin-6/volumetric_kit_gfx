@@ -45,7 +45,7 @@ TEST(GraphicsPipelineTest, NullShaderHandlesRejected) {
   vg::GraphicsPipelineDesc desc;
   auto pipeline = vg::GraphicsPipeline::create(VK_NULL_HANDLE, desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // Command-recording helpers shared by the draw tests below.
@@ -182,7 +182,7 @@ TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {
   // desc.layout left default: color_count == 0.
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
@@ -196,7 +196,7 @@ TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
   desc.entry_point = nullptr;  // rejected before Vulkan is touched
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
@@ -211,7 +211,7 @@ TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
   desc.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
@@ -226,7 +226,7 @@ TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
   desc.layout = color_layout();
   auto pipeline = vg::GraphicsPipeline::create(VK_NULL_HANDLE, desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
@@ -374,7 +374,7 @@ std::array<VkVertexInputAttributeDescription, 2> mesh_attributes() {
 // Uploads `data` into a device-only buffer, which every device has (unlike
 // device-mapped memory). A failed upload fails the test and returns an empty
 // buffer, which callers check before drawing from it.
-vkc::Buffer make_device_buffer(const vg::Device& device,
+vkc::Buffer make_device_buffer(const vkc::Device& device,
                                vkc::Allocator& allocator, const void* data,
                                size_t size, VkBufferUsageFlags usage) {
   vg::BufferUploadDesc desc;
@@ -457,7 +457,7 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestWithoutDepthFormatRejected) {
   desc.depth_test = true;        // rejected before Vulkan is touched
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, VertexBindingCountWithoutPointerRejected) {
@@ -470,7 +470,7 @@ TEST_F(GraphicsPipelineDeviceTest, VertexBindingCountWithoutPointerRejected) {
   desc.vertex_binding_count = 1;  // but vertex_bindings stays null
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
@@ -486,7 +486,7 @@ TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
   desc.depth_test = false;  // in Vulkan, so create() rejects the combination.
   auto pipeline = vg::GraphicsPipeline::create(device(), desc);
   ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
@@ -877,7 +877,7 @@ TEST_F(GraphicsPipelineDeviceTest, MalformedFragmentSpecializationRejected) {
   for (const VkSpecializationInfo& spec : cases) {
     auto pipeline = create_with(spec);
     ASSERT_FALSE(pipeline.ok());
-    EXPECT_EQ(pipeline.status().domain(), vg::Status::Code::InvalidArgument);
+    EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
   }
 }
 

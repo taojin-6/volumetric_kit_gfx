@@ -12,8 +12,8 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
@@ -74,11 +74,11 @@ struct PbrMaterialDesc {
 /// std::vector<PbrMaterialDesc> descs(model.materials.size());
 /// descs[0].base_color_factor = model.materials[0].base_color_factor;
 /// descs[0].base_color = base_view;  // ... the other four maps + sampler
-/// VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
-/// VG_ASSIGN(std::vector<pipelines::PbrMaterial> materials,
+/// VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+/// VKC_ASSIGN(std::vector<pipelines::PbrMaterial> materials,
 ///           pipelines::PbrMaterial::create_all(
 ///               device.handle(), batch, pbr.descriptor_set_layout(1), descs));
-/// VG_TRY(batch.finish());  // the factors are in place; draw the materials
+/// VKC_TRY(batch.finish());  // the factors are in place; draw the materials
 /// @endcode
 class VG_PIPELINES_API PbrMaterial {
  public:
@@ -112,7 +112,7 @@ class VG_PIPELINES_API PbrMaterial {
   ///         what @ref UploadBatch::add_buffer returns.
   /// @warning Keep the materials alive until @p batch's
   ///          @ref UploadBatch::finish returns (see the class warning).
-  static Result<std::vector<PbrMaterial>> create_all(
+  static core::Result<std::vector<PbrMaterial>> create_all(
       VkDevice device, UploadBatch& batch,
       VkDescriptorSetLayout material_layout,
       const std::vector<PbrMaterialDesc>& descs);
@@ -132,9 +132,9 @@ class VG_PIPELINES_API PbrMaterial {
   ///         unchanged.
   /// @warning Keep the material alive until @p batch's
   ///          @ref UploadBatch::finish returns (see the class warning).
-  static Result<PbrMaterial> create(VkDevice device, UploadBatch& batch,
-                                    VkDescriptorSetLayout material_layout,
-                                    const PbrMaterialDesc& desc);
+  static core::Result<PbrMaterial> create(VkDevice device, UploadBatch& batch,
+                                          VkDescriptorSetLayout material_layout,
+                                          const PbrMaterialDesc& desc);
 
   ~PbrMaterial() = default;
   PbrMaterial(PbrMaterial&&) noexcept = default;

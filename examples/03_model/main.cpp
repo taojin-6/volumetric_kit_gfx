@@ -34,7 +34,7 @@
 //    binary PPM. Headless, so it works where no display / screen-capture is
 //    available.
 
-#include "volumetric_kit/gfx/core/vulkan.hpp"  // before GLFW, so glfw3.h sees
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 // Vulkan and declares its helpers
 
 #include <GLFW/glfw3.h>
@@ -66,12 +66,12 @@
 #include "imgui_impl_glfw.h"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
@@ -328,7 +328,7 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
 // Everything else GPU-side for the model -- the
 // meshes, material maps, materials (set 1), and draw list -- comes from
 // pipelines::PbrModel::create.
-pipelines::PbrScene make_pbr_scene(const vg::Device& device,
+pipelines::PbrScene make_pbr_scene(const vkc::Device& device,
                                    vkc::Allocator& alloc,
                                    const pipelines::PbrPipeline& pipeline,
                                    const pipelines::IblMaps& ibl,
@@ -369,7 +369,7 @@ glm::vec3 sky_color(const glm::vec3& dir) {
 // with the IBL bake) and upload them through the core cube-upload path in one
 // submit. Stores linear HDR color in a float cube (the skybox shader tone-maps
 // it on output).
-vkc::Image make_sky_cube(const vg::Device& device, vkc::Allocator& alloc,
+vkc::Image make_sky_cube(const vkc::Device& device, vkc::Allocator& alloc,
                          uint32_t size, bool* ok) {
   // RGBA16F (half) pixels: 16-bit float filters on the broad device set (incl.
   // MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
@@ -420,7 +420,7 @@ struct Skybox {
   vkc::DescriptorSet set;  // set 0: the samplerCube
 };
 
-vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
+vkc::Result<vg::GraphicsPipeline> build_skybox_pipeline(
     VkDevice device, const vg::ShaderModule& vert, const vg::ShaderModule& frag,
     const vg::RenderTargetLayout& layout) {
   vg::GraphicsPipelineDesc desc;
@@ -434,7 +434,7 @@ vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
 }
 
 // Bake the environment cube + build the skybox pipeline and its descriptor set.
-Skybox setup_skybox(const vg::Device& device, vkc::Allocator& alloc,
+Skybox setup_skybox(const vkc::Device& device, vkc::Allocator& alloc,
                     const vg::RenderTargetLayout& layout, bool* ok) {
   *ok = true;  // output flag; cleared on the first failure below
   Skybox s;
@@ -592,7 +592,7 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
   const glm::mat4 view_proj =
       rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
 
-  const vg::Status recorded =
+  const vkc::Status recorded =
       app.device().submit_single_time([&](VkCommandBuffer cmd) {
         // Fixed camera for the still, written before rendering begins.
         scene.set_camera(cmd, 0, rig.position(), ibl.value().prefilter_max_lod);
@@ -948,7 +948,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
 
     f.target->end(cmd);
 
-    const vg::Status present = app.end_frame(f);
+    const vkc::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
       exit_code = 1;
@@ -967,7 +967,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // loop may still have frames in flight referencing it (including after an
   // error break above). Idle the device first so that teardown is safe, and
   // detach the borrowed profiler from the loop before it goes out of scope.
-  if (const vg::Status idle = app.wait_idle(); !idle) {
+  if (const vkc::Status idle = app.wait_idle(); !idle) {
     std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
     exit_code = 1;
   }

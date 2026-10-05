@@ -13,10 +13,10 @@
 #include <string>
 #include <string_view>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::gfx {
 
@@ -34,21 +34,21 @@ namespace volumetric_kit::gfx {
 /// TODO: support combined depth/stencil — needs a stencil attachment wired
 /// through RenderTarget and that device feature; today only depth-only formats
 /// render correctly.
-inline Status validate_depth_only_format(VkFormat format,
-                                         std::string_view context) {
+inline core::Status validate_depth_only_format(VkFormat format,
+                                               std::string_view context) {
   if (!core::format_has_depth(format)) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         std::string(context) +
         ": depth_format must be a depth format (or VK_FORMAT_UNDEFINED for a "
         "color-only target)");
   }
   if (core::format_has_stencil(format)) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         std::string(context) +
         ": combined depth/stencil depth_format is not yet supported; use a "
         "depth-only format such as VK_FORMAT_D32_SFLOAT");
   }
-  return Status{};
+  return core::Status{};
 }
 
 /// @brief Allocate a device-local depth attachment at @p extent.
@@ -57,9 +57,8 @@ inline Status validate_depth_only_format(VkFormat format,
 /// @param format     A depth-only format (validate with @ref
 ///                   validate_depth_only_format first).
 /// @return The depth `core::Image`, or a propagated allocation failure.
-inline Result<core::Image> make_depth_attachment(core::Allocator& allocator,
-                                                 VkExtent2D extent,
-                                                 VkFormat format) {
+inline core::Result<core::Image> make_depth_attachment(
+    core::Allocator& allocator, VkExtent2D extent, VkFormat format) {
   core::ImageDesc desc;
   desc.extent = extent;
   desc.format = format;

@@ -9,7 +9,7 @@
 # (Vulkan::Vulkan) our static archive links privately.
 include(CMakeFindDependencyMacro)
 # volumetric_kit_core is PUBLIC (Status / Result / the log sink in every tier's
-# signatures, and the vulkan tier's umbrella under core/vulkan.hpp), at the minor
+# signatures, and the vulkan tier's types and Vulkan umbrella), at the minor
 # version this package was built against. The prefix this package is installed
 # in is the hint, as gfx's install carries the core beside it; CMAKE_PREFIX_PATH
 # still takes precedence.

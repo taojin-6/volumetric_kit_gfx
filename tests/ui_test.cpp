@@ -87,7 +87,7 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
 // dynamic rendering, which the backend's pipeline is built for) is refused.
 class ImGuiOverlayForeignDeviceTest : public VulkanDeviceTest {
  protected:
-  vg::DeviceRequirements requirements() const override { return {}; }
+  vkc::DeviceRequirements requirements() const override { return {}; }
 };
 
 TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
@@ -99,7 +99,7 @@ TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
   auto overlay =
       ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::Unsupported)
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::Unsupported)
       << overlay.status().message();
 }
 
@@ -107,7 +107,7 @@ TEST_F(ImGuiOverlayDeviceTest, NullInstanceRejected) {
   auto overlay = ui::ImGuiOverlay::create(*device_, VK_NULL_HANDLE,
                                           make_config(color_layout()));
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(ImGuiOverlayDeviceTest, EmptyLayoutRejected) {
@@ -115,7 +115,7 @@ TEST_F(ImGuiOverlayDeviceTest, EmptyLayoutRejected) {
   auto overlay =
       ui::ImGuiOverlay::create(*device_, instance_->handle(), make_config({}));
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(ImGuiOverlayDeviceTest, LowImageCountRejected) {
@@ -124,7 +124,7 @@ TEST_F(ImGuiOverlayDeviceTest, LowImageCountRejected) {
   auto overlay =
       ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(ImGuiOverlayDeviceTest, ImageCountBelowMinRejected) {
@@ -134,7 +134,7 @@ TEST_F(ImGuiOverlayDeviceTest, ImageCountBelowMinRejected) {
   auto overlay =
       ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
@@ -143,7 +143,7 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
   auto overlay =
       ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
   ASSERT_FALSE(overlay.ok());
-  EXPECT_EQ(overlay.status().domain(), vg::Status::Code::InvalidArgument);
+  EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // --- Move-only lifecycle ----------------------------------------------------

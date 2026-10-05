@@ -5,36 +5,36 @@
 
 #include <utility>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
-#include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 
 namespace volumetric_kit::gfx {
 
-Result<OffscreenTarget> OffscreenTarget::create(
+core::Result<OffscreenTarget> OffscreenTarget::create(
     core::Allocator& allocator, const OffscreenTargetDesc& desc) {
   if (desc.extent.width == 0 || desc.extent.height == 0) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OffscreenTarget::create: extent must be non-zero");
   }
   if (desc.color_format == VK_FORMAT_UNDEFINED) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OffscreenTarget::create: color_format must not be "
         "VK_FORMAT_UNDEFINED");
   }
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    VG_TRY(validate_depth_only_format(desc.depth_format,
-                                      "OffscreenTarget::create"));
+    VKC_TRY(validate_depth_only_format(desc.depth_format,
+                                       "OffscreenTarget::create"));
   }
 
   VkDeviceSize readback_size = 0;
   if (desc.readback) {
     const uint32_t texel = core::texel_bytes(desc.color_format);
     if (texel == 0) {
-      return Status::unsupported(
+      return core::Status::unsupported(
           "OffscreenTarget::create: readback unsupported for this color "
           "format");
     }
@@ -48,7 +48,7 @@ Result<OffscreenTarget> OffscreenTarget::create(
   color_desc.format = desc.color_format;
   color_desc.usage =
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  VG_ASSIGN(core::Image color, allocator.create_image(color_desc));
+  VKC_ASSIGN(core::Image color, allocator.create_image(color_desc));
 
   OffscreenTarget target;
   target.color_ = std::move(color);
@@ -56,8 +56,8 @@ Result<OffscreenTarget> OffscreenTarget::create(
   // Optional depth attachment: device-local, depth-stencil usage. depth_format
   // is validated depth-only above, so create_image derives a DEPTH-aspect view.
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    VG_ASSIGN(core::Image depth,
-              make_depth_attachment(allocator, desc.extent, desc.depth_format));
+    VKC_ASSIGN(core::Image depth, make_depth_attachment(allocator, desc.extent,
+                                                        desc.depth_format));
     target.depth_ = std::move(depth);
   }
 
@@ -69,7 +69,7 @@ Result<OffscreenTarget> OffscreenTarget::create(
     readback_desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     readback_desc.memory = core::MemoryUsage::Staging;
     readback_desc.host_access = core::HostAccess::Random;
-    VG_ASSIGN(core::Buffer readback, allocator.create_buffer(readback_desc));
+    VKC_ASSIGN(core::Buffer readback, allocator.create_buffer(readback_desc));
     target.readback_ = std::move(readback);
   }
 
@@ -100,7 +100,7 @@ RenderTargetLayout OffscreenTarget::layout() const {
 }
 
 void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
-  VG_CHECK(valid(), "OffscreenTarget::prepare on an empty target");
+  VKC_CHECK(valid(), "OffscreenTarget::prepare on an empty target");
 
   // UNDEFINED discards the previous contents (a load-op clear rewrites them),
   // so this is valid whatever layout a prior render/readback left them in. The
@@ -143,9 +143,9 @@ void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
 }
 
 void OffscreenTarget::record_readback(VkCommandBuffer cmd) const {
-  VG_CHECK(valid(), "OffscreenTarget::record_readback on an empty target");
-  VG_CHECK(readback_.valid(),
-           "OffscreenTarget::record_readback without a readback buffer");
+  VKC_CHECK(valid(), "OffscreenTarget::record_readback on an empty target");
+  VKC_CHECK(readback_.valid(),
+            "OffscreenTarget::record_readback without a readback buffer");
 
   const VkExtent2D ext = extent();
 
