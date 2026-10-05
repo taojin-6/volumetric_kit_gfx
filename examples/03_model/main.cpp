@@ -64,11 +64,12 @@
 #include "common/glfw_surface.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/camera/camera_rig.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
@@ -77,7 +78,6 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
@@ -89,6 +89,7 @@
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 namespace assets = volumetric_kit::gfx::assets;
 namespace camera = volumetric_kit::gfx::camera;
@@ -323,11 +324,12 @@ bool write_ppm(const char* path, const uint8_t* rgba, uint32_t width,
 // Build the pipelines-tier PbrScene (set 0: camera + IBL) against the
 // pipeline's reflected set-0 layout, one camera UBO ring slot per frame in
 // flight. The caller refreshes the acquired slot's camera each frame through
-// scene.set_camera(slot, ...). Everything else GPU-side for the model -- the
+// scene.set_camera(cmd, slot, ...), before the frame's rendering begins.
+// Everything else GPU-side for the model -- the
 // meshes, material maps, materials (set 1), and draw list -- comes from
 // pipelines::PbrModel::create.
 pipelines::PbrScene make_pbr_scene(const vg::Device& device,
-                                   vg::Allocator& alloc,
+                                   vkc::Allocator& alloc,
                                    const pipelines::PbrPipeline& pipeline,
                                    const pipelines::IblMaps& ibl,
                                    uint32_t frames_in_flight, bool* ok) {
@@ -367,8 +369,8 @@ glm::vec3 sky_color(const glm::vec3& dir) {
 // with the IBL bake) and upload them through the core cube-upload path in one
 // submit. Stores linear HDR color in a float cube (the skybox shader tone-maps
 // it on output).
-vg::Texture make_sky_cube(const vg::Device& device, vg::Allocator& alloc,
-                          uint32_t size, bool* ok) {
+vkc::Image make_sky_cube(const vg::Device& device, vkc::Allocator& alloc,
+                         uint32_t size, bool* ok) {
   // RGBA16F (half) pixels: 16-bit float filters on the broad device set (incl.
   // MoltenVK/Metal); RGBA32F linear filtering is an optional feature many GPUs
   // lack. Unclamped HDR (the skybox tone-maps on output); 2 uint32/texel,
@@ -412,7 +414,7 @@ struct SkyboxPush {
 // The environment cubemap plus the pipeline/descriptor that draws it.
 struct Skybox {
   std::optional<vg::Sampler> sampler;  // no public default ctor (see #47)
-  vg::Texture cube;
+  vkc::Image cube;
   vg::GraphicsPipeline pipeline;
   vg::DescriptorPool pool;
   vg::DescriptorSet set;  // set 0: the samplerCube
@@ -432,7 +434,7 @@ vg::Result<vg::GraphicsPipeline> build_skybox_pipeline(
 }
 
 // Bake the environment cube + build the skybox pipeline and its descriptor set.
-Skybox setup_skybox(const vg::Device& device, vg::Allocator& alloc,
+Skybox setup_skybox(const vg::Device& device, vkc::Allocator& alloc,
                     const vg::RenderTargetLayout& layout, bool* ok) {
   *ok = true;  // output flag; cleared on the first failure below
   Skybox s;
@@ -580,9 +582,6 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
     return 1;
   }
 
-  // Fixed camera for the still: write the eye into the scene set once.
-  scene.set_camera(0, rig.position(), ibl.value().prefilter_max_lod);
-
   Skybox skybox =
       setup_skybox(app.device(), app.allocator(), target.value().layout(), &ok);
   if (!ok) {
@@ -595,6 +594,8 @@ int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
 
   const vg::Status recorded =
       app.device().submit_single_time([&](VkCommandBuffer cmd) {
+        // Fixed camera for the still, written before rendering begins.
+        scene.set_camera(cmd, 0, rig.position(), ibl.value().prefilter_max_lod);
         target.value().prepare(cmd);  // color + depth -> attachment layouts
 
         vg::RenderTargetBeginInfo begin;
@@ -894,12 +895,6 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const ImGuiIO& io = ImGui::GetIO();
     vg::ui::draw_metrics_panel(profiler.value().metrics());
 
-    // The acquired image's target already pairs its color view with its own
-    // depth attachment; the default load op clears both.
-    vg::RenderTargetBeginInfo begin;
-    begin.clear_color = background();
-    f.target->begin(cmd, begin);
-
     // Advance the camera: interactive input, or a deterministic per-frame
     // turntable step under --frames (reproducible for CI).
     if (interactive) {
@@ -918,9 +913,16 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     const glm::mat4 view_proj =
         rig.to_camera(kFovY, aspect, clip.first, clip.second).view_proj();
     // The camera moves each frame, so refresh the acquired slot's camera UBO
-    // before drawing: begin_frame waited that slot's fence, so the GPU is not
-    // reading it.
-    scene.set_camera(f.slot, rig.position(), ibl.value().prefilter_max_lod);
+    // before rendering begins: the write is a recorded update, which a render
+    // pass may not contain.
+    scene.set_camera(cmd, f.slot, rig.position(),
+                     ibl.value().prefilter_max_lod);
+
+    // The acquired image's target already pairs its color view with its own
+    // depth attachment; the default load op clears both.
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color = background();
+    f.target->begin(cmd, begin);
     {
       // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
       // around each, resolved into the metrics the overlay panel shows.

@@ -27,13 +27,15 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
 
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
-class Allocator;
 
 /// @brief Construction parameters for a @ref Profiler.
 struct ProfilerConfig {
@@ -147,7 +149,7 @@ class VG_CORE_API Profiler {
   /// @param allocator  The allocator to sample at each @ref end_frame, or
   ///                   `nullptr` to report zero memory. Borrowed; must outlive
   ///                   the profiler.
-  void set_memory_source(const Allocator* allocator) noexcept;
+  void set_memory_source(const core::Allocator* allocator) noexcept;
 
   /// @brief Begin a frame: publish the frame this slot last held, reset its
   ///        timestamp range, and start the frame's CPU clock.

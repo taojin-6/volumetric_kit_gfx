@@ -12,9 +12,9 @@
 
 #include <glm/vec3.hpp>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -52,7 +52,7 @@ class IblTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -60,10 +60,10 @@ class IblTest : public VulkanDeviceTest {
   // Copy every (mip, layer) of `texture` (left in SHADER_READ_ONLY_OPTIMAL by
   // the bake) into host memory, packed mip-major like ImageUploadDesc. Fails
   // the current test and returns empty on any error.
-  std::vector<uint8_t> read_back(const vg::Texture& texture, uint32_t layers,
+  std::vector<uint8_t> read_back(const vkc::Image& texture, uint32_t layers,
                                  uint32_t texel_bytes) {
     const uint32_t mips = texture.mip_levels();
-    const VkExtent2D extent = texture.extent();
+    const VkExtent2D extent{texture.width(), texture.height()};
     VkDeviceSize total = 0;
     for (uint32_t m = 0; m < mips; ++m) {
       const uint32_t w = std::max(extent.width >> m, 1u);
@@ -71,18 +71,18 @@ class IblTest : public VulkanDeviceTest {
       total += VkDeviceSize{w} * h * layers * texel_bytes;
     }
 
-    vg::BufferDesc rb;
+    vkc::BufferDesc rb;
     rb.size = total;
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    rb.memory = vg::MemoryUsage::HostVisible;
-    rb.mapped = true;
+    rb.memory = vkc::MemoryUsage::Staging;
+    rb.host_access = vkc::HostAccess::Random;
     auto readback = allocator_->create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
       return {};
     }
 
-    const VkImage image = texture.image();
+    const VkImage image = texture.handle();
     const VkBuffer dst = readback.value().handle();
     const auto recorded = device_->submit_single_time([&](VkCommandBuffer cmd) {
       VkImageMemoryBarrier to_src{};
@@ -123,7 +123,7 @@ class IblTest : public VulkanDeviceTest {
     return bytes;
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -172,6 +172,11 @@ TEST_F(IblTest, BakesTinyMapSet) {
   EXPECT_EQ(maps.brdf_lut.format(), VK_FORMAT_R16G16_SFLOAT);
   ASSERT_TRUE(maps.sampler.has_value());
   EXPECT_TRUE(maps.sampler->valid());
+  // The bake's upload has finished, so every map records the layout it left
+  // them in.
+  EXPECT_EQ(maps.irradiance.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_EQ(maps.prefilter.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_EQ(maps.brdf_lut.layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 TEST_F(IblTest, SceneDescNamesEveryViewAndTheSampler) {
@@ -197,6 +202,7 @@ TEST_F(IblTest, BakesBrdfLutStandalone) {
   EXPECT_EQ(lut.value().extent().width, 8u);
   EXPECT_EQ(lut.value().extent().height, 8u);
   EXPECT_EQ(lut.value().format(), VK_FORMAT_R16G16_SFLOAT);
+  EXPECT_EQ(lut.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 TEST_F(IblTest, BrdfLutRejectsZeroSizeZeroSamplesAndEmptyBatch) {

@@ -8,17 +8,19 @@
 
 #include <cstdint>
 
-#include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
-class Allocator;
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
 class UploadBatch;
 namespace assets {
@@ -28,13 +30,13 @@ struct Mesh;
 
 namespace volumetric_kit::gfx::pipelines {
 
-/// @brief Owns a triangle mesh's device-local interleaved vertex buffer and
+/// @brief Owns a triangle mesh's device-only interleaved vertex buffer and
 ///        32-bit index buffer, and records an indexed draw of them.
 ///
 /// Produced by @ref upload_mesh from an @ref assets::Mesh. A
 /// default-constructed `GpuMesh` is empty (`valid()` is false) and safe to
-/// move-assign into. The buffers' producing @ref Allocator must outlive the
-/// mesh (see @ref Buffer).
+/// move-assign into. The device the buffers were made on must outlive the
+/// mesh (see `core::Buffer`).
 ///
 /// @code
 /// // Many meshes: record every upload into one batch, one submit total.
@@ -61,7 +63,8 @@ class VG_PIPELINES_API GpuMesh {
   /// @param vertices     Interleaved vertex buffer (`VERTEX_BUFFER` usage).
   /// @param indices      32-bit index buffer (`INDEX_BUFFER` usage).
   /// @param index_count  Number of indices to draw.
-  GpuMesh(Buffer vertices, Buffer indices, uint32_t index_count) noexcept;
+  GpuMesh(core::Buffer vertices, core::Buffer indices,
+          uint32_t index_count) noexcept;
 
   ~GpuMesh() = default;
   GpuMesh(GpuMesh&& other) noexcept;
@@ -86,8 +89,8 @@ class VG_PIPELINES_API GpuMesh {
   void record_draw(VkCommandBuffer cmd) const;
 
  private:
-  Buffer vertices_;
-  Buffer indices_;
+  core::Buffer vertices_;
+  core::Buffer indices_;
   uint32_t index_count_ = 0;
 };
 
@@ -124,7 +127,7 @@ VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
 /// round trip each.
 /// @param device     The device whose graphics queue runs the one-time
 ///                   transfer.
-/// @param allocator  Allocates the buffers; must outlive the returned mesh.
+/// @param allocator  Allocates the buffers.
 /// @param mesh       The CPU mesh; its `vertices` and `indices` must be
 ///                   non-empty.
 /// @return The GPU mesh -- draw-ready -- on success, or a non-OK @ref Status:
@@ -132,7 +135,7 @@ VG_PIPELINES_API Result<GpuMesh> upload_mesh(UploadBatch& batch,
 ///         indices; otherwise a backend Status from the buffer or
 ///         submit step.
 VG_PIPELINES_API Result<GpuMesh> upload_mesh(const Device& device,
-                                             Allocator& allocator,
+                                             core::Allocator& allocator,
                                              const assets::Mesh& mesh);
 
 }  // namespace volumetric_kit::gfx::pipelines

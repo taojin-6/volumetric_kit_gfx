@@ -11,18 +11,18 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// Adds a VMA allocator on top of the shared device fixture (mirrors
-// AllocatorTest): the derived allocator_ is destroyed before the base's
-// device_/instance_, and each test's textures/buffers before any of them.
+// Adds an allocator on top of the shared device fixture: the derived
+// allocator_ is destroyed before the base's device_/instance_, and each test's
+// textures/buffers before any of them.
 class TextureUploadTest : public VulkanDeviceTest {
  protected:
   // Records copies + subresource barriers, so run under the validation layer
@@ -35,7 +35,7 @@ class TextureUploadTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -51,11 +51,11 @@ class TextureUploadTest : public VulkanDeviceTest {
                                              uint32_t texel_bytes) {
     const VkDeviceSize bytes = VkDeviceSize{mip_ext.width} * mip_ext.height *
                                layer_count * texel_bytes;
-    vg::BufferDesc rb;
+    vkc::BufferDesc rb;
     rb.size = bytes;
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    rb.memory = vg::MemoryUsage::HostVisible;
-    rb.mapped = true;
+    rb.memory = vkc::MemoryUsage::Staging;
+    rb.host_access = vkc::HostAccess::Random;
     auto readback = allocator_->create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
@@ -89,7 +89,7 @@ class TextureUploadTest : public VulkanDeviceTest {
     return std::vector<std::uint8_t>(mapped, mapped + bytes);
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -114,19 +114,22 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   EXPECT_EQ(texture.value().extent().width, 2u);
   EXPECT_EQ(texture.value().extent().height, 2u);
   EXPECT_EQ(texture.value().mip_levels(), 1u);  // no mips requested
+  // The upload's transitions have been submitted, so the image records the
+  // layout they left it in.
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  // Copy the uploaded image back into a host-visible buffer and confirm the
+  // Copy the uploaded image back into a staging buffer and confirm the
   // bytes survived the staging -> image -> readback round trip (proving the
   // copy and the layout transitions landed the data correctly).
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = src.size();
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::HostVisible;
-  rb.mapped = true;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
-  const VkImage image = texture.value().image();
+  const VkImage image = texture.value().handle();
   const VkBuffer dst = readback.value().handle();
   auto recorded =
       device_->submit_single_time([image, dst](VkCommandBuffer cmd) {
@@ -191,7 +194,7 @@ TEST_F(TextureUploadTest, GeneratesMipChain) {
   // Mip 2 (2x2) is reached by two successive blits down from mip 0; every texel
   // must be the source color.
   const std::vector<std::uint8_t> got =
-      read_subresource(texture.value().image(), /*mip=*/2, /*base_layer=*/0,
+      read_subresource(texture.value().handle(), /*mip=*/2, /*base_layer=*/0,
                        /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
   ASSERT_EQ(got.size(), std::size_t{2 * 2 * 4});
   for (std::size_t p = 0; p < got.size(); p += 4) {
@@ -355,15 +358,15 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
 
   // Read the last face back: proves the per-layer buffer offsets landed each
   // face in its own layer, not just that the submit succeeded.
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = kFaceBytes;
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::HostVisible;
-  rb.mapped = true;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
-  const VkImage image = texture.value().image();
+  const VkImage image = texture.value().handle();
   const VkBuffer dst = readback.value().handle();
   auto recorded =
       device_->submit_single_time([image, dst](VkCommandBuffer cmd) {
@@ -422,7 +425,7 @@ TEST_F(TextureUploadTest, UploadsTwoDArrayAndRoutesLayers) {
   // Each layer reads back its own slice of the packed source.
   for (uint32_t layer = 0; layer < kLayers; ++layer) {
     const std::vector<std::uint8_t> got =
-        read_subresource(texture.value().image(), /*mip=*/0, layer,
+        read_subresource(texture.value().handle(), /*mip=*/0, layer,
                          /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
     ASSERT_EQ(got.size(), kLayerBytes);
     for (std::size_t i = 0; i < kLayerBytes; ++i) {
@@ -462,7 +465,7 @@ TEST_F(TextureUploadTest, UploadsPreMippedCube) {
   constexpr std::size_t kMip0Bytes = (4 * 4) * 4 * 6;  // six faces of mip 0
   constexpr std::size_t kMip1FaceBytes = (2 * 2) * 4;
   const std::vector<std::uint8_t> got =
-      read_subresource(texture.value().image(), /*mip=*/1, /*base_layer=*/0,
+      read_subresource(texture.value().handle(), /*mip=*/1, /*base_layer=*/0,
                        /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
   ASSERT_EQ(got.size(), kMip1FaceBytes);
   for (std::size_t i = 0; i < kMip1FaceBytes; ++i) {
@@ -575,7 +578,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   EXPECT_TRUE(batch.value().valid());
 
-  std::vector<vg::Texture> textures;
+  std::vector<vkc::Image> textures;
   for (int t = 0; t < 3; ++t) {
     auto texture = batch.value().add(small_desc(src[t]));
     ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -590,7 +593,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
     ASSERT_TRUE(textures[t].valid());
     EXPECT_NE(textures[t].view(), VK_NULL_HANDLE);
     const std::vector<std::uint8_t> got =
-        read_subresource(textures[t].image(), /*mip=*/0, /*base_layer=*/0,
+        read_subresource(textures[t].handle(), /*mip=*/0, /*base_layer=*/0,
                          /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
     ASSERT_EQ(got.size(), src[t].size());
     for (std::size_t i = 0; i < got.size(); ++i) {
@@ -685,7 +688,7 @@ TEST_F(TextureUploadTest, BatchSelfMoveAssignIsSafe) {
 
 TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
   const std::array<std::uint8_t, 16> px{};
-  std::vector<vg::Texture> textures;
+  std::vector<vkc::Image> textures;
   {
     auto batch = vg::UploadBatch::begin(*device_, *allocator_);
     ASSERT_TRUE(batch.ok()) << batch.status().message();
@@ -739,18 +742,28 @@ TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
       buffer_desc(vertices.data(), vertices.size() * sizeof(float)));
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
 
-  // Not host-mapped (the staging is internal) -- a necessary but not sufficient
-  // proxy for DeviceLocal residency. A positive DEVICE_LOCAL check needs a
-  // memory-property accessor Buffer does not expose, and would be moot on the
-  // UMA/software CI devices anyway (their single heap is device-local), so the
-  // residency rests on the DeviceLocal request in add_buffer + review.
+  // Device-only memory (the staging is internal): device-local and never
+  // mapped. On a unified-memory or software device whose one pool is also
+  // host-visible, the buffer takes it unmapped.
   EXPECT_EQ(buffer.value().mapped(), nullptr);
+  EXPECT_TRUE(buffer.value().is_device_local());
+  EXPECT_TRUE(texture.value().is_device_local());
   EXPECT_EQ(buffer.value().size(), vertices.size() * sizeof(float));
+  // Nothing has transitioned the image yet -- an unfinished, failed or
+  // discarded batch never does -- so it records UNDEFINED until its owner
+  // records the layout a successful finish leaves it in.
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
 
   const vg::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_TRUE(buffer.value().valid());
+  EXPECT_EQ(texture.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
+
+  // The resources hold their allocator's state: dropping the allocator first
+  // is safe, which is what lets a device keep a failed batch's staging
+  // buffers past it.
+  allocator_.reset();
 }
 
 TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
@@ -770,13 +783,13 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
   EXPECT_EQ(buffer.value().size(), src.size());
   EXPECT_EQ(buffer.value().mapped(), nullptr);  // device-local, not mapped
 
-  // Copy back into a host-visible buffer and confirm the bytes survived the
+  // Copy back into a staging buffer and confirm the bytes survived the
   // staging -> device-local -> readback round trip.
-  vg::BufferDesc rb;
+  vkc::BufferDesc rb;
   rb.size = src.size();
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vg::MemoryUsage::HostVisible;
-  rb.mapped = true;
+  rb.memory = vkc::MemoryUsage::Staging;
+  rb.host_access = vkc::HostAccess::Random;
   auto readback = allocator_->create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 

@@ -28,6 +28,14 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-04 — gfx names the core's types as the core does** (`core::Buffer`, `vkc::Buffer`
+  outside gfx), with no aliases of its own: one name per type across the family. See
+  "Memory comes from volumetric_kit_core", below.
+- **2026-10-04 — Memory comes from volumetric_kit_core.** `Allocator`, `Buffer` and
+  `Image` (formerly gfx's `Texture`) are the core's, so every buffer names its placement --
+  `DeviceOnly`, `DeviceMapped` or `Staging` -- and nothing spills into slower memory. The
+  per-frame camera uniforms are device-only, written by a recorded update; material factors
+  are uploaded, one buffer for a model's materials. See the dated entry below.
 - **2026-10-04 — The device comes from volumetric_kit_core.** `Instance`,
   `PhysicalDeviceInfo`, `Device`, `AdoptedDevice` and `DeviceRequirements` are the core's;
   gfx brings `device_requirements()`. See the dated entry below.
@@ -46,8 +54,8 @@ what has landed since then. Record amendments when a contract changes.
   (`VK_NO_PROTOTYPES`, global function pointers, per-platform init) isn't worth it while iOS/Android
   and CUDA interop are deferred. Because every call site includes only the umbrella header, adopting
   volk later (for iOS/Android loader portability or `volkLoadDevice` dispatch perf) is a non-breaking
-  change at gfx's call sites — not a one-way door. VMA uses the linked Vulkan prototypes
-  (`VMA_STATIC_VULKAN_FUNCTIONS`). *Amended 2026-10-04:* gfx's umbrella now forwards to
+  change at gfx's call sites — not a one-way door. VMA — the core's since 2026-10-04 —
+  uses the linked Vulkan prototypes (`VMA_STATIC_VULKAN_FUNCTIONS`). *Amended 2026-10-04:* gfx's umbrella now forwards to
   volumetric_kit_core's (`volumetric_kit/core/vulkan/vulkan.hpp`), which makes the loader choice
   for the whole family, so adopting volk is a change to the core's header plus the link lines
   (the core's `TODO` marks it); see "Vulkan headers come from the system", below.
@@ -72,6 +80,89 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-04 — Memory comes from volumetric_kit_core
+
+gfx's allocator, buffers and images are the family's core's (stage 2b), named
+as the core's: gfx's API takes and returns `core::Allocator`, `core::Buffer`
+and `core::Image`. gfx's own VMA, its `Allocator` and `Texture`, and
+`ExternalHandleType` -- a field whose every value but `None` was refused --
+are gone; exported memory is the core's `create_exported_buffer`. A buffer
+gfx makes is the type recon binds, and the reverse.
+
+- **No gfx names for the core's types.** gfx first named the core's types
+  through using-declarations in `vg::`, as recon does in `vr::`. That kept
+  call sites unchanged but gave each type a second name per library, an alias
+  header and docs to keep in step, and left a reader to discover that
+  `vg::Buffer` was `vkc::Buffer`. The point of the shared core is one type
+  for the whole family, so gfx spells the core's types as the core does:
+  `core::Allocator` inside gfx's namespaces, `vkc::Allocator` in tests and
+  examples (the family's alias for `volumetric_kit::core`), including the
+  core's headers directly. The names aliased before this entry -- `Status`,
+  `Result`, the `VG_*` macros, `Instance`, `Device` and the rest of the device
+  entry below -- move the same way in a follow-up; a `TODO` marks each alias.
+
+- **Every buffer names its placement, as the core's DECISIONS.md, "Where
+  memory lives", sets out.** Vertex, index and uploaded buffers, textures and
+  render targets are `DeviceOnly`: device-local memory the host cannot map,
+  never host memory, where gfx's `DeviceLocal` only preferred device memory
+  and its `Auto` let VMA put a buffer in host memory once VRAM filled.
+  `UploadBatch` stages through `Staging` memory, and `OffscreenTarget` reads
+  back through `Staging` memory the host reads cached (`HostAccess::Random`).
+  `BufferDesc::mapped` and `ImageDesc::memory` are gone: the placement says
+  whether a buffer is mapped, and every image is device-only.
+- **The per-frame camera uniforms are device-only, written by a recorded
+  update.** `make_frame_uniform_buffer` makes them `DeviceOnly`, and
+  `OwnedDescriptorSet::write_uniform` records into the frame's command buffer
+  a barrier after earlier reads and writes of the block, a `vkCmdUpdateBuffer`,
+  and a barrier to the shaders' uniform reads. The core's DECISIONS.md names
+  `DeviceMapped` memory for data the host rewrites each frame, falling back to
+  device-only memory written by a `CommandBatch`; a recorded update in the
+  frame's own command buffer is that fallback without a second submit. A
+  first cut wrote device-mapped memory where the device had room and fell
+  back to the update where it did not, but a device may lack that memory, so
+  `PbrScene::set_camera` had to take the command buffer and be called before
+  rendering on every device anyway. The mapped path then bought nothing but
+  a second behavior: a memcpy applies to the whole submitted frame, a
+  recorded update to the work after it, so a frame rendering two views
+  through one slot saw the last camera on one device and each view's own on
+  another. One path behaves the same everywhere -- each `set_camera` reaches
+  the work recorded after it -- leaves the BAR window to libraries that need
+  it, and has no fallback whose failures need sorting. Its cost is one small
+  update and two barriers a frame.
+- **Material factors are uploaded, not mapped, one buffer for many.** They
+  never change, so `PbrMaterial::create_all` puts every material's factors in
+  one device-only buffer, each at a 256-byte offset (the largest
+  `minUniformBufferOffsetAlignment` Vulkan allows, so no device query), and
+  uploads it on the `UploadBatch` that uploads the model's meshes and maps:
+  one staging buffer and one copy, not one each per material.
+  `PbrModel::create` builds its materials that way. The materials share the
+  buffer, so it lives until the last of them is destroyed. The descriptor
+  pools and sets are allocated before the copy is queued, so a failed create
+  leaves the batch unchanged rather than poisoning it.
+- **Images record their layout.** The core's `Image` records the layout its
+  contents are in, for a library handed one, and asks whoever submits a
+  transition to record it after. An `UploadBatch` image so records
+  `UNDEFINED` until `finish` returns OK -- a batch discarded, poisoned or
+  failed never transitions it -- and its owner records
+  `SHADER_READ_ONLY_OPTIMAL` then, as `upload_texture`, `bake_ibl` and
+  `PbrModel` do. Render targets transition their attachments every frame and
+  keep their images to themselves, so they record none.
+- **Resources outlive their allocator.** Each holds the core's VMA state, so
+  only the device must outlive gfx's buffers and images. `UploadBatch::finish`
+  now hands its staging buffers to `Device::submit_single_time`, which keeps
+  them past a failed wait until the device is destroyed, instead of waiting
+  for the queue to drain and leaking them if it never did.
+- **Frame times re-measured, as the core's DECISIONS.md asks, and unchanged.**
+  A headless benchmark of the 03_model scene -- a grid of cubes, each its own
+  mesh and material -- timed the move's base and head alternately, on unified
+  memory (Apple M5 Max and M4) and on a discrete GPU (RTX 4090). GPU and wall
+  frame times stayed within run-to-run spread; the PR that made the move
+  records the numbers. The benchmark was not kept: a one-off before/after
+  check did not justify maintaining a benchmark executable, an A/B script and
+  CI steps.
+
+Still open: descriptors, sync and the query pool (stage 2c).
 
 ## 2026-10-04 — The device comes from volumetric_kit_core
 
@@ -122,7 +213,8 @@ and the reverse.
 
 Still open: the allocator, buffers, images (`Texture` becoming the core's
 `Image`), descriptors, sync and the query pool (stages 2b and 2c), and
-re-measuring frame times as the core's allocator changes placement.
+re-measuring frame times as the core's allocator changes placement. The memory
+half has since landed ("Memory comes from volumetric_kit_core", above).
 
 ## 2026-10-04 — Vulkan headers come from the system
 
@@ -221,7 +313,8 @@ graphics-only parts (swapchain, render targets, graphics pipelines, samplers,
 the frames-in-flight profiler) staying here; `Texture` becoming the core's
 `Image`; and re-measuring frame times, as the core's allocator places memory
 differently (`DeviceOnly` never falls back to host memory, and per-frame
-uniforms become `DeviceMapped` or batch-uploaded `DeviceOnly`).
+uniforms become `DeviceMapped` or batch-uploaded `DeviceOnly`). The device and
+memory have since moved (the dated entries above).
 
 ## 2026-10-02 — Shared agent guidance
 

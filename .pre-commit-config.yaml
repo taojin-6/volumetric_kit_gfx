@@ -32,8 +32,7 @@ repos:
   # path. The pattern is anchored to the start of a line (after optional
   # whitespace) so it matches real `#include` directives, not the path quoted
   # inside a comment or a Doxygen @code block. Exemptions: examples/ (consumer
-  # demo code, not library code, may use Vulkan directly) and vma_impl.cpp
-  # (which must define VMA_STATIC_VULKAN_FUNCTIONS before the include).
+  # demo code, not library code, may use Vulkan directly).
   - repo: local
     hooks:
       - id: vulkan-include-umbrella
@@ -41,11 +40,7 @@ repos:
         entry: '^\s*#\s*include\s*[<"]vulkan/'
         language: pygrep
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
-        exclude: |
-          (?x)^(
-            examples/.*|
-            src/volumetric_kit/gfx/core/vma_impl\.cpp
-          )$
+        exclude: ^examples/
 
 # pre-commit.ci (https://pre-commit.ci) runs these same hooks on every PR and
 # pushes the auto-fixes back to the branch, so formatting lands even when a

@@ -72,13 +72,18 @@ struct FrameMetrics {
   double cpu_frame_ms = 0.0;
   /// Frames per second (e.g. a smoothed rate the producer maintains).
   double fps = 0.0;
-  /// Aggregate device memory currently in use, in bytes. Summed across heaps:
-  /// on a UMA/Apple GPU the heaps are unified, so this is the single pool's
-  /// usage. Per-heap detail is available via @ref Allocator::memory_stats.
+  /// Aggregate device memory currently in use, in bytes: each heap's
+  /// `HeapStats::usage_bytes`, summed. Where the device enables
+  /// `VK_EXT_memory_budget` that is the driver's figure for the whole process
+  /// -- every library allocating on the device, not only the renderer --
+  /// otherwise the sampled allocator's own. On unified memory the device
+  /// typically reports one heap, so this is the one pool's usage. Per-heap
+  /// detail, and the allocator's own share, are in
+  /// `core::Allocator::memory_stats`.
   uint64_t memory_used_bytes = 0;
   /// Aggregate device memory budget, in bytes, with the same aggregation as
-  /// @ref memory_used_bytes (a single unified pool on UMA/Apple GPUs). Per-heap
-  /// detail is available via @ref Allocator::memory_stats.
+  /// @ref memory_used_bytes. Per-heap detail is available via
+  /// `core::Allocator::memory_stats`.
   uint64_t memory_budget_bytes = 0;
 };
 

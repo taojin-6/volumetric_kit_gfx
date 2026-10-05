@@ -19,11 +19,14 @@
 /// load) the core's instance continues without it, so the test still runs,
 /// just without teeth; CI (lavapipe + the layer) gets them. The plain device
 /// tests leave wants_validation() at its default (false) and are unaffected. A
-/// fixture that needs more of the device overrides requirements().
+/// fixture whose tests hinge on the barriers between recorded commands also
+/// overrides wants_sync_validation(). A fixture that needs more of the device
+/// overrides requirements().
 
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -37,6 +40,7 @@
 #include "volumetric_kit/gfx/core/sync.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 
 class VulkanDeviceTest : public ::testing::Test {
  protected:
@@ -44,6 +48,13 @@ class VulkanDeviceTest : public ::testing::Test {
   // opt into validation-with-teeth. Defaults off so the plain device tests keep
   // running validation-free (and without needing the layer installed).
   virtual bool wants_validation() const { return false; }
+  // On top of wants_validation(): turn on the layer's synchronization
+  // validation, which reports a missing barrier as a hazard -- core
+  // validation does not, and the race it guards is rarely lost in a test.
+  // Set through the layer's settings environment variable, which the layer
+  // reads when the instance is created; a layer too old to read it runs
+  // without it.
+  virtual bool wants_sync_validation() const { return false; }
   // What the fixture's device must provide; the renderer's floor by default.
   virtual vg::DeviceRequirements requirements() const {
     return vg::device_requirements();
@@ -52,7 +63,12 @@ class VulkanDeviceTest : public ::testing::Test {
   void SetUp() override {
     vg::InstanceConfig icfg;
     icfg.enable_validation = wants_validation();
+    std::optional<ScopedEnv> sync;
+    if (wants_validation() && wants_sync_validation()) {
+      sync.emplace("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true");
+    }
     auto instance = vg::Instance::create(icfg);
+    sync.reset();  // read at instance creation; keep it from later instances
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -128,6 +144,42 @@ class VulkanDeviceTest : public ::testing::Test {
   std::optional<vg::Device> device_;
 
  private:
+  // Sets an environment variable for its lifetime, then restores the value it
+  // had, or unsets it.
+  class ScopedEnv {
+   public:
+    ScopedEnv(const char* name, const char* value) : name_(name) {
+      if (const char* old = std::getenv(name)) {
+        old_ = old;
+      }
+      set(name, value);
+    }
+    ~ScopedEnv() {
+      if (old_) {
+        set(name_, old_->c_str());
+      } else {
+#ifdef _WIN32
+        _putenv_s(name_, "");
+#else
+        unsetenv(name_);
+#endif
+      }
+    }
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+   private:
+    static void set(const char* name, const char* value) {
+#ifdef _WIN32
+      _putenv_s(name, value);
+#else
+      setenv(name, value, 1);
+#endif
+    }
+    const char* name_;
+    std::optional<std::string> old_;
+  };
+
   // Route the core's validation messages (source "vulkan", level Error) into
   // validation_errors_; anything else still reaches stderr, as the default
   // sink would print it.

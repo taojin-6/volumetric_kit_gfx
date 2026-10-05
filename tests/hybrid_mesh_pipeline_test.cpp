@@ -26,16 +26,16 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/buffer.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
@@ -182,17 +182,16 @@ bool all_pixels_cleared(const std::vector<uint8_t>& px) {
   return true;
 }
 
-// A host-visible, mapped buffer of `pad + size` bytes with `size` bytes of
+// A device-mapped buffer of `pad + size` bytes with `size` bytes of
 // `data` copied in at byte offset `pad`. A non-zero pad lets a test bind the
 // data at a non-zero (4-aligned) offset, exercising LiveMesh's offset fields.
-vg::Buffer host_buffer_at(vg::Allocator& allocator, const void* data,
-                          VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkDeviceSize pad) {
-  vg::BufferDesc desc;
+vkc::Buffer host_buffer_at(vkc::Allocator& allocator, const void* data,
+                           VkDeviceSize size, VkBufferUsageFlags usage,
+                           VkDeviceSize pad) {
+  vkc::BufferDesc desc;
   desc.size = pad + size;
   desc.usage = usage;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
+  desc.memory = vkc::MemoryUsage::DeviceMapped;
   auto buf = allocator.create_buffer(desc);
   if (!buf.ok()) {
     ADD_FAILURE() << buf.status().message();
@@ -202,12 +201,12 @@ vg::Buffer host_buffer_at(vg::Allocator& allocator, const void* data,
   return std::move(buf).value();
 }
 
-// The three host-visible buffers a LiveMesh borrows; the caller keeps them
+// The three device-mapped buffers a LiveMesh borrows; the caller keeps them
 // alive (the LiveMesh only names their handles).
 struct LiveBuffers {
-  vg::Buffer vertices;
-  vg::Buffer indices;
-  vg::Buffer indirect;
+  vkc::Buffer vertices;
+  vkc::Buffer indices;
+  vkc::Buffer indirect;
 };
 
 // The well-formed command for `mesh`: its whole index run, one instance, no
@@ -220,10 +219,10 @@ VkDrawIndexedIndirectCommand draw_command(const assets::Mesh& mesh) {
 }
 
 // Builds a LiveMesh that draws `mesh` under `command`, backed by three
-// host-visible buffers each carrying `pad` leading bytes -- a non-zero `pad` (a
-// multiple of 4) exercises the vertex/index/indirect bind offsets. The owning
-// buffers land in `out`, which must outlive the draw.
-pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
+// device-mapped buffers each carrying `pad` leading bytes -- a non-zero `pad`
+// (a multiple of 4) exercises the vertex/index/indirect bind offsets. The
+// owning buffers land in `out`, which must outlive the draw.
+pipelines::LiveMesh make_live_mesh(vkc::Allocator& allocator,
                                    const assets::Mesh& mesh, VkDeviceSize pad,
                                    const VkDrawIndexedIndirectCommand& command,
                                    LiveBuffers& out) {
@@ -250,7 +249,7 @@ pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
 }
 
 // Same, under the contract's well-formed command -- the common case.
-pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
+pipelines::LiveMesh make_live_mesh(vkc::Allocator& allocator,
                                    const assets::Mesh& mesh, VkDeviceSize pad,
                                    LiveBuffers& out) {
   return make_live_mesh(allocator, mesh, pad, draw_command(mesh), out);
@@ -261,7 +260,7 @@ pipelines::LiveMesh make_live_mesh(vg::Allocator& allocator,
 // in a test-body vector so they outlive the render() calls yet are destroyed
 // before the allocator that produced them.
 struct AtlasResources {
-  vg::Texture texture;
+  vkc::Image texture;
   vg::Sampler sampler;
   vg::DescriptorPool pool;
   VkDescriptorSet set = VK_NULL_HANDLE;
@@ -365,7 +364,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
   // agnostic, and a draw_count > 1 list exercises submit()'s per-draw dispatch.
   // `color_format` must match the layout `pipeline` was created for.
   std::vector<uint8_t> render(
-      vg::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
+      vkc::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
       const std::vector<pipelines::HybridMeshDraw>& draws,
       VkDescriptorSet atlas, uint32_t flags,
       VkFormat color_format = kColorFormat) {
@@ -431,7 +430,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
   }
 
   // Single-draw convenience -- the common case is one mesh per frame.
-  std::vector<uint8_t> render(vg::Allocator& allocator,
+  std::vector<uint8_t> render(vkc::Allocator& allocator,
                               const pipelines::HybridMeshPipeline& pipeline,
                               const pipelines::HybridMeshDraw& draw,
                               VkDescriptorSet atlas, uint32_t flags,
@@ -446,7 +445,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
   // texture, sampler, and pool to `keep` (a caller-owned local that must
   // outlive the render, but be destroyed before its allocator) and returns the
   // set handle (VK_NULL_HANDLE on failure).
-  VkDescriptorSet make_atlas(vg::Allocator& allocator,
+  VkDescriptorSet make_atlas(vkc::Allocator& allocator,
                              const pipelines::HybridMeshPipeline& pipeline,
                              const void* pixels, VkExtent2D extent,
                              VkDeviceSize size,
@@ -499,7 +498,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
 };
 
 TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -575,7 +574,7 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
 // quad reading exactly what a front-facing -Y would is the documented
 // winding-blindness.
 TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -636,7 +635,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
 // A zero normal has no direction to encode: safe_normalize() maps it to 0, so
 // the view shows mid-grey rather than the NaN a bare normalize() would write.
 TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -677,7 +676,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
 // what bite.
 TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
   constexpr VkFormat kSrgb = VK_FORMAT_R8G8B8A8_SRGB;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline = pipelines::HybridMeshPipeline::create(
@@ -715,7 +714,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
 // Bits HybridMeshFlags does not name are reserved, and the shader tests only
 // the named ones, so setting every reserved bit changes no pixel.
 TEST_F(HybridMeshRenderTest, ReservedFlagBitsAreIgnored) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -752,7 +751,7 @@ TEST_F(HybridMeshRenderTest, ReservedFlagBitsAreIgnored) {
 // this fixture runs with teeth, a VUID-vkCmdDraw-None-* error the fixture fails
 // the test on. So the readback stays the clear color everywhere.
 TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -792,7 +791,7 @@ TEST_F(HybridMeshRenderTest, NullAtlasRecordsNothingInsteadOfDrawingUnbound) {
 // producer->draw barrier itself (see LiveMesh's synchronization warning); that
 // seam belongs to the streamed-app driver, not this pipeline.
 TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -827,11 +826,10 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
   VkDrawIndexedIndirectCommand command{};
   command.indexCount = static_cast<uint32_t>(mesh_cpu.indices.size());
   command.instanceCount = 1;
-  vg::BufferDesc cmd_desc;
+  vkc::BufferDesc cmd_desc;
   cmd_desc.size = sizeof(command);
   cmd_desc.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-  cmd_desc.memory = vg::MemoryUsage::HostVisible;
-  cmd_desc.mapped = true;
+  cmd_desc.memory = vkc::MemoryUsage::DeviceMapped;
   auto indbuf = allocator.value().create_buffer(cmd_desc);
   ASSERT_TRUE(indbuf.ok()) << indbuf.status().message();
   std::memcpy(indbuf.value().mapped(), &command, sizeof(command));
@@ -875,7 +873,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
 // would fail on. A valid atlas is bound so submit() reaches the draw loop (not
 // the null-atlas early-out); with every draw empty, the readback stays cleared.
 TEST_F(HybridMeshRenderTest, SkipsEmptyGeometryInsteadOfDrawingUnbound) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -908,7 +906,7 @@ TEST_F(HybridMeshRenderTest, SkipsEmptyGeometryInsteadOfDrawingUnbound) {
 // require the result to match the direct draw -- if record_draw ignored any
 // offset it would fetch the zeroed pad instead of the mesh, and differ.
 TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -956,7 +954,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
 // region: blue in the centre only when the live draw ran, and the static mesh's
 // own shading unchanged outside it.
 TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =
@@ -1023,7 +1021,7 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
 // violates the contract's `instanceCount = 1` draws nothing at all, which is
 // why the contract fixes it.
 TEST_F(HybridMeshRenderTest, ZeroInstanceCountCommandDrawsNothing) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto pipeline =

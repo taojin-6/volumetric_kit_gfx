@@ -15,8 +15,8 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "vulkan_test_fixture.hpp"
@@ -126,7 +126,7 @@ class PbrModelTest : public VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
 
@@ -146,7 +146,7 @@ class PbrModelTest : public VulkanDeviceTest {
     return made.ok() ? std::move(made).value() : pipelines::PbrModel{};
   }
 
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
 };
 

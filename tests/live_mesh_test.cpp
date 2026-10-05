@@ -8,7 +8,7 @@
 
 #include <gtest/gtest.h>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -34,14 +34,14 @@ TEST(LiveMeshTest, DefaultConstructedIsEmpty) {
 using LiveMeshDeviceTest = VulkanDeviceTest;
 
 TEST_F(LiveMeshDeviceTest, ValidRequiresAllThreeBuffers) {
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   auto make = [&](VkBufferUsageFlags usage) {
-    vg::BufferDesc desc;
+    vkc::BufferDesc desc;
     desc.size = 256;
     desc.usage = usage;
-    desc.memory = vg::MemoryUsage::DeviceLocal;
+    desc.memory = vkc::MemoryUsage::DeviceOnly;
     return allocator.value().create_buffer(desc);
   };
   auto vtx = make(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);

@@ -10,19 +10,21 @@
 #include <optional>
 #include <vector>
 
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx {
 
-class Allocator;
+// TODO: name core::Device as the core does and drop this alias (DECISIONS.md,
+// "Memory comes from volumetric_kit_core").
 using core::Device;
 
 namespace windowing {
@@ -127,7 +129,7 @@ class VG_WINDOWING_API Swapchain {
   ///         `VkResult`.
   static Result<Swapchain> create(const Device& device, VkSurfaceKHR surface,
                                   const SwapchainConfig& config,
-                                  Allocator* allocator = nullptr);
+                                  core::Allocator* allocator = nullptr);
 
   ~Swapchain();
   Swapchain(Swapchain&& other) noexcept;
@@ -228,11 +230,12 @@ class VG_WINDOWING_API Swapchain {
   const Device* device_ = nullptr;         // borrowed; outlives this
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  // borrowed; outlives this
   // Borrowed; outlives this. Non-null only when depth_format_ is set.
-  Allocator* allocator_ = nullptr;
+  core::Allocator* allocator_ = nullptr;
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
   std::vector<VkImage> images_;  // owned by the swapchain, not freed by us
   std::vector<VkImageView> views_;
-  std::vector<Texture> depth_textures_;  // one per image when depth_format_ set
+  std::vector<core::Image>
+      depth_images_;  // one per image when depth_format_ set
   std::vector<RenderTarget> targets_;
   VkFormat format_ = VK_FORMAT_UNDEFINED;
   VkFormat depth_format_ = VK_FORMAT_UNDEFINED;

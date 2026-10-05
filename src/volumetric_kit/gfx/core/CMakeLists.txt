@@ -3,11 +3,11 @@
 
 # --- gfx_core: Tier 1 -------------------------------------------------------
 # Foundation tier: version API, gfx's names for volumetric_kit_core's
-# Status/Result error handling, log sink and contract checks, Vulkan
-# instance/device setup, sync primitives, and GPU memory allocation
-# (buffers/images via VMA). Every other tier depends on this; it depends only on
-# volumetric_kit_core's base and vulkan tiers + Vulkan + VMA + spirv-cross (a
-# private impl detail backing SPIR-V reflection in shader.cpp).
+# Status/Result error handling, log sink and contract checks, instance, device
+# and allocator (buffers and images), plus sync primitives and uploads. Every
+# other tier depends on this; it depends only on volumetric_kit_core's base and
+# vulkan tiers + Vulkan + spirv-cross (a private impl detail backing SPIR-V
+# reflection in shader.cpp).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -19,21 +19,18 @@ add_library(volumetric_kit::gfx_core ALIAS gfx_core)
 target_sources(
   gfx_core
   PRIVATE version.cpp
-          vma_impl.cpp
           debug_label.cpp
           sync.cpp
           query_pool.cpp
           profiler.cpp
           retire_queue.cpp
-          allocator.cpp
-          buffer.cpp
-          texture.cpp
           sampler.cpp
           shader.cpp
           descriptor.cpp
           graphics_pipeline.cpp
           render_target.cpp
           image_barrier.cpp
+          buffer_barrier.cpp
           offscreen_target.cpp
           command_pool.cpp
           command_buffer.cpp
@@ -75,22 +72,17 @@ target_include_directories(
          "$<BUILD_INTERFACE:${_vg_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
-# VMA's header is a vendored private dep (implemented in vma_impl.cpp). Mark it
-# SYSTEM so its warnings -- nullability-extension/-completeness under
-# -Wall/-Wpedantic -- never reach our build, keeping first-party code clean
-# enough for -Werror.
-target_include_directories(gfx_core SYSTEM PRIVATE "${VG_VMA_INCLUDE_DIR}")
-
 # Public deps are independently re-findable, so the installed package's
 # find_dependency() calls stay simple: volumetric_kit_core -- its base tier
 # (Status / Result / the log sink in every tier's signatures) and its vulkan
-# tier (the Instance, PhysicalDeviceInfo and Device gfx's API takes, the
-# umbrella header core/vulkan.hpp forwards to, the VkResult bridge result.hpp
-# names, and the format metadata) -- and the system's Vulkan headers, which
-# every gfx TU compiles against. gfx links the Vulkan loader PRIVATE -- our
-# implementation (VMA) calls it, and no public gfx signature needs it -- but the
-# core's vulkan tier links it PUBLIC, so consumers get it through that. glm is
-# intentionally absent: no public gfx_core header names a glm type (see the
+# tier (the Instance, PhysicalDeviceInfo, Device and Allocator gfx's API takes,
+# the umbrella header core/vulkan.hpp forwards to, the VkResult bridge
+# result.hpp names, and the format metadata) -- and the system's Vulkan headers,
+# which every gfx TU compiles against. gfx links the Vulkan loader PRIVATE --
+# its own implementation calls it, and no public gfx signature needs it -- but
+# the core's vulkan tier links it PUBLIC, so consumers get it through that. VMA
+# is the core's, compiled into its allocator; gfx no longer builds a copy. glm
+# is intentionally absent: no public gfx_core header names a glm type (see the
 # rationale at the top-level find_package site in CMakeLists.txt).
 target_link_libraries(
   gfx_core
@@ -99,9 +91,9 @@ target_link_libraries(
 
 # spirv-cross: SPIR-V reflection for descriptor-set layouts, used privately in
 # shader.cpp -- its headers/types never reach gfx_core's public API. SYSTEM-mark
-# its include dir so its third-party-header warnings stay out of -Werror (the
-# same treatment VMA gets above). spirv-cross runs its own install/export under
-# VG_INSTALL (see third_party/CMakeLists.txt), so the installed package's
+# its include dir so its third-party-header warnings stay out of -Werror.
+# spirv-cross runs its own install/export under VG_INSTALL (see
+# third_party/CMakeLists.txt), so the installed package's
 # find_dependency(spirv_cross_core) re-supplies this private static link.
 target_include_directories(
   gfx_core SYSTEM

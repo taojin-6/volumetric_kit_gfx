@@ -98,7 +98,8 @@ PbrMaterialDesc pbr_material_desc(const assets::Material& material) {
   return desc;
 }
 
-Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
+Result<PbrModel> PbrModel::create(const Device& device,
+                                  core::Allocator& allocator,
                                   const PbrPipeline& pipeline,
                                   const assets::Model& model) {
   if (device.handle() == VK_NULL_HANDLE) {
@@ -116,10 +117,10 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
   out.sampler_.emplace(std::move(sampler));
 
   // One batch for the whole model -- every mesh's vertex/index buffers, the
-  // fallback textures, and every material map record into a single submit,
-  // finished before the descriptor sets are built. A failure below returns
-  // without finishing: the batch (and its pending copies into any dropped
-  // resources) is discarded, never submitted.
+  // fallback textures, every material map and every material's factors record
+  // into a single submit. A failure below returns without finishing: the batch
+  // (and its pending copies into any dropped resources) is discarded, never
+  // submitted.
   VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
 
   // Upload every non-empty mesh; the vector is parallel to model.meshes so a
@@ -146,9 +147,9 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
   fallback_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   fallback_desc.pixels = white_px;
   fallback_desc.size = sizeof(white_px);
-  VG_ASSIGN(Texture white_tex, batch.add(fallback_desc));
+  VG_ASSIGN(core::Image white_tex, batch.add(fallback_desc));
   fallback_desc.pixels = flat_px;
-  VG_ASSIGN(Texture flat_tex, batch.add(fallback_desc));
+  VG_ASSIGN(core::Image flat_tex, batch.add(fallback_desc));
   const size_t white = out.textures_.size();
   out.textures_.push_back(std::move(white_tex));
   const size_t flat = out.textures_.size();
@@ -184,14 +185,10 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     desc.pixels = rgba.data();
     desc.size = rgba.size();
     desc.generate_mips = true;
-    VG_ASSIGN(Texture tex, batch.add(desc));
+    VG_ASSIGN(core::Image tex, batch.add(desc));
     image_tex[i] = out.textures_.size();
     out.textures_.push_back(std::move(tex));
   }
-
-  // Submit every queued upload at once; the meshes are draw-ready and the
-  // textures the materials below bind are sampled-ready when this returns.
-  VG_TRY(batch.finish());
 
   // Texture index for a slot, or the given fallback (assets::kNoTexture is out
   // of image_tex's range, so it resolves to the fallback).
@@ -205,8 +202,11 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
       pipeline.descriptor_set_layout(1);
 
   // One material (set 1) per source material: factors via pbr_material_desc,
-  // maps resolved to the uploaded image for the slot or a fallback.
-  out.materials_.reserve(model.materials.size() + 1);
+  // and maps resolved to the uploaded image for the slot or a fallback. A
+  // descriptor set may name an image whose upload is still queued; it is only
+  // read once the batch has finished.
+  std::vector<PbrMaterialDesc> descs;
+  descs.reserve(model.materials.size() + 1);
   for (const assets::Material& m : model.materials) {
     PbrMaterialDesc desc = pbr_material_desc(m);
     desc.base_color =
@@ -217,10 +217,7 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     desc.occlusion = out.textures_[tex_for(m.occlusion_texture, white)].view();
     desc.emissive = out.textures_[tex_for(m.emissive_texture, white)].view();
     desc.sampler = out.sampler_->handle();
-    VG_ASSIGN(
-        PbrMaterial material,
-        PbrMaterial::create(device.handle(), allocator, material_layout, desc));
-    out.materials_.push_back(std::move(material));
+    descs.push_back(desc);
   }
 
   // Fallback material for meshes with no material: a matte white dielectric.
@@ -237,10 +234,20 @@ Result<PbrModel> PbrModel::create(const Device& device, Allocator& allocator,
     desc.occlusion = out.textures_[white].view();
     desc.emissive = out.textures_[white].view();
     desc.sampler = out.sampler_->handle();
-    VG_ASSIGN(
-        PbrMaterial fallback,
-        PbrMaterial::create(device.handle(), allocator, material_layout, desc));
-    out.materials_.push_back(std::move(fallback));
+    descs.push_back(desc);
+  }
+
+  // Every material's factors share one UBO, uploaded on the batch by one copy.
+  VG_ASSIGN(
+      std::vector<PbrMaterial> materials,
+      PbrMaterial::create_all(device.handle(), batch, material_layout, descs));
+  out.materials_ = std::move(materials);
+
+  // Submit every queued upload at once; the meshes are draw-ready, the
+  // textures sampled-ready and the factors in place when this returns.
+  VG_TRY(batch.finish());
+  for (core::Image& texture : out.textures_) {
+    texture.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
   // Resolve each flattened instance into a PbrDraw: its GPU mesh, world

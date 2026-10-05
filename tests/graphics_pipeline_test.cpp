@@ -12,11 +12,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <utility>
 
 #include "spirv_test_util.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
@@ -24,6 +23,7 @@
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "vulkan_test_fixture.hpp"
 
 namespace {
@@ -258,7 +258,7 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   constexpr uint32_t kSize = 32;
 
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::OffscreenTargetDesc target_desc;
@@ -371,18 +371,19 @@ std::array<VkVertexInputAttributeDescription, 2> mesh_attributes() {
   return attrs;
 }
 
-vg::Buffer make_host_buffer(vg::Allocator& allocator, const void* data,
-                            size_t size, VkBufferUsageFlags usage) {
-  vg::BufferDesc desc;
+// Uploads `data` into a device-only buffer, which every device has (unlike
+// device-mapped memory). A failed upload fails the test and returns an empty
+// buffer, which callers check before drawing from it.
+vkc::Buffer make_device_buffer(const vg::Device& device,
+                               vkc::Allocator& allocator, const void* data,
+                               size_t size, VkBufferUsageFlags usage) {
+  vg::BufferUploadDesc desc;
+  desc.data = data;
   desc.size = size;
   desc.usage = usage;
-  desc.memory = vg::MemoryUsage::HostVisible;
-  desc.mapped = true;
-  auto buffer = allocator.create_buffer(desc);
+  auto buffer = vg::upload_buffer(device, allocator, desc);
   EXPECT_TRUE(buffer.ok()) << buffer.status().message();
-  vg::Buffer out = std::move(buffer).value();
-  std::memcpy(out.mapped(), data, size);
-  return out;
+  return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
 }
 
 vg::GraphicsPipeline build_mesh_pipeline(
@@ -490,7 +491,7 @@ TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::OffscreenTargetDesc target_desc;
@@ -505,8 +506,10 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
       {{0.9f, -0.9f, 0.0f}, {0.0f, 1.0f, 0.0f}},
       {{0.0f, 0.9f, 0.0f}, {0.0f, 1.0f, 0.0f}},
   };
-  vg::Buffer vbuf = make_host_buffer(allocator.value(), verts, sizeof(verts),
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  vkc::Buffer vbuf =
+      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  ASSERT_TRUE(vbuf.valid());
 
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
@@ -532,7 +535,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
 
 TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::OffscreenTargetDesc target_desc;
@@ -557,11 +560,13 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
       {{0.0f, 0.9f, 0.7f}, {1.0f, 0.0f, 0.0f}},
   };
   const uint32_t indices[6] = {0, 1, 2, 3, 4, 5};
-  vg::Buffer vbuf = make_host_buffer(allocator.value(), verts, sizeof(verts),
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-  vg::Buffer ibuf =
-      make_host_buffer(allocator.value(), indices, sizeof(indices),
-                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+  vkc::Buffer vbuf =
+      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  vkc::Buffer ibuf =
+      make_device_buffer(*device_, allocator.value(), indices, sizeof(indices),
+                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+  ASSERT_TRUE(vbuf.valid() && ibuf.valid());
 
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
@@ -589,7 +594,7 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::OffscreenTargetDesc target_desc;
@@ -605,8 +610,10 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
       {{0.25f, -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
       {{0.0f, 0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
   };
-  vg::Buffer vbuf = make_host_buffer(allocator.value(), verts, sizeof(verts),
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  vkc::Buffer vbuf =
+      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  ASSERT_TRUE(vbuf.valid());
 
   // The MVP (column-major) translates by (-0.6, -0.6) in clip space, moving the
   // triangle out of the center and into the top-left quadrant.
@@ -616,8 +623,10 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
       0.0f,  0.0f,  1.0f, 0.0f,  // column 2
       -0.6f, -0.6f, 0.0f, 1.0f,  // column 3 (translation)
   };
-  vg::Buffer ubo = make_host_buffer(allocator.value(), mvp, sizeof(mvp),
-                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+  vkc::Buffer ubo =
+      make_device_buffer(*device_, allocator.value(), mvp, sizeof(mvp),
+                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+  ASSERT_TRUE(ubo.valid());
 
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
   vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
@@ -707,7 +716,7 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
   // regardless of which winding the framebuffer treats as front. Without the
   // desc wired through, both would draw and this would be equal.
   constexpr uint32_t kSize = 32;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
@@ -743,9 +752,12 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
     auto pipeline = vg::GraphicsPipeline::create(device(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
 
-    vg::Buffer vbuf =
-        make_host_buffer(allocator.value(), tri, sizeof(MeshVertex) * 3,
-                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    vkc::Buffer vbuf = make_device_buffer(*device_, allocator.value(), tri,
+                                          sizeof(MeshVertex) * 3,
+                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    if (!vbuf.valid()) {
+      return false;  // make_device_buffer failed the test
+    }
     render_mesh(target.value(), pipeline.value(), vbuf.handle(), VK_NULL_HANDLE,
                 3);
     const auto* px = static_cast<const uint8_t*>(target.value().pixels());
@@ -769,7 +781,7 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
 // fragment_specialization reaches the stage: unwired, both would stay black.
 TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(allocator.ok()) << allocator.status().message();
 
   vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
@@ -781,8 +793,10 @@ TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
       {{0.8f, -0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
       {{0.0f, 0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
   };
-  vg::Buffer vbuf = make_host_buffer(allocator.value(), tri, sizeof(tri),
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  vkc::Buffer vbuf =
+      make_device_buffer(*device_, allocator.value(), tri, sizeof(tri),
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  ASSERT_TRUE(vbuf.valid());
 
   // Renders the triangle under `spec`; returns the red at the image center.
   auto center_red = [&](const VkSpecializationInfo* spec) -> int {

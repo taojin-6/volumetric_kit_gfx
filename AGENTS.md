@@ -18,6 +18,10 @@ using MoltenVK on Apple and one GLSL → SPIR-V shader set across platforms.
   submission structs; there is no library scene graph or global frame type.
 - Reach Vulkan through `core/vulkan.hpp` and the link-time loader. Keep VMA
   and backend details out of public headers.
+- Use volumetric_kit_core's types by their own names -- `core::Buffer` inside
+  gfx, `vkc::Buffer` in tests and examples -- and include the core's headers.
+  Add no `vg::` alias for a core type
+  ([DECISIONS.md](DECISIONS.md#2026-10-04--memory-comes-from-volumetric_kit_core)).
 
 ## Read what the task needs
 
@@ -81,11 +85,10 @@ shape. These are the mistakes reviews keep catching, so get them right at author
 - **`operator=` guards self-move** (`if (this != &other)`) and runs `destroy()` on the
   current state before adopting the source's.
 - **Type-erase the backend via a `std::function<void()>` deleter** so VMA/etc. stay out of
-  the public header (see `Buffer`/`Texture`). Reset the moved-from `deleter_` to `nullptr`
-  explicitly — a moved-from `std::function` is valid-but-unspecified and can otherwise run
-  twice. The producing owner (e.g. the `Allocator` and the device it wraps) must outlive
-  the resource: state that in an `@warning` and point at `RetireQueue` for fence-gated
-  destruction.
+  the public header (as the core's `Buffer`/`Image` do). Reset the moved-from `deleter_` to
+  `nullptr` explicitly — a moved-from `std::function` is valid-but-unspecified and can
+  otherwise run twice. The producing owner (e.g. the device) must outlive the resource:
+  state that in an `@warning` and point at `RetireQueue` for fence-gated destruction.
 - **Validate before creating** — reject zero size/extent, `usage == 0`,
   `VK_FORMAT_UNDEFINED`, etc. with a non-OK `Status` before touching Vulkan/VMA.
 

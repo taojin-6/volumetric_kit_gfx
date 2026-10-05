@@ -17,7 +17,7 @@
 #include <utility>
 
 #include "imgui.h"
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/command_buffer.hpp"
 #include "volumetric_kit/gfx/core/command_pool.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
@@ -57,13 +57,13 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
     return config;
   }
 
-  vg::Allocator make_allocator() {
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+  vkc::Allocator make_allocator() {
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     EXPECT_TRUE(allocator.ok()) << allocator.status().message();
     return std::move(allocator).value();
   }
 
-  vg::OffscreenTarget make_target(vg::Allocator& allocator,
+  vg::OffscreenTarget make_target(vkc::Allocator& allocator,
                                   VkExtent2D extent = {64, 64}) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
@@ -149,7 +149,7 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
 // --- Move-only lifecycle ----------------------------------------------------
 
 TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
-  vg::Allocator allocator = make_allocator();
+  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator);
   ui::ImGuiOverlay source = make_overlay(target.layout());
   ASSERT_TRUE(source.valid());
@@ -163,7 +163,7 @@ TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
 }
 
 TEST_F(ImGuiOverlayDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vg::Allocator allocator = make_allocator();
+  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator);
   ui::ImGuiOverlay dst = make_overlay(target.layout());
   ui::ImGuiOverlay src = make_overlay(target.layout());
@@ -176,7 +176,7 @@ TEST_F(ImGuiOverlayDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(ImGuiOverlayDeviceTest, SelfMoveAssignIsSafe) {
-  vg::Allocator allocator = make_allocator();
+  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator);
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
   ImGuiContext* context = overlay.context();
@@ -192,7 +192,7 @@ TEST_F(ImGuiOverlayDeviceTest, SelfMoveAssignIsSafe) {
 // --- End-to-end: render the UI into an offscreen target ---------------------
 
 TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
-  vg::Allocator allocator = make_allocator();
+  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator);
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
 
@@ -265,7 +265,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 // first frame), so it holds the device's submit mutex -- the one every other
 // submit on that queue holds -- whether or not the queue is shared.
 TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
-  vg::Allocator allocator = make_allocator();
+  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTarget target = make_target(allocator);
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
   ImGui::SetCurrentContext(overlay.context());

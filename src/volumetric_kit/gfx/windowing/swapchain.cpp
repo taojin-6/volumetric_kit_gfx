@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/check.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
@@ -19,7 +19,7 @@ namespace volumetric_kit::gfx::windowing {
 
 Result<Swapchain> Swapchain::create(const Device& device, VkSurfaceKHR surface,
                                     const SwapchainConfig& config,
-                                    Allocator* allocator) {
+                                    core::Allocator* allocator) {
   if (surface == VK_NULL_HANDLE) {
     return Status::invalid_argument(
         "Swapchain::create: surface must be non-null");
@@ -235,7 +235,7 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
   VG_VK_TRY(vkGetSwapchainImagesKHR(dev, swapchain_, &count, images_.data()));
 
   views_.reserve(count);
-  depth_textures_.reserve(depth_format_ != VK_FORMAT_UNDEFINED ? count : 0u);
+  depth_images_.reserve(depth_format_ != VK_FORMAT_UNDEFINED ? count : 0u);
   targets_.reserve(count);
   for (VkImage image : images_) {
     VkImageViewCreateInfo view_info{};
@@ -256,10 +256,10 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
     // the swapchain having to know the loop's.
     RenderTargetAttachment depth_attachment{};
     if (depth_format_ != VK_FORMAT_UNDEFINED) {
-      VG_ASSIGN(Texture depth,
+      VG_ASSIGN(core::Image depth,
                 make_depth_attachment(*allocator_, extent, depth_format_));
-      depth_attachment = {depth.image(), depth.view(), depth_format_};
-      depth_textures_.push_back(std::move(depth));
+      depth_attachment = {depth.handle(), depth.view(), depth_format_};
+      depth_images_.push_back(std::move(depth));
     }
 
     // RenderTarget ignores an empty-view depth, so pass it unconditionally (no
@@ -272,15 +272,15 @@ Status Swapchain::create_image_resources(VkExtent2D extent) {
                           &depth_attachment);
   }
 
-  if (!depth_textures_.empty()) {
+  if (!depth_images_.empty()) {
     // One-time UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL transitions, batched into
     // a single blocking submit. The images then stay in that layout for their
     // lifetime — RenderTarget::begin declares it, and load-op clears rewrite
     // the contents each frame with no further transition.
     VG_TRY(device_->submit_single_time([this](VkCommandBuffer cmd) {
-      for (const Texture& depth : depth_textures_) {
+      for (const core::Image& depth : depth_images_) {
         ImageBarrierDesc to_depth;
-        to_depth.image = depth.image();
+        to_depth.image = depth.handle();
         to_depth.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         to_depth.dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -388,7 +388,7 @@ void Swapchain::destroy_resources() noexcept {
   }
   VkDevice dev = device_->handle();
   targets_.clear();
-  depth_textures_.clear();  // each frees its image + view via the allocator
+  depth_images_.clear();  // each frees its image + view via the allocator
   for (VkImageView view : views_) {
     vkDestroyImageView(dev, view, nullptr);
   }
@@ -433,7 +433,7 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
       swapchain_(other.swapchain_),
       images_(std::move(other.images_)),
       views_(std::move(other.views_)),
-      depth_textures_(std::move(other.depth_textures_)),
+      depth_images_(std::move(other.depth_images_)),
       targets_(std::move(other.targets_)),
       format_(other.format_),
       depth_format_(other.depth_format_),
@@ -454,7 +454,7 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     swapchain_ = other.swapchain_;
     images_ = std::move(other.images_);
     views_ = std::move(other.views_);
-    depth_textures_ = std::move(other.depth_textures_);
+    depth_images_ = std::move(other.depth_images_);
     targets_ = std::move(other.targets_);
     format_ = other.format_;
     depth_format_ = other.depth_format_;

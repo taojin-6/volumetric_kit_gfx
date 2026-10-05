@@ -167,7 +167,8 @@ on it landing, since `LiveMesh` draws whatever command it is handed.
    the visibility itself.
 
    Cross-family access needs the buffers created `VK_SHARING_MODE_CONCURRENT`,
-   which recon's `BufferDesc` now takes queue families for. This matters on
+   which the shared core's `BufferDesc` -- recon's and gfx's -- takes queue
+   families for. This matters on
    Apple, where the bootstrap hands recon and gfx queues from *different*
    families.
 

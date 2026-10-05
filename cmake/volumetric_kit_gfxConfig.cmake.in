@@ -3,9 +3,9 @@
 
 @PACKAGE_INIT@
 
-# Re-find the PUBLIC dependencies. VMA + tinygltf are PRIVATE implementation
-# details (header-only, each implemented in one library TU), so they are
-# deliberately absent here. find_dependency(Vulkan) also re-supplies the loader
+# Re-find the PUBLIC dependencies. tinygltf is a PRIVATE implementation detail
+# (header-only, implemented in one library TU), so it is deliberately absent
+# here, and VMA is the core's, compiled into its allocator. find_dependency(Vulkan) also re-supplies the loader
 # (Vulkan::Vulkan) our static archive links privately.
 include(CMakeFindDependencyMacro)
 # volumetric_kit_core is PUBLIC (Status / Result / the log sink in every tier's
@@ -50,8 +50,8 @@ find_dependency(Threads)
 find_dependency(glm)
 
 # spirv-cross is a PRIVATE dependency of gfx_core (SPIR-V reflection in
-# shader.cpp). Unlike VMA/tinygltf -- header-only and compiled into a gfx_core
-# TU -- spirv-cross is a separate static archive, so gfx_core's own archive
+# shader.cpp). Unlike tinygltf -- header-only and compiled into a gfx TU --
+# spirv-cross is a separate static archive, so gfx_core's own archive
 # still references its symbols at consumer link time. It self-installs under
 # VG_INSTALL, so the package re-finds the vendored copy here.
 find_dependency(spirv_cross_core)

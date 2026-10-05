@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
 #include "volumetric_kit/gfx/core/instance.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
@@ -29,6 +29,7 @@
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
@@ -108,7 +109,7 @@ class WindowingTest : public ::testing::Test {
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
 
-    auto allocator = vg::Allocator::create(instance_->handle(), *device_);
+    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -209,7 +210,7 @@ class WindowingTest : public ::testing::Test {
   std::optional<vg::Device> device_;
   // Declared after device_ so reverse member-destruction tears the allocator
   // down before the device it wraps.
-  std::optional<vg::Allocator> allocator_;
+  std::optional<vkc::Allocator> allocator_;
   std::vector<std::string> validation_errors_;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
   PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger_ = nullptr;
@@ -399,9 +400,9 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
 // matching the one-time transition). It does NOT catch a missing/incorrect
 // *synchronization* scope — synchronization validation is not enabled — and the
 // per-image "no cross-frame sharing" property is guaranteed by construction
-// (one Texture per image below), not asserted here (RenderTarget hides its
-// depth handle). run_frames only *clears* depth; functional depth *testing* is
-// exercised end-to-end by example_03_model.
+// (one Image per swapchain image below), not asserted here (RenderTarget hides
+// its depth handle). run_frames only *clears* depth; functional depth *testing*
+// is exercised end-to-end by example_03_model.
 TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   win::Swapchain sc = make_depth_swapchain();
   ASSERT_TRUE(sc.valid());

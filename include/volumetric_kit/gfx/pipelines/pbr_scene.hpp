@@ -16,9 +16,9 @@
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
-namespace volumetric_kit::gfx {
+namespace volumetric_kit::core {
 class Allocator;
-}  // namespace volumetric_kit::gfx
+}  // namespace volumetric_kit::core
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -36,7 +36,7 @@ struct PbrSceneDesc {
 };
 
 /// @brief Owns the set-0 descriptor resources @ref PbrPipeline binds once per
-///        frame: a host-mapped camera uniform buffer plus the IBL maps.
+///        frame: a camera uniform buffer plus the IBL maps.
 ///
 /// This is the per-frame "view + environment lighting" half of the technique
 /// (set 1, the material, is @ref PbrMaterial). It is **not** a scene graph —
@@ -44,21 +44,23 @@ struct PbrSceneDesc {
 /// data. The camera UBO and its descriptor set are **ringed per
 /// frame-in-flight slot**: create the scene with the frame loop's
 /// `frames_in_flight`, then each frame write and bind the acquired frame's
-/// slot — the CPU never rewrites a UBO the GPU may still be reading. Each slot
+/// slot, so a frame's update never waits on another frame's reads. Each slot
 /// owns its own one-set @ref DescriptorPool, @ref DescriptorSet, and camera
-/// UBO. A default-constructed `PbrScene` is empty (`valid()` is false) and
-/// safe to move-assign into.
+/// UBO in device-only memory, written by an update recorded into the frame's
+/// command buffer -- which is why @ref set_camera takes that command buffer,
+/// and is called before rendering begins. A default-constructed `PbrScene` is
+/// empty (`valid()` is false) and safe to move-assign into.
 ///
-/// @warning The @p allocator passed to @ref create (and the device that backs
-///          it), plus the IBL images @ref PbrSceneDesc names, must outlive the
-///          scene.
+/// @warning The device, plus the IBL images @ref PbrSceneDesc names, must
+///          outlive the scene.
 ///
 /// @code
 /// Result<pipelines::PbrScene> scene = pipelines::PbrScene::create(
 ///     device, allocator, pbr.descriptor_set_layout(0), ibl_desc,
 ///     loop.frames_in_flight());
-/// // each frame, with the windowing Frame f from FrameLoop::begin_frame:
-/// scene.value().set_camera(f.slot, eye, prefilter_max_lod);
+/// // each frame, with the windowing Frame f from FrameLoop::begin_frame,
+/// // before f.target->begin:
+/// scene.value().set_camera(f.cmd, f.slot, eye, prefilter_max_lod);
 /// pbr_frame.slot = f.slot;  // PbrPipeline::submit binds that slot's set
 /// @endcode
 class VG_PIPELINES_API PbrScene {
@@ -69,7 +71,7 @@ class VG_PIPELINES_API PbrScene {
   /// @brief Build the set-0 binding from the IBL environment, one camera UBO +
   ///        descriptor set per frame-in-flight slot.
   /// @param device           The logical device that owns the pools + sets.
-  /// @param allocator        Allocates the camera UBOs; must outlive the scene.
+  /// @param allocator        Allocates the camera UBOs.
   /// @param scene_layout     The reflected set-0 layout, from
   ///                         @ref PbrPipeline::descriptor_set_layout(0).
   /// @param desc             The three IBL map views + sampler.
@@ -82,7 +84,7 @@ class VG_PIPELINES_API PbrScene {
   ///      @ref Status::Code::InvalidArgument.
   /// @return The scene on success, or a non-OK @ref Status (a backend
   ///         Status from buffer / pool / set allocation).
-  static Result<PbrScene> create(VkDevice device, Allocator& allocator,
+  static Result<PbrScene> create(VkDevice device, core::Allocator& allocator,
                                  VkDescriptorSetLayout scene_layout,
                                  const PbrSceneDesc& desc,
                                  uint32_t frames_in_flight = 1);
@@ -100,7 +102,15 @@ class VG_PIPELINES_API PbrScene {
   PbrScene(const PbrScene&) = delete;
   PbrScene& operator=(const PbrScene&) = delete;
 
-  /// @brief Write the per-frame camera into slot @p slot's mapped UBO.
+  /// @brief Record a write of the per-frame camera into slot @p slot's UBO.
+  ///
+  /// Recorded into @p cmd (@ref OwnedDescriptorSet::write_uniform), so it
+  /// applies to the work recorded after it: two views rendered in one command
+  /// buffer, each after its own call, each see their own camera. Call it
+  /// before the frame's rendering begins: a recorded update is invalid inside
+  /// a render pass instance.
+  /// @param cmd               The frame's command buffer, recording, outside
+  ///                          a render pass instance.
   /// @param slot              The acquired frame's in-flight slot (e.g. the
   ///                          windowing `Frame::slot`); its previous use has
   ///                          been fence-waited by the loop, so the GPU is not
@@ -109,10 +119,11 @@ class VG_PIPELINES_API PbrScene {
   /// @param prefilter_max_lod The specular prefilter's highest mip index
   ///                          (mip count - 1); the shader clamps roughness LOD
   ///                          to it.
-  /// @pre `valid()` and @p slot < @ref frames_in_flight; an out-of-range slot
-  ///      is ignored (no write), mirroring @ref descriptor_set.
-  void set_camera(uint32_t slot, const glm::vec3& eye,
-                  float prefilter_max_lod) noexcept;
+  /// @pre @p cmd is non-`VK_NULL_HANDLE` (a contract check), `valid()`, and
+  ///      @p slot < @ref frames_in_flight; an out-of-range slot is ignored
+  ///      (no write), mirroring @ref descriptor_set.
+  void set_camera(VkCommandBuffer cmd, uint32_t slot, const glm::vec3& eye,
+                  float prefilter_max_lod) const;
 
   /// @return Slot @p slot's set-0 `VkDescriptorSet` to bind (`VK_NULL_HANDLE`
   ///         when empty).

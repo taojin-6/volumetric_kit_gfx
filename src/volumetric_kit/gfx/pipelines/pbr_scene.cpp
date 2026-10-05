@@ -3,9 +3,12 @@
 
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
 
+#include <memory>
 #include <utility>
 
 #include <glm/vec4.hpp>
+
+#include "volumetric_kit/gfx/core/check.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -19,7 +22,7 @@ struct SceneUbo {
 
 }  // namespace
 
-Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
+Result<PbrScene> PbrScene::create(VkDevice device, core::Allocator& allocator,
                                   VkDescriptorSetLayout scene_layout,
                                   const PbrSceneDesc& desc,
                                   uint32_t frames_in_flight) {
@@ -42,8 +45,11 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
   scene.slots_.reserve(frames_in_flight);
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
     VG_ASSIGN(OwnedDescriptorSet resources,
-              OwnedDescriptorSet::create(device, allocator, scene_layout,
-                                         sizeof(SceneUbo), 3));
+              OwnedDescriptorSet::create(device, scene_layout, 3));
+    VG_ASSIGN(core::Buffer ubo,
+              make_frame_uniform_buffer(allocator, sizeof(SceneUbo)));
+    resources.bind_uniform(std::make_shared<core::Buffer>(std::move(ubo)), 0,
+                           sizeof(SceneUbo));
 
     // The IBL maps are frame-constant, so they live in every slot's set
     // alongside its camera (binding 0, written per frame by set_camera) at
@@ -63,13 +69,18 @@ Result<PbrScene> PbrScene::create(VkDevice device, Allocator& allocator,
   return scene;
 }
 
-void PbrScene::set_camera(uint32_t slot, const glm::vec3& eye,
-                          float prefilter_max_lod) noexcept {
+void PbrScene::set_camera(VkCommandBuffer cmd, uint32_t slot,
+                          const glm::vec3& eye, float prefilter_max_lod) const {
+  // Checked before the slot, so a caller that would pass a null command buffer
+  // learns it on the first call, whatever slot it names.
+  VG_CHECK(cmd != VK_NULL_HANDLE,
+           "PbrScene::set_camera: the write is recorded, so it needs the "
+           "frame's command buffer");
   // Out-of-range slot is a no-op, mirroring descriptor_set()'s graceful degrade
-  // rather than writing through a garbage mapped() pointer.
+  // rather than writing past the ring.
   if (slot >= slots_.size()) return;
-  *static_cast<SceneUbo*>(slots_[slot].mapped()) =
-      SceneUbo{glm::vec4(eye, prefilter_max_lod)};
+  const SceneUbo block{glm::vec4(eye, prefilter_max_lod)};
+  slots_[slot].write_uniform(cmd, &block, sizeof(block));
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

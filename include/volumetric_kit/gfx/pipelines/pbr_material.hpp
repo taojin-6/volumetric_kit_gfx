@@ -7,6 +7,8 @@
 /// @brief One material's set-1 binding for @ref PbrPipeline: a factor UBO plus
 ///        the five glTF metallic-roughness maps.
 
+#include <vector>
+
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -16,7 +18,7 @@
 #include "volumetric_kit/gfx/pipelines/impl/owned_descriptor_set.hpp"
 
 namespace volumetric_kit::gfx {
-class Allocator;
+class UploadBatch;
 }  // namespace volumetric_kit::gfx
 
 namespace volumetric_kit::gfx::pipelines {
@@ -52,42 +54,85 @@ struct PbrMaterialDesc {
 ///        material: a factor uniform buffer plus the five sampled maps.
 ///
 /// Self-contained, like @ref GpuMesh: it owns its own one-set @ref
-/// DescriptorPool, the @ref DescriptorSet allocated from it, and the factor
-/// UBO. Build one per material with @ref create against
-/// `PbrPipeline::descriptor_set_layout(1)`, then name it in a @ref PbrDraw. A
-/// default-constructed `PbrMaterial` is empty (`valid()` is false) and safe to
-/// move-assign into.
+/// DescriptorPool and the @ref DescriptorSet allocated from it, and shares
+/// the factor UBO its factors live in. The factors never change, so the UBO
+/// is device-only memory, uploaded through an @ref UploadBatch as a mesh's
+/// buffers are: build the materials with @ref create_all (or one with
+/// @ref create) against `PbrPipeline::descriptor_set_layout(1)`, finish the
+/// batch, then name them in @ref PbrDraw "PbrDraws". @ref create_all packs
+/// every material's factors into one UBO, uploaded by one copy. A
+/// default-constructed `PbrMaterial` is empty (`valid()` is false) and safe
+/// to move-assign into.
 ///
-/// @warning The @p allocator passed to @ref create (and the device that backs
-///          it), plus every image @ref PbrMaterialDesc names, must outlive the
-///          material — its descriptor set points at them.
+/// @warning The device, plus every image @ref PbrMaterialDesc names, must
+///          outlive the material — its descriptor set points at them. Keep
+///          the material alive until the batch it was created on has
+///          finished: the copy the batch queued writes its factor UBO, so
+///          destroying it earlier would submit against a freed buffer.
 ///
 /// @code
-/// PbrMaterialDesc d;
-/// d.base_color_factor = m.base_color_factor;
-/// d.base_color = base_view;  // ... and the other four maps + sampler
-/// Result<pipelines::PbrMaterial> mat = pipelines::PbrMaterial::create(
-///     device, allocator, pbr.descriptor_set_layout(1), d);
+/// std::vector<PbrMaterialDesc> descs(model.materials.size());
+/// descs[0].base_color_factor = model.materials[0].base_color_factor;
+/// descs[0].base_color = base_view;  // ... the other four maps + sampler
+/// VG_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+/// VG_ASSIGN(std::vector<pipelines::PbrMaterial> materials,
+///           pipelines::PbrMaterial::create_all(
+///               device.handle(), batch, pbr.descriptor_set_layout(1), descs));
+/// VG_TRY(batch.finish());  // the factors are in place; draw the materials
 /// @endcode
 class VG_PIPELINES_API PbrMaterial {
  public:
   /// @brief Construct an empty material (owns nothing; `valid()` is false).
   PbrMaterial() = default;
 
-  /// @brief Build the set-1 binding for one material.
+  /// @brief Build the set-1 bindings for many materials, queuing one upload
+  ///        of all their factors on @p batch.
+  ///
+  /// Every material's factors go into one device-only UBO the materials
+  /// share, each at its own 256-byte-aligned offset (a multiple of any
+  /// device's `minUniformBufferOffsetAlignment`): one staging buffer, one
+  /// destination and one copy for the lot. The pools and sets are allocated
+  /// before the upload is queued, so a failed call leaves @p batch unchanged
+  /// and usable.
+  /// @param device          The logical device that owns the pools + sets.
+  /// @param batch           An open batch, on @p device, that uploads the
+  ///                        factor UBO; draw the materials only once it has
+  ///                        finished.
+  /// @param material_layout The reflected set-1 layout, from
+  ///                        @ref PbrPipeline::descriptor_set_layout(1).
+  /// @param descs           One desc per material: factors plus the five map
+  ///                        views + sampler.
+  /// @pre @p device and @p material_layout are non-`VK_NULL_HANDLE`, @p descs
+  ///      is non-empty, and every view in each desc plus its sampler is
+  ///      non-`VK_NULL_HANDLE` — validated before Vulkan is touched,
+  ///      otherwise a non-OK @ref Status with domain
+  ///      @ref Status::Code::InvalidArgument.
+  /// @return The materials, parallel to @p descs, on success; or a non-OK
+  ///         @ref Status: a backend Status from pool / set allocation, or
+  ///         what @ref UploadBatch::add_buffer returns.
+  /// @warning Keep the materials alive until @p batch's
+  ///          @ref UploadBatch::finish returns (see the class warning).
+  static Result<std::vector<PbrMaterial>> create_all(
+      VkDevice device, UploadBatch& batch,
+      VkDescriptorSetLayout material_layout,
+      const std::vector<PbrMaterialDesc>& descs);
+
+  /// @brief Build the set-1 binding for one material, queuing its factors'
+  ///        upload on @p batch: @ref create_all for one desc.
   /// @param device          The logical device that owns the pool + set.
-  /// @param allocator       Allocates the factor UBO; must outlive the
-  /// material.
+  /// @param batch           An open batch, on @p device, that uploads the
+  ///                        factor UBO; draw the material only once it has
+  ///                        finished.
   /// @param material_layout The reflected set-1 layout, from
   ///                        @ref PbrPipeline::descriptor_set_layout(1).
   /// @param desc            Factors plus the five map views + sampler.
-  /// @pre @p device and @p material_layout are non-`VK_NULL_HANDLE`, and every
-  ///      view in @p desc plus @p desc.sampler is non-`VK_NULL_HANDLE` —
-  ///      validated before Vulkan is touched, otherwise a non-OK @ref Status
-  ///      with domain @ref Status::Code::InvalidArgument.
-  /// @return The material on success, or a non-OK @ref Status (a backend
-  ///         Status from buffer / pool / set allocation).
-  static Result<PbrMaterial> create(VkDevice device, Allocator& allocator,
+  /// @pre As for @ref create_all.
+  /// @return The material on success, or a non-OK @ref Status as
+  ///         @ref create_all returns; a failed call leaves @p batch
+  ///         unchanged.
+  /// @warning Keep the material alive until @p batch's
+  ///          @ref UploadBatch::finish returns (see the class warning).
+  static Result<PbrMaterial> create(VkDevice device, UploadBatch& batch,
                                     VkDescriptorSetLayout material_layout,
                                     const PbrMaterialDesc& desc);
 
@@ -106,7 +151,7 @@ class VG_PIPELINES_API PbrMaterial {
   bool valid() const noexcept { return resources_.valid(); }
 
  private:
-  OwnedDescriptorSet resources_;  // set 1: pool + set + factor UBO
+  OwnedDescriptorSet resources_;  // set 1: pool + set + shared factor UBO
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

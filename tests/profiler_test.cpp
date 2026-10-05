@@ -8,7 +8,7 @@
 #include <cmath>
 #include <utility>
 
-#include "volumetric_kit/gfx/core/allocator.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "vulkan_test_fixture.hpp"
 
@@ -149,9 +149,9 @@ TEST_F(ProfilerTest, RecordsStagesInRecordOrder) {
 // With a memory source set, end_frame samples the allocator into the snapshot's
 // aggregate figures. Any real device exposes at least one heap with a budget.
 TEST_F(ProfilerTest, MemorySourcePopulatesAggregateMemory) {
-  auto alloc = vg::Allocator::create(instance_->handle(), *device_);
+  auto alloc = vkc::Allocator::create(instance_->handle(), *device_);
   ASSERT_TRUE(alloc.ok()) << alloc.status().message();
-  vg::Allocator allocator = std::move(alloc).value();
+  vkc::Allocator allocator = std::move(alloc).value();
 
   vg::Profiler profiler = make_profiler();
   profiler.set_memory_source(&allocator);
