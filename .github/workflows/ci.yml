@@ -34,25 +34,34 @@ jobs:
       # .env reaches jobs run directly on it (the Mac) but not a job container,
       # where ctest would otherwise run the suite one test at a time. 4 matches
       # the .env the runner setup writes (6 runners x 4 threads per box).
+      # Release runs on every OS; Debug only on macOS, where it is cheap. Every
+      # Ubuntu Debug leg added another full suite's worth of GPU device creation
+      # to boxes that can only do so many at a time, and sanitizers already
+      # builds and tests Debug on Linux (clang + ASan/UBSan).
       matrix:
         include:
           - os: ubuntu-22.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            build_types: '["Release"]'
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            build_types: '["Release"]'
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            build_types: '["Release"]'
           - os: macos-26
             runner: mac
             container: ''
+            build_types: '["Debug","Release"]'
     uses: ./.github/workflows/_build.yml
     with:
       os: ${{ matrix.os }}
       runner: ${{ matrix.runner }}
       container: ${{ matrix.container }}
+      build_types: ${{ matrix.build_types }}
 
   lint:
     uses: ./.github/workflows/lint.yml
