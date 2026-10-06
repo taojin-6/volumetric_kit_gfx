@@ -99,6 +99,47 @@ what has landed since then. Record amendments when a contract changes.
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
 
+## 2026-10-05 — GPU tests share a device per process
+
+**The contract.** `tests/vulkan_test_fixture.hpp`'s `VulkanDeviceTest` no
+longer makes an instance and device per test. Every test in a process that
+asks for the same instance setup -- plain, validation, validation + sync, or
+validation + sync + shader-access tracking, from the `wants_*_validation()`
+overrides -- borrows one instance and device, made on first use and kept until
+the process ends. Each test still makes and destroys its own objects on it,
+and its validation errors still fail it, through a capture installed for that
+test alone. A fixture that needs other device requirements returns them from
+`custom_requirements()` and gets its own instance and device per test. A test
+that loses the device fails, and the next one gets a fresh device. An object a
+test never destroys is reported when the shared device is destroyed, at the
+end of the process: the run fails, though no single test is named.
+
+**Why.** Measured in CI (the draft PR #111, closed after measuring), on
+NVIDIA's Linux driver 615.71.09:
+- **A cost the driver serializes machine-wide.** An instance + device
+  create/destroy cycle costs ~70-90 ms, nearly all of it creating and
+  destroying the device and instance. The driver does those one at a time
+  across the machine: ~7-9 cycles per second on an RTX 4090 or 5090 box, with
+  1, 4 or 8 processes at once. With a device per test, every Linux leg's test
+  time was bound by it, and running tests in parallel (#109) could not help.
+  MoltenVK does the same cycle in about 1 ms, in parallel.
+- **A limit per process.** After 26 instances in one process,
+  `vkCreateInstance` fails with `VK_ERROR_INCOMPATIBLE_DRIVER`. The loader
+  loads the driver library at each instance and unloads it at each
+  `vkDestroyInstance`; each load takes glibc static TLS for `libnvidia-tls`
+  that the unload evidently does not return, until the loader logs "cannot
+  allocate memory in static TLS block" and finds no driver. Descriptors,
+  threads and memory stay flat, with or without the validation layer; one
+  instance held open throughout keeps the library loaded, and the limit never
+  comes. The fixture's shared instances do that, and the test binary's global
+  environment holds one more whenever a process runs several tests, for the
+  tests that make their own. An application that recreates its `VkInstance`
+  many times in one process would hit this limit too.
+
+**Not yet.** CTest still runs one test per process, so no device is shared in
+CI yet; registering each test binary as a few shards, each running its tests in
+one process, is the follow-up that takes the time saving.
+
 ## 2026-10-05 — 2D images: convert, then mip, then draw
 
 **The technique.** `pipelines::ImagePipeline` draws 2D pictures -- camera
