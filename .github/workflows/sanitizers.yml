@@ -61,15 +61,43 @@ jobs:
             exit 1
           fi
 
+      # Cache the FetchContent dependency tree (sources and builds), as
+      # _build.yml does, so it is not re-fetched and recompiled every run. Here
+      # the dependencies are compiled with the sanitizers too (VG_SANITIZE sets
+      # its flags globally), so besides the pins the key carries everything that
+      # changes their objects: the compiler, the runner image, this workflow (the
+      # sanitizer and build settings below) and vg_sanitizers.cmake. The
+      # workspace path is in it as in _build.yml, since FetchContent bakes it in.
+      # No restore-keys, for the reason _build.yml gives: a stale match would
+      # link objects built for something else.
+      - name: Dependency cache key
+        id: deps
+        run: |
+          hash() { sha256sum | cut -c1-12; }
+          ws=$(printf '%s' "${GITHUB_WORKSPACE}" | hash)
+          cc=$(clang --version | head -1 | hash)
+          echo "key=sanitizers-deps-ws${ws}-cc${cc}-img${ImageVersion:-none}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache third-party deps
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/vg_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}
+
       # Debug + clang gives the most reliable sanitizer + mesa interop. (Vulkan
       # validation is a runtime opt-in via InstanceConfig; the test fixture can
       # enable it for the complementary handle/lifetime checking ASan can't see.)
+      # No examples: this job never runs them. VG_TEST_SHARDS: each test binary
+      # runs as 4 one-process shards (tests/CMakeLists.txt), so its tests share
+      # Vulkan devices and the sanitizer runtime starts 36 times, not 385.
       - name: Configure
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DVG_SANITIZE="address;undefined"
+            -DVG_SANITIZE="address;undefined" \
+            -DVG_BUILD_EXAMPLES=OFF \
+            -DVG_TEST_SHARDS=4
 
       - name: Build
         run: cmake --build build --parallel
@@ -80,6 +108,13 @@ jobs:
       # UBSan still on). Prefer extending the suppressions first.
       #
       # --parallel: a hosted runner sets no CTEST_PARALLEL_LEVEL, so ctest would
-      # otherwise run the suite one test at a time.
+      # otherwise run the suite one test at a time. A leak or sanitizer finding
+      # fails its shard, and the report's stack traces name the code.
       - name: Test
+        env:
+          # As in _build.yml: shuffled order, and a fixture test without a
+          # Vulkan device fails rather than skips, since a shard has no skip
+          # expression to report it by.
+          GTEST_SHUFFLE: '1'
+          VG_REQUIRE_VULKAN_DEVICE: '1'
         run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
