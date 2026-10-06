@@ -292,6 +292,12 @@ class VulkanDeviceTest : public ::testing::Test {
       context = &vg_test::SharedContexts::get().acquire(setup);
     }
     if (context->skip) {
+      // CI's GPU legs set VG_REQUIRE_VULKAN_DEVICE: there a missing instance
+      // or device is a failure, as a shard of tests run in one process would
+      // otherwise pass with all of them skipped.
+      if (std::getenv("VG_REQUIRE_VULKAN_DEVICE") != nullptr) {
+        FAIL() << context->error << " (VG_REQUIRE_VULKAN_DEVICE is set)";
+      }
       GTEST_SKIP() << context->error;
     }
     ASSERT_TRUE(context->device.has_value()) << context->error;

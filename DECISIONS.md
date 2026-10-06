@@ -136,9 +136,16 @@ NVIDIA's Linux driver 615.71.09:
   tests that make their own. An application that recreates its `VkInstance`
   many times in one process would hit this limit too.
 
-**Not yet.** CTest still runs one test per process, so no device is shared in
-CI yet; registering each test binary as a few shards, each running its tests in
-one process, is the follow-up that takes the time saving.
+**In CI, test binaries run as shards.** `_build.yml` configures with
+`-DVG_TEST_SHARDS=4`, so CTest runs each test binary as four entries, each
+running its quarter of the tests in one process (`GTEST_TOTAL_SHARDS` /
+`GTEST_SHARD_INDEX`) and in shuffled order (`GTEST_SHUFFLE`), sharing the
+fixture's devices. A shard passes or fails on its exit code alone: given a skip
+expression, one skipped test would mark the whole shard skipped, failures
+included -- the failure that hid the Ubuntu 22.04 leg's results from August to
+#113. Instead CI sets `VG_REQUIRE_VULKAN_DEVICE`, under which a fixture test that
+cannot get an instance or device fails rather than skips, so no shard passes
+with its tests skipped. Locally the default stays one CTest entry per test.
 
 ## 2026-10-05 — 2D images: convert, then mip, then draw
 
