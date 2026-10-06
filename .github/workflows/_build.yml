@@ -255,7 +255,10 @@ jobs:
         run: |
           ok=0
           for attempt in 1 2 3; do
-            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}; then
+            # VG_TEST_SHARDS: run each test binary as 4 one-process shards, so
+            # its tests share Vulkan devices (tests/CMakeLists.txt).
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DVG_TEST_SHARDS=4; then
               ok=1
               break
             fi
@@ -271,10 +274,19 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: cmake --build build --parallel
 
-      # Runs CTEST_PARALLEL_LEVEL tests at once: from the runner's .env on the
+      # Runs CTEST_PARALLEL_LEVEL shards at once: from the runner's .env on the
       # Mac, from the container env ci.yml sets on the Ubuntu legs.
       - name: Test
         if: steps.detect.outputs.present == 'true'
+        env:
+          # Each shard runs its tests in a random order (the seed is printed),
+          # so a test that passes only after another one fails here instead.
+          GTEST_SHUFFLE: '1'
+          # Every leg has a Vulkan device -- the GPU box's (the GPU diagnostic
+          # step insists), MoltenVK, or lavapipe on a hosted runner -- so a
+          # fixture test that cannot get one is a failure, not a skip: a shard
+          # would otherwise pass with all of its tests skipped.
+          VG_REQUIRE_VULKAN_DEVICE: '1'
         run: ctest --test-dir build --output-on-failure
 
       # Nothing above compiles the *installed* tree, so an install-list mistake

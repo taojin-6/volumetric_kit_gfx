@@ -22,8 +22,41 @@ include(GoogleTest)
 # and as the last value set it overrode the module's correct one: on Ubuntu
 # 22.04's CMake 3.22 every test, passing or failing, was reported "Skipped".
 # From 3.26 a second one is a malformed duplicate.
+#
+# VG_TEST_SHARDS > 0 registers each test binary as that many CTest entries
+# instead of one per test: shard i runs the binary with GTEST_TOTAL_SHARDS and
+# GTEST_SHARD_INDEX set, so its share of the tests runs in one process and
+# shares the fixture's Vulkan devices (tests/vulkan_test_fixture.hpp). CI uses
+# it, as on NVIDIA's Linux driver every device costs ~70-90 ms of work the
+# driver serializes machine-wide. 0, the default, keeps one entry per test, so
+# `ctest -R <test>` still runs a single test.
+#
+# A shard gets no SKIP_REGULAR_EXPRESSION: one skipped test among its many would
+# mark the whole shard skipped, failures included. It passes or fails on its
+# exit code alone. Skips stay visible where it matters through
+# VG_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
+# Vulkan device fails rather than skips.
+set(VG_TEST_SHARDS
+    0
+    CACHE STRING
+          "Run each test binary as this many CTest shards (0: one per test)")
+
 function(vg_discover_tests target)
-  gtest_discover_tests(${target} ${ARGN})
+  if(NOT VG_TEST_SHARDS GREATER 0)
+    gtest_discover_tests(${target} ${ARGN})
+    return()
+  endif()
+  cmake_parse_arguments(arg "" "TEST_PREFIX" "" ${ARGN})
+  math(EXPR last "${VG_TEST_SHARDS} - 1")
+  foreach(index RANGE ${last})
+    set(name "${arg_TEST_PREFIX}${target}.shard${index}")
+    add_test(NAME "${name}" COMMAND ${target})
+    set_tests_properties(
+      "${name}"
+      PROPERTIES
+        ENVIRONMENT
+        "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}")
+  endforeach()
 endfunction()
 
 add_executable(vg_version_test version_test.cpp)
