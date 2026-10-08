@@ -63,7 +63,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `begin_frame` handed out (another number or command buffer), and a frame
   that fails before its submit is replaced by an empty submit, so its number
   is still set.
-- build: gfx pins volumetric_kit_core at its PR #15 (`a8b63d1`) and refuses an
+- build: gfx pins volumetric_kit_core at its PR #18 (`5913731`) and refuses an
   older core at configure and in the installed package.
 - `core`: **gfx writes the core's names; its re-exports of them are gone.**
   gfx's API names volumetric_kit_core's types and macros as the core does,

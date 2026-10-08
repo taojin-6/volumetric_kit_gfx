@@ -516,7 +516,7 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   FetchContent may find an installed core; the core's version does not advance
   between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
   to configure unless the tier is there and declares the newest thing gfx uses
-  from it (`TimelinePoint`, in `sync.hpp`), naming the pin and where the core
+  from it (`TimelineWaits`, in `sync.hpp`), naming the pin and where the core
   came from; the package config checks the same.
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's

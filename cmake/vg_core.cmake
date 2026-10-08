@@ -9,7 +9,7 @@
 # available first, and FetchContent may have found an installed core instead, so
 # this checks what arrived rather than trusting the request. The core's version
 # does not advance between commits, so <pin> is recognized by the newest
-# declaration gfx uses from it, core::TimelinePoint in
+# declaration gfx uses from it, core::TimelineWaits in
 # volumetric_kit/core/vulkan/sync.hpp.
 function(vg_require_core_vulkan pin)
   get_target_property(_imported volumetric_kit::core_base IMPORTED)
@@ -56,7 +56,7 @@ function(vg_require_core_vulkan pin)
   foreach(_dir IN LISTS _dirs)
     set(_sync "${_dir}/volumetric_kit/core/vulkan/sync.hpp")
     if(EXISTS "${_sync}")
-      file(STRINGS "${_sync}" _declares REGEX "^struct TimelinePoint")
+      file(STRINGS "${_sync}" _declares REGEX "^enum class TimelineWaits")
       if(_declares)
         return()
       endif()
@@ -66,5 +66,5 @@ function(vg_require_core_vulkan pin)
     FATAL_ERROR
       "gfx needs volumetric_kit_core at ${pin} or newer, and ${_origin} is "
       "older (its volumetric_kit/core/vulkan/sync.hpp declares no "
-      "TimelinePoint): use a core at or after that commit.")
+      "TimelineWaits): use a core at or after that commit.")
 endfunction()

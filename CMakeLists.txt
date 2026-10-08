@@ -95,12 +95,13 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin is main after core PR #15, whose core::TimelinePoint names the
+# The pin is core PR #18's head, whose core::check_timeline_points checks the
 # timeline values a frame waits for and sets.
 #
-# TODO: pin a release tag once the core tags one (v0.1.0).
+# TODO: pin core main once #18 merges, and a release tag once the core tags one
+# (v0.1.0).
 include(FetchContent)
-set(VG_VKC_PIN a8b63d1dd1b29c4ddd8cf0701a4278ee994c2982)
+set(VG_VKC_PIN 5913731fd5a1c0b81f5d354d28f0fbdf60b261ec)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
