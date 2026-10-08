@@ -101,7 +101,8 @@ what has landed since then. Record amendments when a contract changes.
 
 ## 2026-10-05 — GPU tests share a device per process
 
-**The contract.** gfx's GPU tests derive from volumetric_kit_core's test
+**The contract.** *Amended 2026-10-08:* the fixtures and the require-device
+variable are volumetric_kit_core's. gfx's GPU tests derive from the core's test
 fixtures (`volumetric_kit::core_test_support`) through
 `tests/gfx_test_support.hpp`, which adds the renderer's requirements and the
 headless-surface helpers. The fixtures share one instance and device among the

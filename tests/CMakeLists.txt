@@ -126,7 +126,7 @@ vg_discover_tests(vg_core_test)
 
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface). Skips wholesale where that surface or a
-# present-capable device is unavailable (e.g. lavapipe).
+# present-capable device is unavailable.
 add_executable(vg_windowing_test windowing_test.cpp)
 target_link_libraries(
   vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
@@ -136,8 +136,8 @@ vg_discover_tests(vg_windowing_test)
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and
-# skips where that surface or a present-capable device is unavailable (e.g.
-# lavapipe); HeadlessApp runs wherever a Vulkan device exists.
+# skips where that surface or a present-capable device is unavailable;
+# HeadlessApp runs wherever a Vulkan device exists.
 add_executable(vg_app_test app_test.cpp)
 target_link_libraries(
   vg_app_test PRIVATE volumetric_kit::gfx_app volumetric_kit::core_test_support

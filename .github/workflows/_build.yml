@@ -422,9 +422,9 @@ jobs:
           cmake -S . -B build-xcode -G Xcode "${flags[@]}"
 
       # Runtime-validate the windowing tier through the real window -> surface ->
-      # swapchain -> present path. lavapipe has no VK_EXT_headless_surface (so the
-      # headless windowing test skips), but it supports the X11 WSI, so drive the
-      # windowed example through a virtual X server with validation layers on.
+      # swapchain -> present path, which the headless-surface tests do not
+      # reach: drive the windowed example through the X11 WSI on a virtual X
+      # server with validation layers on.
       # macOS runners are display-less, so the example is build-only there (it is
       # runtime-validated locally on MoltenVK). On the self-hosted GPU box this
       # runs against the real 5090, still under Xvfb since the example opens a
