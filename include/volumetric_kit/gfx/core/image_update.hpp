@@ -29,14 +29,15 @@ class RetireQueue;
 /// @brief The shader stages an image update is ordered against: the image's
 ///        readers before the update and after it.
 ///
-/// Both masks hold shader stages only -- `VERTEX_SHADER`, `FRAGMENT_SHADER`
-/// and `COMPUTE_SHADER` -- ones the update's queue runs.
+/// Both masks are non-empty and hold shader stages only -- `VERTEX_SHADER`,
+/// `FRAGMENT_SHADER` and `COMPUTE_SHADER` -- ones the update's queue runs.
 struct ImageUpdateScope {
-  /// Earlier reads of the image on the update's queue that the copy waits
-  /// for. 0 when none can still be running: the image is new, or the host has
-  /// seen every frame that read it complete, as a ring slot reused by frame
-  /// number has (@ref pipelines::StreamedAtlas). Reads on another queue are
-  /// the caller's to order.
+  /// The stages that read the image earlier on the update's queue: the
+  /// transition that discards its contents waits for them. It waits even
+  /// when the host has seen those reads complete -- a ring slot reused by
+  /// frame number (@ref pipelines::StreamedAtlas) -- so that the queue
+  /// itself orders them before the copy. Reads on another queue are the
+  /// caller's to order.
   VkPipelineStageFlags src_stages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   /// The stages that read the image after the update; non-zero. The copy is
   /// made visible to them.
@@ -79,7 +80,7 @@ struct ImageUpdateScope {
 ///         multisampled image, no regions, a region outside the image or
 ///         reading past the end of @p source, a misaligned offset, a row
 ///         length or image height shorter than the region's, or a stage
-///         mask that is not shader stages (or an empty `dst_stages`);
+///         mask that is empty or not shader stages;
 ///         `core::Status::Code::Unsupported` for a compressed, multi-planar
 ///         or depth/stencil format.
 ///

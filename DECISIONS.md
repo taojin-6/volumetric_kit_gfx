@@ -135,10 +135,14 @@ consumer. Vertex color, not the fallback's texel, is what a frame without an
 atlas shows: every reconstruction vertex carries a fused color, while one texel
 would paint each textured triangle a flat color that passes for a texture.
 
-**Why a ring, when `ImageTexture` needs none.** An `ImageTexture` update
-waits on the GPU for every earlier fragment read on the queue. An atlas image
-is rewritten only once the host has seen its last frame complete, so its copy
-waits for no earlier read, and the ring is the structure a producer writing
+**Why a ring, when `ImageTexture` needs none.** Both updates wait on the GPU
+for the earlier fragment reads on the queue. An atlas image is rewritten only
+once the host has seen its last frame complete, but its transition waits for
+the fragment stage all the same, so the queue itself orders those reads
+before the copy; without that wait, validation layers that do not track host
+waits on timeline semaphores (Ubuntu 24.04's 1.3.275) report a
+write-after-read hazard. The ring keeps the picture an update replaces
+intact, so `discard` can restore it, and is the structure a producer writing
 an atlas image from its own queue will need, where no barrier reaches. When
 every image is still used by an earlier frame, the update waits for the
 oldest on the host, as the frame loop waits for a slot; with frames in flight

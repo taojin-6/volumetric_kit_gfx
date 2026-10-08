@@ -37,11 +37,10 @@ core::Result<VkDeviceSize> check_target(const char* call, VkCommandBuffer cmd,
   if (cmd == VK_NULL_HANDLE) {
     return core::Status::invalid_argument(name + ": null command buffer");
   }
-  if (scope.dst_stages == 0 || (scope.dst_stages & ~kShaderStages) != 0 ||
-      (scope.src_stages & ~kShaderStages) != 0) {
+  if (scope.src_stages == 0 || (scope.src_stages & ~kShaderStages) != 0 ||
+      scope.dst_stages == 0 || (scope.dst_stages & ~kShaderStages) != 0) {
     return core::Status::invalid_argument(
-        name +
-        ": the scope's stages must be shader stages, and dst_stages non-empty");
+        name + ": the scope's stages must be non-empty shader stages");
   }
   if (!image.valid()) {
     return core::Status::invalid_argument(name + ": empty image");
@@ -144,8 +143,8 @@ core::Status record_image_update(VkCommandBuffer cmd,
     }
   }
 
-  // The contents are discarded; the copy waits for the earlier reads the
-  // scope names, and for nothing when none can still be running.
+  // The contents are discarded, but not the order: the copy waits for the
+  // earlier reads the scope names.
   detail::record_copies_to_image(cmd, source.handle(), image.handle(),
                                  scope.src_stages, regions, region_count);
   detail::record_copied_to_shader_read(cmd, image.handle(), scope.dst_stages);

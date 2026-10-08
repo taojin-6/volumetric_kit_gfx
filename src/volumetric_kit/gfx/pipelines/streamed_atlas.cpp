@@ -18,10 +18,11 @@ namespace volumetric_kit::gfx::pipelines {
 
 namespace {
 
-// An update copies into an image whose last frame has completed -- the host
-// has seen it on the timeline -- so the copy waits for no earlier read; the
-// pipeline samples the picture in the fragment stage.
-constexpr ImageUpdateScope kUpdateScope{0,
+// The pipeline samples a picture in the fragment stage. An update copies into
+// an image whose last frame the host has seen complete, yet its transition
+// still waits for that stage, so the queue itself orders the earlier frames'
+// reads before the copy.
+constexpr ImageUpdateScope kUpdateScope{VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT};
 
 }  // namespace

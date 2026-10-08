@@ -251,6 +251,11 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
       update(source.value(), image.value(), whole,
              vg::ImageUpdateScope{VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0}),
       Code::InvalidArgument);
+  // No stage to wait for would drop the order against earlier reads.
+  EXPECT_EQ(
+      update(source.value(), image.value(), whole,
+             vg::ImageUpdateScope{0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT}),
+      Code::InvalidArgument);
   EXPECT_EQ(update(source.value(), image.value(), whole,
                    vg::ImageUpdateScope{VK_PIPELINE_STAGE_TRANSFER_BIT,
                                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT}),

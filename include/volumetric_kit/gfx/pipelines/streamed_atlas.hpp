@@ -56,14 +56,16 @@ struct StreamedAtlasDesc {
 /// is recorded into a frame's command buffer, outside its rendering scope, and
 /// copies into the image no unfinished frame uses -- the least recently used,
 /// once the timeline has reached its last frame -- which becomes the current
-/// picture. A picture a frame in flight draws is therefore never overwritten,
-/// so the copy waits on the GPU for nothing earlier. If every image is still in
-/// use by an earlier frame, the update waits on the host for the oldest of
-/// them; with one update a frame and at least the frame loop's frames in
-/// flight plus one images, it never does. Whether a frame's number has been
-/// submitted is read from the core's record of submitted timeline values,
-/// which `windowing::FrameLoop` adds each frame to (a caller submitting frames
-/// itself adds them with `core::note_timeline_signals`).
+/// picture. A picture a frame in flight draws is therefore never overwritten;
+/// the copy's transition still waits on the GPU for the fragment stage that
+/// sampled the image, so the queue orders those reads before it, not only the
+/// host's sight of the timeline. If every image is still in use by an earlier
+/// frame, the update waits on the host for the oldest of them; with one update
+/// a frame and at least the frame loop's frames in flight plus one images, it
+/// never does. Whether a frame's number has been submitted is read from the
+/// core's record of submitted timeline values, which `windowing::FrameLoop`
+/// adds each frame to (a caller submitting frames itself adds them with
+/// `core::note_timeline_signals`).
 ///
 /// Before its first update the atlas has no picture: @ref use returns
 /// `VK_NULL_HANDLE`, and the pipeline draws in vertex color. The descriptor

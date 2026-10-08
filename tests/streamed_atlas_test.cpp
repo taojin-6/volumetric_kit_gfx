@@ -344,6 +344,52 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     return frame;
   }
 
+  // An image the quad samples through a set of its own: what a test of
+  // record_image_update itself rewrites, outside any atlas.
+  struct SampledImage {
+    vkc::Image image;
+    std::optional<vg::Sampler> sampler;
+    vkc::DescriptorPool pool;
+    vkc::DescriptorSet set;
+  };
+
+  // Uploads `picture` into `out.image` and writes the set that binds it.
+  void make_sampled_image(const Picture& picture, SampledImage& out) {
+    vg::ImageUploadDesc upload;
+    upload.extent = {kSide, kSide};
+    upload.format = kFormat;
+    upload.pixels = picture.data();
+    upload.size = sizeof(picture);
+    auto image = vg::upload_texture(*device_, *allocator_, upload);
+    ASSERT_TRUE(image.ok()) << image.status().message();
+    out.image = std::move(image).value();
+    auto sampler = vg::Sampler::create(device());
+    ASSERT_TRUE(sampler.ok()) << sampler.status().message();
+    out.sampler.emplace(std::move(sampler).value());
+    const VkDescriptorPoolSize pool_size{
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
+    ASSERT_TRUE(pool.ok()) << pool.status().message();
+    out.pool = std::move(pool).value();
+    auto set = out.pool.allocate(pipeline_->descriptor_set_layout(0));
+    ASSERT_TRUE(set.ok()) << set.status().message();
+    out.set = std::move(set).value();
+    out.set.write_combined_image_sampler(
+        0, out.image.view(), out.sampler->handle(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
+
+  // A buffer a copy reads `picture` from, tightly packed.
+  vkc::Result<vkc::Buffer> make_source(const Picture& picture) {
+    vkc::BufferDesc desc;
+    desc.size = sizeof(picture);
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.memory = vkc::MemoryUsage::Staging;
+    VKC_ASSIGN(vkc::Buffer source, allocator_->create_buffer(desc));
+    std::memcpy(source.mapped(), picture.data(), sizeof(picture));
+    return source;
+  }
+
   std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::HybridMeshPipeline> pipeline_;
   std::optional<pipelines::GpuMesh> mesh_;
@@ -507,7 +553,9 @@ TEST_F(StreamedAtlasTest, RingNeverOverwritesAPictureAFrameInFlightDraws) {
 // Frames that complete free their images: with two images, frames 1-4
 // alternate between them, each reused once its last frame has completed. The
 // host learns that from the timeline's counter alone, as a frame loop's caller
-// does, and no hazard is reported.
+// does, and no hazard is reported -- by a validation layer that tracks host
+// waits on timeline semaphores or by one that does not (Ubuntu 24.04's), as
+// the reuse also waits on the queue for the fragment reads of frames 1-2.
 TEST_F(StreamedAtlasTest, ReusesAnImageOnceItsFrameCompletes) {
   auto atlas = make_atlas(2);
   ASSERT_TRUE(atlas.ok()) << atlas.status().message();
@@ -808,34 +856,10 @@ TEST_F(StreamedAtlasTest, SelfMoveAssignKeepsTheAtlas) {
 // image: a frame that draws the image, rewrites it and draws it again, all in
 // one command buffer, draws each picture once, with no hazard reported.
 TEST_F(StreamedAtlasTest, ImageUpdateWaitsForEarlierReadsInTheFrame) {
-  const Picture red = solid(kRed);
-  vg::ImageUploadDesc upload;
-  upload.extent = {kSide, kSide};
-  upload.format = kFormat;
-  upload.pixels = red.data();
-  upload.size = sizeof(red);
-  auto image = vg::upload_texture(*device_, *allocator_, upload);
-  ASSERT_TRUE(image.ok()) << image.status().message();
-  auto sampler = vg::Sampler::create(device());
-  ASSERT_TRUE(sampler.ok()) << sampler.status().message();
-  const VkDescriptorPoolSize pool_size{
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
-  ASSERT_TRUE(pool.ok()) << pool.status().message();
-  auto set = pool.value().allocate(pipeline_->descriptor_set_layout(0));
-  ASSERT_TRUE(set.ok()) << set.status().message();
-  set.value().write_combined_image_sampler(
-      0, image.value().view(), sampler.value().handle(),
-      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-  const Picture green = solid(kGreen);
-  vkc::BufferDesc desc;
-  desc.size = sizeof(green);
-  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = vkc::MemoryUsage::Staging;
-  auto source = allocator_->create_buffer(desc);
+  SampledImage sampled;
+  ASSERT_NO_FATAL_FAILURE(make_sampled_image(solid(kRed), sampled));
+  auto source = make_source(solid(kGreen));
   ASSERT_TRUE(source.ok()) << source.status().message();
-  std::memcpy(source.value().mapped(), green.data(), sizeof(green));
   VkBufferImageCopy whole{};
   whole.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   whole.imageExtent = {kSide, kSide, 1};
@@ -850,14 +874,47 @@ TEST_F(StreamedAtlasTest, ImageUpdateWaitsForEarlierReadsInTheFrame) {
   ASSERT_TRUE(target.ok()) << target.status().message();
   again.target = std::move(target).value();
 
-  draw(*frame, set.value().handle());
+  draw(*frame, sampled.set.handle());
   const vkc::Status updated = vg::record_image_update(
-      frame->cmd.handle(), source.value(), image.value(), &whole, 1);
+      frame->cmd.handle(), source.value(), sampled.image, &whole, 1);
   EXPECT_TRUE(updated.ok()) << updated.message();
-  draw(frame->cmd.handle(), again.target, set.value().handle());
+  draw(frame->cmd.handle(), again.target, sampled.set.handle());
   submit(*frame);
-  EXPECT_EQ(drawn(*frame), red);
-  EXPECT_EQ(drawn(again), green);
+  EXPECT_EQ(drawn(*frame), solid(kRed));
+  EXPECT_EQ(drawn(again), solid(kGreen));
+}
+
+// And for reads in an earlier frame, as when a ring reuses an image: frame 1,
+// held in flight, draws the image; frame 2, submitted behind it with no host
+// wait between them, rewrites it and draws it. The rewrite waits on the queue
+// for frame 1's fragment reads, so each frame draws its own picture and no
+// hazard is reported: the order does not rest on the host having seen frame 1
+// complete.
+TEST_F(StreamedAtlasTest, ImageUpdateWaitsForReadsInAnEarlierFrame) {
+  SampledImage sampled;
+  ASSERT_NO_FATAL_FAILURE(make_sampled_image(solid(kRed), sampled));
+  auto source = make_source(solid(kGreen));
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  VkBufferImageCopy whole{};
+  whole.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  whole.imageExtent = {kSide, kSide, 1};
+  OpenGateAtExit open_at_exit(*gate_);
+
+  Frame* one = begin_frame(1);
+  ASSERT_NE(one, nullptr);
+  draw(*one, sampled.set.handle());
+  submit(*one, true);
+
+  Frame* two = begin_frame(2);
+  ASSERT_NE(two, nullptr);
+  const vkc::Status updated = vg::record_image_update(
+      two->cmd.handle(), source.value(), sampled.image, &whole, 1);
+  EXPECT_TRUE(updated.ok()) << updated.message();
+  draw(*two, sampled.set.handle());
+  submit(*two);
+  open_gate(*gate_);
+  EXPECT_EQ(drawn(*one), solid(kRed));
+  EXPECT_EQ(drawn(*two), solid(kGreen));
 }
 
 }  // namespace

@@ -240,8 +240,9 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
     copies[m].imageExtent = {e.width, e.height, 1};
     offset += VkDeviceSize{e.width} * e.height * plan.texel * desc.array_layers;
   }
-  detail::record_copies_to_image(cmd, staging, image, 0, copies.data(),
-                                 desc.mip_levels);
+  detail::record_copies_to_image(cmd, staging, image,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 copies.data(), desc.mip_levels);
 
   // 2. Mip generation (validated single-layer, single-source-mip): blit the
   //    chain down from the copied mip 0; every level ends in SHADER_READ.
