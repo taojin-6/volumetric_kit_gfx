@@ -452,11 +452,12 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   PUBLIC and the installed package refuses a core built without it.
 - **gfx checks the core it got, not the one it asked for.** Its pin and
   `VKC_WITH_VULKAN` yield to a project that made the core available first, and
-  FetchContent may find an installed core; the core's version does not advance
-  between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
-  to configure unless the tier is there and has `format.hpp`, the newest header
-  gfx needs, naming the pin and where the core came from; the package config
-  checks the same.
+  FetchContent may find an installed core. *Amended 2026-10-08:* the check is
+  the core's `vkc_require_core` (the core's DECISIONS.md, "Consumers pin, and
+  an application declares the core first"): gfx's top-level CMakeLists.txt and
+  its package config refuse a core older than `VG_VKC_MIN_VERSION`, the oldest
+  gfx builds with, or one without the vulkan tier, naming where the core came
+  from and how to fix it.
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
   and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one

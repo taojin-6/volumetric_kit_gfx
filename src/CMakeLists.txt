@@ -75,18 +75,8 @@ if(VG_INSTALL)
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_gfx")
 
   # The installed package re-finds the core at the MAJOR.MINOR this build used:
-  # the core's version file accepts only the same minor before 1.0. A core built
-  # here carries its version on core_base; an installed one carries none, but
-  # find_package set its version -- in the top-level CMakeLists.txt
-  # (FetchContent redirected to find_package) or in a parent project.
-  get_target_property(_vg_vkc_version volumetric_kit::core_base VERSION)
-  if(NOT _vg_vkc_version)
-    set(_vg_vkc_version "${volumetric_kit_core_VERSION}")
-  endif()
-  string(REGEX MATCH "^[0-9]+\\.[0-9]+" VG_VKC_MAJOR_MINOR "${_vg_vkc_version}")
-  if(NOT VG_VKC_MAJOR_MINOR)
-    message(FATAL_ERROR "volumetric_kit_core's version is unknown")
-  endif()
+  # the core's version file accepts only the same minor before 1.0.
+  vkc_core_version(VG_VKC_MAJOR_MINOR MAJOR_MINOR)
 
   include(CMakePackageConfigHelpers)
   configure_package_config_file(

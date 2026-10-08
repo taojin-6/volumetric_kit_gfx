@@ -212,9 +212,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - Vulkan headers 1.3.204 or newer are required, 1.3.208 on Apple; older ones
     fail at configure or in `core/vulkan.hpp`, naming the version needed.
   - An application that fetches the core before gfx sets `VKC_WITH_VULKAN ON`
-    first and pins the core at or after gfx's pin, or gfx refuses to configure,
-    saying which. The installed package likewise refuses a core without the
-    tier.
+    first and pins the core at `VG_VKC_MIN_VERSION` (0.1.0) or newer, or gfx
+    refuses to configure, saying which (the core's `vkc_require_core`). The
+    installed package likewise refuses an older core or one without the tier.
   - A texture upload or offscreen readback of a vendor or EXT extension's
     format is refused (`Unsupported`); core and KHR formats are unchanged.
   - `create_image` with `with_view`, and `upload_texture`, refuse a format

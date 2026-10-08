@@ -15,28 +15,9 @@ include(CMakeFindDependencyMacro)
 # still takes precedence.
 find_dependency(volumetric_kit_core @VG_VKC_MAJOR_MINOR@ CONFIG HINTS
                 "${PACKAGE_PREFIX_DIR}")
-# The core's version does not advance between commits, so a core found on
-# CMAKE_PREFIX_PATH may lack the vulkan tier, or predate the format helpers
-# gfx's libraries call (format.hpp, the newest header gfx needs from it).
-set(_vg_vkc_format_found FALSE)
-if(TARGET volumetric_kit::core_vulkan)
-  get_target_property(_vg_vkc_includes volumetric_kit::core_vulkan
-                      INTERFACE_INCLUDE_DIRECTORIES)
-  foreach(_vg_dir IN LISTS _vg_vkc_includes)
-    if(EXISTS "${_vg_dir}/volumetric_kit/core/vulkan/format.hpp")
-      set(_vg_vkc_format_found TRUE)
-    endif()
-  endforeach()
-endif()
-if(NOT _vg_vkc_format_found)
-  set(volumetric_kit_gfx_FOUND FALSE)
-  string(
-    CONCAT volumetric_kit_gfx_NOT_FOUND_MESSAGE
-           "gfx needs volumetric_kit_core's vulkan tier at @VG_VKC_PIN@ or "
-           "newer; the core at ${volumetric_kit_core_DIR} was built without "
-           "the tier (VKC_WITH_VULKAN OFF) or predates that commit")
-  return()
-endif()
+# A core found on CMAKE_PREFIX_PATH may predate the one gfx builds with, or lack
+# the vulkan tier.
+vkc_require_core(@VG_VKC_MIN_VERSION@ VULKAN)
 find_dependency(Vulkan)
 
 # Threads is a PRIVATE dependency of gfx_pipelines (the IBL bake's std::async),
