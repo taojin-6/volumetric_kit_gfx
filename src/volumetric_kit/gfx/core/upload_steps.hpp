@@ -45,8 +45,9 @@ inline void record_copies_to_image(VkCommandBuffer cmd, VkBuffer source,
                                    std::uint32_t region_count) {
   ImageBarrierDesc to_copy;
   to_copy.image = image;
-  to_copy.src_stage =
-      src_stages != 0 ? src_stages : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+  to_copy.src_stage = src_stages != 0 ? src_stages
+                                      : static_cast<VkPipelineStageFlags>(
+                                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
   to_copy.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
   to_copy.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
   to_copy.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
