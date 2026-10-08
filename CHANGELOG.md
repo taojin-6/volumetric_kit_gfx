@@ -234,14 +234,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - `vg::to_string` names the core's `to_string`, for a `Status::Code` as
     for a `VkResult`; an unqualified `to_string(status.domain())` finds it
     too, by argument-dependent lookup.
-  - recon's CUDA failures are `Status::Code::Backend` too, and `vk_result` reads
-    their `cudaError_t` as an unrelated `VkResult`: ask it only of a status from
-    a Vulkan call.
+  - recon's CUDA failures are `Status::Code::Backend` too; `Status::backend()`
+    tells them apart, and `vk_result` is empty for them.
   - A log handler takes `(level, source, message)`; gfx's messages carry source
     `"vg"`, and `vg::log_message(level, message)` is unchanged.
   - `Status` and `Result` are `[[nodiscard]]`; handle or `(void)` a dropped one
     (the examples now report a failed `wait_idle`).
-  - `Status::backend_error(0, …)` and `vk_error(VK_SUCCESS, …)` abort;
+  - `Status::backend_error(backend, 0, …)` and `vk_error(VK_SUCCESS, …)` abort;
     `Status::with_context` prefixes a message and keeps the domain and detail.
   - `std::move(r).value()` and `*std::move(r)` return the value, not a reference
     into `r`; `Result`'s success constructor refuses a pointer for `Result<bool>`

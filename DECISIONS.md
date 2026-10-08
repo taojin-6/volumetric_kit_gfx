@@ -510,7 +510,9 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   asks it only of its own statuses. It does return empty for a detail wider
   than 32 bits, which would be undefined to convert. Recording the backend in
   `Status` is the core's to decide, and its `vk_result`, now gfx's, has the
-  gap.
+  gap. *Amended 2026-10-08:* superseded: a backend status records the backend
+  that set it, and `vk_result` is empty for any but Vulkan (the core's
+  DECISIONS.md, "Merging the three `Status`/`Result` types").
 - **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
   the core's `VKC_*` macros, so open branches merge cleanly and a check
   reports its condition unexpanded; a `TODO:` marks the rename, as recon has
