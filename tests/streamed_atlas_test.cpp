@@ -390,6 +390,27 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     return source;
   }
 
+  // A mapped copy source holding one column of the picture, top to bottom.
+  vkc::Result<vkc::Buffer> make_column(const std::array<Rgba, kSide>& column) {
+    vkc::BufferDesc desc;
+    desc.size = sizeof(column);
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.memory = vkc::MemoryUsage::Staging;
+    VKC_ASSIGN(vkc::Buffer buffer, allocator_->create_buffer(desc));
+    std::memcpy(buffer.mapped(), column.data(), desc.size);
+    return buffer;
+  }
+
+  // The copy of a column buffer into column `x` of the picture.
+  static vg::ImageCopy column_copy(const vkc::Buffer& source, uint32_t x) {
+    vg::ImageCopy copy;
+    copy.source = &source;
+    copy.region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.region.imageOffset = {static_cast<int32_t>(x), 0, 0};
+    copy.region.imageExtent = {1, kSide, 1};
+    return copy;
+  }
+
   std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::HybridMeshPipeline> pipeline_;
   std::optional<pipelines::GpuMesh> mesh_;
@@ -523,23 +544,13 @@ TEST_F(StreamedAtlasTest, UpdateCopiesEachTileFromItsOwnBuffer) {
   const std::array<std::array<Rgba, kSide>, 2> columns{
       {{kRed, kBlue}, {kGreen, kYellow}}};
   std::vector<vkc::Buffer> sources;
-  std::array<vg::ImageCopy, 2> tiles{};
-  for (uint32_t t = 0; t < 2; ++t) {
-    vkc::BufferDesc desc;
-    desc.size = sizeof(columns[t]);
-    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    desc.memory = vkc::MemoryUsage::Staging;
-    auto source = allocator_->create_buffer(desc);
+  for (const std::array<Rgba, kSide>& column : columns) {
+    auto source = make_column(column);
     ASSERT_TRUE(source.ok()) << source.status().message();
-    std::memcpy(source.value().mapped(), columns[t].data(), desc.size);
     sources.push_back(std::move(source).value());
   }
-  for (uint32_t t = 0; t < 2; ++t) {
-    tiles[t].source = &sources[t];
-    tiles[t].region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    tiles[t].region.imageOffset = {static_cast<int32_t>(t), 0, 0};
-    tiles[t].region.imageExtent = {1, kSide, 1};
-  }
+  std::array<vg::ImageCopy, 2> tiles{column_copy(sources[0], 0),
+                                     column_copy(sources[1], 1)};
 
   Frame* frame = begin_frame(1);
   ASSERT_NE(frame, nullptr);
@@ -561,6 +572,72 @@ TEST_F(StreamedAtlasTest, UpdateCopiesEachTileFromItsOwnBuffer) {
   draw(*refused, atlas.value().use(2));
   submit(*refused);
   EXPECT_EQ(drawn(*refused), (Picture{kRed, kGreen, kBlue, kYellow}));
+}
+
+// The ring, updated from several buffers: with two images, frames 1-4 each
+// copy their two columns from buffers of their own and alternate between the
+// images as each image's last frame completes, and every frame draws its own
+// picture. An update whose tiles overlap is refused, and the next frame draws
+// the picture before it.
+TEST_F(StreamedAtlasTest, ReusesImagesForUpdatesFromSeveralBuffers) {
+  auto atlas = make_atlas(2);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+
+  // Frame n's left and right columns.
+  const std::array<std::array<Rgba, 2>, 4> halves{
+      {{kRed, kGreen}, {kBlue, kYellow}, {kMagenta, kWhite}, {kGreen, kRed}}};
+  // Two a frame, kept until the end, after every frame has completed.
+  std::vector<vkc::Buffer> sources;
+  sources.reserve(2 * halves.size());
+  std::array<Frame*, 4> frames{};
+  std::array<VkImage, 4> images{};
+  for (uint64_t n = 1; n <= 4; ++n) {
+    if (n > 2) {
+      // The image's last frame has completed.
+      while (timeline_->value().value() < n - 2) {
+        std::this_thread::yield();
+      }
+    }
+    std::array<vg::ImageCopy, 2> tiles{};
+    for (uint32_t x = 0; x < 2; ++x) {
+      const Rgba color = halves[n - 1][x];
+      auto source = make_column({color, color});
+      ASSERT_TRUE(source.ok()) << source.status().message();
+      sources.push_back(std::move(source).value());
+      tiles[x] = column_copy(sources.back(), x);
+    }
+    frames[n - 1] = begin_frame(n);
+    ASSERT_NE(frames[n - 1], nullptr);
+    const vkc::Status updated = atlas.value().record_update(
+        frames[n - 1]->cmd.handle(), n, tiles.data(), 2);
+    EXPECT_TRUE(updated.ok()) << updated.message();
+    images[n - 1] = atlas.value().picture()->handle();
+    draw(*frames[n - 1], atlas.value().use(n));
+    submit(*frames[n - 1]);
+  }
+  EXPECT_NE(images[0], images[1]);
+  EXPECT_EQ(images[2], images[0]);
+  EXPECT_EQ(images[3], images[1]);
+  for (size_t f = 0; f < 4; ++f) {
+    const Rgba left = halves[f][0];
+    const Rgba right = halves[f][1];
+    EXPECT_EQ(drawn(*frames[f]), (Picture{left, right, left, right}))
+        << "frame " << f + 1;
+  }
+
+  Frame* overlapping = begin_frame(5);
+  ASSERT_NE(overlapping, nullptr);
+  const std::array<vg::ImageCopy, 2> both_left{column_copy(sources[0], 0),
+                                               column_copy(sources[1], 0)};
+  EXPECT_EQ(
+      atlas.value()
+          .record_update(overlapping->cmd.handle(), 5, both_left.data(), 2)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(atlas.value().picture()->handle(), images[3]);
+  draw(*overlapping, atlas.value().use(5));
+  submit(*overlapping);
+  EXPECT_EQ(drawn(*overlapping), (Picture{kGreen, kRed, kGreen, kRed}));
 }
 
 // The ring's promise: while frames 1-3 are held in flight, each drawing its

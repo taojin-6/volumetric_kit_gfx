@@ -4,6 +4,7 @@
 #include "volumetric_kit/gfx/core/image_update.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -134,6 +135,29 @@ core::Status check_source(const std::string& name, const core::Buffer* source,
   return core::Status{};
 }
 
+// Whether regions `a` and `b`, each inside the image, write a texel in
+// common: the same level, a layer in common, and boxes that intersect.
+bool overlap(const VkBufferImageCopy& a, const VkBufferImageCopy& b) {
+  const VkImageSubresourceLayers& sa = a.imageSubresource;
+  const VkImageSubresourceLayers& sb = b.imageSubresource;
+  if (sa.mipLevel != sb.mipLevel ||
+      sa.baseArrayLayer >= sb.baseArrayLayer + sb.layerCount ||
+      sb.baseArrayLayer >= sa.baseArrayLayer + sa.layerCount) {
+    return false;
+  }
+  const auto apart = [](std::int32_t a_offset, std::uint32_t a_extent,
+                        std::int32_t b_offset, std::uint32_t b_extent) {
+    return std::int64_t{a_offset} + a_extent <= b_offset ||
+           std::int64_t{b_offset} + b_extent <= a_offset;
+  };
+  return !apart(a.imageOffset.x, a.imageExtent.width, b.imageOffset.x,
+                b.imageExtent.width) &&
+         !apart(a.imageOffset.y, a.imageExtent.height, b.imageOffset.y,
+                b.imageExtent.height) &&
+         !apart(a.imageOffset.z, a.imageExtent.depth, b.imageOffset.z,
+                b.imageExtent.depth);
+}
+
 }  // namespace
 
 core::Status record_image_update(VkCommandBuffer cmd,
@@ -164,6 +188,15 @@ core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
   for (std::uint32_t i = 0; i < copy_count; ++i) {
     VKC_TRY(check_region(name, image, copies[i].region, i, texel));
     VKC_TRY(check_source(name, copies[i].source, copies[i].region, i, texel));
+    // The copies run with no barrier between them, so two that write one
+    // texel would race.
+    for (std::uint32_t j = 0; j < i; ++j) {
+      if (overlap(copies[j].region, copies[i].region)) {
+        return core::Status::invalid_argument(
+            name + ": region " + std::to_string(i) + " overlaps region " +
+            std::to_string(j));
+      }
+    }
   }
 
   // The contents are discarded, but not the order: the copy waits for the

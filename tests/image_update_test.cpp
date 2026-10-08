@@ -334,6 +334,27 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
                                     1, image.value())
                 .domain(),
             Code::InvalidArgument);
+  // A region outside the image, and two regions that write a texel in common,
+  // which would race: the copies have no barrier between them.
+  VkBufferImageCopy right{};
+  right.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  right.imageOffset = {1, 0, 0};
+  right.imageExtent = {1, 2, 1};
+  copies[0] = {&source.value(), whole};
+  copies[1] = {&source.value(), right};
+  copies[1].region.imageOffset = {2, 0, 0};  // past the right edge
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  copies[1].region.imageOffset = {1, 0, 0};  // inside `whole`
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  const std::array<VkBufferImageCopy, 2> overlapping{whole, right};
+  EXPECT_EQ(vg::record_image_update(cmd, source.value(), image.value(),
+                                    overlapping.data(), 2)
+                .domain(),
+            Code::InvalidArgument);
 
   const Texels pixels(4, 0);
   EXPECT_EQ(vg::record_image_upload(cmd, *allocator_, retire, 1, image.value(),

@@ -70,15 +70,18 @@ struct ImageUpdateScope {
 ///                      `SAMPLED` usage and an uncompressed single-plane
 ///                      color format, in the layout its `layout()` records.
 /// @param regions       The copies: color aspect, within the image's levels,
-///                      layers and extent, each `bufferOffset` a multiple of
-///                      the texel size and each row length and image height
-///                      0 (tightly packed) or at least the region's.
+///                      layers and extent, no two writing a texel in common
+///                      (they run with no barrier between them), each
+///                      `bufferOffset` a multiple of the texel size and each
+///                      row length and image height 0 (tightly packed) or at
+///                      least the region's.
 /// @param region_count  The number of @p regions; non-zero.
 /// @param scope         The stages that read the image before and after.
 /// @return OK once recorded; `core::Status::Code::InvalidArgument` for a null
 ///         @p cmd, an empty @p source or @p image, a missing usage, a
 ///         multisampled image, no regions, a region outside the image or
-///         reading past the end of @p source, a misaligned offset, a row
+///         reading past the end of @p source, two regions that write a
+///         texel in common, a misaligned offset, a row
 ///         length or image height shorter than the region's, or a stage
 ///         mask that is empty or not shader stages;
 ///         `core::Status::Code::Unsupported` for a compressed, multi-planar
