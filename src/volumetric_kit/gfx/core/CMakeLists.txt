@@ -27,6 +27,7 @@ target_sources(
           graphics_pipeline.cpp
           render_target.cpp
           image_barrier.cpp
+          image_update.cpp
           mip_chain.cpp
           buffer_barrier.cpp
           offscreen_target.cpp

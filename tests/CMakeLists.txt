@@ -80,6 +80,7 @@ add_executable(
   graphics_pipeline_test.cpp
   render_target_test.cpp
   image_barrier_test.cpp
+  image_update_test.cpp
   buffer_barrier_test.cpp
   offscreen_target_test.cpp
   sampler_test.cpp

@@ -53,6 +53,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `end_frame` checks them as the core's submits check theirs, refuses a wait
   for a value not yet submitted to be set, and adds what each frame sets to
   the core's record of submitted values.
+- `core`: `record_image_update` and `record_image_upload`
+  (`core/image_update.hpp`) record an image's update into a frame's command
+  buffer between the transitions that order it; an upload stages its pixels
+  through a buffer a `RetireQueue` frees once the frame completes.
 
 ### Changed
 
