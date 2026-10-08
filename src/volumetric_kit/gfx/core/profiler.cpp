@@ -256,7 +256,7 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
     return;
   }
 
-  // The frame this slot last carried has retired (the caller waited for it);
+  // The frame this slot last carried has retired (the caller waited its fence);
   // resolve its GPU ticks and publish, then clear the slot for reuse.
   Impl::SlotFrame& f = d.slots[slot];
   if (f.pending) {

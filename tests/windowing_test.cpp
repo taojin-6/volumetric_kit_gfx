@@ -861,18 +861,27 @@ TEST_F(FrameTimelineTest, SwapchainRebuildWithPendingRetirements) {
   ASSERT_TRUE(producer.value().wait().ok());
 }
 
-// end_frame refuses a wait or signal it cannot submit, or one on the loop's
-// own timeline that could never be met or is not the caller's to set. A
-// refused frame never runs, but an empty submit stands in for it: its number
-// is still set, so what waits for it does not hang, and after the rebuild an
-// unpresented image needs, the loop runs on. A wait for a submitted frame is
-// accepted.
+// end_frame refuses a wait or signal it cannot submit: what the core's
+// submits refuse, a wait for a value nothing is submitted to set (the loop's
+// own frames included), and a value on the loop's timeline, which is not the
+// caller's to set. A refused frame never runs, but an empty submit stands in
+// for it: its number is still set, so what waits for it does not hang, and
+// after the rebuild an unpresented image needs, the loop runs on. Its
+// profiler frame is never read: the slot's queries were reset only in the
+// refused command buffer. A wait for a submitted frame is accepted.
 TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
   win::Swapchain sc = make_swapchain();
+  // Declared before the loop, which borrows it.
+  vg::ProfilerConfig pcfg;
+  pcfg.frames_in_flight = 2;
+  auto profiler = vg::Profiler::create(*device_, pcfg);
+  ASSERT_TRUE(profiler.ok()) << profiler.status().message();
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
+  loop.value().set_profiler(&profiler.value());
   ASSERT_TRUE(run_frames(loop.value(), 1).ok());
   vkc::TimelineSemaphore other = make_timeline();
+  ASSERT_TRUE(other.signal(2).ok());  // nothing is submitted to set more
   vkc::TimelineSemaphore empty;
   const vkc::TimelineSemaphore& own = loop.value().timeline();
 
@@ -885,16 +894,22 @@ TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
       {"null wait", {{{nullptr, 1}}}, {}},
       {"empty wait", {{{&empty, 1}}}, {}},
       {"no stages", {{{&other, 1}, 0}}, {}},
+      {"unsubmitted value", {{{&other, 3}}}, {}},
       {"unsubmitted frame", {{{&own, 0}}}, {}},  // set to the frame's own
       {"null signal", {}, {{nullptr, 1}}},
       {"own timeline signal", {}, {{&own, 100}}},
+      {"signal set twice", {}, {{&other, 5}, {&other, 6}}},
+      {"signal not above the counter", {}, {{&other, 2}}},
   };
   for (const Case& c : cases) {
     SCOPED_TRACE(c.what);
     auto frame = loop.value().begin_frame();
     ASSERT_TRUE(frame.ok()) << frame.status().message();
     win::Frame& f = frame.value();
-    record_clear(f);
+    {
+      vg::Profiler::Scope pass = profiler.value().gpu_scope(f.cmd, "refused");
+      record_clear(f);
+    }
     f.waits = c.waits;
     f.signals = c.signals;
     for (win::FrameWait& wait : f.waits) {
@@ -910,11 +925,91 @@ TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
   auto frame = loop.value().begin_frame();
   ASSERT_TRUE(frame.ok()) << frame.status().message();
   win::Frame& f = frame.value();
-  record_clear(f);
+  {
+    vg::Profiler::Scope pass = profiler.value().gpu_scope(f.cmd, "accepted");
+    record_clear(f);
+  }
   f.waits.push_back({{&own, f.number - 1}});
   EXPECT_TRUE(loop.value().end_frame(f).ok());
+  // The next frame on f's slot publishes f's times.
   EXPECT_TRUE(run_frames(loop.value(), 2).ok());
   vkDeviceWaitIdle(device_->handle());
+  const vg::FrameMetrics& m = profiler.value().metrics();
+  ASSERT_EQ(m.sections.size(), 1u);
+  EXPECT_STREQ(m.sections[0].name, "accepted");
+  EXPECT_EQ(m.sections[0].has_gpu, profiler.value().gpu_timing());
+}
+
+// A refused frame never presents its image, and only a present or a rebuild
+// releases an acquired image: the extent-taking begin_frame rebuilds after
+// each refusal, so refusing more frames than the chain has images neither
+// exhausts it nor needs the caller to rebuild.
+TEST_F(WindowingTest, ManagedBeginFrameRebuildsAfterARefusedFrame) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  int rebuilds = 0;
+  loop.value().set_recreate_callback([&rebuilds](VkExtent2D) {
+    ++rebuilds;
+    return vkc::Status{};
+  });
+
+  const int refusals = static_cast<int>(sc.image_count()) + 2;
+  for (int i = 0; i < refusals; ++i) {
+    auto frame = loop.value().begin_frame(VkExtent2D{256, 256});
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    ASSERT_TRUE(frame.value().has_value());
+    ASSERT_EQ(rebuilds, i);  // one per earlier refusal
+    win::Frame& f = *frame.value();
+    record_clear(f);
+    f.waits.push_back({{nullptr, 1}});
+    EXPECT_EQ(loop.value().end_frame(f).domain(),
+              vkc::Status::Code::InvalidArgument);
+  }
+  const uint32_t presents = 2 * sc.image_count();
+  for (uint32_t i = 0; i < presents; ++i) {
+    auto frame = loop.value().begin_frame(VkExtent2D{256, 256});
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    ASSERT_TRUE(frame.value().has_value());
+    record_clear(*frame.value());
+    EXPECT_TRUE(loop.value().end_frame(*frame.value()).ok());
+  }
+  EXPECT_EQ(rebuilds, refusals);
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// What a frame sets joins the core's record of submitted values: a submit
+// after the frame may not set a value at or below it, whether or not the
+// frame has completed, and a later frame may wait for it before it is
+// reached.
+TEST_F(WindowingTest, FrameSignalsJoinTheCoresRecordOfSubmittedValues) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  vkc::TimelineSemaphore other = make_timeline();
+
+  auto first = loop.value().begin_frame();
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  win::Frame& a = first.value();
+  record_clear(a);
+  a.signals.push_back({&other, 10});
+  ASSERT_TRUE(loop.value().end_frame(a).ok());
+  EXPECT_EQ(device_->submit_pending([](VkCommandBuffer) {}, {}, {{&other, 5}})
+                .status()
+                .domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(
+      vkc::check_timeline_points(*device_, {}, {{&other, 10}}, "test").domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  auto second = loop.value().begin_frame();
+  ASSERT_TRUE(second.ok()) << second.status().message();
+  win::Frame& b = second.value();
+  record_clear(b);
+  b.waits.push_back({{&other, 10}});
+  ASSERT_TRUE(loop.value().end_frame(b).ok());
+  ASSERT_TRUE(loop.value().timeline().wait(b.number).ok());
+  EXPECT_EQ(other.value().value(), 10u);
 }
 
 // end_frame takes only the frame begin_frame handed out: a copy carrying

@@ -141,24 +141,26 @@ one whose record (`Device::check_enabled`) lacks the renderer's requirements.
 ## 4. Answers from recon
 
 These were open when this was first written. recon has since answered all four:
-§4.1 and §4.2 are **landed** (`volumetric_kit_recon` #47, buffer sharing +
-barrier visibility; #48, the arena slot ring). §4.3 and §4.4 are recon's
-**proposed** shape, in review as `volumetric_kit_recon` #49 — recon's shipped
-code still takes the host path (download, then `upload_mesh` into a static
-`GpuMesh`). Recorded here because the contract above only makes sense alongside
+§4.1's host-gated path and §4.2 are **landed** (`volumetric_kit_recon` #47,
+buffer sharing + barrier visibility; #48, the arena slot ring). §4.3 and §4.4
+are recon's **proposed** shape, in review as `volumetric_kit_recon` #49 —
+recon's shipped code still takes the host path (download, then `upload_mesh`
+into a static `GpuMesh`). Recorded here because the contract above only makes sense alongside
 them, and flagged because #49 could still move in review; nothing in gfx depends
 on it landing, since `LiveMesh` draws whatever command it is handed.
 
 1. **Synchronization ownership: the application.** `record_draw` stays a pure
-   recorder and inserts no barrier, as drafted. The producer→draw dependency
-   takes one of two paths. When the extract's timeline value is already
-   submitted -- recon's `submit_async` has returned its `PendingBatch` -- the
-   frame waits for it on the GPU: a `windowing::Frame::waits` entry at
+   recorder and inserts no barrier, as drafted. The landed path gates on the
+   host: the application polls the extract's readiness and skips a not-ready
+   frame, which is what it already does for the host-mesh path. gfx also takes
+   a GPU wait: once an extract is submitted through the core's
+   `CommandBatch::submit_async` with a timeline value to set, a frame can wait
+   for that value with a `windowing::Frame::waits` entry at
    `VERTEX_INPUT | DRAW_INDIRECT`, whose semaphore carries the visibility too.
-   A frame may not wait for a value nothing has yet been submitted to set
-   (`FrameLoop::end_frame` says why), so for an extract not yet submitted the
-   application polls readiness on the host and skips a not-ready frame, which
-   is what it already does for the host-mesh path.
+   recon's extract sets no timeline value yet, so it does not take that path.
+   A frame may not wait for a value nothing has been submitted to set
+   (`FrameLoop::end_frame` says why), so an extract not yet submitted stays
+   gated on the host either way.
 
    On the host path visibility is a barrier, and recon now emits it: its
    shared `dispatch()` widened its destination scope to

@@ -145,9 +145,9 @@ class VG_WINDOWING_API FrameLoop {
 
   /// @brief Begin the next frame, owning the windowed-loop protocol: rebuilds
   ///        the swapchain when it went stale (a prior out-of-date / suboptimal
-  ///        result) or @p current_extent changed, re-runs the @ref
-  ///        set_recreate_callback hook after each rebuild, and retries the
-  ///        acquire once.
+  ///        result), a frame failed after its acquire (@ref end_frame), or
+  ///        @p current_extent changed, re-runs the @ref set_recreate_callback
+  ///        hook after each rebuild, and retries the acquire once.
   /// @param current_extent  The window's current framebuffer extent (e.g. from
   ///                        `glfwGetFramebufferSize`).
   /// @return The @ref Frame to record and pass to @ref end_frame; an *empty*
@@ -181,7 +181,8 @@ class VG_WINDOWING_API FrameLoop {
   ///       it. Dropping a returned @ref Frame leaves that semaphore signalled.
   ///       A failed `begin_frame` returns no @ref Frame and needs no pairing —
   ///       on an internal failure *after* the acquire, an empty submit in the
-  ///       frame's place consumes the acquire and sets its number.
+  ///       frame's place consumes the acquire and sets its number, and the
+  ///       acquired image is released as @ref end_frame's note says.
   /// @note Adapts automatically when @ref Swapchain::recreate changes the image
   ///       count: the per-image sync objects are rebuilt to match on entry.
   core::Result<Frame> begin_frame();
@@ -201,33 +202,34 @@ class VG_WINDOWING_API FrameLoop {
   /// queue, so the next @ref begin_frame, a swapchain rebuild's queue drain
   /// (which holds the submit mutex) and the loop's destruction would block
   /// forever. Gate a producer whose value is not yet submitted on the host
-  /// instead. Whether another timeline's value is submitted is not knowable
-  /// here, so only the loop's own @ref timeline is checked: a wait on it is
-  /// for at most @ref submitted. A value in `frame.signals` follows
-  /// `core::Device::submit_pending`'s rules: above its semaphore's current
-  /// value, every value submitted to set it, and any value the frame waits
-  /// for on it.
+  /// instead. The values are checked as `core::check_timeline_points` checks
+  /// them with `core::TimelineWaits::Submitted`, against the core's record of
+  /// submitted values, which the core's submits, every frame's submit and
+  /// `core::note_timeline_signals` add to: a value waited for must be reached
+  /// or recorded, and a value in `frame.signals` must exceed its semaphore's
+  /// current value, every recorded value, and any value the frame waits for
+  /// on it. What the producer itself waits for is not checked.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
   ///         rebuilds automatically) or another failed `VkResult`;
   ///         `core::Status::Code::InvalidArgument` when this loop is empty,
-  ///         @p frame did not come from its @ref begin_frame, or a wait or
-  ///         signal names a null or empty semaphore, one made on another
-  ///         `VkDevice`, a zero stage mask, a value @ref timeline is not yet
-  ///         submitted to reach, or a value to set on @ref timeline.
-  /// @note On a failure *before* the submit reaches the queue, the frame's
-  ///       commands never run: an empty submit in its place consumes the
-  ///       acquire and sets its number -- and `frame.signals`, unless they
-  ///       were refused -- so the *slot* stays reusable and nothing waiting
-  ///       for them hangs. But the image this frame acquired was never
-  ///       presented, and an acquired image is only released by a present or
-  ///       a swapchain rebuild. So the caller must @ref Swapchain::recreate
-  ///       before continuing (the loop below does), not merely retry, or
-  ///       repeated failures will exhaust the acquirable images. A failed
-  ///       present already submitted the frame: the slot advances normally
-  ///       and only the presentation is reported.
+  ///         @p frame did not come from its @ref begin_frame, a wait has a
+  ///         zero stage mask, a signal names @ref timeline, or
+  ///         `core::check_timeline_points` refuses the values.
+  /// @note On a failure *before* the submit reaches the queue -- a refusal
+  ///       included -- the frame's commands never run: an empty submit in its
+  ///       place consumes the acquire and sets its number -- and
+  ///       `frame.signals`, unless they were refused -- so the *slot* stays
+  ///       reusable and nothing waiting for them hangs. The image the frame
+  ///       acquired was never presented, and only a present or a swapchain
+  ///       rebuild releases an acquired image: the next extent-taking @ref
+  ///       begin_frame rebuilds, and a caller of the raw @ref begin_frame
+  ///       calls @ref Swapchain::recreate before its next one, or repeated
+  ///       failures exhaust the acquirable images. A failed present already
+  ///       submitted the frame: the slot advances normally and only the
+  ///       presentation is reported.
   core::Status end_frame(const Frame& frame);
 
   /// @return The timeline the loop's frames set: it reaches a frame's
@@ -289,6 +291,11 @@ class VG_WINDOWING_API FrameLoop {
   // end_frame's refusals of `frame.waits` / `frame.signals`.
   core::Status check_points(const Frame& frame) const;
 
+  // A submit that sets frame `number` and `signals` reached the queue: count
+  // it, and add its values to the core's record (core::note_timeline_signals).
+  void record_submit(uint64_t number,
+                     const std::vector<core::TimelinePoint>& signals);
+
   // Stand in for the next frame when it failed between its acquire and its
   // submit: an empty submit waits image_available_[slot], whose pending
   // signal only a queue submit may consume, and sets the frame's number and
@@ -332,9 +339,10 @@ class VG_WINDOWING_API FrameLoop {
   VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
   // Managed-protocol state (the extent-taking begin_frame): the rebuild hook
-  // and whether a stale acquire/present or a resize armed a rebuild. Resize is
-  // detected against Swapchain::requested_extent() (the pre-clamp requested
-  // size), so a request the surface pins does not rebuild every tick.
+  // and whether a stale acquire/present, a frame that failed after its
+  // acquire, or a resize armed a rebuild. Resize is detected against
+  // Swapchain::requested_extent() (the pre-clamp requested size), so a request
+  // the surface pins does not rebuild every tick.
   std::function<core::Status(VkExtent2D)> recreate_callback_;
   bool needs_recreate_ = false;
 };

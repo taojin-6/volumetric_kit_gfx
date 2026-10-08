@@ -308,43 +308,35 @@ core::Result<Frame> FrameLoop::begin_frame() {
 }
 
 core::Status FrameLoop::check_points(const Frame& frame) const {
-  // Only what the submit cannot run without, and the loop's own timeline:
-  // whether another timeline's value is submitted to be set is known to no
-  // one here (frame_loop.hpp, end_frame).
-  const auto ours = [this](const core::TimelineSemaphore* semaphore) {
-    return semaphore->handle() == timeline_->handle();
-  };
-  const auto usable = [this](const core::TimelinePoint& point) {
-    return point.semaphore != nullptr && point.semaphore->valid() &&
-           point.semaphore->device() == device_->handle();
-  };
+  // The loop's own rules; the core checks the rest as it does for its own
+  // submits, and refuses a wait whose value nothing has been submitted to set.
+  std::vector<core::TimelinePoint> waits;
+  waits.reserve(frame.waits.size());
   for (const FrameWait& wait : frame.waits) {
-    if (!usable(wait.point)) {
-      return core::Status::invalid_argument(
-          "FrameLoop::end_frame: a wait names a null or empty semaphore, or "
-          "one made on another VkDevice");
-    }
     if (wait.stages == 0) {
       return core::Status::invalid_argument(
           "FrameLoop::end_frame: a wait has no stages");
     }
-    if (ours(wait.point.semaphore) && wait.point.value > submitted_) {
-      return core::Status::invalid_argument(
-          "FrameLoop::end_frame: a wait for a frame not yet submitted");
-    }
+    waits.push_back(wait.point);
   }
   for (const core::TimelinePoint& signal : frame.signals) {
-    if (!usable(signal)) {
-      return core::Status::invalid_argument(
-          "FrameLoop::end_frame: a signal names a null or empty semaphore, or "
-          "one made on another VkDevice");
-    }
-    if (ours(signal.semaphore)) {
+    if (signal.semaphore == timeline_.get()) {
       return core::Status::invalid_argument(
           "FrameLoop::end_frame: only the loop sets its timeline");
     }
   }
-  return core::Status{};
+  return core::check_timeline_points(*device_, waits, frame.signals,
+                                     "FrameLoop::end_frame",
+                                     core::TimelineWaits::Submitted);
+}
+
+void FrameLoop::record_submit(uint64_t number,
+                              const std::vector<core::TimelinePoint>& signals) {
+  submitted_ = number;
+  // Into the core's record of submitted values too, so its checks -- the
+  // next frame's and the core's own submits' -- know them.
+  core::note_timeline_signals({{timeline_.get(), number}});
+  core::note_timeline_signals(signals);
 }
 
 core::Status FrameLoop::end_frame(const Frame& frame) {
@@ -367,6 +359,20 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
         "range, or another command buffer)");
   }
 
+  // Checked before the profiler's frame is closed: a refused frame never
+  // runs, and a closed frame's timestamps are read when its slot recurs.
+  // Left open, it publishes nothing (Profiler::begin_frame cleared the slot).
+  const core::Status points = check_points(frame);
+  if (!points.ok()) {
+    // A recording command buffer cannot be begun again: end it.
+    (void)command_buffers_[slot].end();
+    // This frame's acquire signal was never consumed by a submit; stand in
+    // for the frame so the loop stays usable (best-effort: the refusal
+    // outranks a recovery failure). Refused signals are not set.
+    (void)recover_slot(slot, {});
+    return points;
+  }
+
   // Close the profiler's frame (no-op when none is attached): the caller's
   // scopes have finalized into this command buffer, so the per-frame CPU/memory
   // figures can be stamped before the submit below.
@@ -384,18 +390,10 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   cmd_image_barrier(frame.cmd, to_present);
 
-  // Ended before the points are checked, so a refused frame leaves no
-  // command buffer recording: the slot's next begin may reset it only once it
-  // has ended.
   const core::Status ended = command_buffers_[slot].end();
-  const core::Status points = check_points(frame);
-  if (!ended.ok() || !points.ok()) {
-    // This frame's acquire signal was never consumed by a submit; stand in
-    // for the frame so the loop stays usable (best-effort: the original error
-    // outranks a recovery failure). Refused signals are not set.
-    (void)recover_slot(
-        slot, points.ok() ? frame.signals : std::vector<core::TimelinePoint>{});
-    return ended.ok() ? points : ended;
+  if (!ended.ok()) {
+    (void)recover_slot(slot, frame.signals);
+    return ended;
   }
 
   // The acquire and the present keep their binary semaphores; the frame's
@@ -428,15 +426,15 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
     (void)recover_slot(slot, frame.signals);
     return core::vk_error(submitted, "vkQueueSubmit");
   }
-  submitted_ = frame.number;
+  record_submit(frame.number, frame.signals);
   image_frames_[frame.image_index] = frame.number;
 
   core::Status present = swapchain_->present(frame.image_index, rendered);
   if (swapchain_stale(present)) {
-    // Arm the managed protocol's rebuild; raw callers see the status as ever
-    // (they never read needs_recreate_). This is the one managed-state write on
-    // the raw path: the protocol is asymmetric (a managed begin_frame(extent),
-    // but end_frame stays single, so stale-present has nowhere else to land).
+    // Arm the managed protocol's rebuild, as recover_slot does; raw callers
+    // see the status as ever (they never read needs_recreate_). The protocol
+    // is asymmetric (a managed begin_frame(extent), but end_frame stays
+    // single), so the raw path's failures have nowhere else to land.
     // TODO: fold the managed begin/end protocol into an app-tier frame driver
     // so end_frame carries no managed state and the raw path is policy-free.
     needs_recreate_ = true;
@@ -457,11 +455,16 @@ core::Result<uint64_t> FrameLoop::completed() const {
 
 core::Status FrameLoop::recover_slot(
     uint32_t slot, const std::vector<core::TimelinePoint>& signals) {
+  // The frame's acquired image will not be presented, and only a present or
+  // a swapchain rebuild releases an acquired image: arm the extent-taking
+  // begin_frame's rebuild, or failed frames exhaust the chain.
+  needs_recreate_ = true;
   // A successful acquire left image_available_[slot] with a pending signal that
   // only a queue submit may consume. An empty submit consumes it, sets the
   // frame's number, as the frame would have, and signals the slot fence, so
   // the slot's next begin_frame finds the semaphore free and the numbers stay
-  // contiguous. Reached only on a failed frame.
+  // contiguous. Reached only on a failed frame; `signals` are ones
+  // check_points accepted.
   // TODO: a refused frame runs this, but the callers' other failure branches
   // and the failed submit below lack test coverage -- no queue/command call
   // fails on a healthy device, so a fault-injection seam is needed to exercise
@@ -480,7 +483,7 @@ core::Status FrameLoop::recover_slot(
     const VkResult submitted =
         sync.submit(*device_, nullptr, in_flight_[slot].handle());
     if (submitted == VK_SUCCESS) {
-      submitted_ = number;
+      record_submit(number, signals);
       return core::Status{};
     }
     status = core::vk_error(submitted, "vkQueueSubmit");
