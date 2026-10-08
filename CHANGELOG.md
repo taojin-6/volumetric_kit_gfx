@@ -44,6 +44,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.
+- `windowing`: **frames are numbered on a timeline.** `Frame::number` counts
+  from 1, and `FrameLoop::timeline()` reaches a frame's number once its work
+  completes; `completed()` reads it, and `submitted()` gives the newest frame
+  submitted. `Frame::waits` (`FrameWait`: a `core::TimelinePoint` and the
+  stages that wait) and `Frame::signals` add timeline waits and signals to
+  `end_frame`'s submit, so another queue's work can feed a frame on the GPU; a
+  wait must be for a value whose signal is already submitted.
 
 ### Changed
 
@@ -52,6 +59,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `core::TimelineSemaphore` -- `FrameLoop::timeline()` for what frames use --
   and `push(fence, deleter)` → `push(value, deleter)`, with the value the
   guarding work sets (a `Frame::number`).
+- `windowing`: `end_frame` refuses a `Frame` other than the one
+  `begin_frame` handed out (another number or command buffer), and a frame
+  that fails before its submit is replaced by an empty submit, so its number
+  is still set.
 - build: gfx pins volumetric_kit_core at its PR #15 (`a8b63d1`) and refuses an
   older core at configure and in the installed package.
 - `core`: **gfx writes the core's names; its re-exports of them are gone.**

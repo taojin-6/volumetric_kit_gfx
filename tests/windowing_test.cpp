@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -22,13 +23,16 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/core/retire_queue.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
+#include "vulkan_test_fixture.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
@@ -74,6 +78,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL record_validation_error(
 
 class WindowingTest : public ::testing::Test {
  protected:
+  // Also run the layer's synchronization validation, which reports a missing
+  // dependency between submits as a hazard.
+  virtual bool wants_sync_validation() const { return false; }
+
   void SetUp() override {
     if (!instance_has_headless_surface()) {
       GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
@@ -82,7 +90,12 @@ class WindowingTest : public ::testing::Test {
     icfg.enable_validation = true;
     icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+    std::optional<vg_test::ScopedEnv> sync;
+    if (wants_sync_validation()) {
+      sync.emplace("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true");
+    }
     auto instance = vkc::Instance::create(icfg);
+    sync.reset();
     if (!instance.ok()) {
       GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
     }
@@ -186,6 +199,15 @@ class WindowingTest : public ::testing::Test {
     return sc.ok() ? std::move(sc).value() : win::Swapchain{};
   }
 
+  // Record a clear of the frame's image, as every frame here draws.
+  static void record_clear(const win::Frame& frame) {
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color.float32[0] = 0.1f;
+    begin.clear_color.float32[3] = 1.0f;
+    frame.target->begin(frame.cmd, begin);
+    frame.target->end(frame.cmd);
+  }
+
   // Drive `count` clear-only frames through the loop. A fixed headless extent
   // never goes out of date, so any non-OK status is a real failure.
   vkc::Status run_frames(win::FrameLoop& loop, int count) {
@@ -194,17 +216,38 @@ class WindowingTest : public ::testing::Test {
       if (!frame.ok()) {
         return frame.status();
       }
-      vg::RenderTargetBeginInfo begin;
-      begin.clear_color.float32[0] = 0.1f;
-      begin.clear_color.float32[3] = 1.0f;
-      frame.value().target->begin(frame.value().cmd, begin);
-      frame.value().target->end(frame.value().cmd);
+      record_clear(frame.value());
       vkc::Status end = loop.end_frame(frame.value());
       if (!end.ok()) {
         return end;
       }
     }
     return {};
+  }
+
+  // A timeline semaphore on the fixture's device, at 0.
+  vkc::TimelineSemaphore make_timeline() {
+    auto timeline = vkc::TimelineSemaphore::create(*device_);
+    EXPECT_TRUE(timeline.ok()) << timeline.status().message();
+    return timeline.ok() ? std::move(timeline).value()
+                         : vkc::TimelineSemaphore{};
+  }
+
+  // A 4-byte buffer for the external-work tests: device-only with transfer
+  // usage, or a host-readable readback.
+  vkc::Buffer make_word_buffer(bool readback) {
+    vkc::BufferDesc desc;
+    desc.size = sizeof(uint32_t);
+    desc.usage = readback ? VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                          : VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (readback) {
+      desc.memory = vkc::MemoryUsage::Staging;
+      desc.host_access = vkc::HostAccess::Random;
+    }
+    auto buffer = allocator_->create_buffer(desc);
+    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
+    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
   }
 
   std::optional<vkc::Instance> instance_;
@@ -216,6 +259,12 @@ class WindowingTest : public ::testing::Test {
   std::vector<std::string> validation_errors_;
   VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
   PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger_ = nullptr;
+};
+
+// The frame-timeline tests that order work across submits.
+class FrameTimelineTest : public WindowingTest {
+ protected:
+  bool wants_sync_validation() const override { return true; }
 };
 
 TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
@@ -483,11 +532,11 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
 
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
 // as after a failed rebuild) fails cleanly instead of acquiring on a null
-// handle. NOTE: this covers begin_frame's empty-swapchain guard only, NOT the
-// post-acquire recover_slot path — reaching that needs a Vulkan call (fence
-// wait / command begin/end / queue submit) to fail, which does not happen on a
-// healthy device; see the TODO in FrameLoop::recover_slot on the missing
-// fault-injection coverage for those branches.
+// handle. NOTE: this covers begin_frame's empty-swapchain guard only; the
+// post-acquire recover_slot path runs on a refused frame
+// (EndFrameRefusesPointsItCannotHonour), but its other callers need a Vulkan
+// call (timeline wait / command begin/end / queue submit) to fail, which does
+// not happen on a healthy device; see the TODO in FrameLoop::recover_slot.
 TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, 2);
@@ -636,6 +685,268 @@ TEST_F(WindowingTest, DestructionDrainsInFlightFrames) {
   }
 }
 
+// Frames are numbered 1, 2, ... on the loop's timeline, which reaches a number
+// once that frame completes: the count never runs past what was submitted,
+// never goes back, and stays within the in-flight depth of the frame begun.
+TEST_F(WindowingTest, FrameNumbersIncreaseAndCompleteInOrder) {
+  win::Swapchain sc = make_swapchain();
+  constexpr uint32_t kDepth = 2;
+  auto loop = win::FrameLoop::create(*device_, sc, kDepth);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  EXPECT_EQ(loop.value().submitted(), 0u);
+  ASSERT_TRUE(loop.value().completed().ok());
+  EXPECT_EQ(loop.value().completed().value(), 0u);
+
+  uint64_t last_completed = 0;
+  for (uint64_t n = 1; n <= 8; ++n) {
+    auto frame = loop.value().begin_frame();
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    EXPECT_EQ(frame.value().number, n);
+    EXPECT_EQ(frame.value().slot, (n - 1) % kDepth);
+
+    auto completed = loop.value().completed();
+    ASSERT_TRUE(completed.ok()) << completed.status().message();
+    EXPECT_GE(completed.value() + kDepth, n);  // at most kDepth frames ahead
+    EXPECT_GE(completed.value(), last_completed);
+    EXPECT_LE(completed.value(), loop.value().submitted());
+    last_completed = completed.value();
+
+    record_clear(frame.value());
+    ASSERT_TRUE(loop.value().end_frame(frame.value()).ok());
+    EXPECT_EQ(loop.value().submitted(), n);
+  }
+  ASSERT_TRUE(loop.value().timeline().wait(8).ok());
+  EXPECT_EQ(loop.value().completed().value(), 8u);
+}
+
+// A RetireQueue on the loop's timeline frees what a frame used once that frame
+// completes, and not while a later frame that used something else is only
+// recorded. The frame's own signal is set as it completes, not before.
+TEST_F(WindowingTest, RetireQueueReleasesWhatAFrameUsedOnceItCompletes) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  vkc::TimelineSemaphore done = make_timeline();
+  vg::RetireQueue retire(loop.value().timeline());
+  int released_a = 0;
+  int released_b = 0;
+
+  auto first = loop.value().begin_frame();
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  win::Frame& a = first.value();
+  retire.push(a.number, [&released_a]() { ++released_a; });
+  record_clear(a);
+  a.signals.push_back({&done, 7});
+  EXPECT_EQ(retire.poll(), 0u);  // recorded, not submitted
+  EXPECT_EQ(done.value().value(), 0u);
+  ASSERT_TRUE(loop.value().end_frame(a).ok());
+
+  auto second = loop.value().begin_frame();
+  ASSERT_TRUE(second.ok()) << second.status().message();
+  win::Frame& b = second.value();
+  retire.push(b.number, [&released_b]() { ++released_b; });
+  record_clear(b);
+
+  ASSERT_TRUE(loop.value().timeline().wait(a.number).ok());
+  EXPECT_EQ(retire.poll(), 1u);
+  EXPECT_EQ(released_a, 1);
+  EXPECT_EQ(released_b, 0);  // b is recorded, not submitted
+  ASSERT_TRUE(done.wait(7).ok());
+
+  ASSERT_TRUE(loop.value().end_frame(b).ok());
+  ASSERT_TRUE(loop.value().timeline().wait(b.number).ok());
+  EXPECT_EQ(retire.poll(), 1u);
+  EXPECT_EQ(released_a, 1);
+  EXPECT_EQ(released_b, 1);
+}
+
+// A frame's wait for a value another submit sets is honoured: the producer
+// fills a buffer and sets `produced`, and the frame copies the buffer out at
+// the TRANSFER stage after waiting for it. Under synchronization validation a
+// frame that ignored its wait would be reported: nothing else orders its copy
+// after the producer's fill.
+TEST_F(FrameTimelineTest, FrameWaitsForAnExternalSubmitsTimelineValue) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  vkc::TimelineSemaphore produced = make_timeline();
+  vkc::Buffer source = make_word_buffer(/*readback=*/false);
+  vkc::Buffer readback = make_word_buffer(/*readback=*/true);
+  ASSERT_TRUE(source.valid() && readback.valid());
+
+  constexpr uint32_t kProduced = 0xabcdabcdu;
+  const VkBuffer source_handle = source.handle();
+  auto producer = device_->submit_pending(
+      [&](VkCommandBuffer cmd) {
+        vkCmdFillBuffer(cmd, source_handle, 0, VK_WHOLE_SIZE, kProduced);
+      },
+      {}, {{&produced, 1}});
+  ASSERT_TRUE(producer.ok()) << producer.status().message();
+
+  auto frame = loop.value().begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  win::Frame& f = frame.value();
+  VkBufferCopy region{};
+  region.size = sizeof(uint32_t);
+  vkCmdCopyBuffer(f.cmd, source_handle, readback.handle(), 1, &region);
+  VkMemoryBarrier to_host{};
+  to_host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0, nullptr,
+                       0, nullptr);
+  record_clear(f);
+  f.waits.push_back({{&produced, 1}, VK_PIPELINE_STAGE_TRANSFER_BIT});
+  ASSERT_TRUE(loop.value().end_frame(f).ok());
+
+  ASSERT_TRUE(loop.value().timeline().wait(f.number).ok());
+  ASSERT_TRUE(producer.value().wait().ok());
+  uint32_t copied = 0;
+  std::memcpy(&copied, readback.mapped(), sizeof(copied));
+  EXPECT_EQ(copied, kProduced);
+}
+
+// A swapchain rebuild drains the queue with frames still pending retirement
+// and one waiting on another submit's value -- one already submitted, so the
+// drain returns. The numbers run on across the rebuild, and the retirements
+// release only through the queue's own poll.
+TEST_F(FrameTimelineTest, SwapchainRebuildWithPendingRetirements) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  int rebuilds = 0;
+  loop.value().set_recreate_callback([&rebuilds](VkExtent2D) {
+    ++rebuilds;
+    return vkc::Status{};
+  });
+  vkc::TimelineSemaphore produced = make_timeline();
+  vkc::Buffer source = make_word_buffer(/*readback=*/false);
+  ASSERT_TRUE(source.valid());
+  const VkBuffer source_handle = source.handle();
+  auto producer = device_->submit_pending(
+      [&](VkCommandBuffer cmd) {
+        vkCmdFillBuffer(cmd, source_handle, 0, VK_WHOLE_SIZE, 1u);
+      },
+      {}, {{&produced, 1}});
+  ASSERT_TRUE(producer.ok()) << producer.status().message();
+  vg::RetireQueue retire(loop.value().timeline());
+  int released = 0;
+
+  auto first = loop.value().begin_frame(VkExtent2D{256, 256});
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  ASSERT_TRUE(first.value().has_value());
+  win::Frame& a = *first.value();
+  retire.push(a.number, [&released]() { ++released; });
+  record_clear(a);
+  a.waits.push_back({{&produced, 1}, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT});
+  ASSERT_TRUE(loop.value().end_frame(a).ok());
+
+  auto second = loop.value().begin_frame(VkExtent2D{320, 240});
+  ASSERT_TRUE(second.ok()) << second.status().message();
+  ASSERT_TRUE(second.value().has_value());
+  EXPECT_EQ(rebuilds, 1);
+  win::Frame& b = *second.value();
+  EXPECT_EQ(b.number, a.number + 1);
+  EXPECT_EQ(released, 0);        // the rebuild ran no deleter...
+  EXPECT_EQ(retire.poll(), 1u);  // ...but its drain completed frame a
+  EXPECT_EQ(released, 1);
+
+  retire.push(b.number, [&released]() { ++released; });
+  record_clear(b);
+  ASSERT_TRUE(loop.value().end_frame(b).ok());
+  ASSERT_TRUE(loop.value().timeline().wait(b.number).ok());
+  EXPECT_EQ(retire.poll(), 1u);
+  EXPECT_EQ(released, 2);
+  ASSERT_TRUE(producer.value().wait().ok());
+}
+
+// end_frame refuses a wait or signal it cannot submit, or one on the loop's
+// own timeline that could never be met or is not the caller's to set. A
+// refused frame never runs, but an empty submit stands in for it: its number
+// is still set, so what waits for it does not hang, and after the rebuild an
+// unpresented image needs, the loop runs on. A wait for a submitted frame is
+// accepted.
+TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  ASSERT_TRUE(run_frames(loop.value(), 1).ok());
+  vkc::TimelineSemaphore other = make_timeline();
+  vkc::TimelineSemaphore empty;
+  const vkc::TimelineSemaphore& own = loop.value().timeline();
+
+  struct Case {
+    const char* what;
+    std::vector<win::FrameWait> waits;
+    std::vector<vkc::TimelinePoint> signals;
+  };
+  const std::vector<Case> cases = {
+      {"null wait", {{{nullptr, 1}}}, {}},
+      {"empty wait", {{{&empty, 1}}}, {}},
+      {"no stages", {{{&other, 1}, 0}}, {}},
+      {"unsubmitted frame", {{{&own, 0}}}, {}},  // set to the frame's own
+      {"null signal", {}, {{nullptr, 1}}},
+      {"own timeline signal", {}, {{&own, 100}}},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.what);
+    auto frame = loop.value().begin_frame();
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    win::Frame& f = frame.value();
+    record_clear(f);
+    f.waits = c.waits;
+    f.signals = c.signals;
+    for (win::FrameWait& wait : f.waits) {
+      if (wait.point.semaphore == &own) wait.point.value = f.number;
+    }
+    const vkc::Status ended = loop.value().end_frame(f);
+    EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
+    EXPECT_EQ(loop.value().submitted(), f.number);
+    EXPECT_TRUE(own.wait(f.number).ok());
+    ASSERT_TRUE(sc.recreate({256, 256}).ok());
+  }
+
+  auto frame = loop.value().begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  win::Frame& f = frame.value();
+  record_clear(f);
+  f.waits.push_back({{&own, f.number - 1}});
+  EXPECT_TRUE(loop.value().end_frame(f).ok());
+  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// end_frame takes only the frame begin_frame handed out: a copy carrying
+// another number or command buffer is refused, consuming nothing, and the real
+// frame still ends.
+TEST_F(WindowingTest, EndFrameRefusesAFrameItDidNotHandOut) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  ASSERT_TRUE(run_frames(loop.value(), 1).ok());
+
+  auto frame = loop.value().begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  const win::Frame& f = frame.value();
+  record_clear(f);
+  win::Frame later = f;
+  later.number = f.number + 1;
+  win::Frame stale = f;
+  stale.number = f.number - 1;
+  stale.slot = (stale.number - 1) % 2;
+  win::Frame other_cmd = f;
+  other_cmd.cmd = reinterpret_cast<VkCommandBuffer>(uintptr_t{1});
+  for (const win::Frame* wrong : {&later, &stale, &other_cmd}) {
+    EXPECT_EQ(loop.value().end_frame(*wrong).domain(),
+              vkc::Status::Code::InvalidArgument);
+    EXPECT_EQ(loop.value().submitted(), f.number - 1);
+  }
+  EXPECT_TRUE(loop.value().end_frame(f).ok());
+  EXPECT_EQ(loop.value().submitted(), f.number);
+  vkDeviceWaitIdle(device_->handle());
+}
+
 // A stale swapchain -- out of date, or suboptimal -- is a cue to recreate, read
 // back from the backend status the present returned; any other failure is not.
 TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
@@ -722,11 +1033,20 @@ TEST_F(WindowingTest, FrameLoopMoveLeavesSourceEmpty) {
   auto created = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(created.ok()) << created.status().message();
 
+  EXPECT_TRUE(run_frames(created.value(), 1).ok());
+  const vkc::TimelineSemaphore* timeline = &created.value().timeline();
+
   win::FrameLoop moved(std::move(created).value());
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(created.value().valid());  // NOLINT(bugprone-use-after-move)
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_EQ(created.value().submitted(), 0u);
+  // The timeline stays where it was, and the numbers run on.
+  EXPECT_EQ(&moved.timeline(), timeline);
+  EXPECT_EQ(moved.submitted(), 1u);
   // The moved-to loop owns the resources and drives frames; confirm it works.
   EXPECT_TRUE(run_frames(moved, 2).ok());
+  EXPECT_EQ(moved.submitted(), 3u);
   vkDeviceWaitIdle(device_->handle());
 }
 

@@ -32,6 +32,10 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-08 — Frames are numbered on a timeline.** `windowing::FrameLoop` sets each
+  frame's number on one timeline semaphore, in place of its fences; `RetireQueue` frees on
+  that timeline's values, and a frame may wait for and set other timeline values. See the
+  dated entry below.
 - **2026-10-05 — gfx writes every core name as the core does** -- `core::Status`,
   `core::Device`, `VKC_TRY` in gfx; `vkc::` in tests and examples -- and its re-export
   headers and `VG_*` macro aliases are gone (amends the device and error-handling entries).
@@ -98,6 +102,59 @@ what has landed since then. Record amendments when a contract changes.
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+
+## 2026-10-08 — Frames are numbered on a timeline
+
+`windowing::FrameLoop` numbers its frames on one `core::TimelineSemaphore`
+(`timeline()`): `begin_frame` hands out `Frame::number`, one more than the last
+frame submitted, and `end_frame`'s submit sets that value once the frame's
+work completes. Every frame up to `completed()` has finished, so "free this
+once the last frame that used it is done" is one comparison, made in one
+place: a `RetireQueue` on the timeline. Consumers had derived it from slot
+indices, each their own way.
+
+- **The loop reuses its slots on their fences.** Through MoltenVK a timeline
+  value is reached before the submission's completion handler has run, and
+  timestamp queries read as unavailable until it has: with slot reuse waiting
+  on frame `n - N`, the attached profiler missed its GPU times in about one
+  run in twenty. So a slot's command buffer, semaphore and queries are reused
+  once its fence signals, as before. Waits on what consumers and the
+  acquired image need -- that the GPU is done -- are by number; the per-image
+  fence handles are gone. The acquire and the present keep their binary
+  semaphores, as presentation requires.
+- **A failed frame still sets its number.** A frame that fails between its
+  acquire and its submit -- one whose waits or signals `end_frame` refuses
+  among them -- is replaced by an empty submit that consumes the acquire and
+  sets the number and the slot's fence, and the frame's signals unless they
+  were the ones refused. The numbers stay contiguous, the slot's semaphore is
+  free for its next use without a blocking wait, and nothing waiting for
+  those values hangs.
+- **`RetireQueue` is keyed on timeline values.** It borrows a
+  `TimelineSemaphore` -- the loop's, or another producer's -- and runs a
+  deleter once the value pushed with it is reached. The `VkFence` key is gone:
+  the loop's fences are private, and a slot's fence, reused every `N` frames,
+  still reads as signalled while a newer frame on the slot is being recorded.
+- **A frame carries timeline waits and signals.** `Frame::waits` (a
+  `TimelinePoint` and the stages that wait) and `Frame::signals` join
+  `end_frame`'s one submit through `VkTimelineSemaphoreSubmitInfo`, so another
+  queue's or library's work can feed a frame, and wait for one, on the GPU. A
+  wait must be for a value already reached, or set by work already submitted
+  that waits for nothing unsubmitted itself. The present waits for the frame,
+  and Vulkan requires that of a present's waits
+  (`VUID-vkQueuePresentKHR-pWaitSemaphores-03268`); a frame held for a value
+  nothing has been submitted to set would also hold the next `begin_frame`, a
+  swapchain rebuild's queue drain and the loop's teardown. The core keeps no
+  public record of which values are submitted, so the rule is documented, as
+  the core's `submit_pending` documents its own; only waits on the loop's own
+  timeline are checked. A producer whose value is not yet submitted is gated
+  on the host ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
+- **The core pin is core #15** (`a8b63d1`), which adds `TimelinePoint`.
+
+Verified through MoltenVK under the validation layer: a frame's wait orders
+its copy after another submit's write (without it, synchronization validation
+reports the read-after-write hazard), the numbers run on across a swapchain
+rebuild, a refused frame's number is still set, and the profiler test passes
+300 runs in a row.
 
 ## 2026-10-05 — GPU tests share a device per process
 
@@ -274,9 +331,9 @@ uploads and the frames-in-flight profiler.
 - **The profiler stays gfx's, on the core's `QueryPool`.** The core's
   DECISIONS.md rebuilds the profiler on its `QueryPool` and `GpuTimer`. The
   frames-in-flight shape -- a slot's timestamps read when the slot recurs,
-  after its fence -- is the profiler's own, and the core's `QueryPool`
-  already gives it range-checked commands and reads, so it times on that pool
-  with the core's `timestamp_delta` / `ticks_to_ms`. The `GpuTimer`, built for
+  once its previous frame has completed -- is the profiler's own, and the
+  core's `QueryPool` already gives it range-checked commands and reads, so it
+  times on that pool with the core's `timestamp_delta` / `ticks_to_ms`. The `GpuTimer`, built for
   spans read the moment a blocking submit returns, would add a window per
   slot without changing what the profiler measures; a `TODO:` in
   `profiler.cpp` marks moving onto it if the core gives it such a window.

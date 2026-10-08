@@ -149,22 +149,24 @@ code still takes the host path (download, then `upload_mesh` into a static
 them, and flagged because #49 could still move in review; nothing in gfx depends
 on it landing, since `LiveMesh` draws whatever command it is handed.
 
-1. **Synchronization ownership: the application, gating on the host.**
-   `record_draw` stays a pure recorder and inserts no barrier, as drafted -- but
-   the producer→draw dependency is *not* a semaphore the draw waits on. It
-   cannot be: on the shared-queue arrangement a command buffer waiting on a
-   value the sibling has not signalled deadlocks against a swapchain rebuild,
-   which drains the queue while holding the submit mutex. The application polls
-   readiness on the host and skips a not-ready frame instead, which is what it
-   already does for the host-mesh path.
+1. **Synchronization ownership: the application.** `record_draw` stays a pure
+   recorder and inserts no barrier, as drafted. The producer→draw dependency
+   takes one of two paths. When the extract's timeline value is already
+   submitted -- recon's `submit_async` has returned its `PendingBatch` -- the
+   frame waits for it on the GPU: a `windowing::Frame::waits` entry at
+   `VERTEX_INPUT | DRAW_INDIRECT`, whose semaphore carries the visibility too.
+   A frame may not wait for a value nothing has yet been submitted to set
+   (`FrameLoop::end_frame` says why), so for an extract not yet submitted the
+   application polls readiness on the host and skips a not-ready frame, which
+   is what it already does for the host-mesh path.
 
-   Visibility is still a barrier, and recon now emits it: its shared `dispatch()`
-   widened its destination scope to `VERTEX_INPUT | DRAW_INDIRECT` with
+   On the host path visibility is a barrier, and recon now emits it: its
+   shared `dispatch()` widened its destination scope to
+   `VERTEX_INPUT | DRAW_INDIRECT` with
    `VERTEX_ATTRIBUTE_READ | INDEX_READ | INDIRECT_COMMAND_READ` -- gated on the
    recording family actually supporting graphics, since naming `VERTEX_INPUT` on
    a compute-only family is invalid usage. Where recon lands on such a family the
-   handoff needs a semaphore regardless, and a semaphore's signal/wait carries
-   the visibility itself.
+   handoff needs the semaphore path regardless.
 
    Cross-family access needs the buffers created `VK_SHARING_MODE_CONCURRENT`,
    which the shared core's `BufferDesc` -- recon's and gfx's -- takes queue
@@ -175,9 +177,12 @@ on it landing, since `LiveMesh` draws whatever command it is handed.
 2. **Buffer lifetime: recon rings, the consumer reports completion.**
    `MarchingCubesConfig::slot_count` gives each outstanding extract its own
    arena, index run and command. The consumer calls
-   `MarchingCubes::release_through(generation)` as its frames retire, and an
-   extract only ever writes, grows or frees a released slot -- so no fence queue
-   is needed inside recon and no `MTLSharedEvent` anywhere.
+   `MarchingCubes::release_through(generation)` as its frames retire: a frame
+   that draws generation `g` pushes `release_through(g - 1)` onto a
+   `RetireQueue` on the frame loop's timeline at its `Frame::number`, as every
+   later frame draws `g` or newer. An extract only ever writes, grows or frees
+   a released slot -- so no fence queue is needed inside recon and no
+   `MTLSharedEvent` anywhere.
 
    Depth: **frames in flight + 1**. Extracting with every slot outstanding is
    reported as an error rather than overwriting a live draw.

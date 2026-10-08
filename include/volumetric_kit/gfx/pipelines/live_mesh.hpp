@@ -128,8 +128,10 @@ namespace volumetric_kit::gfx::pipelines {
 ///          record_draw only *records*; the GPU reads all three buffers when
 ///          that frame executes, long after @ref
 ///          HybridMeshPipeline::submit returns. Release or recycle a slot only
-///          once the frame's fence has signalled -- doing it on return from
-///          `submit` recycles geometry that is still in flight.
+///          once the frame has completed (a @ref RetireQueue on the frame
+///          loop's timeline, keyed on its `windowing::Frame::number`) --
+///          doing it on return from `submit` recycles geometry that is still
+///          in flight.
 ///
 /// @code
 /// // recon writes vertices, 32-bit indices, and a VkDrawIndexedIndirectCommand
@@ -148,7 +150,7 @@ namespace volumetric_kit::gfx::pipelines {
 /// frame.draw_count = 1;
 /// // ... after a barrier/semaphore makes recon's writes visible to the draw
 /// ... pipeline.submit(cmd, frame);  // records vkCmdDrawIndexedIndirect
-/// // ... and recon keeps the slot until this frame's fence signals.
+/// // ... and recon keeps the slot until this frame completes.
 /// @endcode
 struct VG_PIPELINES_API LiveMesh {
   /// Interleaved @ref assets::Vertex buffer (`VERTEX_BUFFER` usage).

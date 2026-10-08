@@ -4,6 +4,7 @@
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
@@ -13,6 +14,59 @@
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace volumetric_kit::gfx::windowing {
+
+namespace {
+
+// The semaphores one of the loop's submits waits for and sets, as the parallel
+// arrays VkSubmitInfo and VkTimelineSemaphoreSubmitInfo take. A binary
+// semaphore's value is ignored, so it is 0.
+class SubmitSync {
+ public:
+  void wait(VkSemaphore semaphore, VkPipelineStageFlags stages,
+            uint64_t value = 0) {
+    waits_.push_back(semaphore);
+    wait_stages_.push_back(stages);
+    wait_values_.push_back(value);
+  }
+  void signal(VkSemaphore semaphore, uint64_t value = 0) {
+    signals_.push_back(semaphore);
+    signal_values_.push_back(value);
+  }
+
+  // Submit @p cmd (none when null) to the device's queue, signalling @p fence.
+  VkResult submit(const core::Device& device, const VkCommandBuffer* cmd,
+                  VkFence fence) const {
+    VkTimelineSemaphoreSubmitInfo values{};
+    values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    values.waitSemaphoreValueCount = static_cast<uint32_t>(wait_values_.size());
+    values.pWaitSemaphoreValues = wait_values_.data();
+    values.signalSemaphoreValueCount =
+        static_cast<uint32_t>(signal_values_.size());
+    values.pSignalSemaphoreValues = signal_values_.data();
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.pNext = &values;
+    submit.waitSemaphoreCount = static_cast<uint32_t>(waits_.size());
+    submit.pWaitSemaphores = waits_.data();
+    submit.pWaitDstStageMask = wait_stages_.data();
+    submit.commandBufferCount = cmd != nullptr ? 1 : 0;
+    submit.pCommandBuffers = cmd;
+    submit.signalSemaphoreCount = static_cast<uint32_t>(signals_.size());
+    submit.pSignalSemaphores = signals_.data();
+    // Through the device, so a shared (adopted) graphics queue stays
+    // externally synchronized under its submit mutex.
+    return device.queue_submit(1, &submit, fence);
+  }
+
+ private:
+  std::vector<VkSemaphore> waits_;
+  std::vector<VkPipelineStageFlags> wait_stages_;
+  std::vector<uint64_t> wait_values_;
+  std::vector<VkSemaphore> signals_;
+  std::vector<uint64_t> signal_values_;
+};
+
+}  // namespace
 
 core::Result<FrameLoop> FrameLoop::create(const core::Device& device,
                                           Swapchain& swapchain,
@@ -52,11 +106,16 @@ core::Result<FrameLoop> FrameLoop::create(const core::Device& device,
   }
 
   // Per swapchain image: a render-finished semaphore (keyed by image, not slot,
-  // to avoid racing the presentation engine) + an in-flight-fence tracking
-  // slot. Built here and rebuilt by ensure_image_sync() if a later
+  // to avoid racing the presentation engine) + the number of the frame that
+  // last drew to it. Built here and rebuilt by ensure_image_sync() if a later
   // Swapchain::recreate changes the image count.
   VKC_TRY(loop.ensure_image_sync());
 
+  // Last, as it is what makes the loop valid(): frame n sets n, from 1.
+  VKC_ASSIGN(core::TimelineSemaphore timeline,
+             core::TimelineSemaphore::create(device));
+  loop.timeline_ =
+      std::make_unique<core::TimelineSemaphore>(std::move(timeline));
   return loop;
 }
 
@@ -67,8 +126,8 @@ core::Status FrameLoop::ensure_image_sync() {
   // retires the old images, and a failed present (OUT_OF_DATE) can leave a
   // render-finished semaphore signaled, so reusing it would double-signal on
   // the next submit. recreate() idles the device first, so the old per-image
-  // objects are drained and safe to replace. A no-op (two comparisons) on the
-  // common path.
+  // objects are drained and safe to replace, and every frame that drew to the
+  // old images has completed. A no-op (two comparisons) on the common path.
   //
   // The handle alone is not a sufficient key: a retired VkSwapchainKHR value
   // can be recycled by the driver, so the array sizes are checked too. That
@@ -77,7 +136,7 @@ core::Status FrameLoop::ensure_image_sync() {
   const VkSwapchainKHR current = swapchain_->handle();
   const uint32_t image_count = swapchain_->image_count();
   if (current == last_swapchain_ && render_finished_.size() == image_count &&
-      images_in_flight_.size() == image_count) {
+      image_frames_.size() == image_count) {
     return core::Status{};
   }
   render_finished_.clear();
@@ -87,7 +146,7 @@ core::Status FrameLoop::ensure_image_sync() {
                core::Semaphore::create(device_->handle()));
     render_finished_.push_back(std::move(finished));
   }
-  images_in_flight_.assign(image_count, VK_NULL_HANDLE);
+  image_frames_.assign(image_count, 0);
   last_swapchain_ = current;
   return core::Status{};
 }
@@ -151,7 +210,7 @@ core::Result<std::optional<Frame>> FrameLoop::begin_frame(
     }
     core::Result<Frame> frame = begin_frame();
     if (frame.ok()) {
-      return std::optional<Frame>(frame.value());
+      return std::optional<Frame>(std::move(frame).value());
     }
     if (swapchain_stale(frame.status())) {
       needs_recreate_ = true;
@@ -172,44 +231,47 @@ core::Result<Frame> FrameLoop::begin_frame() {
   // frame; resize the per-image sync arrays before indexing them below.
   VKC_TRY(ensure_image_sync());
 
-  const uint32_t slot = current_slot_;
+  const uint64_t number = submitted_ + 1;
+  const uint32_t slot = slot_of(number);
 
   // Keep the CPU at most N frames ahead: wait until this slot's previous frame
-  // has finished on the GPU before reusing its command buffer / semaphore.
+  // has retired before reusing its command buffer / semaphore / queries. On
+  // its fence, not its number: through MoltenVK the number is reached before
+  // the submission's completion handler has run, which is what makes its
+  // timestamp queries readable (DECISIONS.md, "Frames are numbered on a
+  // timeline").
   VKC_TRY(in_flight_[slot].wait());
 
   core::Result<uint32_t> acquired =
       swapchain_->acquire_next_image(image_available_[slot].handle());
   if (!acquired.ok()) {
     // OUT_OF_DATE (or another error) flows to the caller, which recreates the
-    // swapchain and retries. The slot fence is reset only in end_frame (right
-    // before the submit that re-signals it), so it is still signalled here and
-    // the retry does not deadlock.
+    // swapchain and retries; nothing was consumed, so the retry is this same
+    // frame. The slot fence is reset only right before a submit that
+    // re-signals it, so it is still signalled here and the retry does not
+    // deadlock.
     return acquired.status();
   }
   const uint32_t image_index = acquired.value();
 
-  // The acquired image may still be in use by an earlier (different) slot when
-  // there are more images than in-flight frames; wait that fence too.
-  if (images_in_flight_[image_index] != VK_NULL_HANDLE) {
-    const VkResult waited =
-        vkWaitForFences(device_->handle(), 1, &images_in_flight_[image_index],
-                        VK_TRUE, UINT64_MAX);
-    if (waited != VK_SUCCESS) {
+  // The acquired image may still be in use by an earlier frame on another
+  // slot when there are more images than in-flight frames; wait for it too.
+  if (image_frames_[image_index] != 0) {
+    const core::Status waited = timeline_->wait(image_frames_[image_index]);
+    if (!waited.ok()) {
       // The acquire above left this slot's semaphore with a pending signal;
-      // restore the slot before surfacing the error (best-effort: the original
-      // error outranks a recovery failure).
-      (void)recover_slot(slot);
-      return core::vk_error(waited, "vkWaitForFences");
+      // stand in for the frame before surfacing the error (best-effort: the
+      // original error outranks a recovery failure).
+      (void)recover_slot(slot, {});
+      return waited;
     }
   }
-  images_in_flight_[image_index] = in_flight_[slot].handle();
 
   const VkCommandBuffer cmd = command_buffers_[slot].handle();
   const core::Status begun =
       command_buffers_[slot].begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
   if (!begun.ok()) {
-    (void)recover_slot(slot);
+    (void)recover_slot(slot, {});
     return begun;
   }
 
@@ -229,7 +291,7 @@ core::Result<Frame> FrameLoop::begin_frame() {
   cmd_image_barrier(cmd, to_color);
 
   // Drive the profiler's frame lifecycle (no-op when none is attached). The
-  // slot's fence was waited above, so its prior submission's timestamps are now
+  // slot's previous frame was waited for above, so its timestamps are now
   // readable; the command buffer is recording and outside any render pass,
   // where the slot's query-range reset is legal.
   if (profiler_ != nullptr) {
@@ -241,7 +303,48 @@ core::Result<Frame> FrameLoop::begin_frame() {
   frame.target = &swapchain_->render_target(image_index);
   frame.image_index = image_index;
   frame.slot = slot;
+  frame.number = number;
   return frame;
+}
+
+core::Status FrameLoop::check_points(const Frame& frame) const {
+  // Only what the submit cannot run without, and the loop's own timeline:
+  // whether another timeline's value is submitted to be set is known to no
+  // one here (frame_loop.hpp, end_frame).
+  const auto ours = [this](const core::TimelineSemaphore* semaphore) {
+    return semaphore->handle() == timeline_->handle();
+  };
+  const auto usable = [this](const core::TimelinePoint& point) {
+    return point.semaphore != nullptr && point.semaphore->valid() &&
+           point.semaphore->device() == device_->handle();
+  };
+  for (const FrameWait& wait : frame.waits) {
+    if (!usable(wait.point)) {
+      return core::Status::invalid_argument(
+          "FrameLoop::end_frame: a wait names a null or empty semaphore, or "
+          "one made on another VkDevice");
+    }
+    if (wait.stages == 0) {
+      return core::Status::invalid_argument(
+          "FrameLoop::end_frame: a wait has no stages");
+    }
+    if (ours(wait.point.semaphore) && wait.point.value > submitted_) {
+      return core::Status::invalid_argument(
+          "FrameLoop::end_frame: a wait for a frame not yet submitted");
+    }
+  }
+  for (const core::TimelinePoint& signal : frame.signals) {
+    if (!usable(signal)) {
+      return core::Status::invalid_argument(
+          "FrameLoop::end_frame: a signal names a null or empty semaphore, or "
+          "one made on another VkDevice");
+    }
+    if (ours(signal.semaphore)) {
+      return core::Status::invalid_argument(
+          "FrameLoop::end_frame: only the loop sets its timeline");
+    }
+  }
+  return core::Status{};
 }
 
 core::Status FrameLoop::end_frame(const Frame& frame) {
@@ -255,12 +358,13 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
         "FrameLoop::end_frame on an empty loop");
   }
   const uint32_t slot = frame.slot;
-  if (slot >= command_buffers_.size() ||
+  if (frame.number != submitted_ + 1 || slot != slot_of(frame.number) ||
       frame.image_index >= render_finished_.size() ||
-      frame.cmd == VK_NULL_HANDLE) {
+      frame.cmd != command_buffers_[slot].handle()) {
     return core::Status::invalid_argument(
         "FrameLoop::end_frame: frame did not come from this loop's "
-        "begin_frame (slot / image index out of range, or no command buffer)");
+        "begin_frame (not the frame this loop is on, an image index out of "
+        "range, or another command buffer)");
   }
 
   // Close the profiler's frame (no-op when none is attached): the caller's
@@ -280,50 +384,54 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   cmd_image_barrier(frame.cmd, to_present);
 
+  // Ended before the points are checked, so a refused frame leaves no
+  // command buffer recording: the slot's next begin may reset it only once it
+  // has ended.
   const core::Status ended = command_buffers_[slot].end();
-  if (!ended.ok()) {
-    // This frame's acquire signal was never consumed by a submit; restore the
-    // slot's sync state so the loop stays usable (best-effort: the original
-    // error outranks a recovery failure).
-    (void)recover_slot(slot);
-    return ended;
+  const core::Status points = check_points(frame);
+  if (!ended.ok() || !points.ok()) {
+    // This frame's acquire signal was never consumed by a submit; stand in
+    // for the frame so the loop stays usable (best-effort: the original error
+    // outranks a recovery failure). Refused signals are not set.
+    (void)recover_slot(
+        slot, points.ok() ? frame.signals : std::vector<core::TimelinePoint>{});
+    return ended.ok() ? points : ended;
   }
 
-  const VkSemaphore wait_sem = image_available_[slot].handle();
-  const VkSemaphore signal_sem = render_finished_[frame.image_index].handle();
-  const VkPipelineStageFlags wait_stage =
-      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.waitSemaphoreCount = 1;
-  submit.pWaitSemaphores = &wait_sem;
-  submit.pWaitDstStageMask = &wait_stage;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &frame.cmd;
-  submit.signalSemaphoreCount = 1;
-  submit.pSignalSemaphores = &signal_sem;
-
-  // Reset the in-flight fence immediately before the submit that re-signals it.
-  // Resetting here (rather than in begin_frame) keeps the fence signalled on
-  // every earlier failure or abandoned Frame, so the next begin_frame on this
-  // slot never blocks forever on a fence that will never be submitted.
+  // The acquire and the present keep their binary semaphores; the frame's
+  // number and the caller's values ride the same submit.
+  const VkSemaphore rendered = render_finished_[frame.image_index].handle();
+  SubmitSync sync;
+  sync.wait(image_available_[slot].handle(),
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  for (const FrameWait& wait : frame.waits) {
+    sync.wait(wait.point.semaphore->handle(), wait.stages, wait.point.value);
+  }
+  sync.signal(rendered);
+  sync.signal(timeline_->handle(), frame.number);
+  for (const core::TimelinePoint& signal : frame.signals) {
+    sync.signal(signal.semaphore->handle(), signal.value);
+  }
+  // Reset the in-flight fence immediately before the submit that re-signals it,
+  // so every earlier failure leaves it signalled and the slot's next
+  // begin_frame never blocks on a fence nothing will signal.
   const core::Status fence_ready = in_flight_[slot].reset();
   if (!fence_ready.ok()) {
-    (void)recover_slot(slot);
+    (void)recover_slot(slot, frame.signals);
     return fence_ready;
   }
-  // Route through the device so a shared (adopted) graphics queue stays
-  // externally synchronized under its submit mutex.
   const VkResult submitted =
-      device_->queue_submit(1, &submit, in_flight_[slot].handle());
+      sync.submit(*device_, &frame.cmd, in_flight_[slot].handle());
   if (submitted != VK_SUCCESS) {
     // The failed submit consumed nothing: the acquire signal is still pending
     // and the fence was just reset, so recover_slot restores both.
-    (void)recover_slot(slot);
+    (void)recover_slot(slot, frame.signals);
     return core::vk_error(submitted, "vkQueueSubmit");
   }
+  submitted_ = frame.number;
+  image_frames_[frame.image_index] = frame.number;
 
-  core::Status present = swapchain_->present(frame.image_index, signal_sem);
+  core::Status present = swapchain_->present(frame.image_index, rendered);
   if (swapchain_stale(present)) {
     // Arm the managed protocol's rebuild; raw callers see the status as ever
     // (they never read needs_recreate_). This is the one managed-state write on
@@ -333,61 +441,59 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
     // so end_frame carries no managed state and the raw path is policy-free.
     needs_recreate_ = true;
   }
-  // Advance regardless: the work was submitted and the fence will signal, so
-  // the slot is reusable next round even when present reports out-of-date.
-  current_slot_ =
-      static_cast<uint32_t>((current_slot_ + 1) % in_flight_.size());
+  // The slot advanced with the number regardless: the work was submitted and
+  // will set it, so the slot is reusable next round even when present reports
+  // out-of-date.
   return present;
 }
 
-core::Status FrameLoop::recover_slot(uint32_t slot) {
-  // A successful acquire left image_available_[slot] with a pending signal that
-  // only a queue submit may consume: an empty submit drains it and re-signals
-  // the slot fence, restoring both invariants (semaphore unsignaled, fence
-  // signaled) so the next begin_frame on this slot neither trips the validation
-  // layers nor deadlocks. Blocks until the drain completes; reached only on a
-  // failed frame.
-  // TODO: these recovery branches (here and the callers') lack test coverage —
-  // no queue/fence call fails on a healthy device, so a fault-injection seam is
-  // needed to exercise them; today they ship verified only by inspection.
-  const VkSemaphore wait_sem = image_available_[slot].handle();
-  const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.waitSemaphoreCount = 1;
-  submit.pWaitSemaphores = &wait_sem;
-  submit.pWaitDstStageMask = &wait_stage;
+core::Result<uint64_t> FrameLoop::completed() const {
+  if (!valid()) {
+    return core::Status::invalid_argument(
+        "FrameLoop::completed on an empty loop");
+  }
+  return timeline_->value();
+}
 
-  // The fence must be unsignaled for the submit to signal it: reset, submit,
-  // then wait. If any step fails the queue itself is failing — fall through.
+core::Status FrameLoop::recover_slot(
+    uint32_t slot, const std::vector<core::TimelinePoint>& signals) {
+  // A successful acquire left image_available_[slot] with a pending signal that
+  // only a queue submit may consume. An empty submit consumes it, sets the
+  // frame's number, as the frame would have, and signals the slot fence, so
+  // the slot's next begin_frame finds the semaphore free and the numbers stay
+  // contiguous. Reached only on a failed frame.
+  // TODO: a refused frame runs this, but the callers' other failure branches
+  // and the failed submit below lack test coverage -- no queue/command call
+  // fails on a healthy device, so a fault-injection seam is needed to exercise
+  // them; today they ship verified only by inspection.
+  const uint64_t number = submitted_ + 1;
+  SubmitSync sync;
+  sync.wait(image_available_[slot].handle(),
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+  sync.signal(timeline_->handle(), number);
+  for (const core::TimelinePoint& signal : signals) {
+    sync.signal(signal.semaphore->handle(), signal.value);
+  }
+  // The fence must be unsignaled for the submit to signal it.
   core::Status status = in_flight_[slot].reset();
   if (status.ok()) {
     const VkResult submitted =
-        device_->queue_submit(1, &submit, in_flight_[slot].handle());
+        sync.submit(*device_, nullptr, in_flight_[slot].handle());
     if (submitted == VK_SUCCESS) {
-      return in_flight_[slot].wait();
+      submitted_ = number;
+      return core::Status{};
     }
     status = core::vk_error(submitted, "vkQueueSubmit");
   }
 
-  // The drain never reached the queue, so the fence is now unsignaled with
+  // The queue itself is failing, and the fence may now be unsignaled with
   // nothing that will ever signal it. Replace it with a fresh signaled fence
-  // (safe — no submit references this slot's fence here) so the next
-  // begin_frame fails cleanly instead of blocking forever in
-  // in_flight_[slot].wait(). The acquire semaphore may stay signaled, but only
-  // when the queue is already broken, where the next frame errors out anyway.
+  // (safe -- no submit references this slot's fence here) so the next
+  // begin_frame fails cleanly instead of blocking forever. The acquire
+  // semaphore may stay signaled, but only when the queue is already broken,
+  // where the next frame errors out anyway.
   VKC_ASSIGN(core::Fence resignaled,
              core::Fence::create(device_->handle(), /*signaled=*/true));
-  // images_in_flight_ caches this slot's fence *by raw handle* -- in as many
-  // entries as the slot has been acquired for -- and does not own it. Scrub
-  // those entries before the assignment below destroys the old fence, or the
-  // next begin_frame to re-acquire one of those images waits on freed memory
-  // (which, if the driver recycles the address, silently blocks on an
-  // unrelated fence rather than crashing).
-  const VkFence retired = in_flight_[slot].handle();
-  for (VkFence& tracked : images_in_flight_) {
-    if (tracked == retired) tracked = VK_NULL_HANDLE;
-  }
   in_flight_[slot] = std::move(resignaled);
   return status;
 }
@@ -417,21 +523,27 @@ void FrameLoop::drain() noexcept {
 FrameLoop::FrameLoop(FrameLoop&& other) noexcept
     : device_(other.device_),
       swapchain_(other.swapchain_),
+      timeline_(std::move(other.timeline_)),
+      submitted_(other.submitted_),
       pool_(std::move(other.pool_)),
       command_buffers_(std::move(other.command_buffers_)),
       image_available_(std::move(other.image_available_)),
       in_flight_(std::move(other.in_flight_)),
       render_finished_(std::move(other.render_finished_)),
-      images_in_flight_(std::move(other.images_in_flight_)),
+      image_frames_(std::move(other.image_frames_)),
       last_swapchain_(other.last_swapchain_),
-      current_slot_(other.current_slot_),
       profiler_(other.profiler_),
       recreate_callback_(std::move(other.recreate_callback_)),
       needs_recreate_(other.needs_recreate_) {
   other.device_ = nullptr;
   other.swapchain_ = nullptr;
+  other.submitted_ = 0;
+  other.command_buffers_.clear();
+  other.image_available_.clear();
+  other.in_flight_.clear();
+  other.render_finished_.clear();
+  other.image_frames_.clear();
   other.last_swapchain_ = VK_NULL_HANDLE;
-  other.current_slot_ = 0;
   other.profiler_ = nullptr;
   other.recreate_callback_ = nullptr;
   other.needs_recreate_ = false;
@@ -450,22 +562,28 @@ FrameLoop& FrameLoop::operator=(FrameLoop&& other) noexcept {
 
     device_ = other.device_;
     swapchain_ = other.swapchain_;
+    timeline_ = std::move(other.timeline_);
+    submitted_ = other.submitted_;
     pool_ = std::move(other.pool_);
     command_buffers_ = std::move(other.command_buffers_);
     image_available_ = std::move(other.image_available_);
     in_flight_ = std::move(other.in_flight_);
     render_finished_ = std::move(other.render_finished_);
-    images_in_flight_ = std::move(other.images_in_flight_);
+    image_frames_ = std::move(other.image_frames_);
     last_swapchain_ = other.last_swapchain_;
-    current_slot_ = other.current_slot_;
     profiler_ = other.profiler_;
     recreate_callback_ = std::move(other.recreate_callback_);
     needs_recreate_ = other.needs_recreate_;
 
     other.device_ = nullptr;
     other.swapchain_ = nullptr;
+    other.submitted_ = 0;
+    other.command_buffers_.clear();
+    other.image_available_.clear();
+    other.in_flight_.clear();
+    other.render_finished_.clear();
+    other.image_frames_.clear();
     other.last_swapchain_ = VK_NULL_HANDLE;
-    other.current_slot_ = 0;
     other.profiler_ = nullptr;
     other.recreate_callback_ = nullptr;
     other.needs_recreate_ = false;

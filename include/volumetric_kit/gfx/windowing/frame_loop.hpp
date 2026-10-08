@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -32,17 +33,43 @@ namespace windowing {
 
 class Swapchain;
 
+/// @brief A timeline value a frame's submission waits for, and the stages
+///        that wait for it (@ref Frame::waits).
+struct FrameWait {
+  /// The timeline and the value to reach. Its semaphore is borrowed: it must
+  /// outlive the frame's execution.
+  core::TimelinePoint point;
+  /// The stages that wait; non-zero. Nothing in them starts before the value
+  /// is reached, and the producer's writes are visible to them. The default
+  /// holds the whole frame; a narrower mask lets the rest start, e.g.
+  /// `TRANSFER` before an image update, or `VERTEX_INPUT | DRAW_INDIRECT`
+  /// before a live mesh's draw.
+  VkPipelineStageFlags stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+};
+
 /// @brief One in-flight frame handed to the caller by @ref
 /// FrameLoop::begin_frame.
 ///
 /// Record draws into @ref cmd between `target->begin()` and `target->end()`;
-/// the image is already in `COLOR_ATTACHMENT_OPTIMAL`. Pass the same `Frame`
-/// back to @ref FrameLoop::end_frame to submit + present it.
+/// the image is already in `COLOR_ATTACHMENT_OPTIMAL`. Add any timeline
+/// values the frame waits for or sets, then pass the same `Frame` back to
+/// @ref FrameLoop::end_frame to submit + present it.
 struct Frame {
   VkCommandBuffer cmd = VK_NULL_HANDLE;  ///< Recording command buffer.
   const RenderTarget* target = nullptr;  ///< The acquired image's target.
   uint32_t image_index = 0;              ///< Swapchain image index.
   uint32_t slot = 0;                     ///< Frame-in-flight slot (internal).
+  /// The frame's number: one more than the previous frame's, from 1. The
+  /// loop's @ref FrameLoop::timeline reaches it once the frame's GPU work
+  /// completes, so it keys what the frame uses (@ref RetireQueue).
+  uint64_t number = 0;
+  /// Timeline values the frame's submission waits for, as @ref
+  /// FrameLoop::end_frame says.
+  std::vector<FrameWait> waits;
+  /// Timeline values @ref FrameLoop::end_frame sets once the frame's GPU work
+  /// completes, one per semaphore. Each semaphore is borrowed: it must
+  /// outlive the frame's execution.
+  std::vector<core::TimelinePoint> signals;
 };
 
 /// @brief Drives a @ref Swapchain with a ring of `N` in-flight frames so the
@@ -50,11 +77,12 @@ struct Frame {
 ///        stays at most `N` frames ahead of the GPU.
 ///
 /// Owns, per frame-in-flight slot (`N`), a command buffer + an image-available
-/// semaphore + an in-flight fence; and, per swapchain image (`M`), a
-/// render-finished semaphore. The split matters: reusing one render-finished
+/// semaphore + an in-flight fence; per swapchain image (`M`), a
+/// render-finished semaphore; and one timeline semaphore that numbers the
+/// frames (@ref timeline). The split matters: reusing one render-finished
 /// semaphore across slots races the presentation engine, so it is keyed by
-/// image (and an image still in flight from an earlier slot is fence-waited
-/// before reuse).
+/// image (and an image still in flight from an earlier frame is waited for,
+/// by number, before reuse).
 ///
 /// The extent-taking @ref begin_frame drives the whole windowed protocol: it
 /// rebuilds the swapchain when it went stale or the window resized (running the
@@ -76,11 +104,13 @@ struct Frame {
 ///
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
+/// RetireQueue retire(loop.value().timeline());
 /// while (running) {
 ///   auto frame = loop.value().begin_frame(window_extent());
 ///   if (!frame) return fail(frame.status());          // hard error only
 ///   if (!frame.value()) { wait_events(); continue; }  // minimized
 ///   const Frame& f = *frame.value();
+///   retire.poll();  // free what completed frames used
 ///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   f.target->end(f.cmd);
@@ -137,8 +167,9 @@ class VG_WINDOWING_API FrameLoop {
   ///                  function to detach.
   void set_recreate_callback(std::function<core::Status(VkExtent2D)> callback);
 
-  /// @brief Begin the next frame (raw protocol): wait this slot's fence,
-  ///        acquire an image, begin its command buffer, and transition the
+  /// @brief Begin the next frame (raw protocol): wait for the frame that last
+  ///        used this slot, acquire an image, wait for the frame that last
+  ///        drew to it, begin the slot's command buffer, and transition the
   ///        image into `COLOR_ATTACHMENT_OPTIMAL`.
   /// @return The @ref Frame to record into; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` (recreate the swapchain and retry) or
@@ -149,77 +180,140 @@ class VG_WINDOWING_API FrameLoop {
   ///       slot's image-available semaphore, and only @ref end_frame consumes
   ///       it. Dropping a returned @ref Frame leaves that semaphore signalled.
   ///       A failed `begin_frame` returns no @ref Frame and needs no pairing —
-  ///       on an internal failure *after* the acquire, the slot's sync state is
-  ///       restored (a brief blocking submit) before the error returns.
+  ///       on an internal failure *after* the acquire, an empty submit in the
+  ///       frame's place consumes the acquire and sets its number.
   /// @note Adapts automatically when @ref Swapchain::recreate changes the image
   ///       count: the per-image sync objects are rebuilt to match on entry.
   core::Result<Frame> begin_frame();
 
   /// @brief End the frame from @ref begin_frame: transition the image to
-  ///        `PRESENT_SRC`, end + submit its command buffer, present it, and
-  ///        advance to the next slot.
+  ///        `PRESENT_SRC`, end its command buffer and submit it -- waiting for
+  ///        `frame.waits` and setting its number on @ref timeline and
+  ///        `frame.signals` once it completes -- present it, and advance to
+  ///        the next slot.
+  ///
+  /// A value in `frame.waits` must already be reached, or be set by work
+  /// already submitted -- to this queue or another -- that itself waits for
+  /// nothing not yet submitted. The present waits for this submit, and Vulkan
+  /// requires that of a present's waits
+  /// (`VUID-vkQueuePresentKHR-pWaitSemaphores-03268`); and a frame held for a
+  /// value nothing has been submitted to set holds every later wait on the
+  /// queue, so the next @ref begin_frame, a swapchain rebuild's queue drain
+  /// (which holds the submit mutex) and the loop's destruction would block
+  /// forever. Gate a producer whose value is not yet submitted on the host
+  /// instead. Whether another timeline's value is submitted is not knowable
+  /// here, so only the loop's own @ref timeline is checked: a wait on it is
+  /// for at most @ref submitted. A value in `frame.signals` follows
+  /// `core::Device::submit_pending`'s rules: above its semaphore's current
+  /// value, every value submitted to set it, and any value the frame waits
+  /// for on it.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
   ///         rebuilds automatically) or another failed `VkResult`;
-  ///         `core::Status::Code::InvalidArgument` when this loop is empty or
-  ///         @p frame did not come from its @ref begin_frame.
-  /// @note On a failure *before* the submit reaches the queue, the slot's sync
-  ///       state is restored (a brief blocking submit) so the *slot* stays
-  ///       reusable — but the image this frame acquired was never presented,
-  ///       and an acquired image is only released by a present or a swapchain
-  ///       rebuild. So the caller must @ref Swapchain::recreate before
-  ///       continuing (the loop below does), not merely retry, or repeated
-  ///       failures will exhaust the acquirable images. A failed present
-  ///       already submitted the frame: the slot advances normally and only the
-  ///       presentation is reported.
+  ///         `core::Status::Code::InvalidArgument` when this loop is empty,
+  ///         @p frame did not come from its @ref begin_frame, or a wait or
+  ///         signal names a null or empty semaphore, one made on another
+  ///         `VkDevice`, a zero stage mask, a value @ref timeline is not yet
+  ///         submitted to reach, or a value to set on @ref timeline.
+  /// @note On a failure *before* the submit reaches the queue, the frame's
+  ///       commands never run: an empty submit in its place consumes the
+  ///       acquire and sets its number -- and `frame.signals`, unless they
+  ///       were refused -- so the *slot* stays reusable and nothing waiting
+  ///       for them hangs. But the image this frame acquired was never
+  ///       presented, and an acquired image is only released by a present or
+  ///       a swapchain rebuild. So the caller must @ref Swapchain::recreate
+  ///       before continuing (the loop below does), not merely retry, or
+  ///       repeated failures will exhaust the acquirable images. A failed
+  ///       present already submitted the frame: the slot advances normally
+  ///       and only the presentation is reported.
   core::Status end_frame(const Frame& frame);
+
+  /// @return The timeline the loop's frames set: it reaches a frame's
+  ///         @ref Frame::number once that frame's GPU work completes, in
+  ///         submission order. It stays at one address for the loop's life,
+  ///         moves of the loop included, so a @ref RetireQueue or a
+  ///         `core::TimelinePoint` may borrow it; another queue's work may
+  ///         wait for a frame through it. Only the loop sets it.
+  /// @note Through MoltenVK a number is reached before the submission's
+  ///       completion handler has run, and the frame's query results become
+  ///       readable only then: read them once the loop reuses the slot, as
+  ///       an attached @ref Profiler does.
+  /// @pre @ref valid.
+  const core::TimelineSemaphore& timeline() const noexcept {
+    return *timeline_;
+  }
+
+  /// @return The newest frame number whose GPU work has completed (0 before
+  ///         the first); `core::Status::Code::InvalidArgument` for an empty
+  ///         loop; or a backend `core::Status` (device lost).
+  core::Result<uint64_t> completed() const;
+
+  /// @return The newest frame number submitted (0 before the first): what
+  ///         to retire a resource at between frames, as every frame that may
+  ///         use it has this number or a lower one.
+  uint64_t submitted() const noexcept { return submitted_; }
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
   ///        `nullptr`.
   /// @param profiler  Borrowed and nullable. When set, the loop calls the
-  ///                  profiler's `begin_frame` (for the slot, after waiting its
-  ///                  fence, with the frame's command buffer) and `end_frame`
-  ///                  around each frame, so the caller only opens scopes on the
-  ///                  frame's `cmd`. Its `frames_in_flight` should match this
-  ///                  loop's. Must outlive the loop, or be detached first;
-  ///                  `nullptr` restores the unprofiled path.
+  ///                  profiler's `begin_frame` (for the slot, after waiting for
+  ///                  its previous frame, with the frame's command buffer) and
+  ///                  `end_frame` around each frame, so the caller only opens
+  ///                  scopes on the frame's `cmd`. Its `frames_in_flight`
+  ///                  should match this loop's. Must outlive the loop, or be
+  ///                  detached first; `nullptr` restores the unprofiled path.
   void set_profiler(Profiler* profiler) noexcept;
 
   /// @return The CPU-ahead depth (number of in-flight slots).
   uint32_t frames_in_flight() const noexcept {
-    return static_cast<uint32_t>(in_flight_.size());
+    return static_cast<uint32_t>(command_buffers_.size());
   }
 
   /// @return `true` if this owns frame resources.
-  bool valid() const noexcept { return !in_flight_.empty(); }
+  bool valid() const noexcept { return timeline_ != nullptr; }
 
  private:
-  // Rebuild the per-image sync objects (render_finished_ / images_in_flight_)
-  // when the swapchain handle changed — i.e. after a Swapchain::recreate
-  // produced a fresh chain (see last_swapchain_). A no-op (one handle
-  // comparison) on the common path.
+  // Rebuild the per-image sync state (render_finished_ / image_frames_) when
+  // the swapchain handle changed — i.e. after a Swapchain::recreate produced a
+  // fresh chain (see last_swapchain_). A no-op (one handle comparison) on the
+  // common path.
   core::Status ensure_image_sync();
 
-  // Restore a slot whose acquire signal was never consumed (a failure between
-  // acquire and submit): drain image_available_[slot] with an empty submit and
-  // re-signal the slot fence. If the drain cannot even be issued (the queue is
-  // failing), the fence is instead replaced with a fresh signaled one so the
-  // next begin_frame never blocks on it. Blocking; error-path only.
-  core::Status recover_slot(uint32_t slot);
+  // The slot frame `number` records into: frames take the slots in turn.
+  uint32_t slot_of(uint64_t number) const noexcept {
+    return static_cast<uint32_t>((number - 1) % command_buffers_.size());
+  }
+
+  // end_frame's refusals of `frame.waits` / `frame.signals`.
+  core::Status check_points(const Frame& frame) const;
+
+  // Stand in for the next frame when it failed between its acquire and its
+  // submit: an empty submit waits image_available_[slot], whose pending
+  // signal only a queue submit may consume, and sets the frame's number and
+  // `signals` as the frame would have, so the slot's next use (ordered after
+  // that number like any frame's) finds the semaphore free and nothing
+  // waiting for the values hangs. Error path only.
+  core::Status recover_slot(uint32_t slot,
+                            const std::vector<core::TimelinePoint>& signals);
 
   // Drain the renderer's own queues (`core::Device::wait_idle`: graphics, and
   // present when distinct) so teardown cannot free command buffers / semaphores
-  // the GPU still references. Waiting the queues (not this loop's fences) still
-  // covers a present that reported out-of-date and left a render-finished
-  // semaphore with no fence to wait on. Never device-wide: on a shared adopted
-  // device that would idle a sibling library's queues too. Best-effort: errors
-  // are unreportable from the destructor and moot on a lost device.
+  // the GPU still references. Waiting the queues (not this loop's timeline)
+  // also covers a present that reported out-of-date and left a render-finished
+  // semaphore that no frame number covers. Never device-wide: on a shared
+  // adopted device that would idle a sibling library's queues too. Best-effort:
+  // errors are unreportable from the destructor and moot on a lost device.
   void drain() noexcept;
 
   const core::Device* device_ = nullptr;  // borrowed; outlives this
   Swapchain* swapchain_ = nullptr;        // borrowed; outlives this
+  // The frame numbers. Behind a pointer so its address survives a move of the
+  // loop, as timeline() promises.
+  std::unique_ptr<core::TimelineSemaphore> timeline_;
+  // The newest frame number submitted; the next frame is one more.
+  uint64_t submitted_ = 0;
   // Declared before the buffers it owns so they free back before it is
   // destroyed.
   core::CommandPool pool_;
@@ -227,15 +321,15 @@ class VG_WINDOWING_API FrameLoop {
   std::vector<core::Semaphore> image_available_;      // per slot (N)
   std::vector<core::Fence> in_flight_;                // per slot (N)
   std::vector<core::Semaphore> render_finished_;      // per swapchain image (M)
-  // Per image (M): the in-flight fence of the slot that last rendered to it, so
-  // a re-acquired image still in use is waited on before reuse. Non-owning.
-  std::vector<VkFence> images_in_flight_;
+  // Per image (M): the number of the last submitted frame that rendered to
+  // it (0 for none), so a re-acquired image still in use is waited on before
+  // reuse.
+  std::vector<uint64_t> image_frames_;
   // The swapchain handle the per-image sync above was built for. A mismatch in
   // ensure_image_sync means a Swapchain::recreate produced a fresh chain, so
-  // render_finished_ / images_in_flight_ must be rebuilt (a same-count rebuild
+  // render_finished_ / image_frames_ must be rebuilt (a same-count rebuild
   // still retires the old images and can leave a semaphore signaled).
   VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
-  uint32_t current_slot_ = 0;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
   // Managed-protocol state (the extent-taking begin_frame): the rebuild hook
   // and whether a stale acquire/present or a resize armed a rebuild. Resize is
