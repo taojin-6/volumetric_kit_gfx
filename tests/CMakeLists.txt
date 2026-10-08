@@ -274,3 +274,48 @@ vg_target_warnings(vg_ui_test)
 set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")
 vg_discover_tests(vg_ui_test TEST_PREFIX "ui.")
+
+# gfx as its consumers take it (consumer/), configure only, with the dependency
+# sources this build fetched: as an application's subproject, whose defaults
+# hold, and as an installed package.
+set(_vg_consumer
+    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/consumer" -G
+    "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+if(CMAKE_PREFIX_PATH)
+  string(REPLACE ";" "$<SEMICOLON>" _vg_prefixes "${CMAKE_PREFIX_PATH}")
+  list(APPEND _vg_consumer "-DCMAKE_PREFIX_PATH=${_vg_prefixes}")
+endif()
+set(_vg_consumer_dir "${CMAKE_CURRENT_BINARY_DIR}/consumer")
+
+FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vg_core_source)
+set(_vg_subdirectory
+    -DVG_CONSUME=subdirectory "-DVG_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DVKC_SOURCE_DIR=${_vg_core_source}")
+foreach(_vg_dep VulkanMemoryAllocator tinygltf spirv-cross imgui glm)
+  unset(_vg_dep_source)
+  FetchContent_GetProperties(${_vg_dep} SOURCE_DIR _vg_dep_source)
+  if(_vg_dep_source)
+    string(TOUPPER "${_vg_dep}" _vg_dep_upper)
+    list(APPEND _vg_subdirectory
+         "-DFETCHCONTENT_SOURCE_DIR_${_vg_dep_upper}=${_vg_dep_source}")
+  endif()
+endforeach()
+
+add_test(NAME vg_consumer_subdirectory
+         COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory"
+                 ${_vg_subdirectory} -DVKC_WITH_VULKAN=ON)
+
+if(VG_INSTALL)
+  set(_vg_stage "${_vg_consumer_dir}/stage")
+  add_test(NAME vg_consumer_install
+           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
+                   --config "$<CONFIG>" --prefix "${_vg_stage}")
+  set_tests_properties(vg_consumer_install PROPERTIES FIXTURES_SETUP
+                                                      vg_consumer_stage)
+
+  add_test(NAME vg_consumer_find_package
+           COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/find_package"
+                   -DVG_CONSUME=find_package "-DCMAKE_PREFIX_PATH=${_vg_stage}")
+  set_tests_properties(vg_consumer_find_package PROPERTIES FIXTURES_REQUIRED
+                                                           vg_consumer_stage)
+endif()

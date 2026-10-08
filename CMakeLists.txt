@@ -15,20 +15,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Are we the top-level project, or pulled in via add_subdirectory/FetchContent?
-# Defaults for "build the extras" and "generate install rules" follow from this.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  set(VG_IS_TOP_LEVEL ON)
-else()
-  set(VG_IS_TOP_LEVEL OFF)
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- Options -----------------------------------------------------------------
-option(VG_BUILD_EXAMPLES "Build example programs" ${VG_IS_TOP_LEVEL})
-option(VG_BUILD_TESTS "Build tests" ${VG_IS_TOP_LEVEL})
-option(VG_INSTALL "Generate install/export rules" ${VG_IS_TOP_LEVEL})
+# Examples, tests, install rules and -Werror default ON only when gfx is the
+# top-level project, so an application that fetches gfx builds the libraries
+# alone, with no warnings-as-errors from its own compiler.
+option(VG_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
+option(VG_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
+option(VG_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
+option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
+       ${PROJECT_IS_TOP_LEVEL})
 # VG_WITH_GLFW gates the examples: examples/CMakeLists.txt skips the whole
 # directory when it is OFF (or when GLFW is not installed). The library tiers
 # never read it — windowing is GLFW-free by design.
@@ -40,7 +37,6 @@ option(
   VG_WITH_CUDA
   "Enable CUDA <-> Vulkan external-memory interop (reserved; not yet wired)"
   OFF)
-option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 # Validation is a runtime decision (InstanceConfig::enable_validation), gated at
 # instance creation by layer availability — not a compile-time switch. The debug

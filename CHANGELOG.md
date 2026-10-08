@@ -47,6 +47,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `VG_WARNINGS_AS_ERRORS` defaults ON only when gfx is the top-level project,
+  as the core's `VKC_WARNINGS_AS_ERRORS` does, so an application that fetches
+  gfx no longer compiles it with `-Werror`; set it ON to keep that.
 - `core`: **gfx writes the core's names; its re-exports of them are gone.**
   gfx's API names volumetric_kit_core's types and macros as the core does,
   so the `vg::` names for them and the `VG_*` macros are removed. Migrating:

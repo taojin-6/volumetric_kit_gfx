@@ -75,10 +75,11 @@ gfx compiles against the system's Vulkan headers -- 1.3.204 or newer, 1.3.208
 on Apple, the core's floor -- and vendors none. To build against a pinned copy,
 point `Vulkan_INCLUDE_DIR` at it; the loader still comes from the system.
 
-Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, and `VG_INSTALL` default
-ON only when `volumetric_kit_gfx` is the top-level project (OFF when it is
-consumed via FetchContent / `add_subdirectory`). `VG_WITH_GLFW` and
-`VG_WARNINGS_AS_ERRORS` default ON regardless; `VG_WITH_CUDA` defaults OFF.
+Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL` and
+`VG_WARNINGS_AS_ERRORS` default ON only when `volumetric_kit_gfx` is the
+top-level project (OFF when it is consumed via FetchContent /
+`add_subdirectory`). `VG_WITH_GLFW` defaults ON regardless; `VG_WITH_CUDA`
+defaults OFF.
 `VG_SANITIZE` is a semicolon list, empty (off) by default — e.g.
 `-DVG_SANITIZE="address;undefined"`.
 
