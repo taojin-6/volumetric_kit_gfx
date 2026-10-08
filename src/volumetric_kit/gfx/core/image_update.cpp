@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "upload_steps.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -25,15 +26,11 @@ constexpr VkPipelineStageFlags kShaderStages =
     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
-// The image, the scope and the regions' placement in the image -- everything
-// but the source buffer, so an upload checks them before it allocates. Returns
-// the texel size.
-core::Result<VkDeviceSize> check_target(const char* call, VkCommandBuffer cmd,
-                                        const core::Image& image,
-                                        const VkBufferImageCopy* regions,
-                                        std::uint32_t region_count,
-                                        const ImageUpdateScope& scope) {
-  const std::string name = call;
+// The command buffer, the scope and the image. Returns the texel size.
+core::Result<VkDeviceSize> check_image(const std::string& name,
+                                       VkCommandBuffer cmd,
+                                       const core::Image& image,
+                                       const ImageUpdateScope& scope) {
   if (cmd == VK_NULL_HANDLE) {
     return core::Status::invalid_argument(name + ": null command buffer");
   }
@@ -61,49 +58,80 @@ core::Result<VkDeviceSize> check_target(const char* call, VkCommandBuffer cmd,
         ": the image's format is not an uncompressed single-plane color "
         "format");
   }
-  if (regions == nullptr || region_count == 0) {
-    return core::Status::invalid_argument(name + ": no regions");
-  }
-  for (std::uint32_t i = 0; i < region_count; ++i) {
-    const VkBufferImageCopy& r = regions[i];
-    const std::string which = name + ": region " + std::to_string(i);
-    const VkImageSubresourceLayers& sub = r.imageSubresource;
-    if (sub.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
-        sub.mipLevel >= image.mip_levels() || sub.layerCount == 0 ||
-        sub.baseArrayLayer >= image.array_layers() ||
-        sub.layerCount > image.array_layers() - sub.baseArrayLayer) {
-      return core::Status::invalid_argument(
-          which + " names an aspect, level or layer the image lacks");
-    }
-    const std::uint32_t level_width =
-        std::max<std::uint32_t>(1, image.width() >> sub.mipLevel);
-    const std::uint32_t level_height =
-        std::max<std::uint32_t>(1, image.height() >> sub.mipLevel);
-    const std::uint32_t level_depth =
-        std::max<std::uint32_t>(1, image.depth() >> sub.mipLevel);
-    const VkOffset3D& o = r.imageOffset;
-    const VkExtent3D& e = r.imageExtent;
-    if (o.x < 0 || o.y < 0 || o.z < 0 || e.width == 0 || e.height == 0 ||
-        e.depth == 0 || e.width > level_width ||
-        static_cast<std::uint32_t>(o.x) > level_width - e.width ||
-        e.height > level_height ||
-        static_cast<std::uint32_t>(o.y) > level_height - e.height ||
-        e.depth > level_depth ||
-        static_cast<std::uint32_t>(o.z) > level_depth - e.depth) {
-      return core::Status::invalid_argument(
-          which + " is empty or outside the image level");
-    }
-    if ((r.bufferRowLength != 0 && r.bufferRowLength < e.width) ||
-        (r.bufferImageHeight != 0 && r.bufferImageHeight < e.height)) {
-      return core::Status::invalid_argument(
-          which + "'s row length or image height is shorter than the region");
-    }
-    if (r.bufferOffset % texel != 0) {
-      return core::Status::invalid_argument(
-          which + "'s buffer offset is not a multiple of the texel size");
-    }
-  }
   return texel;
+}
+
+// Region `i`'s placement in the image, and its rows' layout. `texel` is the
+// image's texel size.
+core::Status check_region(const std::string& name, const core::Image& image,
+                          const VkBufferImageCopy& r, std::uint32_t i,
+                          VkDeviceSize texel) {
+  const std::string which = name + ": region " + std::to_string(i);
+  const VkImageSubresourceLayers& sub = r.imageSubresource;
+  if (sub.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+      sub.mipLevel >= image.mip_levels() || sub.layerCount == 0 ||
+      sub.baseArrayLayer >= image.array_layers() ||
+      sub.layerCount > image.array_layers() - sub.baseArrayLayer) {
+    return core::Status::invalid_argument(
+        which + " names an aspect, level or layer the image lacks");
+  }
+  const std::uint32_t level_width =
+      std::max<std::uint32_t>(1, image.width() >> sub.mipLevel);
+  const std::uint32_t level_height =
+      std::max<std::uint32_t>(1, image.height() >> sub.mipLevel);
+  const std::uint32_t level_depth =
+      std::max<std::uint32_t>(1, image.depth() >> sub.mipLevel);
+  const VkOffset3D& o = r.imageOffset;
+  const VkExtent3D& e = r.imageExtent;
+  if (o.x < 0 || o.y < 0 || o.z < 0 || e.width == 0 || e.height == 0 ||
+      e.depth == 0 || e.width > level_width ||
+      static_cast<std::uint32_t>(o.x) > level_width - e.width ||
+      e.height > level_height ||
+      static_cast<std::uint32_t>(o.y) > level_height - e.height ||
+      e.depth > level_depth ||
+      static_cast<std::uint32_t>(o.z) > level_depth - e.depth) {
+    return core::Status::invalid_argument(
+        which + " is empty or outside the image level");
+  }
+  if ((r.bufferRowLength != 0 && r.bufferRowLength < e.width) ||
+      (r.bufferImageHeight != 0 && r.bufferImageHeight < e.height)) {
+    return core::Status::invalid_argument(
+        which + "'s row length or image height is shorter than the region");
+  }
+  if (r.bufferOffset % texel != 0) {
+    return core::Status::invalid_argument(
+        which + "'s buffer offset is not a multiple of the texel size");
+  }
+  return core::Status{};
+}
+
+// Region `i` reads only `source`, a buffer a copy may read.
+core::Status check_source(const std::string& name, const core::Buffer* source,
+                          const VkBufferImageCopy& r, std::uint32_t i,
+                          VkDeviceSize texel) {
+  const std::string which = name + ": region " + std::to_string(i);
+  if (source == nullptr || !source->valid() ||
+      (source->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
+    return core::Status::invalid_argument(
+        which + "'s source buffer is null, empty or lacks TRANSFER_SRC usage");
+  }
+  // The last texel the copy reads: rows of `row` texels, `rows` rows to a
+  // slice, a slice per layer (or per depth step of a 3D image).
+  const VkDeviceSize row =
+      r.bufferRowLength != 0 ? r.bufferRowLength : r.imageExtent.width;
+  const VkDeviceSize rows =
+      r.bufferImageHeight != 0 ? r.bufferImageHeight : r.imageExtent.height;
+  const VkDeviceSize slices =
+      VkDeviceSize{r.imageSubresource.layerCount} * r.imageExtent.depth;
+  const VkDeviceSize texels = (slices - 1) * rows * row +
+                              (r.imageExtent.height - 1) * row +
+                              r.imageExtent.width;
+  if (r.bufferOffset > source->size() ||
+      texels * texel > source->size() - r.bufferOffset) {
+    return core::Status::invalid_argument(
+        which + " reads past the end of its source buffer");
+  }
+  return core::Status{};
 }
 
 }  // namespace
@@ -113,40 +141,46 @@ core::Status record_image_update(VkCommandBuffer cmd,
                                  const VkBufferImageCopy* regions,
                                  std::uint32_t region_count,
                                  const ImageUpdateScope& scope) {
-  constexpr const char* kCall = "record_image_update";
-  VKC_ASSIGN(const VkDeviceSize texel,
-             check_target(kCall, cmd, image, regions, region_count, scope));
-  if (!source.valid() ||
-      (source.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
-    return core::Status::invalid_argument(
-        "record_image_update: the source buffer is empty or lacks "
-        "TRANSFER_SRC usage");
-  }
-  for (std::uint32_t i = 0; i < region_count; ++i) {
-    // The last texel the copy reads: rows of `row` texels, `rows` rows to a
-    // slice, a slice per layer (or per depth step of a 3D image).
-    const VkBufferImageCopy& r = regions[i];
-    const VkDeviceSize row =
-        r.bufferRowLength != 0 ? r.bufferRowLength : r.imageExtent.width;
-    const VkDeviceSize rows =
-        r.bufferImageHeight != 0 ? r.bufferImageHeight : r.imageExtent.height;
-    const VkDeviceSize slices =
-        VkDeviceSize{r.imageSubresource.layerCount} * r.imageExtent.depth;
-    const VkDeviceSize texels = (slices - 1) * rows * row +
-                                (r.imageExtent.height - 1) * row +
-                                r.imageExtent.width;
-    if (r.bufferOffset > source.size() ||
-        texels * texel > source.size() - r.bufferOffset) {
-      return core::Status::invalid_argument(
-          "record_image_update: region " + std::to_string(i) +
-          " reads past the end of the source buffer");
+  std::vector<ImageCopy> copies;
+  if (regions != nullptr) {
+    copies.reserve(region_count);
+    for (std::uint32_t i = 0; i < region_count; ++i) {
+      copies.push_back({&source, regions[i]});
     }
+  }
+  return record_image_update(cmd, copies.data(),
+                             static_cast<std::uint32_t>(copies.size()), image,
+                             scope);
+}
+
+core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
+                                 std::uint32_t copy_count, core::Image& image,
+                                 const ImageUpdateScope& scope) {
+  const std::string name = "record_image_update";
+  VKC_ASSIGN(const VkDeviceSize texel, check_image(name, cmd, image, scope));
+  if (copies == nullptr || copy_count == 0) {
+    return core::Status::invalid_argument(name + ": no regions");
+  }
+  for (std::uint32_t i = 0; i < copy_count; ++i) {
+    VKC_TRY(check_region(name, image, copies[i].region, i, texel));
+    VKC_TRY(check_source(name, copies[i].source, copies[i].region, i, texel));
   }
 
   // The contents are discarded, but not the order: the copy waits for the
-  // earlier reads the scope names.
-  detail::record_copies_to_image(cmd, source.handle(), image.handle(),
-                                 scope.src_stages, regions, region_count);
+  // earlier reads the scope names. Each run of copies from one buffer is one
+  // copy command.
+  detail::record_discard_for_copy(cmd, image.handle(), scope.src_stages);
+  std::vector<VkBufferImageCopy> run;
+  for (std::uint32_t i = 0; i < copy_count; ++i) {
+    run.push_back(copies[i].region);
+    if (i + 1 == copy_count || copies[i + 1].source != copies[i].source) {
+      vkCmdCopyBufferToImage(cmd, copies[i].source->handle(), image.handle(),
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             static_cast<std::uint32_t>(run.size()),
+                             run.data());
+      run.clear();
+    }
+  }
   detail::record_copied_to_shader_read(cmd, image.handle(), scope.dst_stages);
   image.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return core::Status{};
@@ -162,8 +196,8 @@ core::Status record_image_upload(VkCommandBuffer cmd,
   VkBufferImageCopy region{};
   region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   region.imageExtent = image.extent();
-  VKC_ASSIGN(const VkDeviceSize texel,
-             check_target(kCall, cmd, image, &region, 1, scope));
+  VKC_ASSIGN(const VkDeviceSize texel, check_image(kCall, cmd, image, scope));
+  VKC_TRY(check_region(kCall, image, region, 0, texel));
   if (pixels == nullptr) {
     return core::Status::invalid_argument("record_image_upload: null pixels");
   }

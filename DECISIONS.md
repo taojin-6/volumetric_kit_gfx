@@ -118,10 +118,10 @@ allocator and builds a fallback atlas -- one texel, its set and a sampler.
 `pipelines::StreamedAtlas` is the atlas a live mesh samples: a ring of images,
 each with a set written once. A frame binds `use(frame.number)`, the newest
 picture's set, which marks that image used by the frame. An update -- tiles
-from device buffers (`record_update`) or host pixels (`record_upload`) -- is
-recorded into a frame's command buffer and copies into the least recently used
-image whose last frame the timeline has reached; that image becomes the
-picture. A frame that never reaches the queue is given back with
+from device buffers, one buffer or one a tile (`record_update`), or host
+pixels (`record_upload`) -- is recorded into a frame's command buffer and
+copies into the least recently used image whose last frame the timeline has
+reached; that image becomes the picture. A frame that never reaches the queue is given back with
 `discard(frame.number)`, which makes the picture its update replaced current
 again: the atlas cannot tell a frame whose commands ran from one whose number
 the frame loop's stand-in submit set. The copy and its transitions are the core

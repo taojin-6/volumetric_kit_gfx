@@ -26,6 +26,10 @@ class Buffer;
 class Device;
 }  // namespace volumetric_kit::core
 
+namespace volumetric_kit::gfx {
+struct ImageCopy;
+}  // namespace volumetric_kit::gfx
+
 namespace volumetric_kit::gfx::pipelines {
 
 class HybridMeshPipeline;
@@ -160,6 +164,22 @@ class VG_PIPELINES_API StreamedAtlas {
                              const core::Buffer& source,
                              const VkBufferImageCopy* regions,
                              std::uint32_t region_count);
+
+  /// @brief @ref record_update from several buffers -- each camera's tile
+  ///        from that camera's buffer, say -- into one free image, which
+  ///        becomes the current picture.
+  ///
+  /// The copies are recorded as the several-buffer `record_image_update`
+  /// records them.
+  /// @param cmd         As @ref record_update.
+  /// @param frame       As @ref record_update.
+  /// @param copies      Each a source buffer and a region, as
+  ///                    `record_image_update` takes them; every source must
+  ///                    outlive frame @p frame 's execution.
+  /// @param copy_count  The number of @p copies.
+  /// @return As @ref record_update.
+  core::Status record_update(VkCommandBuffer cmd, std::uint64_t frame,
+                             const ImageCopy* copies, std::uint32_t copy_count);
 
   /// @brief Record an upload of host @p pixels -- a whole picture, tightly
   ///        packed -- into a free image, which becomes the current picture.

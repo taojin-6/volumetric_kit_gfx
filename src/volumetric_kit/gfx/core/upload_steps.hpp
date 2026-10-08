@@ -36,16 +36,12 @@ inline core::Result<core::Buffer> make_staging(core::Allocator& allocator,
 
 // Records the transition that discards `image`'s contents -- every level and
 // layer, UNDEFINED to TRANSFER_DST_OPTIMAL -- once `src_stages` are done,
-// then the copies from `source`. `src_stages` are the stages that last read
-// the image, which discarding its contents does not excuse waiting for; only
-// an image just created, which nothing has read, waits for nothing
-// (TOP_OF_PIPE). The image is left in TRANSFER_DST_OPTIMAL for the caller's
-// own end.
-inline void record_copies_to_image(VkCommandBuffer cmd, VkBuffer source,
-                                   VkImage image,
-                                   VkPipelineStageFlags src_stages,
-                                   const VkBufferImageCopy* regions,
-                                   std::uint32_t region_count) {
+// ahead of copies into it. `src_stages` are the stages that last read the
+// image, which discarding its contents does not excuse waiting for; only an
+// image just created, which nothing has read, waits for nothing
+// (TOP_OF_PIPE).
+inline void record_discard_for_copy(VkCommandBuffer cmd, VkImage image,
+                                    VkPipelineStageFlags src_stages) {
   ImageBarrierDesc to_copy;
   to_copy.image = image;
   to_copy.src_stage = src_stages;
@@ -54,6 +50,16 @@ inline void record_copies_to_image(VkCommandBuffer cmd, VkBuffer source,
   to_copy.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   to_copy.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
   cmd_image_barrier(cmd, to_copy);
+}
+
+// Records record_discard_for_copy, then the copies from `source`. The image
+// is left in TRANSFER_DST_OPTIMAL for the caller's own end.
+inline void record_copies_to_image(VkCommandBuffer cmd, VkBuffer source,
+                                   VkImage image,
+                                   VkPipelineStageFlags src_stages,
+                                   const VkBufferImageCopy* regions,
+                                   std::uint32_t region_count) {
+  record_discard_for_copy(cmd, image, src_stages);
   vkCmdCopyBufferToImage(cmd, source, image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region_count,
                          regions);

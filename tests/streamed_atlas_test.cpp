@@ -512,6 +512,57 @@ TEST_F(StreamedAtlasTest, UpdateCopiesTilesFromADeviceBuffer) {
   EXPECT_EQ(drawn(*frame), (Picture{kRed, kGreen, kBlue, kYellow}));
 }
 
+// An update from several buffers -- each camera's tile from that camera's
+// buffer -- is one update: both tiles land in the one image that becomes the
+// picture, rather than each taking an image of its own.
+TEST_F(StreamedAtlasTest, UpdateCopiesEachTileFromItsOwnBuffer) {
+  auto atlas = make_atlas(3);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+
+  // One buffer a tile, each a column of the picture, top to bottom.
+  const std::array<std::array<Rgba, kSide>, 2> columns{
+      {{kRed, kBlue}, {kGreen, kYellow}}};
+  std::vector<vkc::Buffer> sources;
+  std::array<vg::ImageCopy, 2> tiles{};
+  for (uint32_t t = 0; t < 2; ++t) {
+    vkc::BufferDesc desc;
+    desc.size = sizeof(columns[t]);
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.memory = vkc::MemoryUsage::Staging;
+    auto source = allocator_->create_buffer(desc);
+    ASSERT_TRUE(source.ok()) << source.status().message();
+    std::memcpy(source.value().mapped(), columns[t].data(), desc.size);
+    sources.push_back(std::move(source).value());
+  }
+  for (uint32_t t = 0; t < 2; ++t) {
+    tiles[t].source = &sources[t];
+    tiles[t].region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    tiles[t].region.imageOffset = {static_cast<int32_t>(t), 0, 0};
+    tiles[t].region.imageExtent = {1, kSide, 1};
+  }
+
+  Frame* frame = begin_frame(1);
+  ASSERT_NE(frame, nullptr);
+  const vkc::Status updated =
+      atlas.value().record_update(frame->cmd.handle(), 1, tiles.data(), 2);
+  EXPECT_TRUE(updated.ok()) << updated.message();
+  draw(*frame, atlas.value().use(1));
+  submit(*frame);
+  EXPECT_EQ(drawn(*frame), (Picture{kRed, kGreen, kBlue, kYellow}));
+
+  // A refused update leaves the picture as it was: a tile with no buffer.
+  Frame* refused = begin_frame(2);
+  ASSERT_NE(refused, nullptr);
+  tiles[1].source = nullptr;
+  EXPECT_EQ(atlas.value()
+                .record_update(refused->cmd.handle(), 2, tiles.data(), 2)
+                .domain(),
+            vkc::Status::Code::InvalidArgument);
+  draw(*refused, atlas.value().use(2));
+  submit(*refused);
+  EXPECT_EQ(drawn(*refused), (Picture{kRed, kGreen, kBlue, kYellow}));
+}
+
 // The ring's promise: while frames 1-3 are held in flight, each drawing its
 // own picture, frame 4's update finds every image in use. It waits for frame
 // 1 -- the oldest -- and only then takes frame 1's image, so every frame still
