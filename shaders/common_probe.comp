@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#version 450
+
+// A test probe (shader_common_test): runs the helpers in shaders/common/ on
+// the device, one invocation per input, for the host to check against its
+// reference implementations.
+
+#extension GL_GOOGLE_include_directive : require
+#include "common/fullscreen_triangle.glsl"
+#include "common/srgb.glsl"
+#include "common/tonemap.glsl"
+
+layout(local_size_x = 64) in;
+
+// Three values per input, one in each of .xyz, so every channel is exercised.
+layout(set = 0, binding = 0) readonly buffer Inputs {
+  vec4 inputs[];
+};
+
+// Mirrors Outputs in shader_common_test.cpp (std430, 80 bytes).
+struct Outputs {
+  vec4 decoded;          // srgb_to_linear(input)
+  vec4 encoded;          // linear_to_srgb(input)
+  vec4 encoded_decoded;  // linear_to_srgb(srgb_to_linear(input))
+  vec4 decoded_encoded;  // srgb_to_linear(linear_to_srgb(input))
+  vec4 tonemapped;       // tonemap_aces(input)
+};
+
+layout(set = 0, binding = 1) writeonly buffer Results {
+  Outputs results[];
+};
+
+// fullscreen_triangle_ndc(0), (1) and (2), from the first three invocations.
+layout(set = 0, binding = 2) writeonly buffer Corners {
+  vec2 corners[3];
+};
+
+layout(push_constant) uniform Push {
+  uint count;  // inputs
+}
+pc;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i < 3u) {
+    corners[i] = fullscreen_triangle_ndc(int(i));
+  }
+  if (i >= pc.count) {
+    return;
+  }
+  vec3 v = inputs[i].xyz;
+  results[i].decoded = vec4(srgb_to_linear(v), 0.0);
+  results[i].encoded = vec4(linear_to_srgb(v), 0.0);
+  results[i].encoded_decoded = vec4(linear_to_srgb(srgb_to_linear(v)), 0.0);
+  results[i].decoded_encoded = vec4(srgb_to_linear(linear_to_srgb(v)), 0.0);
+  results[i].tonemapped = vec4(tonemap_aces(v), 0.0);
+}

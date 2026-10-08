@@ -59,6 +59,9 @@ what has landed since then. Record amendments when a contract changes.
   `VG_CHECK` and the log sink are the family's shared core's base tier; see the dated entry
   below for the `VkResult` bridge and the stages still to come.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
+  A helper several shaders use (the sRGB curve, the tonemap, the full-screen triangle) is
+  written once in `shaders/common/` and `#include`d, with `shaders/` as the include root;
+  `tests/shader_common_test.cpp` checks each against a reference.
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.
 - **Vulkan via the link-time loader (`Vulkan::Vulkan`), accessed through one internal umbrella
