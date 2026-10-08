@@ -454,10 +454,14 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   `VKC_WITH_VULKAN` yield to a project that made the core available first, and
   FetchContent may find an installed core. *Amended 2026-10-08:* the check is
   the core's `vkc_require_core` (the core's DECISIONS.md, "Consumers pin, and
-  an application declares the core first"): gfx's top-level CMakeLists.txt and
-  its package config refuse a core older than `VG_VKC_MIN_VERSION`, the oldest
-  gfx builds with, or one without the vulkan tier, naming where the core came
-  from and how to fix it.
+  an application declares the core first"). On a core older than
+  `VG_VKC_MIN_VERSION`, the oldest gfx builds with, or one without the vulkan
+  tier, gfx's top-level CMakeLists.txt fails the configure, and its package
+  config reports `volumetric_kit_gfx` not found (`PACKAGE`), so a consumer
+  that can do without gfx carries on. Either way the message names where the
+  core came from and how to fix it. A core older than 0.1.0 has no
+  `vkc_require_core`, so the configure stops at gfx's call as an unknown
+  command (the core's README, "Use it in your project").
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
   and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one

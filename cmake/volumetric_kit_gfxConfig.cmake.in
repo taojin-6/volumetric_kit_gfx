@@ -16,8 +16,9 @@ include(CMakeFindDependencyMacro)
 find_dependency(volumetric_kit_core @VG_VKC_MAJOR_MINOR@ CONFIG HINTS
                 "${PACKAGE_PREFIX_DIR}")
 # A core found on CMAKE_PREFIX_PATH may predate the one gfx builds with, or lack
-# the vulkan tier.
-vkc_require_core(@VG_VKC_MIN_VERSION@ VULKAN)
+# the vulkan tier; then this package is not found, saying why, as a failed
+# find_dependency leaves it.
+vkc_require_core(@VG_VKC_MIN_VERSION@ VULKAN PACKAGE volumetric_kit_gfx)
 find_dependency(Vulkan)
 
 # Threads is a PRIVATE dependency of gfx_pipelines (the IBL bake's std::async),

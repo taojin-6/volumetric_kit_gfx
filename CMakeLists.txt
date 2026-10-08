@@ -90,15 +90,16 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin is the head of core PR #20 (0.1.0 and vkc_require_core), which builds
-# on #17 (core_test_support, which gfx's tests link) and #19.
+# The pin is the head of core PR #21 (vkc_require_core's PACKAGE, which gfx's
+# package config calls), stacked on #20 (0.1.0 and vkc_require_core), which
+# builds on #17 (core_test_support, which gfx's tests link) and #19.
 #
 # TODO: re-pin to the core's v0.1.0 tag once it is tagged.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG d02a2d20ccd245521b536c9bf41b31d3c0f3cb8f)
+  GIT_TAG d0c770fada66c9c57b1217fde18dcfcccff5bd92)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the

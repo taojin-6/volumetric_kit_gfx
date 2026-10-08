@@ -11,7 +11,9 @@
 # available first, with VKC_WITH_VULKAN as given, so gfx's pin yields to it, and
 # gfx is not the top-level project, so its examples, tests, install rules and
 # -Werror must stay off. -DVG_CONSUMER_CORE_VERSION=<version> stamps that
-# version on the core, standing in for a core older than it is.
+# version on the core, standing in for a core older than it is. The second finds
+# gfx REQUIRED, or with -DVG_CONSUMER_OPTIONAL=ON QUIET, saying why when it is
+# not found.
 cmake_minimum_required(VERSION 3.21)
 project(vg_consumer LANGUAGES CXX)
 
@@ -21,9 +23,19 @@ set(VG_CONSUME
 set(VG_CONSUMER_CORE_VERSION
     ""
     CACHE STRING "A version to stamp on the core (subdirectory only)")
+option(VG_CONSUMER_OPTIONAL "Find gfx QUIET, not REQUIRED (find_package only)"
+       OFF)
 
 if(VG_CONSUME STREQUAL "find_package")
-  find_package(volumetric_kit_gfx REQUIRED CONFIG)
+  if(VG_CONSUMER_OPTIONAL)
+    find_package(volumetric_kit_gfx CONFIG QUIET)
+    if(NOT volumetric_kit_gfx_FOUND)
+      message(STATUS "volumetric_kit_gfx not found: "
+                     "${volumetric_kit_gfx_NOT_FOUND_MESSAGE}")
+    endif()
+  else()
+    find_package(volumetric_kit_gfx REQUIRED CONFIG)
+  endif()
 elseif(VG_CONSUME STREQUAL "subdirectory")
   include(FetchContent)
   FetchContent_Declare(volumetric_kit_core SOURCE_DIR "${VKC_SOURCE_DIR}")
