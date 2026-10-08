@@ -47,6 +47,19 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **labels record through the core's device, and queue labels take
+  the queue's mutex.** `QueueLabelScope` labelled the queue without
+  `Device::submit_mutex`, racing any submit on another thread or from another
+  library sharing the queue. Migrating:
+  - `DebugLabelScope(cmd, table, name, color)` →
+    `DebugLabelScope(device, cmd, name)`; `name` must outlive the scope.
+  - `QueueLabelScope(queue, table, name, color)` →
+    `QueueLabelScope(device, name)`, labelling `device.queue()`. Do not open
+    or close one while holding `device.submit_mutex()`.
+  - `vg::set_object_name(vk_device, table, type, handle, name)` →
+    `device.set_object_name(type, handle, name)`.
+  - `vg::debug_utils` and `DebugUtilsTable` are gone, and labels take no
+    color; `device.debug_labels_available()` says whether labels emit.
 - `core`: **gfx writes the core's names; its re-exports of them are gone.**
   gfx's API names volumetric_kit_core's types and macros as the core does,
   so the `vg::` names for them and the `VG_*` macros are removed. Migrating:
@@ -58,7 +71,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
     `DeviceSupport`, `merge`, `check_device_support`, `LogLevel`,
     `LogHandler` and `set_log_handler` → `vkc::` (`volumetric_kit::core::`).
     gfx's own names stay: `vg::device_requirements()`, `vg::log_message`,
-    `vg::kLogSource`, `vg::debug_utils`.
+    `vg::kLogSource`.
   - Headers: `gfx/core/result.hpp` → `core/base/result.hpp` (and
     `core/vulkan/vk_result.hpp` for the `VkResult` bridge and `VKC_VK_TRY`);
     `gfx/core/check.hpp` → `core/base/check.hpp`; `gfx/core/instance.hpp`,
@@ -176,8 +189,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - `Device::graphics_queue()` / `graphics_family()` /
     `graphics_timestamp_valid_bits()` → `queue()` / `queue_family()` /
     `timestamp_valid_bits()`. `command_pool()` is gone: make a `CommandPool` on
-    `queue_family()`, or use `submit_single_time`. `device.debug_utils()` →
-    `vg::debug_utils(device)`, by value; keep it for the device's lifetime.
+    `queue_family()`, or use `submit_single_time`. `device.debug_utils()` is
+    gone: the label scopes take the device (above).
     `PhysicalDeviceInfo::features2()` is gone (`features()` and the
     `supports_*` flags remain).
   - `AdoptedDevice`: `graphics_family` / `graphics_queue` → `queue_family` /

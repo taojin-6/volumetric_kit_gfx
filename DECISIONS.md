@@ -218,9 +218,9 @@ the core's names into `vg::` are gone -- `core/result.hpp`, `check.hpp`,
 `instance.hpp`, `physical_device_info.hpp` and the `vulkan.hpp` forwarder --
 and so are the four macro aliases. What stays under `core/` is gfx's own:
 `device_requirements.hpp` (was `device.hpp`; only `device_requirements()`),
-`log.hpp` (`log_message`, source `"vg"`), `debug_label.hpp` (`debug_utils`
-and the labels), and the renderer's types. gfx declares no `core` namespace of
-its own, so `core::Status` in gfx's namespaces finds `volumetric_kit::core`.
+`log.hpp` (`log_message`, source `"vg"`), `debug_label.hpp` (the label
+scopes), and the renderer's types. gfx declares no `core` namespace of its
+own, so `core::Status` in gfx's namespaces finds `volumetric_kit::core`.
 
 **Why.** The aliases kept gfx's call sites unchanged while it moved onto the
 core, and its open branches merging cleanly. With stages 2a to 2c landed
@@ -231,8 +231,8 @@ with the core's. recon dropped its re-exports the same way (its #167).
 
 **What it costs.** Consumers rename on their next pin bump: the four macros,
 `vg::X` to `vkc::X` for each core name, and the include map in the
-CHANGELOG. gfx's own names (`vg::device_requirements`, `vg::log_message`,
-`vg::debug_utils`) are unchanged. The tests of the core's types under gfx's
+CHANGELOG. gfx's own names (`vg::device_requirements`, `vg::log_message`)
+are unchanged. The tests of the core's types under gfx's
 names (`result_test`, `core_vulkan_tier_test`) are gone with the names; the
 core tests its own, and `swapchain_stale`, the one gfx function the tier test
 covered, moved to `windowing_test`.
@@ -407,10 +407,14 @@ core's names", above).
 - **Debug labels follow the instance.** The core's instance requests
   `VK_EXT_debug_utils` by default, and its device resolves labels when the
   instance enabled it, so the app tier no longer threads a flag through.
-  gfx keeps its `DebugUtilsTable`, as the core's device records neither queue
-  labels nor label colors; `debug_utils(device)` loads it, gated on
-  `Device::debug_labels_available`. A `TODO:` marks taking both from the core
-  if another library needs them.
+  Command-buffer labels and object names are the core's device's
+  (`begin_debug_label`, `end_debug_label`, `set_object_name`): `Profiler` and
+  `DebugLabelScope` record through them, so gfx's labels carry no color. The
+  core's device records no queue labels, so `QueueLabelScope` looks up those
+  two entry points itself, gated on `Device::debug_labels_available`, and
+  calls them holding `Device::submit_mutex`: Vulkan requires the queue be
+  externally synchronized, and another library may share it. A `TODO:` marks
+  taking queue labels from the core.
 - **No shared command pool.** The core's device keeps its pools to itself, so
   `UploadBatch` queues its copies and records them at `finish` through
   `Device::submit_single_time`, on a pool no other submit holds -- which also
