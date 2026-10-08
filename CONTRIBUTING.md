@@ -35,7 +35,8 @@ suite runs on headless machines.
 
 ## Formatting and CI
 
-- The `lint` check (`pre-commit run --all-files`) and the per-platform builds are
+- The `lint` check (`pre-commit run --all-files`, then volumetric_kit_core's
+  `check_fork_guards.py` on `.github/workflows`) and the per-platform builds are
   **required** to merge: a red `lint` blocks the PR regardless of local setup, so
   CI — not the local hook — is the real guarantee.
 - [pre-commit.ci](https://pre-commit.ci) runs the same hooks on every PR and
@@ -43,6 +44,17 @@ suite runs on headless machines.
   the local `pre-commit install`.
 - clang-format is pinned (see `.pre-commit-config.yaml`) so local and CI
   formatting are byte-identical; don't reformat with a different version.
+
+## Pull requests from forks
+
+A pull request from a fork runs none of the `ci` workflow's jobs, and
+`ci / required` fails it; to test one, a maintainer pushes its branch to this
+repository and opens a pull request from there. The workflows skip the jobs
+with `if:` guards, which a fork's own pull request can edit, so they are not
+the boundary: the first gate is the repository's approval setting for fork pull
+requests (Settings → Actions → General, *Require approval for all external
+contributors*), and the backstop is the hook each self-hosted runner runs
+before a job, which refuses a fork's job on the host.
 
 ## Commits
 

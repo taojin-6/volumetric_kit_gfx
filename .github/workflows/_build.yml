@@ -38,6 +38,8 @@ on:
 
 jobs:
   build:
+    # Skipped for a fork's pull request, as is every job ci.yml reaches.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ inputs.runner != '' && inputs.runner || inputs.os }}
     # Render the container JSON to a map only when one was requested; macOS and
     # any hosted leg pass '' and run directly on the runner. `&&` short-circuits,
