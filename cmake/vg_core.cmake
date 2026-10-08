@@ -8,8 +8,9 @@
 # gfx's pin and its VKC_WITH_VULKAN yield to a project that made the core
 # available first, and FetchContent may have found an installed core instead, so
 # this checks what arrived rather than trusting the request. The core's version
-# does not advance between commits, so <pin> is recognized by the newest header
-# gfx includes from it, volumetric_kit/core/vulkan/format.hpp.
+# does not advance between commits, so <pin> is recognized by the newest
+# declaration gfx uses from it, core::TimelinePoint in
+# volumetric_kit/core/vulkan/sync.hpp.
 function(vg_require_core_vulkan pin)
   get_target_property(_imported volumetric_kit::core_base IMPORTED)
   if(_imported)
@@ -53,13 +54,17 @@ function(vg_require_core_vulkan pin)
   string(REGEX REPLACE "\\$<BUILD_INTERFACE:([^>;]*)>" "\\1" _dirs "${_dirs}")
   list(FILTER _dirs EXCLUDE REGEX "^\\$<")
   foreach(_dir IN LISTS _dirs)
-    if(EXISTS "${_dir}/volumetric_kit/core/vulkan/format.hpp")
-      return()
+    set(_sync "${_dir}/volumetric_kit/core/vulkan/sync.hpp")
+    if(EXISTS "${_sync}")
+      file(STRINGS "${_sync}" _declares REGEX "^struct TimelinePoint")
+      if(_declares)
+        return()
+      endif()
     endif()
   endforeach()
   message(
     FATAL_ERROR
       "gfx needs volumetric_kit_core at ${pin} or newer, and ${_origin} is "
-      "older (it has no volumetric_kit/core/vulkan/format.hpp): use a core at "
-      "or after that commit.")
+      "older (its volumetric_kit/core/vulkan/sync.hpp declares no "
+      "TimelinePoint): use a core at or after that commit.")
 endfunction()

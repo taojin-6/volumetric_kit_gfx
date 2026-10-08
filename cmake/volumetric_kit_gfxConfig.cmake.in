@@ -16,19 +16,24 @@ include(CMakeFindDependencyMacro)
 find_dependency(volumetric_kit_core @VG_VKC_MAJOR_MINOR@ CONFIG HINTS
                 "${PACKAGE_PREFIX_DIR}")
 # The core's version does not advance between commits, so a core found on
-# CMAKE_PREFIX_PATH may lack the vulkan tier, or predate the format helpers
-# gfx's libraries call (format.hpp, the newest header gfx needs from it).
-set(_vg_vkc_format_found FALSE)
+# CMAKE_PREFIX_PATH may lack the vulkan tier, or predate the timeline values
+# gfx's frame loop names (core::TimelinePoint in sync.hpp, the newest
+# declaration gfx needs from it).
+set(_vg_vkc_found FALSE)
 if(TARGET volumetric_kit::core_vulkan)
   get_target_property(_vg_vkc_includes volumetric_kit::core_vulkan
                       INTERFACE_INCLUDE_DIRECTORIES)
   foreach(_vg_dir IN LISTS _vg_vkc_includes)
-    if(EXISTS "${_vg_dir}/volumetric_kit/core/vulkan/format.hpp")
-      set(_vg_vkc_format_found TRUE)
+    set(_vg_sync "${_vg_dir}/volumetric_kit/core/vulkan/sync.hpp")
+    if(EXISTS "${_vg_sync}")
+      file(STRINGS "${_vg_sync}" _vg_declares REGEX "^struct TimelinePoint")
+      if(_vg_declares)
+        set(_vg_vkc_found TRUE)
+      endif()
     endif()
   endforeach()
 endif()
-if(NOT _vg_vkc_format_found)
+if(NOT _vg_vkc_found)
   set(volumetric_kit_gfx_FOUND FALSE)
   string(
     CONCAT volumetric_kit_gfx_NOT_FOUND_MESSAGE
