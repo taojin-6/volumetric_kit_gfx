@@ -3,17 +3,16 @@
 
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 
-#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "upload_steps.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
-#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/mip_chain.hpp"
 
 namespace volumetric_kit::gfx {
@@ -93,22 +92,6 @@ BufferConsumeScope buffer_consume_scope(VkBufferUsageFlags usage) {
     scope.access |= VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
   }
   return scope;
-}
-
-// A staging buffer -- host memory, mapped -- holding @p size bytes copied from
-// @p src, written once front-to-back (write-combined where the device has it)
-// -- the single recipe both add() (pixels) and add_buffer() (bytes) stage their
-// source through.
-core::Result<core::Buffer> make_staging(core::Allocator& allocator,
-                                        const void* src, VkDeviceSize size) {
-  core::BufferDesc desc;
-  desc.size = size;
-  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = core::MemoryUsage::Staging;
-  desc.host_access = core::HostAccess::SequentialWrite;
-  VKC_ASSIGN(core::Buffer staging, allocator.create_buffer(desc));
-  std::memcpy(staging.mapped(), src, size);
-  return staging;
 }
 
 // What plan_upload derives from a validated ImageUploadDesc.
@@ -242,20 +225,11 @@ core::Status plan_upload(const core::Device& device,
 // asked, and leave the whole image in SHADER_READ_ONLY_OPTIMAL.
 void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
                    const ImageUploadDesc& desc, const UploadPlan& plan) {
-  // 1. Every (mip, layer) UNDEFINED -> TRANSFER_DST for the copy and blit
-  //    writes; the ImageBarrierDesc defaults span the whole image.
-  ImageBarrierDesc to_dst;
-  to_dst.image = image;
-  to_dst.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-  to_dst.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_dst.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_dst.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_dst.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  cmd_image_barrier(cmd, to_dst);
-
-  // 2. Copy the supplied pixels: one region per mip level spanning all layers
+  // 1. Copy the supplied pixels: one region per mip level spanning all layers
   //    at once -- the mip-major packing keeps a mip's layers contiguous, and
-  //    bufferRowLength/bufferImageHeight of 0 mean tightly packed.
+  //    bufferRowLength/bufferImageHeight of 0 mean tightly packed. Every
+  //    (mip, layer) goes to TRANSFER_DST for the copy and blit writes; the
+  //    image is new, so nothing earlier reads it.
   std::vector<VkBufferImageCopy> copies(desc.mip_levels);
   VkDeviceSize offset = 0;
   for (uint32_t m = 0; m < desc.mip_levels; ++m) {
@@ -266,11 +240,10 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
     copies[m].imageExtent = {e.width, e.height, 1};
     offset += VkDeviceSize{e.width} * e.height * plan.texel * desc.array_layers;
   }
-  vkCmdCopyBufferToImage(cmd, staging, image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, desc.mip_levels,
-                         copies.data());
+  detail::record_copies_to_image(cmd, staging, image, 0, copies.data(),
+                                 desc.mip_levels);
 
-  // 3. Mip generation (validated single-layer, single-source-mip): blit the
+  // 2. Mip generation (validated single-layer, single-source-mip): blit the
   //    chain down from the copied mip 0; every level ends in SHADER_READ.
   if (desc.generate_mips && plan.image_mips > 1) {
     MipChainDesc mips;
@@ -282,17 +255,9 @@ void record_upload(VkCommandBuffer cmd, VkImage image, VkBuffer staging,
     return;
   }
 
-  // 4. No generation: every level holds its supplied pixels and is still
+  // 3. No generation: every level holds its supplied pixels and is still
   //    TRANSFER_DST -- move the whole image to SHADER_READ in one barrier.
-  ImageBarrierDesc to_read;
-  to_read.image = image;
-  to_read.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_read.dst_stage = kSampleStages;
-  to_read.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_read.dst_access = VK_ACCESS_SHADER_READ_BIT;
-  to_read.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  to_read.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  cmd_image_barrier(cmd, to_read);
+  detail::record_copied_to_shader_read(cmd, image, kSampleStages);
 }
 
 }  // namespace
@@ -354,7 +319,7 @@ core::Result<core::Image> UploadBatch::add(const ImageUploadDesc& desc) {
   VKC_TRY(plan_upload(*device_, desc, &plan));
 
   VKC_ASSIGN(core::Buffer staging,
-             make_staging(*allocator_, desc.pixels, desc.size));
+             detail::make_staging(*allocator_, desc.pixels, desc.size));
 
   // Destination: device-local sampled image. SAMPLED to read it in shaders,
   // TRANSFER_DST for the staging copy, and TRANSFER_SRC so the mip-chain blits
@@ -407,7 +372,7 @@ core::Result<core::Buffer> UploadBatch::add_buffer(
   }
 
   VKC_ASSIGN(core::Buffer staging,
-             make_staging(*allocator_, desc.data, desc.size));
+             detail::make_staging(*allocator_, desc.data, desc.size));
 
   // Destination: device-only memory, TRANSFER_DST for the staging copy plus
   // the caller's usage.

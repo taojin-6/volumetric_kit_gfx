@@ -75,8 +75,7 @@ void PbrPipeline::submit(VkCommandBuffer cmd, const PbrFrame& frame) const {
   // model.frag reads set 0 (camera position + the three IBL maps) in main()
   // with no branch, so a *valid* scene set must be bound for any draw to be
   // legal. Drop the whole frame when there is none rather than recording draws
-  // against an unbound or VK_NULL_HANDLE set -- matching HybridMeshPipeline's
-  // missing-atlas handling above. Three ways to get here:
+  // against an unbound or VK_NULL_HANDLE set. Three ways to get here:
   //   - no pipeline (default-constructed or moved-from);
   //   - no scene at all;
   //   - a slot past the scene's UBO ring. PbrScene::create defaults

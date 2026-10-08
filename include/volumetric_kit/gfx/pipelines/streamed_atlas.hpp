@@ -71,6 +71,9 @@ struct StreamedAtlasDesc {
 /// frame but a host upload's staging buffer, which an internal
 /// @ref RetireQueue frees once the frame completes.
 ///
+/// A frame that never reaches the queue is given back with @ref discard;
+/// otherwise the next frames bind a picture whose update never ran.
+///
 /// A mesh's `uv0` index into one picture, so commit a mesh and its picture in
 /// the same frame: record the update in the frame that first draws the mesh.
 /// An atlas is used from one thread at a time.
@@ -93,6 +96,11 @@ struct StreamedAtlasDesc {
 /// // inside it:
 /// frame.atlas = atlas.use(f.number);
 /// pipeline.submit(f.cmd, frame);
+/// // after it:
+/// core::Status end = loop.end_frame(f);
+/// if (!end.ok() && !windowing::swapchain_stale(end)) {
+///   atlas.discard(f.number);  // the frame may not have reached the queue
+/// }
 /// @endcode
 class VG_PIPELINES_API StreamedAtlas {
  public:
@@ -177,6 +185,24 @@ class VG_PIPELINES_API StreamedAtlas {
   ///         then draws in vertex color.
   VkDescriptorSet use(std::uint64_t frame);
 
+  /// @brief Undo what frame @p frame gave the atlas -- its updates and
+  ///        @ref use -- for a frame whose commands may not have run: the
+  ///        picture its first update replaced is current again.
+  ///
+  /// Call it when a frame fails to reach the queue: after
+  /// `windowing::FrameLoop::end_frame` returns an error that
+  /// `windowing::swapchain_stale` does not classify, or after dropping a frame
+  /// you submit yourself; and before giving the atlas a later frame. Whether
+  /// the frame, or a submission in its place, reached a queue is read from the
+  /// core's record of submitted timeline values, as for an update's wait. If
+  /// one did, the frame's commands may have run -- its present failed -- so
+  /// the images it used stay in use until the timeline reaches @p frame;
+  /// otherwise they are free at once.
+  /// @param frame  The frame's number: the newest given to the atlas, or a
+  ///               later one, which gave it nothing to undo (checked with
+  ///               `VKC_CHECK`).
+  void discard(std::uint64_t frame);
+
   /// @return The current picture -- its image, in `SHADER_READ_ONLY_OPTIMAL`
   ///         once its update has run -- or `nullptr` before the first update.
   const core::Image* picture() const noexcept;
@@ -205,6 +231,17 @@ class VG_PIPELINES_API StreamedAtlas {
     std::uint64_t last_use = 0;
   };
 
+  // One change the newest frame made, which discard() reverts: a slot's
+  // last_use and, for an update, the picture it replaced and the image's
+  // layout before it.
+  struct Undo {
+    std::uint32_t slot = 0;
+    std::uint64_t last_use = 0;
+    bool update = false;
+    std::uint32_t current = kNoPicture;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  };
+
   // Checks `frame` for an update, and returns the slot it copies into: the
   // least recently used, the current picture last, once its last frame has
   // completed -- waiting for that frame when it is an earlier one.
@@ -212,8 +249,14 @@ class VG_PIPELINES_API StreamedAtlas {
   // OK when the timeline has reached `frame` or a submission that sets it
   // has reached a queue, so that a wait for it returns.
   core::Status check_submitted(std::uint64_t frame, const char* call) const;
-  // Makes `slot` the current picture, written by frame `frame`.
-  void publish(std::uint32_t slot, std::uint64_t frame);
+  // Makes `slot` the current picture, written by frame `frame`; `undo` holds
+  // the slot's state from before the update.
+  void publish(std::uint32_t slot, std::uint64_t frame, Undo undo);
+  // The state an update of `slot` changes, as it is now.
+  Undo before_update(std::uint32_t slot) const;
+  // Makes `frame` the newest frame given, starting its undo log when it is
+  // newer than the last. `frame` is at least newest_.
+  void enter(std::uint64_t frame);
   // Waits for the newest frame given, then frees everything.
   void destroy() noexcept;
 
@@ -228,6 +271,8 @@ class VG_PIPELINES_API StreamedAtlas {
   std::uint32_t current_ = kNoPicture;
   // The newest frame number given to the atlas (0 for none).
   std::uint64_t newest_ = 0;
+  // What frame newest_ changed, oldest first.
+  std::vector<Undo> undo_;
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

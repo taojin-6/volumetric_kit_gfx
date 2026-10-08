@@ -60,8 +60,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `StreamedAtlas` (`pipelines/streamed_atlas.hpp`), the atlas a
   live `HybridMeshPipeline` mesh samples: a ring of images reused by frame
   number, updated by copies recorded into the frame -- tiles from device
-  buffers (`record_update`) or host pixels (`record_upload`) -- and bound with
-  `use(frame.number)`.
+  buffers (`record_update`) or host pixels (`record_upload`) -- bound with
+  `use(frame.number)`, and given back with `discard(frame.number)` for a frame
+  that never reaches the queue.
 - `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
   color, the atlas bound or not.
 

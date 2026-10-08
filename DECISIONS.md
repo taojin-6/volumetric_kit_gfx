@@ -114,24 +114,26 @@ what has landed since then. Record amendments when a contract changes.
 **The contract.** `HybridMeshPipeline::create` now takes the device and an
 allocator and builds a fallback atlas -- one texel, its set and a sampler.
 `submit` binds it for a frame whose `atlas` is null and sets
-`kHybridMeshVertexColor`, so every triangle draws in its vertex color; a null
-atlas used to drop the frame. `pipelines::StreamedAtlas` is the atlas a live
-mesh samples: a ring of images, each with a set written once. A frame binds
-`use(frame.number)`, the newest picture's set, which marks that image used by
-the frame. An update -- tiles from device buffers (`record_update`) or host
-pixels (`record_upload`) -- is recorded into a frame's command buffer and
-copies into the least recently used image whose last frame the timeline has
-reached; that image becomes the picture. The copy and its transitions are the
-core tier's `record_image_update`, and `record_image_upload` stages host pixels
+`kHybridMeshVertexColor`, so every triangle draws in its vertex color.
+`pipelines::StreamedAtlas` is the atlas a live mesh samples: a ring of images,
+each with a set written once. A frame binds `use(frame.number)`, the newest
+picture's set, which marks that image used by the frame. An update -- tiles
+from device buffers (`record_update`) or host pixels (`record_upload`) -- is
+recorded into a frame's command buffer and copies into the least recently used
+image whose last frame the timeline has reached; that image becomes the
+picture. A frame that never reaches the queue is given back with
+`discard(frame.number)`, which makes the picture its update replaced current
+again: the atlas cannot tell a frame whose commands ran from one whose number
+the frame loop's stand-in submit set. The copy and its transitions are the core
+tier's `record_image_update`, and `record_image_upload` stages host pixels
 through a buffer a `RetireQueue` frees at the frame's number: gfx's one
 in-frame image update, beside the blocking `upload_texture` for load time.
 
 **Why the pipeline owns the fallback.** The shader samples set 0
-unconditionally, so every consumer kept a 1x1 set of its own, and one that
-bound none drew nothing, with no error. Vertex color, not the fallback's
-texel, is what a frame without an atlas shows: every reconstruction vertex
-carries a fused color, while one texel would paint each textured triangle a
-flat color that passes for a texture.
+unconditionally, so the pipeline owns the one fallback rather than each
+consumer. Vertex color, not the fallback's texel, is what a frame without an
+atlas shows: every reconstruction vertex carries a fused color, while one texel
+would paint each textured triangle a flat color that passes for a texture.
 
 **Why a ring, when `ImageTexture` needs none.** An `ImageTexture` update
 waits on the GPU for every earlier fragment read on the queue. An atlas image

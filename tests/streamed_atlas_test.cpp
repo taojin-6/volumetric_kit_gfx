@@ -149,6 +149,7 @@ TEST(StreamedAtlasEmptyTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(atlas.extent().width, 0u);
   EXPECT_EQ(atlas.format(), VK_FORMAT_UNDEFINED);
   EXPECT_EQ(atlas.use(1), VK_NULL_HANDLE);
+  atlas.discard(1);  // nothing to undo
   const Picture picture = solid(kRed);
   const vkc::Status refused =
       atlas.record_upload(VK_NULL_HANDLE, 1, picture.data(), sizeof(picture));
@@ -278,6 +279,19 @@ class StreamedAtlasTest : public VulkanDeviceTest {
   void submit(Frame& frame, bool gated = false) {
     ASSERT_TRUE(frame.cmd.end().ok());
     const VkCommandBuffer cmd = frame.cmd.handle();
+    queue(frame.number, &cmd, gated);
+  }
+
+  // Submit nothing in the frame's place, setting its number, as
+  // windowing::FrameLoop::end_frame does for a frame that fails before its
+  // submit: the frame's commands never run.
+  void submit_in_place_of(const Frame& frame) {
+    queue(frame.number, nullptr, false);
+  }
+
+  // Submit `cmd` (or nothing), setting `number` on the timeline, and record
+  // that the submission reached the queue.
+  void queue(uint64_t number, const VkCommandBuffer* cmd, bool gated) {
     const uint64_t open = 1;
     const VkSemaphore gate = gate_->handle();
     const VkPipelineStageFlags held = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
@@ -287,19 +301,19 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     values.waitSemaphoreValueCount = gated ? 1 : 0;
     values.pWaitSemaphoreValues = &open;
     values.signalSemaphoreValueCount = 1;
-    values.pSignalSemaphoreValues = &frame.number;
+    values.pSignalSemaphoreValues = &number;
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.pNext = &values;
     submit.waitSemaphoreCount = gated ? 1 : 0;
     submit.pWaitSemaphores = &gate;
     submit.pWaitDstStageMask = &held;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &cmd;
+    submit.commandBufferCount = cmd != nullptr ? 1 : 0;
+    submit.pCommandBuffers = cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &timeline;
     ASSERT_EQ(device_->queue_submit(1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
-    vkc::note_timeline_signals({{&*timeline_, frame.number}});
+    vkc::note_timeline_signals({{&*timeline_, number}});
   }
 
   // What the frame drew, once it completed.
@@ -597,6 +611,96 @@ TEST_F(StreamedAtlasTest, NeverWaitsForAFrameThatWasNotSubmitted) {
   atlas.reset();  // returns: frame 1 is not waited for
 }
 
+// A frame whose commands never run -- an empty submit sets its number in its
+// place, as the frame loop's does -- is discarded, and the picture its update
+// replaced is current again: the next frame draws it, not an image nothing
+// wrote.
+TEST_F(StreamedAtlasTest, DiscardRestoresThePictureADroppedFrameReplaced) {
+  auto atlas = make_atlas(3);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+  Frame* one = upload_and_draw(atlas.value(), 1, solid(kRed));
+  ASSERT_NE(one, nullptr);
+  const VkImage red = atlas.value().picture()->handle();
+
+  Frame* two = begin_frame(2);
+  ASSERT_NE(two, nullptr);
+  const Picture green = solid(kGreen);
+  EXPECT_TRUE(
+      atlas.value()
+          .record_upload(two->cmd.handle(), 2, green.data(), sizeof(green))
+          .ok());
+  draw(*two, atlas.value().use(2));
+  submit_in_place_of(*two);
+  atlas.value().discard(2);
+  ASSERT_TRUE(atlas.value().has_picture());
+  EXPECT_EQ(atlas.value().picture()->handle(), red);
+  EXPECT_EQ(atlas.value().picture()->layout(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  Frame* three = begin_frame(3);
+  ASSERT_NE(three, nullptr);
+  draw(*three, atlas.value().use(3));
+  submit(*three);
+  EXPECT_EQ(drawn(*one), solid(kRed));
+  EXPECT_EQ(drawn(*three), solid(kRed));
+}
+
+// A frame that never reaches a queue frees what it used at once: with one
+// image, the next frame's update takes it without waiting for a frame nothing
+// will submit, and the image keeps the layout frame 1 left it in.
+TEST_F(StreamedAtlasTest, DiscardFreesTheImagesOfAFrameThatNeverRuns) {
+  auto atlas = make_atlas(1);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+  Frame* one = upload_and_draw(atlas.value(), 1, solid(kRed));
+  ASSERT_NE(one, nullptr);
+  EXPECT_EQ(drawn(*one), solid(kRed));
+
+  Frame* dropped = begin_frame(2);
+  ASSERT_NE(dropped, nullptr);
+  const Picture green = solid(kGreen);
+  EXPECT_TRUE(
+      atlas.value()
+          .record_upload(dropped->cmd.handle(), 2, green.data(), sizeof(green))
+          .ok());
+  draw(*dropped, atlas.value().use(2));
+  // Frame 2 is never submitted.
+  atlas.value().discard(2);
+  ASSERT_TRUE(atlas.value().has_picture());
+  EXPECT_EQ(atlas.value().picture()->layout(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  Frame* three = upload_and_draw(atlas.value(), 3, solid(kBlue));
+  ASSERT_NE(three, nullptr);
+  EXPECT_EQ(drawn(*three), solid(kBlue));
+}
+
+// A discarded frame that did reach the queue -- its present failed -- may
+// still be drawing: the image it updated is not reused until it completes.
+TEST_F(StreamedAtlasTest, DiscardKeepsTheImagesOfAFrameThatReachedTheQueue) {
+  auto atlas = make_atlas(2);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+  OpenGateAtExit open_at_exit(*gate_);
+  Frame* one = upload_and_draw(atlas.value(), 1, solid(kRed));
+  ASSERT_NE(one, nullptr);
+  EXPECT_EQ(drawn(*one), solid(kRed));
+  const VkImage red = atlas.value().picture()->handle();
+
+  Frame* two = upload_and_draw(atlas.value(), 2, solid(kGreen), true);
+  ASSERT_NE(two, nullptr);
+  const VkImage green = atlas.value().picture()->handle();
+  atlas.value().discard(2);
+  EXPECT_EQ(atlas.value().picture()->handle(), red);
+
+  // Frame 2 is held, drawing green: frame 3's update takes frame 1's image.
+  Frame* three = upload_and_draw(atlas.value(), 3, solid(kBlue));
+  ASSERT_NE(three, nullptr);
+  EXPECT_EQ(atlas.value().picture()->handle(), red);
+  EXPECT_NE(atlas.value().picture()->handle(), green);
+  open_gate(*gate_);
+  EXPECT_EQ(drawn(*two), solid(kGreen));
+  EXPECT_EQ(drawn(*three), solid(kBlue));
+}
+
 // Destroying an atlas waits for the newest frame that used it, so a frame
 // held in flight still draws from live images.
 TEST_F(StreamedAtlasTest, DestructionWaitsForTheNewestFrame) {
@@ -639,8 +743,12 @@ TEST_F(StreamedAtlasTest, MoveConstructLeavesTheSourceEmpty) {
   EXPECT_EQ(source.extent().width, 0u);
   EXPECT_EQ(source.format(), VK_FORMAT_UNDEFINED);
   EXPECT_EQ(source.use(2), VK_NULL_HANDLE);
+  source.discard(1);  // nothing to undo
   // NOLINTEND(bugprone-use-after-move)
   EXPECT_EQ(drawn(*frame), solid(kRed));
+  // What frame 1 gave the atlas moved with it.
+  moved.discard(1);
+  EXPECT_FALSE(moved.has_picture());
 }
 
 // Move-assigning over a live atlas waits for the frames that used it, frees

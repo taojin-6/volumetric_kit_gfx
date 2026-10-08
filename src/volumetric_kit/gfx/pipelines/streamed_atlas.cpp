@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
-#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -112,7 +111,8 @@ StreamedAtlas::StreamedAtlas(StreamedAtlas&& other) noexcept
       slots_(std::move(other.slots_)),
       retire_(std::move(other.retire_)),
       current_(other.current_),
-      newest_(other.newest_) {
+      newest_(other.newest_),
+      undo_(std::move(other.undo_)) {
   other.device_ = nullptr;
   other.timeline_ = nullptr;
   other.allocator_ = nullptr;
@@ -121,6 +121,7 @@ StreamedAtlas::StreamedAtlas(StreamedAtlas&& other) noexcept
   other.retire_.reset();
   other.current_ = kNoPicture;
   other.newest_ = 0;
+  other.undo_.clear();
 }
 
 StreamedAtlas& StreamedAtlas::operator=(StreamedAtlas&& other) noexcept {
@@ -135,6 +136,7 @@ StreamedAtlas& StreamedAtlas::operator=(StreamedAtlas&& other) noexcept {
     retire_ = std::move(other.retire_);
     current_ = other.current_;
     newest_ = other.newest_;
+    undo_ = std::move(other.undo_);
     other.device_ = nullptr;
     other.timeline_ = nullptr;
     other.allocator_ = nullptr;
@@ -143,6 +145,7 @@ StreamedAtlas& StreamedAtlas::operator=(StreamedAtlas&& other) noexcept {
     other.retire_.reset();
     other.current_ = kNoPicture;
     other.newest_ = 0;
+    other.undo_.clear();
   }
   return *this;
 }
@@ -154,10 +157,11 @@ core::Status StreamedAtlas::record_update(VkCommandBuffer cmd,
                                           std::uint32_t region_count) {
   constexpr const char* kCall = "StreamedAtlas::record_update";
   VKC_ASSIGN(const std::uint32_t slot, take_slot(kCall, frame));
+  const Undo undo = before_update(slot);
   VKC_TRY(record_image_update(cmd, source, slots_[slot].image, regions,
                               region_count, kUpdateScope)
               .with_context(kCall));
-  publish(slot, frame);
+  publish(slot, frame, undo);
   return core::Status{};
 }
 
@@ -167,11 +171,12 @@ core::Status StreamedAtlas::record_upload(VkCommandBuffer cmd,
                                           VkDeviceSize size) {
   constexpr const char* kCall = "StreamedAtlas::record_upload";
   VKC_ASSIGN(const std::uint32_t slot, take_slot(kCall, frame));
+  const Undo undo = before_update(slot);
   retire_->poll();
   VKC_TRY(record_image_upload(cmd, *allocator_, *retire_, frame,
                               slots_[slot].image, pixels, size, kUpdateScope)
               .with_context(kCall));
-  publish(slot, frame);
+  publish(slot, frame, undo);
   return core::Status{};
 }
 
@@ -183,9 +188,42 @@ VkDescriptorSet StreamedAtlas::use(std::uint64_t frame) {
   // Called once a frame, so the last frames' staging buffers go promptly.
   retire_->poll();
   Slot& slot = slots_[current_];
-  slot.last_use = std::max(slot.last_use, frame);
-  newest_ = std::max(newest_, frame);
+  if (slot.last_use < frame) {
+    if (frame >= newest_) {
+      enter(frame);
+      Undo undo;
+      undo.slot = current_;
+      undo.last_use = slot.last_use;
+      undo_.push_back(undo);
+    }
+    slot.last_use = frame;
+  }
   return slot.set.handle();
+}
+
+void StreamedAtlas::discard(std::uint64_t frame) {
+  VKC_CHECK(frame != 0, "StreamedAtlas::discard: frame numbers start at 1");
+  VKC_CHECK(frame >= newest_,
+            "StreamedAtlas::discard: a later frame has been given to the "
+            "atlas; discard a frame before giving it the next");
+  if (frame != newest_ || undo_.empty()) {
+    return;  // the frame gave the atlas nothing
+  }
+  // A frame that reached a queue -- or a submission in its place -- sets its
+  // number, and its commands may have run, so the images it used stay its
+  // until the timeline reaches it. One that did not never runs.
+  const bool reached = check_submitted(frame, "StreamedAtlas::discard").ok();
+  for (auto undo = undo_.rbegin(); undo != undo_.rend(); ++undo) {
+    Slot& slot = slots_[undo->slot];
+    if (!reached) {
+      slot.last_use = undo->last_use;
+    }
+    if (undo->update) {
+      current_ = undo->current;
+      slot.image.set_layout(undo->layout);
+    }
+  }
+  undo_.clear();
 }
 
 const core::Image* StreamedAtlas::picture() const noexcept {
@@ -250,10 +288,29 @@ core::Status StreamedAtlas::check_submitted(std::uint64_t frame,
                                      core::TimelineWaits::Submitted);
 }
 
-void StreamedAtlas::publish(std::uint32_t slot, std::uint64_t frame) {
+StreamedAtlas::Undo StreamedAtlas::before_update(std::uint32_t slot) const {
+  Undo undo;
+  undo.slot = slot;
+  undo.last_use = slots_[slot].last_use;
+  undo.update = true;
+  undo.current = current_;
+  undo.layout = slots_[slot].image.layout();
+  return undo;
+}
+
+void StreamedAtlas::publish(std::uint32_t slot, std::uint64_t frame,
+                            Undo undo) {
+  enter(frame);
+  undo_.push_back(undo);
   slots_[slot].last_use = frame;
   current_ = slot;
-  newest_ = std::max(newest_, frame);
+}
+
+void StreamedAtlas::enter(std::uint64_t frame) {
+  if (frame > newest_) {
+    newest_ = frame;
+    undo_.clear();
+  }
 }
 
 void StreamedAtlas::destroy() noexcept {
@@ -286,6 +343,7 @@ void StreamedAtlas::destroy() noexcept {
   desc_ = kNoDesc;
   current_ = kNoPicture;
   newest_ = 0;
+  undo_.clear();
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

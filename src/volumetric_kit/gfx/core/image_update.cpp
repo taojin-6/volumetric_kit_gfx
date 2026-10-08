@@ -4,17 +4,15 @@
 #include "volumetric_kit/gfx/core/image_update.hpp"
 
 #include <algorithm>
-#include <cstddef>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "upload_steps.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
-#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
 
 namespace volumetric_kit::gfx {
@@ -146,32 +144,11 @@ core::Status record_image_update(VkCommandBuffer cmd,
     }
   }
 
-  // The contents are discarded, so the transition starts from UNDEFINED; it
-  // waits for the earlier reads the scope names, and for nothing when none can
-  // still be running.
-  ImageBarrierDesc to_copy;
-  to_copy.image = image.handle();
-  to_copy.src_stage = scope.src_stages != 0 ? scope.src_stages
-                                            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-  to_copy.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_copy.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_copy.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_copy.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  cmd_image_barrier(cmd, to_copy);
-
-  vkCmdCopyBufferToImage(cmd, source.handle(), image.handle(),
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region_count,
-                         regions);
-
-  ImageBarrierDesc to_read;
-  to_read.image = image.handle();
-  to_read.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_read.dst_stage = scope.dst_stages;
-  to_read.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_read.dst_access = VK_ACCESS_SHADER_READ_BIT;
-  to_read.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  to_read.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  cmd_image_barrier(cmd, to_read);
+  // The contents are discarded; the copy waits for the earlier reads the
+  // scope names, and for nothing when none can still be running.
+  detail::record_copies_to_image(cmd, source.handle(), image.handle(),
+                                 scope.src_stages, regions, region_count);
+  detail::record_copied_to_shader_read(cmd, image.handle(), scope.dst_stages);
   image.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return core::Status{};
 }
@@ -199,13 +176,8 @@ core::Status record_image_upload(VkCommandBuffer cmd,
         "packed");
   }
 
-  core::BufferDesc desc;
-  desc.size = size;
-  desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  desc.memory = core::MemoryUsage::Staging;
-  desc.host_access = core::HostAccess::SequentialWrite;
-  VKC_ASSIGN(core::Buffer buffer, allocator.create_buffer(desc));
-  std::memcpy(buffer.mapped(), pixels, static_cast<std::size_t>(size));
+  VKC_ASSIGN(core::Buffer buffer,
+             detail::make_staging(allocator, pixels, size));
   // Shared, as the RetireQueue's deleter must be copyable.
   auto staging = std::make_shared<core::Buffer>(std::move(buffer));
 
