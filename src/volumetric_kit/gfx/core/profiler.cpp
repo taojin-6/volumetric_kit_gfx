@@ -43,7 +43,9 @@ struct Profiler::Impl {
     double cpu_ms = 0.0;
     bool finished = false;
     bool has_gpu = false;  // a timestamp pair was written for this stage
-    bool label = false;    // a debug-utils region was opened for this stage
+    // begin_debug_label was called for this stage, so finalize makes the
+    // matching end_debug_label call (both no-ops without debug labels).
+    bool label = false;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t begin_query = 0;  // absolute query index; the end query is +1
   };
