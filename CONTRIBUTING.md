@@ -56,6 +56,13 @@ requests (Settings → Actions → General, *Require approval for all external
 contributors*), and the backstop is the hook each self-hosted runner runs
 before a job, which refuses a fork's job on the host.
 
+## Self-hosted runners
+
+The build legs' `vk-linux-gpu` and `mac` runners, and that hook, are set up and
+removed with volumetric_kit_core's
+[tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md),
+with `gfx` as the repository.
+
 ## Commits
 
 Follow the existing Conventional Commits style in the history, e.g.
