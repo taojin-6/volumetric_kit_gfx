@@ -11,8 +11,8 @@
 /// Readiness and waiting are supplied by the caller as callables, so the
 /// ordering, run-once, compaction, and drain logic is free of Vulkan and
 /// unit-testable on any host. @ref volumetric_kit::gfx::RetireQueue
-/// instantiates it with `Key = VkFence` and feeds in `vkGetFenceStatus` /
-/// `vkWaitForFences`.
+/// instantiates it with `Key = std::uint64_t`, a timeline value, and feeds in
+/// the timeline's value and wait.
 
 #include <cstddef>
 #include <functional>
@@ -24,7 +24,7 @@ namespace volumetric_kit::gfx {
 /// @brief Holds `(key, deleter)` entries and runs each deleter exactly once,
 /// when the
 ///        caller's predicate reports the key ready.
-/// @tparam Key  Identifies the work guarding an entry (a `VkFence` in
+/// @tparam Key  Identifies the work guarding an entry (a timeline value in
 /// practice).
 ///
 /// Each deleter runs once, from @ref poll, @ref drain, or @ref run_all.

@@ -69,7 +69,7 @@ consumer/example.
   relying on per-triangle barycentric interpolation port cleanly.
 - ⚠️ MoltenVK's external-semaphore export to `MTLSharedEvent` is buggy/incomplete. Do NOT build
   compute↔render sync on it. **Double-buffer the shared resource + release via a
-  `VkFence`-completion CPU token** instead.
+  CPU completion token** (`RetireQueue` on the frame loop's timeline) instead.
 
 ## RAII resource types
 
@@ -89,7 +89,7 @@ shape. These are the mistakes reviews keep catching, so get them right at author
   the public header (as the core's `Buffer`/`Image` do). Reset the moved-from `deleter_` to
   `nullptr` explicitly — a moved-from `std::function` is valid-but-unspecified and can
   otherwise run twice. The producing owner (e.g. the device) must outlive the resource:
-  state that in an `@warning` and point at `RetireQueue` for fence-gated destruction.
+  state that in an `@warning` and point at `RetireQueue` for deferred destruction.
 - **Validate before creating** — reject zero size/extent, `usage == 0`,
   `VK_FORMAT_UNDEFINED`, etc. with a non-OK `Status` before touching Vulkan/VMA.
 

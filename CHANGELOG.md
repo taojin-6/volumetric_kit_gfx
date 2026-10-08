@@ -47,6 +47,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **`RetireQueue` is keyed on timeline values**, not `VkFence`s.
+  Migrating: `RetireQueue(device.handle())` → `RetireQueue(timeline)` on a
+  `core::TimelineSemaphore` -- `FrameLoop::timeline()` for what frames use --
+  and `push(fence, deleter)` → `push(value, deleter)`, with the value the
+  guarding work sets (a `Frame::number`).
 - build: gfx pins volumetric_kit_core at its PR #15 (`a8b63d1`) and refuses an
   older core at configure and in the installed package.
 - `core`: **gfx writes the core's names; its re-exports of them are gone.**
