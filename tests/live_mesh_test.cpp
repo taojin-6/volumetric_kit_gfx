@@ -8,9 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -31,18 +31,15 @@ TEST(LiveMeshTest, DefaultConstructedIsEmpty) {
 
 // --- valid() gating on real buffers ------------------------------------------
 
-using LiveMeshDeviceTest = VulkanDeviceTest;
+using LiveMeshDeviceTest = vg_test::RendererDeviceTest;
 
 TEST_F(LiveMeshDeviceTest, ValidRequiresAllThreeBuffers) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   auto make = [&](VkBufferUsageFlags usage) {
     vkc::BufferDesc desc;
     desc.size = 256;
     desc.usage = usage;
     desc.memory = vkc::MemoryUsage::DeviceOnly;
-    return allocator.value().create_buffer(desc);
+    return allocator().create_buffer(desc);
   };
   auto vtx = make(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
   auto idx = make(VK_BUFFER_USAGE_INDEX_BUFFER_BIT);

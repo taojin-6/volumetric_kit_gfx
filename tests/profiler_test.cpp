@@ -8,10 +8,10 @@
 #include <cmath>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -24,16 +24,18 @@ vg::ProfilerConfig make_config(uint32_t frames, uint32_t max_gpu_sections) {
   return config;
 }
 
-class ProfilerTest : public VulkanDeviceTest {
+class ProfilerTest : public vg_test::RendererDeviceTest {
  protected:
   // Validation as the label-balance backstop, on the instance's debug-utils
-  // (which every fixture instance requests), so gpu_scope's label emit/close
-  // path is exercised; the core's instance continues debug-utils-only where
-  // the layer is unavailable.
-  bool wants_validation() const override { return true; }
+  // (which every instance requests), so gpu_scope's label emit/close path is
+  // exercised; the core's instance continues debug-utils-only where the layer
+  // is unavailable.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 
   vg::Profiler make_profiler(uint32_t frames = 1, uint32_t max_gpu = 8) {
-    auto result = vg::Profiler::create(*device_, make_config(frames, max_gpu));
+    auto result = vg::Profiler::create(device(), make_config(frames, max_gpu));
     EXPECT_TRUE(result.ok()) << result.status().message();
     return std::move(result).value();
   }
@@ -43,7 +45,7 @@ class ProfilerTest : public VulkanDeviceTest {
   // begin_frame. `body` records work between begin_frame and end_frame.
   template <class Body>
   void run_frame(vg::Profiler& profiler, uint32_t slot, Body&& body) {
-    vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
       profiler.begin_frame(slot, cmd);
       body(cmd);
       profiler.end_frame();
@@ -58,7 +60,7 @@ class ProfilerTest : public VulkanDeviceTest {
 // is the single wiring invariant the rest of the GPU path keys off.
 TEST_F(ProfilerTest, GpuTimingMatchesDeviceCapability) {
   vg::Profiler profiler = make_profiler();
-  EXPECT_EQ(profiler.gpu_timing(), device_->timestamp_valid_bits() != 0);
+  EXPECT_EQ(profiler.gpu_timing(), device().timestamp_valid_bits() != 0);
 }
 
 // The published snapshot lags the in-flight depth: with one slot, the frame
@@ -129,12 +131,8 @@ TEST_F(ProfilerTest, RecordsStagesInRecordOrder) {
 // With a memory source set, end_frame samples the allocator into the snapshot's
 // aggregate figures. Any real device exposes at least one heap with a budget.
 TEST_F(ProfilerTest, MemorySourcePopulatesAggregateMemory) {
-  auto alloc = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(alloc.ok()) << alloc.status().message();
-  vkc::Allocator allocator = std::move(alloc).value();
-
   vg::Profiler profiler = make_profiler();
-  profiler.set_memory_source(&allocator);
+  profiler.set_memory_source(&allocator());
   run_frame(profiler, 0, [&](VkCommandBuffer) {});
   run_frame(profiler, 0, [&](VkCommandBuffer) {});
 
@@ -179,7 +177,7 @@ TEST_F(ProfilerTest, MultiSlotMultiSectionResolves) {
 // recording buffer; the stage must resolve has_gpu == false.
 TEST_F(ProfilerTest, GpuScopeWithMismatchedCmdIsCpuOnly) {
   vg::Profiler profiler = make_profiler();
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
     profiler.begin_frame(0, VK_NULL_HANDLE);  // CPU-only frame: no reset
     {
       auto s = profiler.gpu_scope(cmd, "stage");
@@ -200,7 +198,7 @@ TEST_F(ProfilerTest, GpuScopeWithMismatchedCmdIsCpuOnly) {
 // no-op. (The @warning still asks callers to close scopes within the frame.)
 TEST_F(ProfilerTest, ScopeOpenAtEndFrameStillResolves) {
   vg::Profiler profiler = make_profiler();
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
     profiler.begin_frame(0, cmd);
     vg::Profiler::Scope open = profiler.gpu_scope(cmd, "open");
     profiler.end_frame();  // finalizes `open` before the buffer is submitted
@@ -245,7 +243,7 @@ TEST_F(ProfilerTest, NullNameStageIsRecordedUnnamed) {
 // product past 32 bits (here wrapping to 2) is refused rather than sizing a
 // pool smaller than the ranges the slots index.
 TEST_F(ProfilerTest, CreateRejectsQueryCountOverflow) {
-  auto result = vg::Profiler::create(*device_, make_config(3, 0x2AAAAAABu));
+  auto result = vg::Profiler::create(device(), make_config(3, 0x2AAAAAABu));
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.status().domain(), vkc::Status::Code::InvalidArgument);
 }

@@ -2,54 +2,29 @@
 // Copyright (c) 2026 Tao Jin
 
 // App tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is
-// driven through a VK_EXT_headless_surface factory — the same vehicle as
-// windowing_test — so the full instance -> surface -> device -> allocator ->
-// swapchain -> frame-loop chain runs on Linux CI (lavapipe) without a display;
-// the suite skips wholesale where that surface or a present-capable device is
-// unavailable (e.g. MoltenVK). HeadlessApp needs no surface at all, so its
-// cases run wherever a Vulkan device exists. Validation is enabled in every
-// config (a no-op when the layer is absent); the facades own their instances,
-// so unlike windowing_test no external error-capturing messenger can outlive
-// the chain — the tests are behavior-level instead.
+// driven through a VK_EXT_headless_surface factory -- the same vehicle as
+// windowing_test -- so the full instance -> surface -> device -> allocator ->
+// swapchain -> frame-loop chain runs without a display; the suite skips where
+// that surface or a present-capable device is unavailable. HeadlessApp needs
+// no surface at all. The facades own their instances, validated as the
+// environment asks, and the fixtures fail a test on any error their layer
+// reports.
 
 #include <gtest/gtest.h>
 
-#include <cstring>
 #include <string>
 #include <utility>
-#include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
-namespace vg = volumetric_kit::gfx;
-namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
-
-bool instance_has_headless_surface() {
-  uint32_t count = 0;
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  std::vector<VkExtensionProperties> props(count);
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data()) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  for (const VkExtensionProperties& p : props) {
-    if (std::strcmp(p.extensionName, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) ==
-        0) {
-      return true;
-    }
-  }
-  return false;
-}
 
 // The SurfaceFactory the tests hand to WindowedApp::create: a raw
 // VK_EXT_headless_surface the app adopts (and later destroys) — the headless
@@ -74,9 +49,8 @@ vg::app::WindowedAppConfig windowed_config(
     VkFormat depth_format = VK_FORMAT_UNDEFINED) {
   vg::app::WindowedAppConfig config;
   config.app_name = "vg_app_test";
-  config.enable_validation = true;
-  config.instance_extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                                VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+  config.enable_validation = vkc::test::instance_config().enable_validation;
+  config.instance_extensions = vg_test::headless_surface_extensions();
   config.swapchain.extent = {256, 256};
   config.swapchain.depth_format = depth_format;
   return config;
@@ -101,29 +75,25 @@ vkc::AdoptedDevice placeholder_share() {
 vg::app::HeadlessAppConfig headless_config() {
   vg::app::HeadlessAppConfig config;
   config.app_name = "vg_app_test";
-  config.enable_validation = true;
+  config.enable_validation = vkc::test::instance_config().enable_validation;
   return config;
 }
 
-class WindowedAppTest : public ::testing::Test {
+class WindowedAppTest : public vg_test::RendererTest {
  protected:
   void SetUp() override {
     // Probe the pre-facade steps with the core/windowing APIs so the skip
     // conditions stay as precise as windowing_test's; the probe is torn down
-    // again and every test then asserts on the facade itself. Validation is
-    // enabled to match the configs below, so a runner whose validated
-    // instance cannot be created skips here instead of failing later.
-    if (!instance_has_headless_surface()) {
-      GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
+    // again and every test then asserts on the facade itself.
+    RendererTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
     }
-    vkc::InstanceConfig icfg;
-    icfg.enable_validation = true;
-    icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                       VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-    auto instance = vkc::Instance::create(icfg);
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+    if (!vg_test::has_headless_surface()) {
+      GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
     }
+    auto instance = vkc::Instance::create(vg_test::headless_instance_config());
+    ASSERT_TRUE(instance.ok()) << instance.status().message();
     auto surface = win::Surface::headless(instance.value().handle());
     if (!surface.ok()) {
       GTEST_SKIP() << "headless surface: " << surface.status().message();
@@ -177,11 +147,7 @@ class WindowedAppTest : public ::testing::Test {
 // building instance + present-capable device the way another library would,
 // then handing over the raw handles.
 TEST_F(WindowedAppTest, AdoptBuildsChainOnBorrowedDeviceAndRendersFrames) {
-  vkc::InstanceConfig icfg;
-  icfg.enable_validation = true;
-  icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                     VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-  auto instance = vkc::Instance::create(icfg);
+  auto instance = vkc::Instance::create(vg_test::headless_instance_config());
   ASSERT_TRUE(instance.ok()) << instance.status().message();
   // Selection needs a surface; the app builds its own below, so this one only
   // serves the embedder's device creation.
@@ -536,15 +502,16 @@ TEST(WindowedAppValidation, AdoptRejectsNullSurfaceFromFactory) {
 }
 
 // HeadlessApp needs no surface extension and no present queue, so this fixture
-// guards only on a device existing — it runs wherever windowing cannot (e.g.
-// MoltenVK).
-class HeadlessAppTest : public ::testing::Test {
+// asks only for a device fit for the renderer.
+class HeadlessAppTest : public vg_test::RendererTest {
  protected:
   void SetUp() override {
-    auto app = vg::app::HeadlessApp::create(headless_config());
-    if (!app.ok()) {
-      GTEST_SKIP() << "no Vulkan device: " << app.status().message();
+    RendererTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
     }
+    auto app = vg::app::HeadlessApp::create(headless_config());
+    ASSERT_TRUE(app.ok()) << app.status().message();
     app_ = std::move(app).value();
   }
 
@@ -575,11 +542,11 @@ TEST_F(HeadlessAppTest, DeviceDebugUtilsTableMatchesInstanceFlag) {
 // The requirements passthrough reaches Device::create: without it the facade
 // could not enable a device feature at all (GraphicsPipeline tells consumers to
 // require fillModeNonSolid, which had no app-tier route).
-TEST(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
+using HeadlessAppConfigTest = vg_test::RendererTest;
+
+TEST_F(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
   auto probe = vg::app::HeadlessApp::create(headless_config());
-  if (!probe.ok()) {
-    GTEST_SKIP() << "no Vulkan device: " << probe.status().message();
-  }
+  ASSERT_TRUE(probe.ok()) << probe.status().message();
   VkPhysicalDeviceFeatures supported{};
   vkGetPhysicalDeviceFeatures(probe.value().device().physical_device(),
                               &supported);
@@ -596,13 +563,11 @@ TEST(HeadlessAppConfigTest, PassesDeviceFeaturesThrough) {
 // config.device can only add to the renderer's floor: requirements built from
 // DeviceRequirements{} (the core's defaults, without dynamic rendering) still
 // yield a device every gfx type runs on.
-TEST(HeadlessAppConfigTest, MergesTheRendererFloorIn) {
+TEST_F(HeadlessAppConfigTest, MergesTheRendererFloorIn) {
   vg::app::HeadlessAppConfig config = headless_config();
   config.device = vkc::DeviceRequirements{};
   auto app = vg::app::HeadlessApp::create(config);
-  if (!app.ok()) {
-    GTEST_SKIP() << "no Vulkan device: " << app.status().message();
-  }
+  ASSERT_TRUE(app.ok()) << app.status().message();
   const vkc::Status enabled =
       app.value().device().check_enabled(vg::device_requirements());
   EXPECT_TRUE(enabled.ok()) << enabled.message();

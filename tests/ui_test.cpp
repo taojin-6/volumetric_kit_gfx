@@ -16,6 +16,7 @@
 #include <mutex>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "imgui.h"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -24,7 +25,6 @@
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace ui = volumetric_kit::gfx::ui;
 
@@ -40,7 +40,7 @@ TEST(ImGuiOverlayTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(overlay.context(), nullptr);
 }
 
-class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
+class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
  protected:
   static vg::RenderTargetLayout color_layout() {
     vg::RenderTargetLayout layout;
@@ -57,24 +57,17 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
     return config;
   }
 
-  vkc::Allocator make_allocator() {
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    EXPECT_TRUE(allocator.ok()) << allocator.status().message();
-    return std::move(allocator).value();
-  }
-
-  vg::OffscreenTarget make_target(vkc::Allocator& allocator,
-                                  VkExtent2D extent = {64, 64}) {
+  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64}) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = kFormat;
-    auto target = vg::OffscreenTarget::create(allocator, desc);
+    auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
   }
 
   ui::ImGuiOverlay make_overlay(const vg::RenderTargetLayout& layout) {
-    auto overlay = ui::ImGuiOverlay::create(*device_, instance_->handle(),
+    auto overlay = ui::ImGuiOverlay::create(device(), instance().handle(),
                                             make_config(layout));
     EXPECT_TRUE(overlay.ok()) << overlay.status().message();
     return std::move(overlay).value();
@@ -85,12 +78,7 @@ class ImGuiOverlayDeviceTest : public VulkanDeviceTest {
 
 // A device made to another library's requirements (the core's defaults: no
 // dynamic rendering, which the backend's pipeline is built for) is refused.
-class ImGuiOverlayForeignDeviceTest : public VulkanDeviceTest {
- protected:
-  std::optional<vkc::DeviceRequirements> custom_requirements() const override {
-    return vkc::DeviceRequirements{};
-  }
-};
+using ImGuiOverlayForeignDeviceTest = vkc::test::VulkanDeviceTest;
 
 TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
   ui::ImGuiOverlayConfig config;
@@ -99,14 +87,14 @@ TEST_F(ImGuiOverlayForeignDeviceTest, DeviceWithoutRendererFloorRejected) {
   config.min_image_count = 2;
   config.image_count = 2;
   auto overlay =
-      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+      ui::ImGuiOverlay::create(device(), instance().handle(), config);
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::Unsupported)
       << overlay.status().message();
 }
 
 TEST_F(ImGuiOverlayDeviceTest, NullInstanceRejected) {
-  auto overlay = ui::ImGuiOverlay::create(*device_, VK_NULL_HANDLE,
+  auto overlay = ui::ImGuiOverlay::create(device(), VK_NULL_HANDLE,
                                           make_config(color_layout()));
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
@@ -115,7 +103,7 @@ TEST_F(ImGuiOverlayDeviceTest, NullInstanceRejected) {
 TEST_F(ImGuiOverlayDeviceTest, EmptyLayoutRejected) {
   // Default layout has color_count == 0 -- ImGui has no attachment to target.
   auto overlay =
-      ui::ImGuiOverlay::create(*device_, instance_->handle(), make_config({}));
+      ui::ImGuiOverlay::create(device(), instance().handle(), make_config({}));
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -124,7 +112,7 @@ TEST_F(ImGuiOverlayDeviceTest, LowImageCountRejected) {
   ui::ImGuiOverlayConfig config = make_config(color_layout());
   config.min_image_count = 1;  // ImGui requires >= 2
   auto overlay =
-      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+      ui::ImGuiOverlay::create(device(), instance().handle(), config);
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -134,7 +122,7 @@ TEST_F(ImGuiOverlayDeviceTest, ImageCountBelowMinRejected) {
   config.min_image_count = 3;
   config.image_count = 2;  // < min_image_count
   auto overlay =
-      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+      ui::ImGuiOverlay::create(device(), instance().handle(), config);
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -143,7 +131,7 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
   ui::ImGuiOverlayConfig config = make_config(color_layout());
   config.layout.samples = static_cast<VkSampleCountFlagBits>(0);  // invalid
   auto overlay =
-      ui::ImGuiOverlay::create(*device_, instance_->handle(), config);
+      ui::ImGuiOverlay::create(device(), instance().handle(), config);
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -151,8 +139,7 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
 // --- Move-only lifecycle ----------------------------------------------------
 
 TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay source = make_overlay(target.layout());
   ASSERT_TRUE(source.valid());
   ImGuiContext* context = source.context();
@@ -165,8 +152,7 @@ TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
 }
 
 TEST_F(ImGuiOverlayDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay dst = make_overlay(target.layout());
   ui::ImGuiOverlay src = make_overlay(target.layout());
   ImGuiContext* src_context = src.context();
@@ -178,8 +164,7 @@ TEST_F(ImGuiOverlayDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(ImGuiOverlayDeviceTest, SelfMoveAssignIsSafe) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
   ImGuiContext* context = overlay.context();
 
@@ -194,8 +179,7 @@ TEST_F(ImGuiOverlayDeviceTest, SelfMoveAssignIsSafe) {
 // --- End-to-end: render the UI into an offscreen target ---------------------
 
 TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
 
   // No platform backend here, so set DisplaySize ourselves (ImGui::NewFrame
@@ -212,7 +196,8 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   ImGui::GetBackgroundDrawList()->AddRectFilled(
       ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -245,7 +230,8 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   target.record_readback(raw);  // copy the rendered image into the host buffer
 
   ASSERT_TRUE(cmd.value().end().ok());
-  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+  const vkc::Status submitted = device().submit_and_wait(raw);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 
   // The white background rect fills the viewport, so the center texel must be
   // opaque white -- proof ImGui drew (validation-clean recording alone would
@@ -260,22 +246,22 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
-  vkDeviceWaitIdle(device());
+  vkDeviceWaitIdle(device().handle());
 }
 
 // render() may submit on the device's queue itself (the font atlas, on the
 // first frame), so it holds the device's submit mutex -- the one every other
 // submit on that queue holds -- whether or not the queue is shared.
 TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
   ImGui::SetCurrentContext(overlay.context());
   ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
   overlay.new_frame();
   ImGui::ShowDemoWindow();
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -285,7 +271,7 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
   const vg::RenderTarget rt = target.target();
   rt.begin(raw, vg::RenderTargetBeginInfo{});
 
-  std::unique_lock<std::mutex> held(*device_->submit_mutex());
+  std::unique_lock<std::mutex> held(*device().submit_mutex());
   std::future<void> rendered =
       std::async(std::launch::async, [&overlay, raw] { overlay.render(raw); });
   // Blocked for as long as the mutex is held; it finishes once released.
@@ -296,7 +282,8 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
 
   rt.end(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  vkDeviceWaitIdle(device());  // the backend's own upload, before teardown
+  vkDeviceWaitIdle(
+      device().handle());  // the backend's own upload, before teardown
 }
 
 // --- Metrics panel: CPU-only widget building (no device) --------------------
