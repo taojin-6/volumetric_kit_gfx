@@ -2,8 +2,8 @@
 
 **Status:** the draw mechanics, with the seams it depends on now answered by the
 reconstruction side. This is the first of the three slices that complete the
-live zero-copy path (indirect draw → per-slot atlas ringing →
-`app::StreamedApp` driver).
+live zero-copy path (indirect draw → per-slot atlas ringing, since landed as
+`pipelines::StreamedAtlas` → `app::StreamedApp` driver).
 
 This lands **only the draw mechanics**. The synchronization and lifetime seams
 were left open here for recon to answer, and it has — see **§4**, which records

@@ -11,8 +11,11 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/pipeline_util.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
@@ -44,7 +47,7 @@ static_assert(offsetof(PushConstants, light_dir) == 64,
 static_assert(offsetof(PushConstants, flags) == 76,
               "PushConstants layout drift");
 
-// hybrid_mesh.frag's specialization constants, constant_ids 0..2 in order. The
+// hybrid_mesh.frag's specialization constants, constant_ids 0..3 in order. The
 // flag bits it tests come from HybridMeshFlags here, so the enum is their one
 // definition (the shader's defaults are 0, which switches a mode off); the
 // sRGB bit tells the normal view to pre-decode its encoding so that a target
@@ -53,6 +56,7 @@ struct FragmentSpecialization {
   uint32_t flag_lit;
   uint32_t flag_normals;
   VkBool32 srgb_target;
+  uint32_t flag_vertex_color;
 };
 
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
@@ -97,17 +101,19 @@ struct RecordGeometry {
 }  // namespace
 
 core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
-    VkDevice device, const RenderTargetLayout& layout) {
-  VKC_ASSIGN(
-      ShaderModule vert,
-      ShaderModule::create(
-          device, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_vert_spv),
-          vg_hybrid_mesh_vert_spv_size));
-  VKC_ASSIGN(
-      ShaderModule frag,
-      ShaderModule::create(
-          device, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_frag_spv),
-          vg_hybrid_mesh_frag_spv_size));
+    const core::Device& device, core::Allocator& allocator,
+    const RenderTargetLayout& layout) {
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("HybridMeshPipeline::create"));
+  const VkDevice vk = device.handle();
+  VKC_ASSIGN(ShaderModule vert,
+             ShaderModule::create(
+                 vk, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_vert_spv),
+                 vg_hybrid_mesh_vert_spv_size));
+  VKC_ASSIGN(ShaderModule frag,
+             ShaderModule::create(
+                 vk, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_frag_spv),
+                 vg_hybrid_mesh_frag_spv_size));
 
   // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), and
   // color (3) -- the layout hybrid_mesh.vert declares. tangent is unused by
@@ -125,13 +131,16 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   // decides the sRGB path.
   const FragmentSpecialization spec_data{
       kHybridMeshLit, kHybridMeshNormals,
-      is_srgb_attachment(layout.color_formats[0]) ? VK_TRUE : VK_FALSE};
-  const VkSpecializationMapEntry spec_entries[3] = {
+      is_srgb_attachment(layout.color_formats[0]) ? VK_TRUE : VK_FALSE,
+      kHybridMeshVertexColor};
+  const VkSpecializationMapEntry spec_entries[4] = {
       {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
       {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},
       {2, offsetof(FragmentSpecialization, srgb_target), sizeof(VkBool32)},
+      {3, offsetof(FragmentSpecialization, flag_vertex_color),
+       sizeof(uint32_t)},
   };
-  const VkSpecializationInfo spec{3, spec_entries, sizeof(spec_data),
+  const VkSpecializationInfo spec{4, spec_entries, sizeof(spec_data),
                                   &spec_data};
 
   GraphicsPipelineDesc desc;
@@ -145,32 +154,104 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.depth_test = true;
   desc.depth_write = true;
   desc.fragment_specialization = &spec;
-  VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));
+  VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(vk, desc));
+
+  // Atlas tiles meet at their edges, so the sampler clamps rather than wraps
+  // into the next tile; the atlas has one level.
+  SamplerDesc sampler_desc;
+  sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_desc.max_lod = 0.0f;
+  VKC_ASSIGN(Sampler sampler, Sampler::create(vk, sampler_desc));
+
+  // The fallback is only ever bound with kHybridMeshVertexColor set, so its
+  // texel is never shown; it exists so that the shader's sample reads a
+  // defined image.
+  const uint8_t white[4] = {255, 255, 255, 255};
+  ImageUploadDesc fallback_desc;
+  fallback_desc.extent = {1, 1};
+  fallback_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  fallback_desc.pixels = white;
+  fallback_desc.size = sizeof(white);
+  VKC_ASSIGN(core::Image fallback,
+             upload_texture(device, allocator, fallback_desc));
+
+  const VkDescriptorPoolSize pool_size{
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+  VKC_ASSIGN(core::DescriptorPool pool,
+             core::DescriptorPool::create(vk, &pool_size, 1, 1));
+  VKC_ASSIGN(core::DescriptorSet fallback_set,
+             pool.allocate(pipeline.descriptor_set_layout(0)));
+  fallback_set.write_combined_image_sampler(
+      0, fallback.view(), sampler.handle(),
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   HybridMeshPipeline hybrid;
+  hybrid.device_ = &device;
   hybrid.pipeline_ = std::move(pipeline);
+  hybrid.sampler_.emplace(std::move(sampler));
+  hybrid.fallback_ = std::move(fallback);
+  hybrid.pool_ = std::move(pool);
+  hybrid.fallback_set_ = std::move(fallback_set);
   return hybrid;
+}
+
+HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept
+    : device_(other.device_),
+      pipeline_(std::move(other.pipeline_)),
+      sampler_(std::move(other.sampler_)),
+      fallback_(std::move(other.fallback_)),
+      pool_(std::move(other.pool_)),
+      fallback_set_(std::move(other.fallback_set_)) {
+  other.device_ = nullptr;
+  other.sampler_.reset();
+  other.fallback_set_ = {};
+}
+
+HybridMeshPipeline& HybridMeshPipeline::operator=(
+    HybridMeshPipeline&& other) noexcept {
+  if (this != &other) {
+    // Release in reverse declaration order -- the set, the pool that frees it,
+    // the image it names, the sampler -- before adopting other's.
+    fallback_set_ = {};
+    pool_ = {};
+    fallback_ = {};
+    sampler_.reset();
+    pipeline_ = {};
+
+    device_ = other.device_;
+    pipeline_ = std::move(other.pipeline_);
+    sampler_ = std::move(other.sampler_);
+    fallback_ = std::move(other.fallback_);
+    pool_ = std::move(other.pool_);
+    fallback_set_ = std::move(other.fallback_set_);
+    other.device_ = nullptr;
+    other.sampler_.reset();
+    other.fallback_set_ = {};
+  }
+  return *this;
 }
 
 void HybridMeshPipeline::submit(VkCommandBuffer cmd,
                                 const HybridMeshFrame& frame) const {
-  // The fragment shader statically samples the atlas (set 0), so a valid set
-  // must be bound for any draw to be legal -- a purely vertex-colored mesh
-  // binds a 1x1 image (see the class doc). With no atlas -- or no pipeline at
-  // all, on a default-constructed or moved-from object -- there is nothing safe
-  // to record, so drop the frame rather than draw against an unbound set.
-  if (!valid() || frame.atlas == VK_NULL_HANDLE) {
+  // A default-constructed or moved-from pipeline has nothing to record.
+  if (!valid()) {
     return;
   }
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
   set_full_viewport_scissor(cmd, frame.extent);
 
-  // Set 0 (the atlas combined-image-sampler) binds once for the frame.
-  // TODO: per-slot atlas ringing for a live-updated texture (the device-adopt
-  // decision's live zero-copy path) -- select the slot's atlas set here.
+  // Set 0 (the atlas combined-image-sampler) binds once for the frame. The
+  // fragment shader samples it unconditionally, so a frame without an atlas
+  // binds the fallback and draws in vertex color instead.
+  const bool has_atlas = frame.atlas != VK_NULL_HANDLE;
+  const VkDescriptorSet atlas =
+      has_atlas ? frame.atlas : fallback_set_.handle();
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipeline_.layout(), 0, 1, &frame.atlas, 0, nullptr);
+                          pipeline_.layout(), 0, 1, &atlas, 0, nullptr);
 
   // One push for the whole frame: no per-draw model matrix (world-space
   // geometry), so the camera + light are constant across draws. Normalize the
@@ -185,7 +266,7 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   pc.light_dir[0] = light_dir.x;
   pc.light_dir[1] = light_dir.y;
   pc.light_dir[2] = light_dir.z;
-  pc.flags = frame.flags;
+  pc.flags = has_atlas ? frame.flags : frame.flags | kHybridMeshVertexColor;
   vkCmdPushConstants(cmd, pipeline_.layout(),
                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                      0, sizeof(pc), &pc);

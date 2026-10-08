@@ -155,7 +155,8 @@ add_executable(
   pbr_material_test.cpp
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
-  pbr_scene_test.cpp)
+  pbr_scene_test.cpp
+  streamed_atlas_test.cpp)
 target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)
