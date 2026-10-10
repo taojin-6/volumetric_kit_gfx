@@ -13,12 +13,16 @@ namespace volumetric_kit::gfx::camera {
 namespace {
 
 // glm's projections target OpenGL's framebuffer (Y up); Vulkan's is Y down.
-// Negating proj[1][1] flips clip-space Y once at the source, so the same shader
+// Negating the Y row flips clip-space Y once at the source, so the same shader
 // renders right-side up under Vulkan without a per-vertex flip or a
 // negative-height viewport. (GLM_FORCE_DEPTH_ZERO_TO_ONE -- see glm_config.hpp
-// -- has already mapped depth into [0, 1]; this only touches Y.)
+// -- has already mapped depth into [0, 1]; this only touches Y.) The
+// translation in an asymmetric orthographic projection must flip along with its
+// scale.
 glm::mat4 flip_y(glm::mat4 proj) {
-  proj[1][1] = -proj[1][1];
+  for (int column = 0; column < 4; ++column) {
+    proj[column][1] = -proj[column][1];
+  }
   return proj;
 }
 
