@@ -15,6 +15,9 @@
 // read with texelFetch at gl_FragCoord. Only NV12's chroma plane is sampled
 // with filtering, to bring it up to luma resolution.
 
+#extension GL_GOOGLE_include_directive : require
+#include "common/srgb.glsl"
+
 layout(set = 0, binding = 0) uniform sampler2D plane0;  // color, grey, ramp or luma
 layout(set = 0, binding = 1) uniform sampler2D plane1;  // NV12 CbCr; else plane0, nearest
 
@@ -40,12 +43,6 @@ const uint kColor = 0u;
 const uint kGrey = 1u;
 const uint kRamp = 2u;
 const uint kNv12 = 3u;
-
-// The sRGB decode (IEC 61966-2-1).
-vec3 srgb_to_linear(vec3 c) {
-  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)),
-             greaterThan(c, vec3(0.04045)));
-}
 
 // The ramp: five sRGB-encoded stops, dark violet through blue, green and
 // yellow to dark red, interpolated linearly between them.

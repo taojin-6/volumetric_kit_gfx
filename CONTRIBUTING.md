@@ -47,8 +47,7 @@ On macOS the layer needs the setup in the core's
 
 ## Formatting and CI
 
-- The `lint` check (`pre-commit run --all-files`, then volumetric_kit_core's
-  `check_fork_guards.py` on `.github/workflows`) and the per-platform builds are
+- The `lint` check (`pre-commit run --all-files`) and the per-platform builds are
   **required** to merge: a red `lint` blocks the PR regardless of local setup, so
   CI — not the local hook — is the real guarantee.
 - [pre-commit.ci](https://pre-commit.ci) runs the same hooks on every PR and
@@ -57,21 +56,19 @@ On macOS the layer needs the setup in the core's
 - clang-format is pinned (see `.pre-commit-config.yaml`) so local and CI
   formatting are byte-identical; don't reformat with a different version.
 
-## Pull requests from forks
+## Who can trigger CI
 
-A pull request from a fork runs none of the `ci` workflow's jobs, and
-`ci / required` fails it; to test one, a maintainer pushes its branch to this
-repository and opens a pull request from there. The workflows skip the jobs
-with `if:` guards, which a fork's own pull request can edit, so they are not
-the boundary: the first gate is the repository's approval setting for fork pull
-requests (Settings → Actions → General, *Require approval for all external
-contributors*), and the backstop is the hook each self-hosted runner runs
-before a job, which refuses a fork's job on the host.
+Only the owner: the repository's Actions policy (Settings → Actions → Rules)
+lets no other account trigger a workflow, so a fork's pull request never reaches
+the self-hosted runners, and no job carries a fork guard. To test a fork's
+change, a maintainer pushes its branch to this repository and opens a pull
+request from there. volumetric_kit_core's
+[tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md#who-can-trigger-ci)
+has the policy and why.
 
 ## Self-hosted runners
 
-The build legs' `vk-linux-gpu` and `mac` runners, and that hook, are set up and
-removed with volumetric_kit_core's
+The build legs' `vk-linux-gpu` and `mac` runners are set up and removed with volumetric_kit_core's
 [tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md),
 with `gfx` as the repository.
 

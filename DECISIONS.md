@@ -59,6 +59,8 @@ what has landed since then. Record amendments when a contract changes.
   `VG_CHECK` and the log sink are the family's shared core's base tier; see the dated entry
   below for the `VkResult` bridge and the stages still to come.
 - **One GLSL shader source per technique** (→ SPIR-V; MoltenVK consumes SPIR-V — no MSL hand-port).
+  A helper several shaders use (the sRGB curve, the tonemap, the full-screen triangle) is
+  written once in `shaders/common/` and `#include`d, with `shaders/` as the include root.
 - **Descriptor layouts from spirv-cross reflection.** No global frame type; `Pipeline::submit()`
   takes a per-pipeline struct. No scene graph in the library.
 - **Vulkan via the link-time loader (`Vulkan::Vulkan`), accessed through one internal umbrella
@@ -214,9 +216,9 @@ the core's names into `vg::` are gone -- `core/result.hpp`, `check.hpp`,
 `instance.hpp`, `physical_device_info.hpp` and the `vulkan.hpp` forwarder --
 and so are the four macro aliases. What stays under `core/` is gfx's own:
 `device_requirements.hpp` (was `device.hpp`; only `device_requirements()`),
-`log.hpp` (`log_message`, source `"vg"`), `debug_label.hpp` (`debug_utils`
-and the labels), and the renderer's types. gfx declares no `core` namespace of
-its own, so `core::Status` in gfx's namespaces finds `volumetric_kit::core`.
+`log.hpp` (`log_message`, source `"vg"`), `debug_label.hpp` (the label
+scopes), and the renderer's types. gfx declares no `core` namespace of its
+own, so `core::Status` in gfx's namespaces finds `volumetric_kit::core`.
 
 **Why.** The aliases kept gfx's call sites unchanged while it moved onto the
 core, and its open branches merging cleanly. With stages 2a to 2c landed
@@ -227,8 +229,8 @@ with the core's. recon dropped its re-exports the same way (its #167).
 
 **What it costs.** Consumers rename on their next pin bump: the four macros,
 `vg::X` to `vkc::X` for each core name, and the include map in the
-CHANGELOG. gfx's own names (`vg::device_requirements`, `vg::log_message`,
-`vg::debug_utils`) are unchanged. The tests of the core's types under gfx's
+CHANGELOG. gfx's own names (`vg::device_requirements`, `vg::log_message`)
+are unchanged. The tests of the core's types under gfx's
 names (`result_test`, `core_vulkan_tier_test`) are gone with the names; the
 core tests its own, and `swapchain_stale`, the one gfx function the tier test
 covered, moved to `windowing_test`.
@@ -403,10 +405,14 @@ core's names", above).
 - **Debug labels follow the instance.** The core's instance requests
   `VK_EXT_debug_utils` by default, and its device resolves labels when the
   instance enabled it, so the app tier no longer threads a flag through.
-  gfx keeps its `DebugUtilsTable`, as the core's device records neither queue
-  labels nor label colors; `debug_utils(device)` loads it, gated on
-  `Device::debug_labels_available`. A `TODO:` marks taking both from the core
-  if another library needs them.
+  Command-buffer labels and object names are the core's device's
+  (`begin_debug_label`, `end_debug_label`, `set_object_name`): `Profiler` and
+  `DebugLabelScope` record through them, so gfx's labels carry no color. The
+  core's device records no queue labels, so `QueueLabelScope` looks up those
+  two entry points itself, gated on `Device::debug_labels_available`, and
+  calls them holding `Device::submit_mutex`: Vulkan requires the queue be
+  externally synchronized, and another library may share it. A `TODO:` marks
+  taking queue labels from the core.
 - **No shared command pool.** The core's device keeps its pools to itself, so
   `UploadBatch` queues its copies and records them at `finish` through
   `Device::submit_single_time`, on a pool no other submit holds -- which also
@@ -444,8 +450,9 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   offscreen readback or texture upload of one is refused rather than sized.
 - **The oldest supported headers are the core's: 1.3.204, and 1.3.208 on
   Apple.** `core/vulkan.hpp` forwards to the core's umbrella, whose check
-  refuses older headers in every gfx translation unit; the Ubuntu 22.04 leg
-  builds on its system's 1.3.204.
+  refuses older headers in every gfx translation unit. No gfx leg builds on
+  that floor since the Ubuntu 22.04 leg went (2026-10-10): the oldest headers
+  in CI are Ubuntu 24.04's 1.3.275.
 - **gfx turns the core's vulkan tier on and links it PUBLIC.** gfx's public
   `core/vulkan.hpp` and `core/result.hpp` include the tier's headers, so a
   consumer needs the tier whichever gfx type it names; `gfx_core` links it

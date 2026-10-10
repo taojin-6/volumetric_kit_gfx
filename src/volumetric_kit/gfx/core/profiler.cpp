@@ -12,9 +12,7 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/query_pool.hpp"
-#include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
-#include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
 namespace volumetric_kit::gfx {
@@ -33,10 +31,10 @@ double ms_since(Clock::time_point start) {
 
 }  // namespace
 
-// pImpl: keeps the timestamp pool, the marker table, and <chrono> out of the
-// public header. One owns-everything struct; the only owned Vulkan resource is
-// the core's QueryPool (move-only), so Profiler's move/dtor are defaulted
-// around the unique_ptr.
+// pImpl: keeps the timestamp pool and <chrono> out of the public header. One
+// owns-everything struct; the only owned Vulkan resource is the core's
+// QueryPool (move-only), so Profiler's move/dtor are defaulted around the
+// unique_ptr.
 struct Profiler::Impl {
   // A stage recorded in the current frame; CPU time is filled in on finalize.
   struct Section {
@@ -45,7 +43,9 @@ struct Profiler::Impl {
     double cpu_ms = 0.0;
     bool finished = false;
     bool has_gpu = false;  // a timestamp pair was written for this stage
-    bool label = false;    // a debug-utils region was opened for this stage
+    // begin_debug_label was called for this stage, so finalize makes the
+    // matching end_debug_label call (both no-ops without debug labels).
+    bool label = false;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t begin_query = 0;  // absolute query index; the end query is +1
   };
@@ -68,7 +68,8 @@ struct Profiler::Impl {
   uint32_t max_gpu_sections = 0;
   uint32_t valid_bits = 0;
   float ts_period_ns = 0.0f;
-  DebugUtilsTable table;
+  // Borrowed: records the labels, and outlives the profiler.
+  const core::Device* device = nullptr;
   // The core's pool, valid exactly where the device can time (non-zero
   // timestampValidBits): the one record of whether GPU timing is on.
   // TODO: time on the core's GpuTimer instead if it gains a frames-in-flight
@@ -118,7 +119,7 @@ struct Profiler::Impl {
           s.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query + 1);
     }
     if (s.label) {
-      table.cmd_end(s.cmd);
+      device->end_debug_label(s.cmd, s.name);
     }
     s.finished = true;
   }
@@ -187,7 +188,7 @@ core::Result<Profiler> Profiler::create(const core::Device& device,
   impl->max_gpu_sections = config.max_gpu_sections_per_frame;
   impl->valid_bits = device.timestamp_valid_bits();
   impl->ts_period_ns = device.caps().limits().timestampPeriod;
-  impl->table = debug_utils(device);
+  impl->device = &device;
   impl->slots.resize(config.frames_in_flight);
 
   // The timestamp pool exists only where timing is supported; without it every
@@ -359,14 +360,11 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   // unreset query.
   const bool records_gpu = (cmd == d.current_cmd);
 
-  // A label is independent of timestamp timing: open it whenever debug-utils is
-  // active, even if no GPU timing is available. s.name is never null, as
-  // VkDebugUtilsLabelEXT::pLabelName must not be.
-  if (records_gpu && d.table.active()) {
-    VkDebugUtilsLabelEXT label{};
-    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-    label.pLabelName = s.name;
-    d.table.cmd_begin(cmd, &label);
+  // A label is independent of timestamp timing. The device emits it where
+  // VK_EXT_debug_utils is enabled, and skips the begin/end pair alike where it
+  // is not. s.name is never null, as a label's name must not be.
+  if (records_gpu) {
+    d.device->begin_debug_label(cmd, s.name);
     s.label = true;
   }
 

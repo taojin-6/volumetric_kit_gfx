@@ -38,8 +38,6 @@ on:
 
 jobs:
   build:
-    # Skipped for a fork's pull request, as is every job ci.yml reaches.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ inputs.runner != '' && inputs.runner || inputs.os }}
     # Render the container JSON to a map only when one was requested; macOS and
     # any hosted leg pass '' and run directly on the runner. `&&` short-circuits,
@@ -50,7 +48,7 @@ jobs:
       run:
         # Inside a container GitHub runs `run:` steps under `sh` (dash), not the
         # `bash` it defaults to on hosted runners. Dash only learned `set -o
-        # pipefail` in 0.5.12 (POSIX 2024) — Ubuntu 26.04 has it, 22.04/24.04 do
+        # pipefail` in 0.5.12 (POSIX 2024) — Ubuntu 26.04 has it, 24.04 does
         # not — so force bash everywhere for one consistent shell across legs.
         shell: bash
     env:

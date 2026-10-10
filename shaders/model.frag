@@ -13,6 +13,9 @@
 // the factor alone applies. Two-sided: the normal is flipped for back faces
 // because the pipeline does not cull.
 
+#extension GL_GOOGLE_include_directive : require
+#include "common/tonemap.glsl"
+
 layout(location = 0) in vec3 frag_normal;
 layout(location = 1) in vec2 frag_uv;
 layout(location = 2) in vec3 frag_world_pos;
@@ -44,17 +47,6 @@ layout(set = 1, binding = 5) uniform sampler2D emissive_tex;
 layout(location = 0) out vec4 out_color;
 
 const float PI = 3.14159265359;
-
-// Narkowicz ACES filmic tone-mapping approximation (operates on linear HDR).
-// Duplicated in skybox.frag (no shader #include path) -- keep in sync.
-vec3 tonemap_aces(vec3 x) {
-  const float a = 2.51;
-  const float b = 0.03;
-  const float c = 2.43;
-  const float d = 0.59;
-  const float e = 0.14;
-  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
 
 // Trowbridge-Reitz GGX normal distribution.
 float distribution_ggx(float n_dot_h, float roughness) {
