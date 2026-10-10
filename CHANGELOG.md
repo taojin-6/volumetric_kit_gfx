@@ -74,6 +74,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `camera`: asymmetric orthographic projections flip their Y translation
+  along with their scale, keeping off-center boxes inside the viewport.
 - `pipelines`: **`HybridMeshPipeline` owns a fallback atlas**, and a frame
   with no atlas draws in vertex color instead of drawing nothing. Migrating:
   `HybridMeshPipeline::create(device.handle(), layout)` →
