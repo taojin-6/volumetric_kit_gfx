@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/log.hpp"
@@ -170,6 +171,10 @@ class PbrSubmitTest : public PbrSceneTest {
     ASSERT_TRUE(ibl.ok()) << ibl.status().message();
     ibl_.emplace(std::move(ibl).value());
 
+    upload_quad(glm::vec4(1.0f));
+  }
+
+  void upload_quad(const glm::vec4& color) {
     volumetric_kit::gfx::assets::Mesh mesh;
     const glm::vec3 corners[4] = {{-0.5f, -0.5f, 0.5f},
                                   {0.5f, -0.5f, 0.5f},
@@ -178,6 +183,7 @@ class PbrSubmitTest : public PbrSceneTest {
     for (const glm::vec3& corner : corners) {
       volumetric_kit::gfx::assets::Vertex v;
       v.position = corner;
+      v.color = color;
       mesh.vertices.push_back(v);
     }
     mesh.indices = {0, 1, 2, 0, 2, 3};
@@ -253,6 +259,37 @@ class PbrSubmitTest : public PbrSceneTest {
 };
 
 }  // namespace
+
+// COLOR_0 is a multiplier of the material's base color, in linear light.
+// A constant vertex tint must therefore match the same tint applied to the
+// material factor on white vertices, through the full PBR draw and readback.
+TEST_F(PbrSubmitTest, VertexColorModulatesMaterialBaseColor) {
+  ASSERT_NO_FATAL_FAILURE(build_quad_scene());
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
+                                           scene_layout(), ibl_->scene_desc());
+  ASSERT_TRUE(scene.ok()) << scene.status().message();
+  auto actual = make_target();
+  auto expected = make_target();
+  ASSERT_TRUE(actual.ok());
+  ASSERT_TRUE(expected.ok());
+
+  const glm::vec4 tint(0.2f, 0.5f, 0.8f, 1.0f);
+  pipelines::PbrMaterialDesc desc = lit_material_desc();
+  desc.base_color_factor = glm::vec4(0.6f, 0.7f, 0.8f, 1.0f);
+  auto material = make_material(desc);
+  ASSERT_TRUE(material.ok()) << material.status().message();
+  ASSERT_NO_FATAL_FAILURE(upload_quad(tint));
+  ASSERT_TRUE(render(scene.value(), material.value(),
+                     {{&actual.value(), {0.0f, 0.0f, 2.0f}}}));
+
+  desc.base_color_factor *= tint;
+  auto tinted_material = make_material(desc);
+  ASSERT_TRUE(tinted_material.ok()) << tinted_material.status().message();
+  ASSERT_NO_FATAL_FAILURE(upload_quad(glm::vec4(1.0f)));
+  ASSERT_TRUE(render(scene.value(), tinted_material.value(),
+                     {{&expected.value(), {0.0f, 0.0f, 2.0f}}}));
+  EXPECT_EQ(center_pixel(actual.value()), center_pixel(expected.value()));
+}
 
 TEST_F(PbrSceneTest, CreatesSet0) {
   auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
