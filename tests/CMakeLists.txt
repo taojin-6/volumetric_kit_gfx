@@ -279,3 +279,132 @@ vg_target_warnings(vg_ui_test)
 set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")
 vg_discover_tests(vg_ui_test TEST_PREFIX "ui.")
+
+# gfx as its consumers take it (consumer/), configure only, with the dependency
+# sources this build fetched. As an application's subproject: the defaults hold,
+# and gfx refuses a core the application made available first that is older than
+# VG_VKC_MIN_VERSION (one stamped 0.0.1) or lacks the vulkan tier. As an
+# installed package: it configures, and on an installed core without the vulkan
+# tier, built for the test, it is not found, saying why -- an error found
+# REQUIRED, and not one found QUIET.
+set(_vg_consumer
+    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/consumer" -G
+    "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+# This build's prefixes, after any a test puts first (_vg_more_prefixes): a
+# -DCMAKE_PREFIX_PATH given twice keeps only the last.
+set(_vg_prefixes)
+set(_vg_more_prefixes)
+if(CMAKE_PREFIX_PATH)
+  string(REPLACE ";" "$<SEMICOLON>" _vg_prefixes "${CMAKE_PREFIX_PATH}")
+  set(_vg_more_prefixes "$<SEMICOLON>${_vg_prefixes}")
+endif()
+set(_vg_consumer_dir "${CMAKE_CURRENT_BINARY_DIR}/consumer")
+
+# Sets <test>'s PASS_REGULAR_EXPRESSION to <message>, a space in which matches
+# however CMake wrapped the error's lines.
+function(_vg_expect_message test message)
+  string(REPLACE " " "[ \n]+" message "${message}")
+  set_tests_properties(${test} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+endfunction()
+
+FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vg_core_source)
+set(_vg_subdirectory
+    -DVG_CONSUME=subdirectory "-DVG_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DVKC_SOURCE_DIR=${_vg_core_source}" "-DCMAKE_PREFIX_PATH=${_vg_prefixes}")
+foreach(_vg_dep VulkanMemoryAllocator tinygltf spirv-cross imgui glm)
+  unset(_vg_dep_source)
+  FetchContent_GetProperties(${_vg_dep} SOURCE_DIR _vg_dep_source)
+  if(_vg_dep_source)
+    string(TOUPPER "${_vg_dep}" _vg_dep_upper)
+    list(APPEND _vg_subdirectory
+         "-DFETCHCONTENT_SOURCE_DIR_${_vg_dep_upper}=${_vg_dep_source}")
+  endif()
+endforeach()
+
+add_test(NAME vg_consumer_subdirectory
+         COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory"
+                 ${_vg_subdirectory} -DVKC_WITH_VULKAN=ON)
+
+add_test(
+  NAME vg_consumer_subdirectory_old_core
+  COMMAND
+    ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory_old_core"
+    ${_vg_subdirectory} -DVKC_WITH_VULKAN=ON -DVG_CONSUMER_CORE_VERSION=0.0.1)
+_vg_expect_message(
+  vg_consumer_subdirectory_old_core
+  "volumetric_kit_gfx needs volumetric_kit_core ${VG_VKC_MIN_VERSION} or newer, but the core at .+ is 0.0.1: pin v${VG_VKC_MIN_VERSION} or newer"
+)
+
+add_test(
+  NAME vg_consumer_subdirectory_core_without_vulkan
+  COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory_no_vulkan"
+          ${_vg_subdirectory} -DVKC_WITH_VULKAN=OFF)
+_vg_expect_message(
+  vg_consumer_subdirectory_core_without_vulkan
+  "volumetric_kit_gfx needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
+)
+
+if(VG_INSTALL)
+  set(_vg_stage "${_vg_consumer_dir}/stage")
+  add_test(NAME vg_consumer_install
+           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
+                   --config "$<CONFIG>" --prefix "${_vg_stage}")
+  set_tests_properties(vg_consumer_install PROPERTIES FIXTURES_SETUP
+                                                      vg_consumer_stage)
+
+  set(_vg_base_core "${_vg_consumer_dir}/base_core")
+  add_test(
+    NAME vg_consumer_base_core_configure
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${_vg_core_source}" -B "${_vg_base_core}/build" -G
+      "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      -DVKC_WITH_VULKAN=OFF -DVKC_BUILD_TESTS=OFF -DVKC_WARNINGS_AS_ERRORS=OFF
+      "-DCMAKE_INSTALL_PREFIX=${_vg_base_core}/install")
+  set_tests_properties(vg_consumer_base_core_configure
+                       PROPERTIES FIXTURES_SETUP vg_consumer_base_core_build)
+  add_test(NAME vg_consumer_base_core_install
+           COMMAND "${CMAKE_COMMAND}" --build "${_vg_base_core}/build" --target
+                   install)
+  set_tests_properties(
+    vg_consumer_base_core_install
+    PROPERTIES FIXTURES_REQUIRED vg_consumer_base_core_build FIXTURES_SETUP
+               vg_consumer_base_core)
+
+  add_test(
+    NAME vg_consumer_find_package
+    COMMAND
+      ${_vg_consumer} -B "${_vg_consumer_dir}/find_package"
+      -DVG_CONSUME=find_package
+      "-DCMAKE_PREFIX_PATH=${_vg_stage}${_vg_more_prefixes}")
+  set_tests_properties(vg_consumer_find_package PROPERTIES FIXTURES_REQUIRED
+                                                           vg_consumer_stage)
+
+  # The base core first, so the package re-finds it rather than the stage's.
+  set(_vg_no_vulkan
+      -DVG_CONSUME=find_package
+      "-DCMAKE_PREFIX_PATH=${_vg_base_core}/install$<SEMICOLON>${_vg_stage}${_vg_more_prefixes}"
+  )
+  set(_vg_no_vulkan_reason
+      "volumetric_kit_gfx needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
+  )
+  add_test(
+    NAME vg_consumer_find_package_core_without_vulkan
+    COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/find_package_no_vulkan"
+            ${_vg_no_vulkan})
+  _vg_expect_message(vg_consumer_find_package_core_without_vulkan
+                     "Reason given by package: ${_vg_no_vulkan_reason}")
+  add_test(
+    NAME vg_consumer_find_package_optional_core_without_vulkan
+    COMMAND
+      ${_vg_consumer} -B "${_vg_consumer_dir}/find_package_optional_no_vulkan"
+      ${_vg_no_vulkan} -DVG_CONSUMER_OPTIONAL=ON)
+  _vg_expect_message(
+    vg_consumer_find_package_optional_core_without_vulkan
+    "volumetric_kit_gfx not found: ${_vg_no_vulkan_reason}.+Generating done")
+  set_tests_properties(
+    vg_consumer_find_package_core_without_vulkan
+    vg_consumer_find_package_optional_core_without_vulkan
+    PROPERTIES FIXTURES_REQUIRED "vg_consumer_stage;vg_consumer_base_core")
+  set_tests_properties(vg_consumer_find_package_optional_core_without_vulkan
+                       PROPERTIES FAIL_REGULAR_EXPRESSION "CMake Error")
+endif()

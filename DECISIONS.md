@@ -459,11 +459,16 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   PUBLIC and the installed package refuses a core built without it.
 - **gfx checks the core it got, not the one it asked for.** Its pin and
   `VKC_WITH_VULKAN` yield to a project that made the core available first, and
-  FetchContent may find an installed core; the core's version does not advance
-  between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
-  to configure unless the tier is there and has `format.hpp`, the newest header
-  gfx needs, naming the pin and where the core came from; the package config
-  checks the same.
+  FetchContent may find an installed core. *Amended 2026-10-08:* the check is
+  the core's `vkc_require_core` (the core's DECISIONS.md, "Consumers pin, and
+  an application declares the core first"). On a core older than
+  `VG_VKC_MIN_VERSION`, the oldest gfx builds with, or one without the vulkan
+  tier, gfx's top-level CMakeLists.txt fails the configure, and its package
+  config reports `volumetric_kit_gfx` not found (`PACKAGE`), so a consumer
+  that can do without gfx carries on. Either way the message names where the
+  core came from and how to fix it. A core older than 0.1.0 has no
+  `vkc_require_core`, so the configure stops at gfx's call as an unknown
+  command (the core's README, "Use it in your project").
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
   and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one
@@ -516,7 +521,9 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   asks it only of its own statuses. It does return empty for a detail wider
   than 32 bits, which would be undefined to convert. Recording the backend in
   `Status` is the core's to decide, and its `vk_result`, now gfx's, has the
-  gap.
+  gap. *Amended 2026-10-08:* superseded: a backend status records the backend
+  that set it, and `vk_result` is empty for any but Vulkan (the core's
+  DECISIONS.md, "Merging the three `Status`/`Result` types").
 - **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
   the core's `VKC_*` macros, so open branches merge cleanly and a check
   reports its condition unexpanded; a `TODO:` marks the rename, as recon has
