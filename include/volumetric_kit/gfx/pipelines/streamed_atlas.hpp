@@ -39,8 +39,9 @@ struct StreamedAtlasDesc {
   /// can sample with linear filtering and copy into. `_SRGB` for 8-bit camera
   /// color, so the sampler filters in linear light.
   VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
-  /// The ring's depth; non-zero. With one update a frame, the frame loop's
-  /// frames in flight plus one never waits (see @ref StreamedAtlas).
+  /// The ring's depth; at least two, so an update preserves the picture
+  /// discard may restore. With one update a frame, the frame loop's frames
+  /// in flight plus one never waits (see @ref StreamedAtlas).
   std::uint32_t slots = 3;
 };
 
@@ -56,16 +57,20 @@ struct StreamedAtlasDesc {
 /// is recorded into a frame's command buffer, outside its rendering scope, and
 /// copies into the image no unfinished frame uses -- the least recently used,
 /// once the timeline has reached its last frame -- which becomes the current
-/// picture. A picture a frame in flight draws is therefore never overwritten;
+/// picture. The picture from before the frame is excluded from updates until
+/// a later frame is given, so @ref discard restores its pixels even if the
+/// discarded frame ran. A frame that starts with a picture can record at most
+/// `slots - 1` updates; without a prior picture, all slots are available.
+/// A picture a frame in flight draws is therefore never overwritten;
 /// the copy's transition still waits on the GPU for the fragment stage that
 /// sampled the image, so the queue orders those reads before it, not only the
-/// host's sight of the timeline. If every image is still in use by an earlier
-/// frame, the update waits on the host for the oldest of them; with one update
-/// a frame and at least the frame loop's frames in flight plus one images, it
-/// never does. Whether a frame's number has been submitted is read from the
-/// core's record of submitted timeline values, which `windowing::FrameLoop`
-/// adds each frame to (a caller submitting frames itself adds them with
-/// `core::note_timeline_signals`).
+/// host's sight of the timeline. If every writable image is still in use by
+/// an earlier frame, the update waits on the host for the oldest; with one
+/// update a frame and at least the frame loop's frames in flight plus one
+/// images, it never does. Whether a frame's number has been submitted is read
+/// from the core's record of submitted timeline values, which
+/// `windowing::FrameLoop` adds each frame to (a caller submitting frames itself
+/// adds them with `core::note_timeline_signals`).
 ///
 /// Before its first update the atlas has no picture: @ref use returns
 /// `VK_NULL_HANDLE`, and the pipeline draws in vertex color. The descriptor
@@ -119,8 +124,8 @@ class VG_PIPELINES_API StreamedAtlas {
   /// @param desc       The pictures' size and format, and the ring's depth.
   /// @return The atlas, holding no picture; or
   ///         `core::Status::Code::InvalidArgument` for an empty @p pipeline or
-  ///         @p timeline, a zero extent or slot count, or an extent beyond the
-  ///         device's `maxImageDimension2D`;
+  ///         @p timeline, a zero extent, fewer than two slots, or an extent
+  ///         beyond the device's `maxImageDimension2D`;
   ///         `core::Status::Code::Unsupported` for a format that is not an
   ///         uncompressed single-plane color format, or that the device
   ///         cannot sample with linear filtering and copy into; or a backend
@@ -151,9 +156,10 @@ class VG_PIPELINES_API StreamedAtlas {
   /// @param region_count  The number of @p regions.
   /// @return OK once recorded; `core::Status::Code::InvalidArgument` for an
   ///         empty atlas, a zero @p frame or one below a number already
-  ///         given, every image in use by frame @p frame already (too many
-  ///         updates in one frame for the ring) or by an earlier frame not
-  ///         yet submitted, or what `record_image_update` refuses; or a
+  ///         given, every writable image in use by frame @p frame already
+  ///         (too many updates while preserving the picture for @ref discard)
+  ///         or by an earlier frame not yet submitted, or what
+  ///         `record_image_update` refuses; or a
   ///         backend failure reading or waiting for the timeline. On an error
   ///         the current picture is unchanged.
   core::Status record_update(VkCommandBuffer cmd, std::uint64_t frame,
@@ -245,8 +251,8 @@ class VG_PIPELINES_API StreamedAtlas {
   };
 
   // Checks `frame` for an update, and returns the slot it copies into: the
-  // least recently used, the current picture last, once its last frame has
-  // completed -- waiting for that frame when it is an earlier one.
+  // least recently used, excluding the picture discard would restore, once
+  // its last frame has completed -- waiting for an earlier frame if needed.
   core::Result<std::uint32_t> take_slot(const char* call, std::uint64_t frame);
   // OK when the timeline has reached `frame` or a submission that sets it
   // has reached a queue, so that a wait for it returns.

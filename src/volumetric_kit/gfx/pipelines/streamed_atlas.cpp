@@ -38,9 +38,10 @@ core::Result<StreamedAtlas> StreamedAtlas::create(
     return core::Status::invalid_argument(
         "StreamedAtlas::create: empty timeline");
   }
-  if (desc.extent.width == 0 || desc.extent.height == 0 || desc.slots == 0) {
+  if (desc.extent.width == 0 || desc.extent.height == 0 || desc.slots < 2) {
     return core::Status::invalid_argument(
-        "StreamedAtlas::create: the extent and slot count must be non-zero");
+        "StreamedAtlas::create: the extent must be non-zero and at least "
+        "two slots are needed to preserve the picture for discard");
   }
   const core::Device& device = *pipeline.device_;
   const std::uint32_t max_dim = device.caps().limits().maxImageDimension2D;
@@ -246,7 +247,23 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
         std::to_string(newest_) + ", already given");
   }
 
-  // The least recently used image, the current picture last among equals.
+  // Keep the picture from before this frame intact, even if the frame's
+  // copies run before its present fails. Restoring an index in discard()
+  // cannot restore overwritten texels. Uses before the first update also
+  // have undo entries, so find the first update rather than the first entry.
+  std::uint32_t preserved = current_;
+  if (frame == newest_) {
+    for (const Undo& undo : undo_) {
+      if (undo.update) {
+        preserved = undo.current;
+        break;
+      }
+    }
+  }
+
+  // The least recently used writable image, the current picture last among
+  // equals. Creation guarantees at least two slots, so excluding the
+  // preserved picture always leaves a candidate.
   const auto later = [this](std::uint32_t a, std::uint32_t b) {
     const Slot& sa = slots_[a];
     const Slot& sb = slots_[b];
@@ -255,9 +272,9 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
     }
     return a == current_ && b != current_;
   };
-  std::uint32_t pick = 0;
-  for (std::uint32_t i = 1; i < slot_count(); ++i) {
-    if (later(pick, i)) {
+  std::uint32_t pick = kNoPicture;
+  for (std::uint32_t i = 0; i < slot_count(); ++i) {
+    if (i != preserved && (pick == kNoPicture || later(pick, i))) {
       pick = i;
     }
   }
@@ -272,8 +289,8 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
   }
   if (last >= frame) {
     return core::Status::invalid_argument(
-        name + ": every image is in use by frame " + std::to_string(frame) +
-        "; deepen the ring (StreamedAtlasDesc::slots)");
+        name + ": every image available for updates is in use by frame " +
+        std::to_string(frame) + "; deepen the ring (StreamedAtlasDesc::slots)");
   }
   // An earlier frame still uses it: wait for it, as the frame loop waits for
   // a slot's last frame -- once it is known to be submitted, so that the wait

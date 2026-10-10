@@ -144,10 +144,14 @@ the fragment stage all the same, so the queue itself orders those reads
 before the copy; without that wait, validation layers that do not track host
 waits on timeline semaphores (Ubuntu 24.04's 1.3.275) report a
 write-after-read hazard. The ring keeps the picture an update replaces
-intact, so `discard` can restore it, and is the structure a producer writing
-an atlas image from its own queue will need, where no barrier reaches. When
-every image is still used by an earlier frame, the update waits for the
-oldest on the host, as the frame loop waits for a slot; with frames in flight
+intact, so `discard` can restore it even if the frame ran before its present
+failed. That picture is excluded from updates until the next frame: the ring
+requires at least two images. A frame that starts with a picture can update
+at most `slots - 1` images; without a prior picture all slots are available.
+The ring is also the structure a producer writing an atlas image from its own
+queue will need, where no barrier reaches. When every writable image is still
+used by an earlier frame, the update waits for the oldest on the host, as the
+frame loop waits for a slot; with frames in flight
 plus one images and one update a frame it never does. It waits only for a
 frame the core's record shows submitted, so a frame that failed before its
 submit is refused rather than waited for forever. Destroying an atlas waits

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -191,6 +192,56 @@ TEST_F(ImageUpdateTest, UploadStagesThroughTheRetireQueue) {
   EXPECT_EQ(retire.poll(), 1u);
   EXPECT_EQ(retire.pending(), 0u);
   EXPECT_EQ(read(image.value()), (Texels{0xAABBCCDD, 0x11223344}));
+}
+
+// Large caller-supplied strides must be refused before they can overflow a
+// last-texel or byte-count calculation. Use tiny real resources, and never
+// submit a malformed copy even if a regression accepts it.
+TEST_F(ImageUpdateTest, RefusesOverflowingRegionSizesWithoutRecording) {
+  auto image = make_image({1, 3}, 17);
+  ASSERT_TRUE(image.ok()) << image.status().message();
+  auto source = make_source(Texels{0x11223344});
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto buffer = pool.value().allocate_primary();
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  ASSERT_TRUE(buffer.value().begin().ok());
+  const VkCommandBuffer cmd = buffer.value().handle();
+
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 17};
+  region.imageExtent = {1, 1, 1};
+  region.bufferRowLength = 1u << 28;
+  region.bufferImageHeight = 1u << 30;
+  // 2^64 + 4 bytes used to wrap to four and fit the one-texel source.
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  // Overflow the texel count itself, before conversion to bytes.
+  region.imageSubresource.layerCount = 5;
+  region.bufferRowLength = 1u << 31;
+  region.bufferImageHeight = 1u << 31;
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  // The stride product fits, but adding the final rows used to wrap to zero.
+  region.imageSubresource.layerCount = 2;
+  region.imageExtent.height = 3;
+  region.bufferRowLength = std::numeric_limits<uint32_t>::max();
+  region.bufferImageHeight = std::numeric_limits<uint32_t>::max();
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
+  ASSERT_TRUE(buffer.value().end().ok());
+  submit_and_wait(cmd);  // nothing was recorded
 }
 
 // Everything refused is refused before anything is recorded: the command

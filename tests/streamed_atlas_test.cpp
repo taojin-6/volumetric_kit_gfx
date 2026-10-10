@@ -432,6 +432,12 @@ TEST_F(StreamedAtlasTest, CreateRefusesWhatItCannotHold) {
           .status()
           .domain(),
       vkc::Status::Code::InvalidArgument);
+  bad.slots = 1;  // cannot both update and preserve the picture for discard
+  EXPECT_EQ(
+      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+          .status()
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
   bad = desc;
   bad.extent = {caps_.limits().maxImageDimension2D + 1, kSide};
   EXPECT_EQ(
@@ -640,13 +646,17 @@ TEST_F(StreamedAtlasTest, RefusesAFrameNumberBelowOneGiven) {
 TEST_F(StreamedAtlasTest, NeverWaitsForAFrameThatWasNotSubmitted) {
   std::optional<pipelines::StreamedAtlas> atlas;
   {
-    auto made = make_atlas(1);
+    auto made = make_atlas(2);
     ASSERT_TRUE(made.ok()) << made.status().message();
     atlas.emplace(std::move(made).value());
   }
   const Picture red = solid(kRed);
   Frame* dropped = begin_frame(1);
   ASSERT_NE(dropped, nullptr);
+  EXPECT_TRUE(
+      atlas->record_upload(dropped->cmd.handle(), 1, red.data(), sizeof(red))
+          .ok());
+  // Fill the ring: neither image's frame has reached the queue.
   EXPECT_TRUE(
       atlas->record_upload(dropped->cmd.handle(), 1, red.data(), sizeof(red))
           .ok());
@@ -693,33 +703,40 @@ TEST_F(StreamedAtlasTest, DiscardRestoresThePictureADroppedFrameReplaced) {
   EXPECT_EQ(drawn(*three), solid(kRed));
 }
 
-// A frame that never reaches a queue frees what it used at once: with one
-// image, the next frame's update takes it without waiting for a frame nothing
-// will submit, and the image keeps the layout frame 1 left it in.
+// A frame that never reaches a queue frees what it used at once: the next
+// frame's update takes that image without waiting for a frame nothing will
+// submit, and the image keeps its layout from before the discarded update.
 TEST_F(StreamedAtlasTest, DiscardFreesTheImagesOfAFrameThatNeverRuns) {
-  auto atlas = make_atlas(1);
+  auto atlas = make_atlas(2);
   ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+  // Initialize both images so restoring UNDEFINED would be wrong too.
   Frame* one = upload_and_draw(atlas.value(), 1, solid(kRed));
   ASSERT_NE(one, nullptr);
   EXPECT_EQ(drawn(*one), solid(kRed));
+  Frame* two = upload_and_draw(atlas.value(), 2, solid(kRed));
+  ASSERT_NE(two, nullptr);
+  EXPECT_EQ(drawn(*two), solid(kRed));
 
-  Frame* dropped = begin_frame(2);
+  Frame* dropped = begin_frame(3);
   ASSERT_NE(dropped, nullptr);
   const Picture green = solid(kGreen);
   EXPECT_TRUE(
       atlas.value()
-          .record_upload(dropped->cmd.handle(), 2, green.data(), sizeof(green))
+          .record_upload(dropped->cmd.handle(), 3, green.data(), sizeof(green))
           .ok());
-  draw(*dropped, atlas.value().use(2));
-  // Frame 2 is never submitted.
-  atlas.value().discard(2);
+  const vkc::Image* changed = atlas.value().picture();
+  draw(*dropped, atlas.value().use(3));
+  // Frame 3 is never submitted.
+  atlas.value().discard(3);
   ASSERT_TRUE(atlas.value().has_picture());
+  EXPECT_EQ(changed->layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   EXPECT_EQ(atlas.value().picture()->layout(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  Frame* three = upload_and_draw(atlas.value(), 3, solid(kBlue));
-  ASSERT_NE(three, nullptr);
-  EXPECT_EQ(drawn(*three), solid(kBlue));
+  Frame* four = upload_and_draw(atlas.value(), 4, solid(kBlue));
+  ASSERT_NE(four, nullptr);
+  EXPECT_EQ(atlas.value().picture(), changed);
+  EXPECT_EQ(drawn(*four), solid(kBlue));
 }
 
 // A discarded frame that did reach the queue -- its present failed -- may
@@ -739,14 +756,76 @@ TEST_F(StreamedAtlasTest, DiscardKeepsTheImagesOfAFrameThatReachedTheQueue) {
   atlas.value().discard(2);
   EXPECT_EQ(atlas.value().picture()->handle(), red);
 
-  // Frame 2 is held, drawing green: frame 3's update takes frame 1's image.
-  Frame* three = upload_and_draw(atlas.value(), 3, solid(kBlue));
+  // Red is reserved for frame 3's rollback, and green is still drawing.
+  // The update must wait for green instead of overwriting red or green early.
+  Frame* three = nullptr;
+  {
+    OpenGateLater open_later(*gate_);
+    three = upload_and_draw(atlas.value(), 3, solid(kBlue));
+    EXPECT_TRUE(open_later.opened()) << "the update waited for frame 2";
+  }
   ASSERT_NE(three, nullptr);
-  EXPECT_EQ(atlas.value().picture()->handle(), red);
-  EXPECT_NE(atlas.value().picture()->handle(), green);
-  open_gate(*gate_);
+  EXPECT_EQ(atlas.value().picture()->handle(), green);
+  EXPECT_NE(atlas.value().picture()->handle(), red);
   EXPECT_EQ(drawn(*two), solid(kGreen));
   EXPECT_EQ(drawn(*three), solid(kBlue));
+
+  // Its copy really ran, but discarding frame 3 must still restore red.
+  atlas.value().discard(3);
+  Frame* four = begin_frame(4);
+  ASSERT_NE(four, nullptr);
+  draw(*four, atlas.value().use(4));
+  submit(*four);
+  EXPECT_EQ(drawn(*four), solid(kRed));
+}
+
+// A frame can fill the writable slots, but cannot overwrite the picture it
+// would restore on discard. The commands reach the queue before the discard,
+// modeling a failed present; the next frame must still draw the old pixels.
+TEST_F(StreamedAtlasTest, MultipleUpdatesPreserveThePictureForDiscard) {
+  auto atlas = make_atlas(3);
+  ASSERT_TRUE(atlas.ok()) << atlas.status().message();
+  Frame* one = upload_and_draw(atlas.value(), 1, solid(kRed));
+  ASSERT_NE(one, nullptr);
+  EXPECT_EQ(drawn(*one), solid(kRed));
+  const VkImage original = atlas.value().picture()->handle();
+
+  Frame* two = begin_frame(2);
+  ASSERT_NE(two, nullptr);
+  const Picture green = solid(kGreen);
+  ASSERT_TRUE(
+      atlas.value()
+          .record_upload(two->cmd.handle(), 2, green.data(), sizeof(green))
+          .ok());
+  auto blue = make_source(solid(kBlue));
+  ASSERT_TRUE(blue.ok()) << blue.status().message();
+  OpenGateAtExit open_at_exit(*gate_);
+  VkBufferImageCopy whole{};
+  whole.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  whole.imageExtent = {kSide, kSide, 1};
+  ASSERT_TRUE(atlas.value()
+                  .record_update(two->cmd.handle(), 2, blue.value(), &whole, 1)
+                  .ok());
+  const VkImage updated = atlas.value().picture()->handle();
+  const Picture yellow = solid(kYellow);
+  EXPECT_EQ(
+      atlas.value()
+          .record_upload(two->cmd.handle(), 2, yellow.data(), sizeof(yellow))
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(atlas.value().picture()->handle(), updated);
+  draw(*two, atlas.value().use(2));
+  submit(*two, true);
+  atlas.value().discard(2);
+  EXPECT_EQ(atlas.value().picture()->handle(), original);
+
+  Frame* three = begin_frame(3);
+  ASSERT_NE(three, nullptr);
+  draw(*three, atlas.value().use(3));
+  submit(*three);
+  open_gate(*gate_);
+  EXPECT_EQ(drawn(*two), solid(kBlue));
+  EXPECT_EQ(drawn(*three), solid(kRed));
 }
 
 // Destroying an atlas waits for the newest frame that used it, so a frame

@@ -62,7 +62,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   number, updated by copies recorded into the frame -- tiles from device
   buffers (`record_update`) or host pixels (`record_upload`) -- bound with
   `use(frame.number)`, and given back with `discard(frame.number)` for a frame
-  that never reaches the queue.
+  that fails. At least two slots are required. A frame that starts with a
+  picture can record at most `slots - 1` updates, preserving that picture
+  for discard even if the frame's commands ran.
 - `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
   color, the atlas bound or not.
 
