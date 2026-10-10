@@ -93,6 +93,9 @@ struct Frame {
 /// themselves; it and @ref end_frame surface stale results as statuses
 /// classified by @ref swapchain_stale.
 ///
+/// A loop is neither copied nor moved: @ref create hands it out behind a
+/// `std::unique_ptr`, so it stays where it was made and is never empty.
+///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
 ///          the loop (it borrows both). Destruction drains the renderer's
 ///          queues (`core::Device::wait_idle`) to finish in-flight frames, so
@@ -104,9 +107,9 @@ struct Frame {
 ///
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
-/// RetireQueue retire(loop.value().timeline());
+/// RetireQueue retire(loop.value()->timeline());
 /// while (running) {
-///   auto frame = loop.value().begin_frame(window_extent());
+///   auto frame = loop.value()->begin_frame(window_extent());
 ///   if (!frame) return fail(frame.status());          // hard error only
 ///   if (!frame.value()) { wait_events(); continue; }  // minimized
 ///   const Frame& f = *frame.value();
@@ -114,15 +117,12 @@ struct Frame {
 ///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   f.target->end(f.cmd);
-///   core::Status end = loop.value().end_frame(f);
+///   core::Status end = loop.value()->end_frame(f);
 ///   if (!end.ok() && !swapchain_stale(end)) return fail(end);
 /// }
 /// @endcode
 class VG_WINDOWING_API FrameLoop {
  public:
-  /// @brief Construct an empty loop (owns nothing; `valid()` is false).
-  FrameLoop() = default;
-
   /// @brief Create a loop driving @p swapchain with @p frames_in_flight slots.
   /// @param device            A device with a graphics (and present) queue that
   ///                          enabled the renderer's requirements
@@ -133,15 +133,15 @@ class VG_WINDOWING_API FrameLoop {
   ///         for a zero count or empty swapchain;
   ///         `core::Status::Code::Unsupported` for a @p device without the
   ///         renderer's requirements; otherwise a propagated failure).
-  static core::Result<FrameLoop> create(const core::Device& device,
-                                        Swapchain& swapchain,
-                                        uint32_t frames_in_flight = 2);
+  static core::Result<std::unique_ptr<FrameLoop>> create(
+      const core::Device& device, Swapchain& swapchain,
+      uint32_t frames_in_flight = 2);
 
   ~FrameLoop();
-  FrameLoop(FrameLoop&& other) noexcept;
-  FrameLoop& operator=(FrameLoop&& other) noexcept;
   FrameLoop(const FrameLoop&) = delete;
   FrameLoop& operator=(const FrameLoop&) = delete;
+  FrameLoop(FrameLoop&&) = delete;
+  FrameLoop& operator=(FrameLoop&&) = delete;
 
   /// @brief Begin the next frame, owning the windowed-loop protocol: rebuilds
   ///        the swapchain when it went stale (a prior out-of-date / suboptimal
@@ -214,10 +214,10 @@ class VG_WINDOWING_API FrameLoop {
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
   ///         rebuilds automatically) or another failed `VkResult`;
-  ///         `core::Status::Code::InvalidArgument` when this loop is empty,
-  ///         @p frame did not come from its @ref begin_frame, a wait has a
-  ///         zero stage mask, a signal names @ref timeline, or
-  ///         `core::check_timeline_points` refuses the values.
+  ///         `core::Status::Code::InvalidArgument` when @p frame did not come
+  ///         from its @ref begin_frame, a wait has a zero stage mask, a signal
+  ///         names @ref timeline, or `core::check_timeline_points` refuses the
+  ///         values.
   /// @note On a failure *before* the submit reaches the queue -- a refusal
   ///       included -- the frame's commands never run: an empty submit in its
   ///       place consumes the acquire and sets its number -- and
@@ -235,21 +235,17 @@ class VG_WINDOWING_API FrameLoop {
   /// @return The timeline the loop's frames set: it reaches a frame's
   ///         @ref Frame::number once that frame's GPU work completes, in
   ///         submission order. It stays at one address for the loop's life,
-  ///         moves of the loop included, so a @ref RetireQueue or a
-  ///         `core::TimelinePoint` may borrow it; another queue's work may
-  ///         wait for a frame through it. Only the loop sets it.
+  ///         so a @ref RetireQueue or a `core::TimelinePoint` may borrow it;
+  ///         another queue's work may wait for a frame through it. Only the
+  ///         loop sets it.
   /// @note Through MoltenVK a number is reached before the submission's
   ///       completion handler has run, and the frame's query results become
   ///       readable only then: read them once the loop reuses the slot, as
   ///       an attached @ref Profiler does.
-  /// @pre @ref valid.
-  const core::TimelineSemaphore& timeline() const noexcept {
-    return *timeline_;
-  }
+  const core::TimelineSemaphore& timeline() const noexcept { return timeline_; }
 
   /// @return The newest frame number whose GPU work has completed (0 before
-  ///         the first); `core::Status::Code::InvalidArgument` for an empty
-  ///         loop; or a backend `core::Status` (device lost).
+  ///         the first), or a backend `core::Status` (device lost).
   core::Result<uint64_t> completed() const;
 
   /// @return The newest frame number submitted (0 before the first): what
@@ -273,10 +269,9 @@ class VG_WINDOWING_API FrameLoop {
     return static_cast<uint32_t>(command_buffers_.size());
   }
 
-  /// @return `true` if this owns frame resources.
-  bool valid() const noexcept { return timeline_ != nullptr; }
-
  private:
+  FrameLoop(const core::Device& device, Swapchain& swapchain);
+
   // Rebuild the per-image sync state (render_finished_ / image_frames_) when
   // the swapchain handle changed — i.e. after a Swapchain::recreate produced a
   // fresh chain (see last_swapchain_). A no-op (one handle comparison) on the
@@ -314,11 +309,10 @@ class VG_WINDOWING_API FrameLoop {
   // errors are unreportable from the destructor and moot on a lost device.
   void drain() noexcept;
 
-  const core::Device* device_ = nullptr;  // borrowed; outlives this
-  Swapchain* swapchain_ = nullptr;        // borrowed; outlives this
-  // The frame numbers. Behind a pointer so its address survives a move of the
-  // loop, as timeline() promises.
-  std::unique_ptr<core::TimelineSemaphore> timeline_;
+  const core::Device& device_;  // borrowed; outlives this
+  Swapchain& swapchain_;        // borrowed; outlives this
+  // The frame numbers.
+  core::TimelineSemaphore timeline_;
   // The newest frame number submitted; the next frame is one more.
   uint64_t submitted_ = 0;
   // Declared before the buffers it owns so they free back before it is
