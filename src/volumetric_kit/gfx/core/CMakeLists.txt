@@ -27,10 +27,12 @@ target_sources(
           graphics_pipeline.cpp
           render_target.cpp
           image_barrier.cpp
+          image_update.cpp
           mip_chain.cpp
           buffer_barrier.cpp
           offscreen_target.cpp
-          texture_upload.cpp)
+          texture_upload.cpp
+          upload_steps.hpp)
 
 # Generated headers: the VG_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VG_CORE_API +

@@ -53,9 +53,28 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `end_frame` checks them as the core's submits check theirs, refuses a wait
   for a value not yet submitted to be set, and adds what each frame sets to
   the core's record of submitted values.
+- `core`: `record_image_update` and `record_image_upload`
+  (`core/image_update.hpp`) record an image's update into a frame's command
+  buffer between the transitions that order it; an upload stages its pixels
+  through a buffer a `RetireQueue` frees once the frame completes.
+- `pipelines`: `StreamedAtlas` (`pipelines/streamed_atlas.hpp`), the atlas a
+  live `HybridMeshPipeline` mesh samples: a ring of images reused by frame
+  number, updated by copies recorded into the frame -- tiles from device
+  buffers (`record_update`) or host pixels (`record_upload`) -- bound with
+  `use(frame.number)`, and given back with `discard(frame.number)` for a frame
+  that fails. At least two slots are required. A frame that starts with a
+  picture can record at most `slots - 1` updates, preserving that picture
+  for discard even if the frame's commands ran.
+- `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
+  color, the atlas bound or not.
 
 ### Changed
 
+- `pipelines`: **`HybridMeshPipeline` owns a fallback atlas**, and a frame
+  with no atlas draws in vertex color instead of drawing nothing. Migrating:
+  `HybridMeshPipeline::create(device.handle(), layout)` →
+  `create(device, allocator, layout)`; a 1x1 set bound only to satisfy the old
+  precondition can go (pass `VK_NULL_HANDLE`).
 - `core`: **`RetireQueue` is keyed on timeline values**, not `VkFence`s.
   Migrating: `RetireQueue(device.handle())` → `RetireQueue(timeline)` on a
   `core::TimelineSemaphore` -- `FrameLoop::timeline()` for what frames use --

@@ -9,7 +9,9 @@
 // the interpolated per-vertex color (the TSDF fallback) otherwise. Whenever
 // albedo is shown the atlas is sampled unconditionally -- in uniform control
 // flow, so its implicit-LOD screen derivatives are always well defined -- and
-// the unused result is simply not selected. Optionally lit by a single
+// the unused result is simply not selected. The kHybridMeshVertexColor flag
+// selects the vertex color everywhere (HybridMeshPipeline::submit sets it when
+// it binds its fallback for a frame with no atlas). Optionally lit by a single
 // world-space directional light plus a constant ambient term (the
 // kHybridMeshLit flag); unlit passes the albedo straight through. Two-sided:
 // the normal is flipped for back faces since the pipeline does not cull. The
@@ -39,6 +41,7 @@ pc;
 layout(constant_id = 0) const uint kFlagLit = 0u;      // kHybridMeshLit
 layout(constant_id = 1) const uint kFlagNormals = 0u;  // kHybridMeshNormals
 layout(constant_id = 2) const bool kSrgbTarget = false;
+layout(constant_id = 3) const uint kFlagVertexColor = 0u;  // kHybridMeshVertexColor
 
 layout(location = 0) out vec4 out_color;
 
@@ -64,9 +67,12 @@ void main() {
   }
 
   // Sample the atlas unconditionally (uniform control flow keeps the LOD
-  // derivatives defined), then select the source the vertex stage resolved.
+  // derivatives defined), then select the source the vertex stage resolved,
+  // or the vertex color everywhere when the frame asks for it.
   vec3 atlas_albedo = texture(atlas_tex, frag_uv).rgb;
-  vec3 albedo = frag_use_vertex_color != 0u ? frag_color.rgb : atlas_albedo;
+  bool use_vertex_color =
+      frag_use_vertex_color != 0u || (pc.flags & kFlagVertexColor) != 0u;
+  vec3 albedo = use_vertex_color ? frag_color.rgb : atlas_albedo;
 
   // The lit flag requests lit shading; otherwise pass the albedo through flat.
   if ((pc.flags & kFlagLit) != 0u) {

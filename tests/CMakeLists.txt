@@ -80,6 +80,7 @@ add_executable(
   graphics_pipeline_test.cpp
   render_target_test.cpp
   image_barrier_test.cpp
+  image_update_test.cpp
   buffer_barrier_test.cpp
   offscreen_target_test.cpp
   sampler_test.cpp
@@ -155,7 +156,8 @@ add_executable(
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
   pbr_scene_test.cpp
-  shader_common_test.cpp)
+  shader_common_test.cpp
+  streamed_atlas_test.cpp)
 target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)

@@ -145,7 +145,8 @@ namespace volumetric_kit::gfx::pipelines {
 /// pipelines::HybridMeshFrame frame;
 /// frame.extent = target_extent;
 /// frame.view_proj = camera_view_proj;
-/// frame.atlas = atlas_set;  // required: a null set records NOTHING
+/// // A pipelines::StreamedAtlas; VK_NULL_HANDLE draws in vertex color.
+/// frame.atlas = atlas.use(f.number);
 /// frame.draws = &draw;
 /// frame.draw_count = 1;
 /// // ... after a barrier/semaphore makes recon's writes visible to the draw
