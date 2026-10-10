@@ -73,24 +73,30 @@ consumer/example.
 
 ## RAII resource types
 
-Every type that owns a Vulkan/VMA handle — or a deleter that frees one — follows the same
-shape. These are the mistakes reviews keep catching, so get them right at authoring time:
+A type that owns Vulkan/VMA objects is one of two kinds
+([DECISIONS.md](DECISIONS.md#2026-10-10--an-aggregate-is-neither-copied-nor-moved)):
 
-- **Move-only.** `= delete` the copy ctor/assign; `= default` (or hand-write) the move pair.
-  A copyable wrapper double-frees — e.g. a copied `std::function` deleter runs twice.
-- **Reset *every* owned member on each ownership transfer** — in the move ctor, move
-  assignment, *and* `destroy()`. Null the handle *and* zero the metadata (`size_`,
-  `extent_`, `format_`, `mapped_`, …) and the deleter, so a moved-from / destroyed object
-  is fully empty and its accessors stay consistent with `valid()`. Forgetting a scalar
-  (e.g. `size_`/`extent_`) is the recurring miss.
-- **`operator=` guards self-move** (`if (this != &other)`) and runs `destroy()` on the
-  current state before adopting the source's.
-- **Type-erase the backend via a `std::function<void()>` deleter** so VMA/etc. stay out of
-  the public header (as the core's `Buffer`/`Image` do). Reset the moved-from `deleter_` to
-  `nullptr` explicitly — a moved-from `std::function` is valid-but-unspecified and can
-  otherwise run twice. The producing owner (e.g. the device) must outlive the resource:
-  state that in an `@warning` and point at `RetireQueue` for fence-gated destruction.
-- **Validate before creating** — reject zero size/extent, `usage == 0`,
+- **An aggregate** owns several objects and borrows others (`windowing::FrameLoop`). It
+  deletes copy *and* move, and `create` returns `core::Result<std::unique_ptr<T>>` from a
+  private constructor. It is never empty: no default constructor, `valid()` or
+  `destroy()`; borrowed objects are references; the destructor tears down once.
+- **A handle wrapper** owns one handle, with its metadata and deleter. It is a move-only
+  value, and these are the mistakes reviews keep catching:
+  - **Move-only.** `= delete` the copy ctor/assign; `= default` (or hand-write) the move pair.
+    A copyable wrapper double-frees — e.g. a copied `std::function` deleter runs twice.
+  - **Reset *every* owned member on each ownership transfer** — in the move ctor, move
+    assignment, *and* `destroy()`. Null the handle *and* zero the metadata (`size_`,
+    `extent_`, `format_`, `mapped_`, …) and the deleter, so a moved-from / destroyed object
+    is fully empty and its accessors stay consistent with `valid()`. Forgetting a scalar
+    (e.g. `size_`/`extent_`) is the recurring miss.
+  - **`operator=` guards self-move** (`if (this != &other)`) and runs `destroy()` on the
+    current state before adopting the source's.
+  - **Type-erase the backend via a `std::function<void()>` deleter** so VMA/etc. stay out of
+    the public header (as the core's `Buffer`/`Image` do). Reset the moved-from `deleter_` to
+    `nullptr` explicitly — a moved-from `std::function` is valid-but-unspecified and can
+    otherwise run twice. The producing owner (e.g. the device) must outlive the resource:
+    state that in an `@warning` and point at `RetireQueue` for fence-gated destruction.
+- **Validate before creating**, in either kind — reject zero size/extent, `usage == 0`,
   `VK_FORMAT_UNDEFINED`, etc. with a non-OK `Status` before touching Vulkan/VMA.
 
 **Tests for every move-only type** (not just the headline behavior):

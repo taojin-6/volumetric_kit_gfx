@@ -16,6 +16,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -247,9 +248,9 @@ TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  EXPECT_EQ(loop.value().frames_in_flight(), 2u);
+  EXPECT_EQ(loop.value()->frames_in_flight(), 2u);
 
-  const vkc::Status status = run_frames(loop.value(), /*count=*/8);
+  const vkc::Status status = run_frames(*loop.value(), /*count=*/8);
   EXPECT_TRUE(status.ok()) << status.message();
 
   vkDeviceWaitIdle(device_->handle());
@@ -272,10 +273,10 @@ TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
 
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  loop.value().set_profiler(&profiler.value());
+  loop.value()->set_profiler(&profiler.value());
 
   for (int i = 0; i < 6; ++i) {
-    auto frame = loop.value().begin_frame();
+    auto frame = loop.value()->begin_frame();
     ASSERT_TRUE(frame.ok()) << frame.status().message();
     {
       // Scope the whole render so its GPU timestamps + label sit outside the
@@ -287,7 +288,7 @@ TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
       frame.value().target->begin(frame.value().cmd, begin);
       frame.value().target->end(frame.value().cmd);
     }
-    ASSERT_TRUE(loop.value().end_frame(frame.value()).ok());
+    ASSERT_TRUE(loop.value()->end_frame(frame.value()).ok());
   }
   vkDeviceWaitIdle(device_->handle());
 
@@ -299,47 +300,6 @@ TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
   // passed the frame's own cmd to the profiler's begin_frame, and the fixture's
   // validation capture fails the test on any mis-wired reset / timestamp.
   EXPECT_EQ(m.sections[0].has_gpu, profiler.value().gpu_timing());
-}
-
-// A moved FrameLoop carries its attached profiler: the moved-to loop drives
-// begin/end_frame, so a stage opened on its frames still resolves. Guards the
-// move pair against dropping the borrowed profiler_ (which would silently stop
-// profiling after any move). `profiler` is declared before the loops so it
-// outlives both.
-TEST_F(WindowingTest, MovedFrameLoopKeepsDrivingProfiler) {
-  win::Swapchain sc = make_swapchain();
-
-  vg::ProfilerConfig pcfg;
-  pcfg.frames_in_flight = 2;
-  auto profiler = vg::Profiler::create(*device_, pcfg);
-  ASSERT_TRUE(profiler.ok()) << profiler.status().message();
-
-  auto created = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
-  ASSERT_TRUE(created.ok()) << created.status().message();
-  created.value().set_profiler(&profiler.value());
-
-  // Move-construct: the borrowed profiler_ must travel to `loop`.
-  win::FrameLoop loop = std::move(created).value();
-
-  for (int i = 0; i < 4; ++i) {
-    auto frame = loop.begin_frame();
-    ASSERT_TRUE(frame.ok()) << frame.status().message();
-    {
-      vg::Profiler::Scope pass =
-          profiler.value().gpu_scope(frame.value().cmd, "moved");
-      vg::RenderTargetBeginInfo begin;
-      begin.clear_color.float32[3] = 1.0f;
-      frame.value().target->begin(frame.value().cmd, begin);
-      frame.value().target->end(frame.value().cmd);
-    }
-    ASSERT_TRUE(loop.end_frame(frame.value()).ok());
-  }
-  vkDeviceWaitIdle(device_->handle());
-
-  // The moved-to loop drove the profiler, so a "moved" stage was published.
-  const vg::FrameMetrics& m = profiler.value().metrics();
-  ASSERT_FALSE(m.sections.empty());
-  EXPECT_STREQ(m.sections[0].name, "moved");
 }
 
 TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
@@ -362,7 +322,7 @@ TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
 
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  EXPECT_TRUE(run_frames(loop.value(), 4).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 4).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -387,11 +347,11 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
   // The untouched chain still drives frames...
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 2).ok());
 
   // ...and a later non-zero recreate recovers normally under the same loop.
   ASSERT_TRUE(sc.recreate({320, 240}).ok());
-  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 2).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -418,7 +378,7 @@ TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   ASSERT_TRUE(loop.ok()) << loop.status().message();
   // run_frames' begin info clears depth too: load_op defaults to CLEAR and
   // clear_depth to the far plane, so every frame writes the depth attachment.
-  EXPECT_TRUE(run_frames(loop.value(), 6).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 6).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -430,7 +390,7 @@ TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
   ASSERT_TRUE(sc.valid());
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
 
   ASSERT_TRUE(sc.recreate({320, 240}).ok());
   EXPECT_EQ(sc.extent().width, 320u);
@@ -442,7 +402,7 @@ TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
     EXPECT_TRUE(sc.render_target(i).valid());
     EXPECT_EQ(sc.render_target(i).layout().depth_format, VK_FORMAT_D32_SFLOAT);
   }
-  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -492,13 +452,13 @@ TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  EXPECT_TRUE(run_frames(loop.value(), 1).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 1).ok());
   vkDeviceWaitIdle(device_->handle());
 
   // Move the swapchain out from under the loop: the borrowed &sc now refers to
   // an empty object.
   win::Swapchain stolen = std::move(sc);
-  auto frame = loop.value().begin_frame();
+  auto frame = loop.value()->begin_frame();
   ASSERT_FALSE(frame.ok());
   EXPECT_EQ(frame.status().domain(), vkc::Status::Code::InvalidArgument);
   vkDeviceWaitIdle(device_->handle());
@@ -509,11 +469,11 @@ TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
 
-  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
   // Recreate under the SAME FrameLoop (the documented resize pattern): the loop
   // must resync its per-image sync objects and keep driving frames.
   ASSERT_TRUE(sc.recreate({320, 240}).ok());
-  EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -528,20 +488,20 @@ TEST_F(WindowingTest, ManagedBeginFrameSkipsAndRebuilds) {
 
   int callback_runs = 0;
   VkExtent2D callback_extent{};
-  loop.value().set_recreate_callback([&](VkExtent2D extent) {
+  loop.value()->set_recreate_callback([&](VkExtent2D extent) {
     ++callback_runs;
     callback_extent = extent;
     return vkc::Status{};
   });
 
   // Zero extent: a skipped tick — no acquire, no rebuild.
-  auto skipped = loop.value().begin_frame(VkExtent2D{0, 0});
+  auto skipped = loop.value()->begin_frame(VkExtent2D{0, 0});
   ASSERT_TRUE(skipped.ok()) << skipped.status().message();
   EXPECT_FALSE(skipped.value().has_value());
   EXPECT_EQ(callback_runs, 0);
 
   // Matching extent: a normal frame, still no rebuild.
-  auto frame = loop.value().begin_frame(VkExtent2D{256, 256});
+  auto frame = loop.value()->begin_frame(VkExtent2D{256, 256});
   ASSERT_TRUE(frame.ok()) << frame.status().message();
   ASSERT_TRUE(frame.value().has_value());
   {
@@ -550,12 +510,12 @@ TEST_F(WindowingTest, ManagedBeginFrameSkipsAndRebuilds) {
     frame.value()->target->begin(frame.value()->cmd, begin);
     frame.value()->target->end(frame.value()->cmd);
   }
-  ASSERT_TRUE(loop.value().end_frame(*frame.value()).ok());
+  ASSERT_TRUE(loop.value()->end_frame(*frame.value()).ok());
   EXPECT_EQ(callback_runs, 0);
 
   // Changed extent: the loop rebuilds the swapchain, runs the callback with
   // the rebuilt extent, and still delivers a frame.
-  auto resized = loop.value().begin_frame(VkExtent2D{320, 240});
+  auto resized = loop.value()->begin_frame(VkExtent2D{320, 240});
   ASSERT_TRUE(resized.ok()) << resized.status().message();
   ASSERT_TRUE(resized.value().has_value());
   EXPECT_EQ(callback_runs, 1);
@@ -568,7 +528,7 @@ TEST_F(WindowingTest, ManagedBeginFrameSkipsAndRebuilds) {
     resized.value()->target->begin(resized.value()->cmd, begin);
     resized.value()->target->end(resized.value()->cmd);
   }
-  ASSERT_TRUE(loop.value().end_frame(*resized.value()).ok());
+  ASSERT_TRUE(loop.value()->end_frame(*resized.value()).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -578,47 +538,13 @@ TEST_F(WindowingTest, ManagedBeginFramePropagatesCallbackFailure) {
   win::Swapchain sc = make_swapchain({256, 256});
   auto loop = win::FrameLoop::create(*device_, sc, 2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
-  loop.value().set_recreate_callback([](VkExtent2D) {
+  loop.value()->set_recreate_callback([](VkExtent2D) {
     return vkc::Status::out_of_memory("test: depth rebuild failed");
   });
 
-  auto resized = loop.value().begin_frame(VkExtent2D{320, 240});
+  auto resized = loop.value()->begin_frame(VkExtent2D{320, 240});
   ASSERT_FALSE(resized.ok());
   EXPECT_EQ(resized.status().domain(), vkc::Status::Code::OutOfMemory);
-  vkDeviceWaitIdle(device_->handle());
-}
-
-// The recreate callback is a borrowed hook moved with the loop (like the
-// profiler): a move-constructed loop still runs it, and a changed extent driven
-// through the moved loop rebuilds and invokes it with the rebuilt extent.
-TEST_F(WindowingTest, MovedFrameLoopKeepsRunningRecreateCallback) {
-  win::Swapchain sc = make_swapchain({256, 256});
-  auto created = win::FrameLoop::create(*device_, sc, 2);
-  ASSERT_TRUE(created.ok()) << created.status().message();
-
-  int callback_runs = 0;
-  VkExtent2D callback_extent{};
-  created.value().set_recreate_callback([&](VkExtent2D extent) {
-    ++callback_runs;
-    callback_extent = extent;
-    return vkc::Status{};
-  });
-
-  // Move-construct after the hook is set; the moved-to loop must carry it.
-  win::FrameLoop loop = std::move(created.value());
-
-  auto resized = loop.begin_frame(VkExtent2D{320, 240});
-  ASSERT_TRUE(resized.ok()) << resized.status().message();
-  ASSERT_TRUE(resized.value().has_value());
-  EXPECT_EQ(callback_runs, 1);
-  EXPECT_EQ(callback_extent.width, 320u);
-  {
-    vg::RenderTargetBeginInfo begin;
-    begin.clear_color.float32[3] = 1.0f;
-    resized.value()->target->begin(resized.value()->cmd, begin);
-    resized.value()->target->end(resized.value()->cmd);
-  }
-  ASSERT_TRUE(loop.end_frame(*resized.value()).ok());
   vkDeviceWaitIdle(device_->handle());
 }
 
@@ -632,7 +558,7 @@ TEST_F(WindowingTest, DestructionDrainsInFlightFrames) {
   {
     auto loop = win::FrameLoop::create(*device_, sc, 2);
     ASSERT_TRUE(loop.ok()) << loop.status().message();
-    EXPECT_TRUE(run_frames(loop.value(), 3).ok());
+    EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
   }
 }
 
@@ -665,15 +591,22 @@ TEST(SwapchainEmpty, OperationsFailCleanly) {
   EXPECT_EQ(recreated.domain(), vkc::Status::Code::InvalidArgument);
 }
 
-// end_frame on an empty loop (default-constructed or moved-from) fails with
-// InvalidArgument instead of dereferencing a null swapchain and indexing empty
-// vectors. Frame is a public aggregate with every member defaulted, so this is
-// reachable without any Vulkan object at all -- and needs no instance/device,
-// so it runs everywhere.
-TEST(FrameLoopEmpty, EndFrameFailsCleanly) {
-  win::FrameLoop loop;
-  ASSERT_FALSE(loop.valid());
-  const vkc::Status ended = loop.end_frame(win::Frame{});
+// A loop stays where create made it: it can be neither copied nor moved, so it
+// is never empty.
+static_assert(!std::is_copy_constructible_v<win::FrameLoop> &&
+                  !std::is_copy_assignable_v<win::FrameLoop> &&
+                  !std::is_move_constructible_v<win::FrameLoop> &&
+                  !std::is_move_assignable_v<win::FrameLoop>,
+              "FrameLoop is neither copied nor moved");
+
+// Frame is a public aggregate with every member defaulted, so end_frame can
+// be handed one its begin_frame never returned. It fails with InvalidArgument
+// instead of indexing the loop's per-slot and per-image state.
+TEST_F(WindowingTest, FrameLoopEndFrameRefusesAFrameItDidNotHandOut) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  const vkc::Status ended = loop.value()->end_frame(win::Frame{});
   ASSERT_FALSE(ended.ok());
   EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -715,54 +648,6 @@ TEST_F(WindowingTest, SwapchainSelfMoveAssignIsSafe) {
   sc = std::move(*alias);   // guarded by if (this != &other)
   EXPECT_TRUE(sc.valid());  // unchanged and still usable
   EXPECT_NE(sc.format(), VK_FORMAT_UNDEFINED);
-}
-
-TEST_F(WindowingTest, FrameLoopMoveLeavesSourceEmpty) {
-  win::Swapchain sc = make_swapchain();
-  auto created = win::FrameLoop::create(*device_, sc, 2);
-  ASSERT_TRUE(created.ok()) << created.status().message();
-
-  win::FrameLoop moved(std::move(created).value());
-  EXPECT_TRUE(moved.valid());
-  EXPECT_FALSE(created.value().valid());  // NOLINT(bugprone-use-after-move)
-  // The moved-to loop owns the resources and drives frames; confirm it works.
-  EXPECT_TRUE(run_frames(moved, 2).ok());
-  vkDeviceWaitIdle(device_->handle());
-}
-
-TEST_F(WindowingTest, FrameLoopMoveAssignOverLiveLeavesSourceEmpty) {
-  // Each swapchain needs its own surface (one live swapchain per surface).
-  win::Surface surface_b = make_headless_surface();
-  ASSERT_TRUE(surface_b.valid());
-  win::Swapchain sc_a = make_swapchain();
-  win::Swapchain sc_b = make_swapchain_on(surface_b.handle());
-  auto a = win::FrameLoop::create(*device_, sc_a, 2);
-  auto b = win::FrameLoop::create(*device_, sc_b, 2);
-  ASSERT_TRUE(a.ok()) << a.status().message();
-  ASSERT_TRUE(b.ok()) << b.status().message();
-
-  // Leave b with in-flight work so the move-assign's drain() has something to
-  // wait on before it frees b's command pool + buffers: freeing them while the
-  // GPU still references them is a fault the validation-with-teeth fixture (and
-  // ASan/LSan on the wrong free order) catches here.
-  EXPECT_TRUE(run_frames(b.value(), 2).ok());
-  b.value() = std::move(a.value());
-  EXPECT_TRUE(b.value().valid());
-  EXPECT_FALSE(a.value().valid());  // NOLINT(bugprone-use-after-move)
-  EXPECT_TRUE(run_frames(b.value(), 2).ok());  // adopted loop drives sc_a
-  vkDeviceWaitIdle(device_->handle());
-}
-
-TEST_F(WindowingTest, FrameLoopSelfMoveAssignIsSafe) {
-  win::Swapchain sc = make_swapchain();
-  auto loop = win::FrameLoop::create(*device_, sc, 2);
-  ASSERT_TRUE(loop.ok()) << loop.status().message();
-
-  win::FrameLoop* alias = &loop.value();
-  loop.value() = std::move(*alias);  // guarded by if (this != &other)
-  EXPECT_TRUE(loop.value().valid());
-  EXPECT_TRUE(run_frames(loop.value(), 2).ok());
-  vkDeviceWaitIdle(device_->handle());
 }
 
 TEST_F(WindowingTest, SurfaceMoveLeavesSourceEmpty) {

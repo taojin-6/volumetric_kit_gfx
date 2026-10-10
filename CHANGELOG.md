@@ -265,3 +265,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
   26.04, so no leg builds on the core's 1.3.204 header floor; the oldest
   headers in CI are 24.04's 1.3.275.
+- `windowing`: **`FrameLoop` is neither copied nor moved.**
+  `FrameLoop::create` returns `core::Result<std::unique_ptr<FrameLoop>>`, and
+  the default constructor and `valid()` are gone: a loop is never empty.
+  Migrating: `loop.value().begin_frame(...)` → `loop.value()->begin_frame(...)`,
+  and hold a loop by `std::unique_ptr` where it was held by value.
+  `WindowedApp::frame_loop()` still returns a reference.

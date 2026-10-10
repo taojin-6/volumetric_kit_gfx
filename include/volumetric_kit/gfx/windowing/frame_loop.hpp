@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -65,6 +66,9 @@ struct Frame {
 /// themselves; it and @ref end_frame surface stale results as statuses
 /// classified by @ref swapchain_stale.
 ///
+/// A loop is neither copied nor moved: @ref create hands it out behind a
+/// `std::unique_ptr`, so it stays where it was made and is never empty.
+///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
 ///          the loop (it borrows both). Destruction drains the renderer's
 ///          queues (`core::Device::wait_idle`) to finish in-flight frames, so
@@ -77,22 +81,19 @@ struct Frame {
 /// @code
 /// auto loop = windowing::FrameLoop::create(device, swapchain);
 /// while (running) {
-///   auto frame = loop.value().begin_frame(window_extent());
+///   auto frame = loop.value()->begin_frame(window_extent());
 ///   if (!frame) return fail(frame.status());          // hard error only
 ///   if (!frame.value()) { wait_events(); continue; }  // minimized
 ///   const Frame& f = *frame.value();
 ///   f.target->begin(f.cmd, clear);
 ///   // ... bind pipeline, set viewport/scissor, draw ...
 ///   f.target->end(f.cmd);
-///   core::Status end = loop.value().end_frame(f);
+///   core::Status end = loop.value()->end_frame(f);
 ///   if (!end.ok() && !swapchain_stale(end)) return fail(end);
 /// }
 /// @endcode
 class VG_WINDOWING_API FrameLoop {
  public:
-  /// @brief Construct an empty loop (owns nothing; `valid()` is false).
-  FrameLoop() = default;
-
   /// @brief Create a loop driving @p swapchain with @p frames_in_flight slots.
   /// @param device            A device with a graphics (and present) queue that
   ///                          enabled the renderer's requirements
@@ -103,15 +104,15 @@ class VG_WINDOWING_API FrameLoop {
   ///         for a zero count or empty swapchain;
   ///         `core::Status::Code::Unsupported` for a @p device without the
   ///         renderer's requirements; otherwise a propagated failure).
-  static core::Result<FrameLoop> create(const core::Device& device,
-                                        Swapchain& swapchain,
-                                        uint32_t frames_in_flight = 2);
+  static core::Result<std::unique_ptr<FrameLoop>> create(
+      const core::Device& device, Swapchain& swapchain,
+      uint32_t frames_in_flight = 2);
 
   ~FrameLoop();
-  FrameLoop(FrameLoop&& other) noexcept;
-  FrameLoop& operator=(FrameLoop&& other) noexcept;
   FrameLoop(const FrameLoop&) = delete;
   FrameLoop& operator=(const FrameLoop&) = delete;
+  FrameLoop(FrameLoop&&) = delete;
+  FrameLoop& operator=(FrameLoop&&) = delete;
 
   /// @brief Begin the next frame, owning the windowed-loop protocol: rebuilds
   ///        the swapchain when it went stale (a prior out-of-date / suboptimal
@@ -163,8 +164,8 @@ class VG_WINDOWING_API FrameLoop {
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
   ///         @ref swapchain_stale; the next extent-taking @ref begin_frame
   ///         rebuilds automatically) or another failed `VkResult`;
-  ///         `core::Status::Code::InvalidArgument` when this loop is empty or
-  ///         @p frame did not come from its @ref begin_frame.
+  ///         `core::Status::Code::InvalidArgument` when @p frame did not come
+  ///         from its @ref begin_frame.
   /// @note On a failure *before* the submit reaches the queue, the slot's sync
   ///       state is restored (a brief blocking submit) so the *slot* stays
   ///       reusable — but the image this frame acquired was never presented,
@@ -192,10 +193,9 @@ class VG_WINDOWING_API FrameLoop {
     return static_cast<uint32_t>(in_flight_.size());
   }
 
-  /// @return `true` if this owns frame resources.
-  bool valid() const noexcept { return !in_flight_.empty(); }
-
  private:
+  FrameLoop(const core::Device& device, Swapchain& swapchain);
+
   // Rebuild the per-image sync objects (render_finished_ / images_in_flight_)
   // when the swapchain handle changed — i.e. after a Swapchain::recreate
   // produced a fresh chain (see last_swapchain_). A no-op (one handle
@@ -218,8 +218,8 @@ class VG_WINDOWING_API FrameLoop {
   // are unreportable from the destructor and moot on a lost device.
   void drain() noexcept;
 
-  const core::Device* device_ = nullptr;  // borrowed; outlives this
-  Swapchain* swapchain_ = nullptr;        // borrowed; outlives this
+  const core::Device& device_;  // borrowed; outlives this
+  Swapchain& swapchain_;        // borrowed; outlives this
   // Declared before the buffers it owns so they free back before it is
   // destroyed.
   core::CommandPool pool_;
