@@ -448,8 +448,9 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   offscreen readback or texture upload of one is refused rather than sized.
 - **The oldest supported headers are the core's: 1.3.204, and 1.3.208 on
   Apple.** `core/vulkan.hpp` forwards to the core's umbrella, whose check
-  refuses older headers in every gfx translation unit; the Ubuntu 22.04 leg
-  builds on its system's 1.3.204.
+  refuses older headers in every gfx translation unit. No gfx leg builds on
+  that floor since the Ubuntu 22.04 leg went (2026-10-10): the oldest headers
+  in CI are Ubuntu 24.04's 1.3.275.
 - **gfx turns the core's vulkan tier on and links it PUBLIC.** gfx's public
   `core/vulkan.hpp` and `core/result.hpp` include the tier's headers, so a
   consumer needs the tier whichever gfx type it names; `gfx_core` links it
