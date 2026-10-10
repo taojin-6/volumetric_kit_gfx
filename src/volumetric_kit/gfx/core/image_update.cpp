@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -16,6 +15,7 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/gfx/core/impl/image_copy_layout.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
 
 namespace volumetric_kit::gfx {
@@ -63,11 +63,9 @@ core::Result<VkDeviceSize> check_image(const std::string& name,
   return texel;
 }
 
-// Region `i`'s placement in the image, and its rows' layout. `texel` is the
-// image's texel size.
+// Region `i`'s placement in the image.
 core::Status check_region(const std::string& name, const core::Image& image,
-                          const VkBufferImageCopy& r, std::uint32_t i,
-                          VkDeviceSize texel) {
+                          const VkBufferImageCopy& r, std::uint32_t i) {
   const std::string which = name + ": region " + std::to_string(i);
   const VkImageSubresourceLayers& sub = r.imageSubresource;
   if (sub.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
@@ -94,69 +92,6 @@ core::Status check_region(const std::string& name, const core::Image& image,
       static_cast<std::uint32_t>(o.z) > level_depth - e.depth) {
     return core::Status::invalid_argument(
         which + " is empty or outside the image level");
-  }
-  if ((r.bufferRowLength != 0 && r.bufferRowLength < e.width) ||
-      (r.bufferImageHeight != 0 && r.bufferImageHeight < e.height)) {
-    return core::Status::invalid_argument(
-        which + "'s row length or image height is shorter than the region");
-  }
-  // VUID-vkCmdCopyBufferToImage-bufferRowLength-09108 bounds the byte pitch
-  // even when only one row is copied and source bounds do not constrain it.
-  if (r.bufferRowLength > std::numeric_limits<std::int32_t>::max() / texel) {
-    return core::Status::invalid_argument(
-        which + "'s row pitch exceeds 2^31 - 1 bytes");
-  }
-  if (r.bufferOffset % texel != 0) {
-    return core::Status::invalid_argument(
-        which + "'s buffer offset is not a multiple of the texel size");
-  }
-  return core::Status{};
-}
-
-// Check the copy's last texel against the source capacity by subtracting and
-// dividing that capacity. Multiplying the caller's row/slice strides first
-// can wrap even when the image itself is tiny. check_image and check_region
-// have established non-zero extents, layer counts and strides, and a non-zero
-// texel size.
-bool fits_source(VkDeviceSize size, VkDeviceSize texel,
-                 const VkBufferImageCopy& region) {
-  if (region.bufferOffset > size) {
-    return false;
-  }
-  const VkDeviceSize available = (size - region.bufferOffset) / texel;
-  if (region.imageExtent.width > available) {
-    return false;
-  }
-  const VkDeviceSize row = region.bufferRowLength != 0
-                               ? region.bufferRowLength
-                               : region.imageExtent.width;
-  const VkDeviceSize rows = region.bufferImageHeight != 0
-                                ? region.bufferImageHeight
-                                : region.imageExtent.height;
-  // Both factors are uint32_t, so this product fits in VkDeviceSize.
-  const VkDeviceSize slices = VkDeviceSize{region.imageSubresource.layerCount} *
-                              region.imageExtent.depth;
-  const VkDeviceSize preceding_rows =
-      (available - region.imageExtent.width) / row;
-  const VkDeviceSize last_slice_rows = region.imageExtent.height - 1;
-  return last_slice_rows <= preceding_rows &&
-         slices - 1 <= (preceding_rows - last_slice_rows) / rows;
-}
-
-// Region `i` reads only `source`, a buffer a copy may read. check_region has
-// passed it.
-core::Status check_source(const std::string& name, const core::Buffer* source,
-                          const VkBufferImageCopy& r, std::uint32_t i,
-                          VkDeviceSize texel) {
-  const std::string which = name + ": region " + std::to_string(i);
-  if (source == nullptr || !source->valid() ||
-      (source->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
-    return core::Status::invalid_argument(
-        which + "'s source buffer is null, empty or lacks TRANSFER_SRC usage");
-  }
-  if (!fits_source(source->size(), texel, r)) {
-    return core::Status::invalid_argument(
-        which + " reads past the end of its source buffer");
   }
   return core::Status{};
 }
@@ -212,8 +147,10 @@ core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
     return core::Status::invalid_argument(name + ": no regions");
   }
   for (std::uint32_t i = 0; i < copy_count; ++i) {
-    VKC_TRY(check_region(name, image, copies[i].region, i, texel));
-    VKC_TRY(check_source(name, copies[i].source, copies[i].region, i, texel));
+    VKC_TRY(check_region(name, image, copies[i].region, i));
+    VKC_TRY(detail::check_buffer_image_copy(
+        name + ": region " + std::to_string(i), copies[i].source,
+        copies[i].region, texel));
     // The copies run with no barrier between them, so two that write one
     // texel would race.
     for (std::uint32_t j = 0; j < i; ++j) {
@@ -256,7 +193,7 @@ core::Status record_image_upload(VkCommandBuffer cmd,
   region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   region.imageExtent = image.extent();
   VKC_ASSIGN(const VkDeviceSize texel, check_image(kCall, cmd, image, scope));
-  VKC_TRY(check_region(kCall, image, region, 0, texel));
+  VKC_TRY(check_region(kCall, image, region, 0));
   if (pixels == nullptr) {
     return core::Status::invalid_argument("record_image_upload: null pixels");
   }

@@ -29,6 +29,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   or buffers), converts them to display color in an `_SRGB` image and rebuilds
   its mip chain, so a picture shrunk by window scaling or zoom averages in
   linear light; draws minify trilinearly and magnify nearest or linear.
+  Buffer updates reject overflowing source ranges and row pitches above
+  Vulkan's limit before recording, using the same validation as image updates.
 - `camera`: `ImageView2D` (`camera/image_view_2d.hpp`), a pan-and-zoom view of
   a 2D image in a viewport, mapping image coordinates to target pixels and
   back.
