@@ -96,6 +96,8 @@ vkc_compile_shaders(
   "${CMAKE_CURRENT_BINARY_DIR}/shaders"
   TARGET_ENV
   vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/skybox.vert"
   "${PROJECT_SOURCE_DIR}/shaders/skybox.frag")

@@ -100,9 +100,10 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 
-// TODO: load_spirv + framebuffer_extent are still duplicated across examples
-// 01/02/03; hoist them into examples/common/ too (the GLFW surface factory
-// already lives there) in a focused cleanup.
+// TODO: hoist load_spirv and framebuffer_extent, copied across the examples,
+// and set_full_viewport, a copy of the pipelines' internal
+// set_full_viewport_scissor, into examples/common/ next to the GLFW surface
+// factory.
 std::vector<uint32_t> load_spirv(const char* path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -345,6 +346,10 @@ pipelines::PbrScene make_pbr_scene(const vkc::Device& device,
 }
 
 // --- Skybox: a procedural environment cubemap drawn behind the model --------
+
+// TODO: ship the skybox as an embedded pipelines::SkyboxPipeline next to
+// bake_ibl, so a PbrPipeline consumer draws the environment without copying
+// this section.
 
 // Analytic sky in linear HDR RGB: a zenith->horizon->ground vertical gradient
 // plus a tight, bright (> 1) sun toward the key-light direction -- the same

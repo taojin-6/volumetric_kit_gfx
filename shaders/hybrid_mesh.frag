@@ -18,6 +18,9 @@
 // kHybridMeshNormals debug view replaces all of that with the world-space
 // normal encoded as a color.
 
+#extension GL_GOOGLE_include_directive : require
+#include "common/srgb.glsl"
+
 layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
@@ -48,21 +51,15 @@ vec3 safe_normalize(vec3 v) {
   return dot(v, v) > 0.0 ? normalize(v) : vec3(0.0);
 }
 
-// The sRGB decode (IEC 61966-2-1): an sRGB target encodes what is written, so
-// writing srgb_to_linear(c) stores c itself.
-vec3 srgb_to_linear(vec3 c) {
-  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)),
-             greaterThan(c, vec3(0.04045)));
-}
-
 void main() {
   // Normal debug view: the mesh's own normal, deliberately NOT flipped for back
   // faces, so a region whose normals point the wrong way reads as a color jump
   // instead of being masked the way lit shading masks it. (Winding alone does
   // not change this output; lit shading is what shows that.) A zero normal
-  // encodes to mid-grey. `flags` is a push constant, so this branch is
-  // dynamically uniform and the atlas sample below stays in uniform control
-  // flow.
+  // encodes to mid-grey. An sRGB target encodes what is written, so writing
+  // srgb_to_linear(c) stores c itself. `flags` is a push constant, so this
+  // branch is dynamically uniform and the atlas sample below stays in uniform
+  // control flow.
   if ((pc.flags & kFlagNormals) != 0u) {
     vec3 encoded = safe_normalize(frag_normal) * 0.5 + 0.5;
     out_color = vec4(kSrgbTarget ? srgb_to_linear(encoded) : encoded, 1.0);
