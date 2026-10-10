@@ -4,8 +4,10 @@ name: sanitizers
 # (LeakSanitizer isn't available on macOS). Builds against lavapipe (software
 # Vulkan) with validation layers on, so the GPU-touching tests run under the
 # sanitizers — this is what catches the leak / use-after-free / double-free
-# class the unit tests alone can't detect. Invoked by ci.yml, which owns the
-# push / pull_request triggers and the concurrency group.
+# class the unit tests alone can't detect. It stays on a GitHub-hosted runner
+# with lavapipe rather than the self-hosted GPU runners: under ASan/LSan,
+# NVIDIA's proprietary driver reports its own allocations as leaks. Invoked by
+# ci.yml, which owns the push / pull_request triggers and the concurrency group.
 on:
   workflow_call:
 

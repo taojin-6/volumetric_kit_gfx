@@ -22,7 +22,6 @@
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
-#include "volumetric_kit/gfx/core/debug_label.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
 namespace vg = volumetric_kit::gfx;
@@ -559,16 +558,14 @@ TEST_F(HeadlessAppTest, CreateBuildsInstanceDeviceAllocator) {
   EXPECT_GE(app_.allocator().memory_stats().heap_count, 1u);
 }
 
-// The same wiring invariant debug_label_test asserts for a hand-built device:
-// the device's debug-utils table is active iff the instance enabled
-// VK_EXT_debug_utils. The app tier builds both, so it is the tier's job to
-// connect them -- and until it did, every label and object name recorded
-// through an app-tier device was a silent no-op (a capture of a
-// validation-enabled app showed no pass markers, with no diagnostic saying
-// why).
-TEST_F(HeadlessAppTest, DeviceDebugUtilsTableMatchesInstanceFlag) {
+// The device has debug labels iff the instance enabled VK_EXT_debug_utils.
+// The app tier builds both, so it is the tier's job to connect them -- and
+// until it did, every label and object name recorded through an app-tier
+// device was a silent no-op (a capture of a validation-enabled app showed no
+// pass markers, with no diagnostic saying why).
+TEST_F(HeadlessAppTest, DeviceDebugLabelsMatchInstanceFlag) {
   ASSERT_TRUE(app_.valid());
-  EXPECT_EQ(vg::debug_utils(app_.device()).active(),
+  EXPECT_EQ(app_.device().debug_labels_available(),
             app_.instance().debug_utils_enabled());
 }
 
