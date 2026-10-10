@@ -5,6 +5,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -157,11 +158,26 @@ core::Status StreamedAtlas::record_update(VkCommandBuffer cmd,
                                           const core::Buffer& source,
                                           const VkBufferImageCopy* regions,
                                           std::uint32_t region_count) {
+  std::vector<ImageCopy> copies;
+  if (regions != nullptr) {
+    copies.reserve(region_count);
+    for (std::uint32_t i = 0; i < region_count; ++i) {
+      copies.push_back({&source, regions[i]});
+    }
+  }
+  return record_update(cmd, frame, copies.data(),
+                       static_cast<std::uint32_t>(copies.size()));
+}
+
+core::Status StreamedAtlas::record_update(VkCommandBuffer cmd,
+                                          std::uint64_t frame,
+                                          const ImageCopy* copies,
+                                          std::uint32_t copy_count) {
   constexpr const char* kCall = "StreamedAtlas::record_update";
   VKC_ASSIGN(const std::uint32_t slot, take_slot(kCall, frame));
   const Undo undo = before_update(slot);
-  VKC_TRY(record_image_update(cmd, source, slots_[slot].image, regions,
-                              region_count, kUpdateScope)
+  VKC_TRY(record_image_update(cmd, copies, copy_count, slots_[slot].image,
+                              kUpdateScope)
               .with_context(kCall));
   publish(slot, frame, undo);
   return core::Status{};

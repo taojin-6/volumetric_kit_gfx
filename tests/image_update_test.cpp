@@ -153,6 +153,40 @@ TEST_F(ImageUpdateTest, CopiesRegionsFromRowsOfABuffer) {
             (Texels{0x01, 0x11, 0x02, 0x12, 0x03, 0x13, 0x04, 0x14}));
 }
 
+// One update from several buffers, the sources alternating A, B, A: each
+// region reads its own buffer, wherever in the list it is, and the image is
+// left ready to sample once, after all of them.
+TEST_F(ImageUpdateTest, CopiesEachRegionFromItsOwnBuffer) {
+  auto image = make_image({3, 1});
+  ASSERT_TRUE(image.ok()) << image.status().message();
+  auto a = make_source(Texels{0xA0, 0xA2});
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  auto b = make_source(Texels{0xB1});
+  ASSERT_TRUE(b.ok()) << b.status().message();
+
+  std::array<vg::ImageCopy, 3> copies{};
+  for (uint32_t x = 0; x < 3; ++x) {
+    copies[x].region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copies[x].region.imageOffset = {static_cast<int32_t>(x), 0, 0};
+    copies[x].region.imageExtent = {1, 1, 1};
+  }
+  copies[0].source = &a.value();
+  copies[1].source = &b.value();
+  copies[2].source = &a.value();
+  copies[2].region.bufferOffset = kTexel;
+
+  vkc::Status recorded;
+  const vkc::Status submitted =
+      device().submit_single_time([&](VkCommandBuffer cmd) {
+        recorded =
+            vg::record_image_update(cmd, copies.data(), 3, image.value());
+      });
+  ASSERT_TRUE(recorded.ok()) << recorded.message();
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
+  EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  EXPECT_EQ(read(image.value()), (Texels{0xA0, 0xB1, 0xA2}));
+}
+
 // An upload copies the pixels into a staging buffer at once -- the caller's
 // may change straight away -- and queues the buffer on the RetireQueue, which
 // frees it once the timeline reaches the frame's value.
@@ -323,6 +357,48 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
   bad = whole;
   bad.bufferRowLength = 3;  // 3 + 2 texels: past the 4-texel source
   EXPECT_EQ(update(source.value(), image.value(), bad), Code::InvalidArgument);
+
+  // The several-buffer form checks each region against its own source.
+  auto one_texel = make_source(Texels(1, 0));
+  ASSERT_TRUE(one_texel.ok()) << one_texel.status().message();
+  std::array<vg::ImageCopy, 2> copies{};
+  copies[0] = {&source.value(), whole};
+  copies[1] = {&one_texel.value(), whole};  // 4 texels from a 1-texel buffer
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  copies[1] = {nullptr, whole};
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 0, image.value()).domain(),
+      Code::InvalidArgument);
+  EXPECT_EQ(vg::record_image_update(cmd, static_cast<vg::ImageCopy*>(nullptr),
+                                    1, image.value())
+                .domain(),
+            Code::InvalidArgument);
+  // A region outside the image, and two regions that write a texel in common,
+  // which would race: the copies have no barrier between them.
+  VkBufferImageCopy right{};
+  right.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  right.imageOffset = {1, 0, 0};
+  right.imageExtent = {1, 2, 1};
+  copies[0] = {&source.value(), whole};
+  copies[1] = {&source.value(), right};
+  copies[1].region.imageOffset = {2, 0, 0};  // past the right edge
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  copies[1].region.imageOffset = {1, 0, 0};  // inside `whole`
+  EXPECT_EQ(
+      vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+      Code::InvalidArgument);
+  const std::array<VkBufferImageCopy, 2> overlapping{whole, right};
+  EXPECT_EQ(vg::record_image_update(cmd, source.value(), image.value(),
+                                    overlapping.data(), 2)
+                .domain(),
+            Code::InvalidArgument);
 
   const Texels pixels(4, 0);
   EXPECT_EQ(vg::record_image_upload(cmd, allocator(), retire, 1, image.value(),

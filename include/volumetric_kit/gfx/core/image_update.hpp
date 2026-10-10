@@ -6,7 +6,7 @@
 /// @file image_update.hpp
 /// @brief Rewrite a sampled image inside a frame: copies recorded into the
 ///        frame's own command buffer, between the layout transitions that
-///        order them, from rows of a device buffer (@ref record_image_update)
+///        order them, from rows of device buffers (@ref record_image_update)
 ///        or from host pixels staged through a buffer a @ref RetireQueue
 ///        frees (@ref record_image_upload).
 
@@ -70,15 +70,18 @@ struct ImageUpdateScope {
 ///                      `SAMPLED` usage and an uncompressed single-plane
 ///                      color format, in the layout its `layout()` records.
 /// @param regions       The copies: color aspect, within the image's levels,
-///                      layers and extent, each `bufferOffset` a multiple of
-///                      the texel size and each row length and image height
-///                      0 (tightly packed) or at least the region's.
+///                      layers and extent, no two writing a texel in common
+///                      (they run with no barrier between them), each
+///                      `bufferOffset` a multiple of the texel size and each
+///                      row length and image height 0 (tightly packed) or at
+///                      least the region's.
 /// @param region_count  The number of @p regions; non-zero.
 /// @param scope         The stages that read the image before and after.
 /// @return OK once recorded; `core::Status::Code::InvalidArgument` for a null
 ///         @p cmd, an empty @p source or @p image, a missing usage, a
 ///         multisampled image, no regions, a region outside the image or
-///         reading past the end of @p source, a misaligned offset, a row
+///         reading past the end of @p source, two regions that write a
+///         texel in common, a misaligned offset, a row
 ///         length or image height shorter than the region's, or a stage
 ///         mask that is empty or not shader stages;
 ///         `core::Status::Code::Unsupported` for a compressed, multi-planar
@@ -96,6 +99,46 @@ VG_CORE_API core::Status record_image_update(
     VkCommandBuffer cmd, const core::Buffer& source, core::Image& image,
     const VkBufferImageCopy* regions, std::uint32_t region_count,
     const ImageUpdateScope& scope = {});
+
+/// @brief One copy into an image from rows of a buffer of its own: the update
+///        @ref record_image_update records from several buffers.
+struct ImageCopy {
+  /// The buffer the rows are in, as @ref record_image_update 's `source`;
+  /// non-null.
+  const core::Buffer* source = nullptr;
+  /// Where they go, as one of @ref record_image_update 's `regions`.
+  VkBufferImageCopy region{};
+};
+
+/// @brief Record an update of @p image from several buffers -- each camera's
+///        tile from that camera's buffer, say -- as one update: the copies
+///        between one pair of transitions.
+///
+/// As the one-buffer @ref record_image_update, except that each copy names
+/// its own source, so one update fills regions from buffers that are not one
+/// allocation. Every source's writes must be visible to the copy, as that one
+/// says.
+///
+/// @param cmd         As @ref record_image_update.
+/// @param copies      The copies, each a source and a region as
+///                    @ref record_image_update takes them.
+/// @param copy_count  The number of @p copies; non-zero.
+/// @param image       As @ref record_image_update.
+/// @param scope       As @ref record_image_update.
+/// @return As @ref record_image_update, checking each copy's source against
+///         its own region; `core::Status::Code::InvalidArgument` also for a
+///         null source.
+///
+/// @code
+/// std::vector<ImageCopy> tiles;  // one a camera
+/// for (const Camera& c : cameras) tiles.push_back({&c.colour, c.tile});
+/// VKC_TRY(record_image_update(frame.cmd, tiles.data(),
+///                             static_cast<std::uint32_t>(tiles.size()),
+///                             atlas));
+/// @endcode
+VG_CORE_API core::Status record_image_update(
+    VkCommandBuffer cmd, const ImageCopy* copies, std::uint32_t copy_count,
+    core::Image& image, const ImageUpdateScope& scope = {});
 
 /// @brief Record an upload of host @p pixels into the whole of @p image 's
 ///        first level and layer, staged through a buffer that @p retire frees
