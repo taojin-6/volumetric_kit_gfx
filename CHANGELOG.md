@@ -262,3 +262,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
     names. A failed `VG_CHECK`, or reading the value of an error `Result`, logs
     with source `"core"` (`[core error] contract check failed: …`, formerly
     `[vg error]`), so a handler that keeps only `"vg"` misses them.
+- CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
+  26.04, so no leg builds on the core's 1.3.204 header floor; the oldest
+  headers in CI are 24.04's 1.3.275.
