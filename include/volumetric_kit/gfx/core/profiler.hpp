@@ -54,20 +54,21 @@ struct ProfilerConfig {
 /// only where the graphics queue reports non-zero `timestampValidBits`
 /// (MoltenVK may report zero — then GPU scopes degrade to CPU-only timing plus
 /// their label, never an error), and labels emit only where
-/// `VK_EXT_debug_utils` is enabled (see @ref debug_utils). Drive it once per
-/// frame: @ref begin_frame at the top (after the slot's in-flight fence has
-/// signalled, not only its frame's timeline value: see
+/// `VK_EXT_debug_utils` is enabled (`core::Device::debug_labels_available`).
+/// Drive it once per frame: @ref begin_frame at the top (after the slot's
+/// in-flight fence has signalled, not only its frame's timeline value: see
 /// @ref windowing::FrameLoop::timeline), @ref cpu_scope / @ref gpu_scope
 /// around work, @ref end_frame at the bottom; read the latest resolved
 /// snapshot from @ref metrics.
 ///
 /// @warning The @p device passed to @ref create must outlive the profiler (it
-///          owns a timestamp pool freed through that device). A @ref Scope
-///          borrows the profiler's state: it must not outlive the frame it was
-///          opened in, and the profiler must not be moved-assigned-over or
-///          destroyed while any Scope from it is still open (that frees the
-///          state the Scope finalizes through). A memory source set via
-///          @ref set_memory_source must outlive the profiler.
+///          owns a timestamp pool freed through that device, and borrows the
+///          device by address to record labels, so it must not move
+///          meanwhile). A @ref Scope borrows the profiler's state: it must not
+///          outlive the frame it was opened in, and the profiler must not be
+///          moved-assigned-over or destroyed while any Scope from it is still
+///          open (that frees the state the Scope finalizes through). A memory
+///          source set via @ref set_memory_source must outlive the profiler.
 ///
 /// @code
 /// ProfilerConfig cfg;
@@ -87,7 +88,7 @@ struct ProfilerConfig {
 /// const FrameMetrics& m = profiler.metrics();  // resolved snapshot (lags N)
 /// @endcode
 class VG_CORE_API Profiler {
-  struct Impl;  // pImpl: seals the timestamp pool, marker table, and chrono
+  struct Impl;  // pImpl: seals the timestamp pool and chrono
 
  public:
   /// @brief A timed stage: a CPU span, optionally paired with a GPU timestamp

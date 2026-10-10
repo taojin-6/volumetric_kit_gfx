@@ -154,21 +154,26 @@ add_executable(
   pbr_material_test.cpp
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
-  pbr_scene_test.cpp)
+  pbr_scene_test.cpp
+  shader_common_test.cpp)
 target_link_libraries(
   vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
                             volumetric_kit::gfx_io GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
-# update's barriers are checked against a writer in a stage of its own.
+# update's barriers are checked against a writer in a stage of its own; and
+# shader_common_test's probe, which runs the pipelines' shared GLSL helpers.
 vkc_compile_shaders(
   vg_pipelines_test
   OUTPUT_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/shaders"
   TARGET_ENV
   vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
-  "${PROJECT_SOURCE_DIR}/shaders/write_words.comp")
+  "${PROJECT_SOURCE_DIR}/shaders/write_words.comp"
+  "${PROJECT_SOURCE_DIR}/shaders/common_probe.comp")
 target_compile_definitions(
   vg_pipelines_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")

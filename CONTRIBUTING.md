@@ -44,6 +44,22 @@ suite runs on headless machines.
 - clang-format is pinned (see `.pre-commit-config.yaml`) so local and CI
   formatting are byte-identical; don't reformat with a different version.
 
+## Who can trigger CI
+
+Only the owner: the repository's Actions policy (Settings → Actions → Rules)
+lets no other account trigger a workflow, so a fork's pull request never reaches
+the self-hosted runners, and no job carries a fork guard. To test a fork's
+change, a maintainer pushes its branch to this repository and opens a pull
+request from there. volumetric_kit_core's
+[tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md#who-can-trigger-ci)
+has the policy and why.
+
+## Self-hosted runners
+
+The build legs' `vk-linux-gpu` and `mac` runners are set up and removed with volumetric_kit_core's
+[tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md),
+with `gfx` as the repository.
+
 ## Commits
 
 Follow the existing Conventional Commits style in the history, e.g.
