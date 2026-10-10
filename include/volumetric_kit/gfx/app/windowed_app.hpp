@@ -286,10 +286,10 @@ class VG_APP_API WindowedApp {
     return state_->swapchain;
   }
   /// @return The owned frame loop. @pre @ref valid.
-  windowing::FrameLoop& frame_loop() noexcept { return state_->frame_loop; }
+  windowing::FrameLoop& frame_loop() noexcept { return *state_->frame_loop; }
   /// @copydoc frame_loop
   const windowing::FrameLoop& frame_loop() const noexcept {
-    return state_->frame_loop;
+    return *state_->frame_loop;
   }
 
   /// @return `true` if this owns a created chain (`false` when
@@ -329,7 +329,7 @@ class VG_APP_API WindowedApp {
     std::optional<core::Device> device;
     std::optional<core::Allocator> allocator;
     windowing::Swapchain swapchain;
-    windowing::FrameLoop frame_loop;
+    std::unique_ptr<windowing::FrameLoop> frame_loop;
   };
   std::unique_ptr<State> state_;
 };
