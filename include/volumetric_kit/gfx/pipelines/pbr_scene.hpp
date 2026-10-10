@@ -113,8 +113,8 @@ class VG_PIPELINES_API PbrScene {
   /// @param cmd               The frame's command buffer, recording, outside
   ///                          a render pass instance.
   /// @param slot              The acquired frame's in-flight slot (e.g. the
-  ///                          windowing `Frame::slot`); its previous use has
-  ///                          been fence-waited by the loop, so the GPU is not
+  ///                          windowing `Frame::slot`); the loop has waited
+  ///                          for its previous frame, so the GPU is not
   ///                          reading this UBO.
   /// @param eye               World-space camera position.
   /// @param prefilter_max_lod The specular prefilter's highest mip index
@@ -145,7 +145,7 @@ class VG_PIPELINES_API PbrScene {
 
  private:
   // Set 0 per frame-in-flight slot: pool + set + camera UBO each, so a slot's
-  // UBO is rewritten only after its previous frame's fence was waited.
+  // UBO is rewritten only after its previous frame was waited for.
   std::vector<OwnedDescriptorSet> slots_;
 };
 

@@ -30,8 +30,16 @@ what has landed since then. Record amendments when a contract changes.
   same-API case that needs none of the CUDA/Metal external-memory machinery above. The embedding app
   owns the shared instance/device and merges both libraries' requirements; gfx stays standalone
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
-  (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
-  what remains.
+  (`pipelines::LiveMesh`, below), and so has per-slot atlas ringing for an atlas the frame copies
+  into (`pipelines::StreamedAtlas`, 2026-10-08); a producer writing an atlas image from its own
+  queue, zero-copy, is what remains.
+- **2026-10-08 — The hybrid mesh's atlas is streamed, and the pipeline owns a fallback.**
+  `pipelines::StreamedAtlas` rings its images on frame numbers and is updated by copies recorded
+  into the frame (`record_image_update` / `record_image_upload`); a frame with no atlas draws in
+  vertex color against the pipeline's own fallback set. See the dated entry below.
+- **2026-10-08 — Frames are numbered on a timeline.** `windowing::FrameLoop` sets each
+  frame's number on one timeline semaphore; `RetireQueue` frees on that timeline's values,
+  and a frame may wait for and set other timeline values. See the dated entry below.
 - **2026-10-05 — gfx writes every core name as the core does** -- `core::Status`,
   `core::Device`, `VKC_TRY` in gfx; `vkc::` in tests and examples -- and its re-export
   headers and `VG_*` macro aliases are gone (amends the device and error-handling entries).
@@ -84,7 +92,8 @@ what has landed since then. Record amendments when a contract changes.
   set. This is the *static* data-path (upload a mesh + atlas, draw); proven headless via an offscreen
   draw + pixel readback under validation. A vertex-color/atlas mesh pipeline is a broadly-useful
   renderer feature, so the siblings stay independent — gfx gains a capability, not a dependency on
-  recon.
+  recon. *Amended 2026-10-08:* the pipeline owns a fallback atlas, so a frame needs none ("A
+  streamed atlas", below).
 - **2026-10-05 — 2D images are converted, then mip-mapped, then drawn.**
   `pipelines::ImagePipeline` copies a picture's planes into an `ImageTexture`, renders them to
   display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
@@ -99,7 +108,125 @@ what has landed since then. Record amendments when a contract changes.
   draw). gfx owns only the *recording*: synchronization, buffer lifetime, and the command's contents
   are the producer's, spelled out in `docs/integration/recon-live-mesh.md` — the cross-repo byte
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
-  for the full live path: per-slot atlas ringing, then the `app::StreamedApp` driver.
+  for the full live path: the `app::StreamedApp` driver (per-slot atlas ringing landed
+  2026-10-08).
+
+## 2026-10-08 — A streamed atlas, and the pipeline's own fallback
+
+**The contract.** `HybridMeshPipeline::create` now takes the device and an
+allocator and builds a fallback atlas -- one texel, its set and a sampler.
+`submit` binds it for a frame whose `atlas` is null and sets
+`kHybridMeshVertexColor`, so every triangle draws in its vertex color.
+`pipelines::StreamedAtlas` is the atlas a live mesh samples: a ring of images,
+each with a set written once. A frame binds `use(frame.number)`, the newest
+picture's set, which marks that image used by the frame. An update -- tiles
+from device buffers, one buffer or one a tile (`record_update`), or host
+pixels (`record_upload`) -- is recorded into a frame's command buffer and
+copies into the least recently used image whose last frame the timeline has
+reached; that image becomes the picture. A frame that never reaches the queue is given back with
+`discard(frame.number)`, which makes the picture its update replaced current
+again: the atlas cannot tell a frame whose commands ran from one whose number
+the frame loop's stand-in submit set. The copy and its transitions are the core
+tier's `record_image_update`, and `record_image_upload` stages host pixels
+through a buffer a `RetireQueue` frees at the frame's number: gfx's one
+in-frame image update, beside the blocking `upload_texture` for load time.
+
+**Why the pipeline owns the fallback.** The shader samples set 0
+unconditionally, so the pipeline owns the one fallback rather than each
+consumer. Vertex color, not the fallback's texel, is what a frame without an
+atlas shows: every reconstruction vertex carries a fused color, while one texel
+would paint each textured triangle a flat color that passes for a texture.
+
+**Why a ring, when `ImageTexture` needs none.** Both updates wait on the GPU
+for the earlier fragment reads on the queue. An atlas image is rewritten only
+once the host has seen its last frame complete, but its transition waits for
+the fragment stage all the same, so the queue itself orders those reads
+before the copy; without that wait, validation layers that do not track host
+waits on timeline semaphores (Ubuntu 24.04's 1.3.275) report a
+write-after-read hazard. The ring keeps the picture an update replaces
+intact, so `discard` can restore it even if the frame ran before its present
+failed. That picture is excluded from updates until the next frame: the ring
+requires at least two images. A frame that starts with a picture can update
+at most `slots - 1` images; without a prior picture all slots are available.
+The ring is also the structure a producer writing an atlas image from its own
+queue will need, where no barrier reaches. When every writable image is still
+used by an earlier frame, the update waits for the oldest on the host, as the
+frame loop waits for a slot; with frames in flight
+plus one images and one update a frame it never does. It waits only for a
+frame the core's record shows submitted, so a frame that failed before its
+submit is refused rather than waited for forever. Destroying an atlas waits
+for its newest frame, or for the renderer's queues when that frame never
+reached them, as a `RetireQueue` drains.
+
+**Not yet.** Mips for a minified atlas; a producer writing an image from its
+own queue; the `app::StreamedApp` driver.
+
+## 2026-10-10 — An aggregate is neither copied nor moved
+
+A type that owns several Vulkan objects and borrows others, such as
+`windowing::FrameLoop`, is a thing with an identity, not a value. Nothing
+needs to move one: `FrameLoop` moved only from `create` to its owner. Its
+hand-written move pair still cost 57 lines that moved and then reset each of
+its 13 members by hand, and every new member had to join both lists. So an
+aggregate deletes copy and move and is handed out by `std::unique_ptr`, while
+a handle wrapper, which owns one Vulkan object, stays a move-only value
+([AGENTS.md](AGENTS.md#raii-resource-types) states the rule).
+
+- **Not defaulted moves.** A defaulted move assignment frees the old objects
+  without first draining the work that uses them, and a moved-from aggregate
+  is an empty one again, with the guards that come with it.
+- **recon is narrower.** It deletes both only for internal aggregates; its
+  public `VoxelBlockGrid` keeps a defaulted move constructor. gfx deletes both
+  for public aggregates too.
+- `FrameLoop` is the first. The other types with hand-written move pairs are
+  sorted into the two kinds and converted one at a time; a `TODO:` marks each
+  aggregate found so far.
+
+## 2026-10-08 — Frames are numbered on a timeline
+
+`windowing::FrameLoop` numbers its frames on one `core::TimelineSemaphore`
+(`timeline()`): `begin_frame` hands out `Frame::number`, one more than the last
+frame submitted, and `end_frame`'s submit sets that value once the frame's
+work completes. Every frame up to `completed()` has finished, so "free this
+once the last frame that used it is done" is one comparison, made in one
+place: a `RetireQueue` on the timeline.
+
+- **The loop reuses its slots on their fences.** Through MoltenVK a timeline
+  value is reached before the submission's completion handler has run, and
+  timestamp queries read as unavailable until it has, so a slot's command
+  buffer, semaphore and queries are reused once its fence signals. Waits on
+  what consumers and the acquired image need -- that the GPU is done -- are by
+  number; the per-image fence handles are gone. The acquire and the present
+  keep their binary semaphores, as presentation requires.
+- **A failed frame still sets its number.** A frame that fails between its
+  acquire and its submit -- one whose values `end_frame` refuses among them --
+  is replaced by an empty submit that consumes the acquire and sets the number
+  and the slot's fence, and the frame's signals unless they were the ones
+  refused. The numbers stay contiguous, the slot's semaphore is free for its
+  next use without a blocking wait, and nothing waiting for those values
+  hangs. The frame's image was never presented, so the next extent-taking
+  `begin_frame` rebuilds the swapchain, which releases it.
+- **`RetireQueue` is keyed on timeline values.** It borrows a
+  `TimelineSemaphore` -- the loop's, or another producer's -- and runs a
+  deleter once the value pushed with it is reached. The `VkFence` key is gone:
+  the loop's fences are private, and a slot's fence, reused every `N` frames,
+  still reads as signalled while a newer frame on the slot is being recorded.
+- **A frame carries timeline waits and signals.** `Frame::waits` (a
+  `TimelinePoint` and the stages that wait) and `Frame::signals` join
+  `end_frame`'s one submit through `VkTimelineSemaphoreSubmitInfo`, so another
+  queue's or library's work can feed a frame, and wait for one, on the GPU.
+  `end_frame` checks them with the core's `check_timeline_points`, taking a
+  wait only for a value already reached (`TimelineWaits::Reached`), and adds
+  what each frame sets to the core's record of submitted values;
+  `FrameLoop::end_frame` says why. A producer whose
+  value is not yet reached is gated on the host
+  ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
+- **The core pin is `ce76978`**, which includes the timeline-value checks
+  and the 0.1.0 package helpers. The core's former `Submitted` spelling now
+  means `Reached`: a submitted producer alone does not prove its upstream
+  dependencies are resolved. Atlas retirement still checks whether work was
+  submitted, through the core's signal-value ordering check, before waiting
+  on the host or releasing a discarded frame's images.
 
 ## 2026-10-05 — GPU tests share a device per process
 
@@ -176,8 +303,8 @@ decoder's imported surface may carry `TRANSFER_SRC` alone, and a buffer
 The copies give the texture descriptor sets made once, so a stream allocates
 nothing per frame; and since a texture's updates and draws run on one queue,
 each update's barriers order it after the earlier draws still reading it --
-one texture per stream, with no ring per frame in flight. (The per-slot
-ringing the device-adopt entry lists stays open for the mesh atlas.)
+one texture per stream, with no ring per frame in flight. (The mesh atlas
+rings: "A streamed atlas", 2026-10-08.)
 
 **What it costs.** One device-to-device copy per update, small beside the
 decode. Memory: about 4/3 x 4 bytes per texel for the display image (44 MB for

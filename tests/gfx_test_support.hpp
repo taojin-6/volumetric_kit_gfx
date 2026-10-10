@@ -70,10 +70,13 @@ inline std::vector<const char*> headless_surface_extensions() {
           VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
 }
 
-// The test policy's instance, validated as the environment asks, with the
-// extensions for a headless surface.
-inline vkc::InstanceConfig headless_instance_config() {
-  vkc::InstanceConfig config = vkc::test::instance_config();
+// The test policy's instance, validated as the environment asks or at
+// `validation`, with the extensions for a headless surface. Above the
+// environment's level, create it while a vkc::test::ValidationSession for that
+// level lives, as the layer reads its settings then.
+inline vkc::InstanceConfig headless_instance_config(
+    vkc::test::Validation validation = vkc::test::requested_validation()) {
+  vkc::InstanceConfig config = vkc::test::instance_config(validation);
   config.extensions = headless_surface_extensions();
   return config;
 }

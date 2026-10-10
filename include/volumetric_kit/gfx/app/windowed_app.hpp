@@ -286,10 +286,10 @@ class VG_APP_API WindowedApp {
     return state_->swapchain;
   }
   /// @return The owned frame loop. @pre @ref valid.
-  windowing::FrameLoop& frame_loop() noexcept { return state_->frame_loop; }
+  windowing::FrameLoop& frame_loop() noexcept { return *state_->frame_loop; }
   /// @copydoc frame_loop
   const windowing::FrameLoop& frame_loop() const noexcept {
-    return state_->frame_loop;
+    return *state_->frame_loop;
   }
 
   /// @return `true` if this owns a created chain (`false` when
@@ -318,7 +318,8 @@ class VG_APP_API WindowedApp {
   // every address stable. Declaration order is the teardown contract — members
   // destruct in reverse, so the loop drains its in-flight frames first and the
   // instance dies last. std::optional stands in where a type has no public
-  // default constructor.
+  // default constructor, and std::unique_ptr where it cannot move either (the
+  // loop).
   struct State {
     // Set only on the create path; empty when the instance is the embedder's.
     std::optional<core::Instance> instance;
@@ -329,7 +330,7 @@ class VG_APP_API WindowedApp {
     std::optional<core::Device> device;
     std::optional<core::Allocator> allocator;
     windowing::Swapchain swapchain;
-    windowing::FrameLoop frame_loop;
+    std::unique_ptr<windowing::FrameLoop> frame_loop;
   };
   std::unique_ptr<State> state_;
 };

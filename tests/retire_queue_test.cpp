@@ -3,6 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <thread>
 #include <utility>
 
 #include "gfx_test_support.hpp"
@@ -11,76 +15,148 @@
 
 namespace {
 
-// GPU smoke tests: a real VkFence flowing through RetireQueue's
-// vkGetFenceStatus path, plus the move-only queue's hand-written move ops. The
-// ordering / run-once / drain logic is covered device-free in
-// retire_list_test.cpp.
-using RetireQueueTest = vg_test::RendererDeviceTest;
+// GPU tests of RetireQueue on a real timeline semaphore, raised from the host:
+// what its value releases, the wait in drain, and the move-only queue's
+// hand-written move ops. The ordering / run-once / drain logic is covered
+// device-free in retire_list_test.cpp; the frame loop's timeline feeding it is
+// in windowing_test.cpp.
+class RetireQueueTest : public vg_test::RendererDeviceTest {
+ protected:
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
+
+  void SetUp() override {
+    vg_test::RendererDeviceTest::SetUp();
+    if (base_setup_incomplete()) return;
+    auto timeline = vkc::TimelineSemaphore::create(device());
+    ASSERT_TRUE(timeline.ok()) << timeline.status().message();
+    timeline_ = std::move(timeline).value();
+  }
+
+  // Raise the timeline from the host, as a completed frame would.
+  void reach(std::uint64_t value) { ASSERT_TRUE(timeline_.signal(value).ok()); }
+
+  vkc::TimelineSemaphore timeline_;
+};
 
 }  // namespace
 
-TEST_F(RetireQueueTest, SignaledFenceReleasesDeleterOnPoll) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
+// The defining behavior: a deleter runs once the timeline reaches its value,
+// and not one value earlier.
+TEST_F(RetireQueueTest, ReleasesExactlyWhenTheTimelineReachesTheValue) {
   int released = 0;
-  vg::RetireQueue retire(device().handle());
-  retire.push(fence.value().handle(), [&released]() { ++released; });
+  vg::RetireQueue retire(timeline_);
+  retire.push(2, [&released]() { ++released; });
+
+  EXPECT_EQ(retire.poll(), 0u);  // at 0
+  reach(1);
+  EXPECT_EQ(retire.poll(), 0u);  // one short
+  EXPECT_EQ(released, 0);
   EXPECT_EQ(retire.pending(), 1u);
 
-  EXPECT_EQ(retire.poll(), 1u);  // real vkGetFenceStatus reports signaled
+  reach(2);
+  EXPECT_EQ(retire.poll(), 1u);
+  EXPECT_EQ(released, 1);
+  EXPECT_EQ(retire.pending(), 0u);
+  EXPECT_EQ(retire.poll(), 0u);  // ran once
+  EXPECT_EQ(released, 1);
+}
+
+// poll() releases every entry at or below the value reached, in any push
+// order, and keeps the rest.
+TEST_F(RetireQueueTest, PollReleasesOnlyReachedValues) {
+  int first = 0;
+  int second = 0;
+  int third = 0;
+  vg::RetireQueue retire(timeline_);
+  retire.push(3, [&third]() { ++third; });
+  retire.push(1, [&first]() { ++first; });
+  retire.push(2, [&second]() { ++second; });
+
+  reach(2);
+  EXPECT_EQ(retire.poll(), 2u);
+  EXPECT_EQ(first, 1);
+  EXPECT_EQ(second, 1);
+  EXPECT_EQ(third, 0);
+  EXPECT_EQ(retire.pending(), 1u);
+
+  reach(3);  // so the destructor's drain does not wait forever
+}
+
+// drain() waits for the value, set here by a host thread after a delay, then
+// runs the deleter.
+TEST_F(RetireQueueTest, DrainWaitsForThePendingValue) {
+  std::atomic<bool> signalled{false};
+  bool ran_after_signal = false;
+  vg::RetireQueue retire(timeline_);
+  retire.push(1, [&]() { ran_after_signal = signalled.load(); });
+
+  std::thread setter([&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    signalled.store(true);
+    reach(1);
+  });
+  retire.drain();
+  setter.join();
+  EXPECT_TRUE(ran_after_signal);
+  EXPECT_EQ(retire.pending(), 0u);
+}
+
+TEST_F(RetireQueueTest, ReclaimRunsDeletersWithoutWaiting) {
+  // A value nothing sets: poll() defers and drain() would block forever.
+  // reclaim() runs the deleter at once -- the no-wait forced reclaim for an
+  // idle/lost-device teardown.
+  int released = 0;
+  vg::RetireQueue retire(timeline_);
+  retire.push(5, [&released]() { ++released; });
+  EXPECT_EQ(retire.poll(), 0u);
+
+  retire.reclaim();
   EXPECT_EQ(released, 1);
   EXPECT_EQ(retire.pending(), 0u);
 }
 
-TEST_F(RetireQueueTest, ReclaimRunsDeletersWithoutWaitingOnFence) {
-  // An unsignaled fence: poll() defers and drain() would block on it forever.
-  // reclaim() runs the deleter immediately — the no-wait forced-reclaim path
-  // for an idle/lost-device teardown.
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/false);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
-  int released = 0;
-  vg::RetireQueue retire(device().handle());
-  retire.push(fence.value().handle(), [&released]() { ++released; });
-  EXPECT_EQ(retire.poll(), 0u);  // unsignaled → deferred
-
-  retire.reclaim();
-  EXPECT_EQ(released, 1);  // ran despite the fence never signaling
-  EXPECT_EQ(retire.pending(), 0u);
+TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
+  reach(1);
+  int ran = 0;
+  {
+    vg::RetireQueue retire(timeline_);
+    retire.push(1, [&ran]() { ++ran; });
+    // No poll(): the destructor must drain (the value is reached, so the wait
+    // returns at once), not leak the deleter.
+  }
+  EXPECT_EQ(ran, 1);
 }
 
-TEST_F(RetireQueueTest, MoveConstructTransfersPendingDeleters) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
+TEST_F(RetireQueueTest, MoveConstructTransfersTimelineAndDeleters) {
   int ran = 0;
-  vg::RetireQueue source(device().handle());
-  source.push(fence.value().handle(), [&ran]() { ++ran; });
+  vg::RetireQueue source(timeline_);
+  source.push(1, [&ran]() { ++ran; });
   ASSERT_EQ(source.pending(), 1u);
 
   vg::RetireQueue moved(std::move(source));
   EXPECT_EQ(moved.pending(), 1u);
   EXPECT_EQ(source.pending(), 0u);  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source.poll(), 0u);     // NOLINT(bugprone-use-after-move)
 
-  // The moved-to queue still observes the device, so poll releases the deleter.
+  // The moved-to queue observes the timeline, so poll releases the deleter.
+  reach(1);
   EXPECT_EQ(moved.poll(), 1u);
   EXPECT_EQ(ran, 1);
 }
 
 TEST_F(RetireQueueTest, MoveAssignOverLiveRunsExistingDeletersThenAdopts) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
+  reach(1);
   int dst_ran = 0;
   int src_ran = 0;
-  vg::RetireQueue dst(device().handle());
-  dst.push(fence.value().handle(), [&dst_ran]() { ++dst_ran; });
+  vg::RetireQueue dst(timeline_);
+  dst.push(1, [&dst_ran]() { ++dst_ran; });
 
   {
-    vg::RetireQueue src(device().handle());
-    src.push(fence.value().handle(), [&src_ran]() { ++src_ran; });
-    // Move-assign runs dst's already-queued deleter (device assumed idle), then
+    vg::RetireQueue src(timeline_);
+    src.push(2, [&src_ran]() { ++src_ran; });
+    // Move-assign drains dst's queued deleter (its value is reached), then
     // adopts src's still-pending one.
     dst = std::move(src);
   }
@@ -88,17 +164,15 @@ TEST_F(RetireQueueTest, MoveAssignOverLiveRunsExistingDeletersThenAdopts) {
   EXPECT_EQ(src_ran, 0);  // src's was adopted, not yet run
   EXPECT_EQ(dst.pending(), 1u);
 
-  EXPECT_EQ(dst.poll(), 1u);  // adopted device is valid
+  reach(2);
+  EXPECT_EQ(dst.poll(), 1u);  // the adopted timeline is observed
   EXPECT_EQ(src_ran, 1);
 }
 
 TEST_F(RetireQueueTest, SelfMoveAssignKeepsDeletersPending) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
   int ran = 0;
-  vg::RetireQueue queue(device().handle());
-  queue.push(fence.value().handle(), [&ran]() { ++ran; });
+  vg::RetireQueue queue(timeline_);
+  queue.push(1, [&ran]() { ++ran; });
 
   // Pointer-laundered self-move (dodges -Wself-move); the this != &other guard
   // must leave the deleter queued and unrun.
@@ -107,76 +181,7 @@ TEST_F(RetireQueueTest, SelfMoveAssignKeepsDeletersPending) {
   EXPECT_EQ(ran, 0);
   EXPECT_EQ(queue.pending(), 1u);
 
+  reach(1);
   EXPECT_EQ(queue.poll(), 1u);
   EXPECT_EQ(ran, 1);
-}
-
-TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
-  int ran = 0;
-  {
-    vg::RetireQueue retire(device().handle());
-    retire.push(fence.value().handle(), [&ran]() { ++ran; });
-    // No poll(): the destructor must drain (wait for the signaled fence, then
-    // run the deleter), not leak it.
-  }
-  EXPECT_EQ(ran, 1);
-}
-
-// The defining behavior the CPU-token lifetime model depends on: a deleter
-// guarded by an UNSIGNALED fence is deferred, then released once the fence
-// signals. (Every other test here uses a pre-signaled fence.)
-TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
-  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/false);
-  ASSERT_TRUE(fence.ok()) << fence.status().message();
-
-  int released = 0;
-  vg::RetireQueue retire(device().handle());
-  retire.push(fence.value().handle(), [&released]() { ++released; });
-
-  EXPECT_EQ(retire.poll(), 0u);  // unsignaled -> deferred, not run
-  EXPECT_EQ(retire.pending(), 1u);
-  EXPECT_EQ(released, 0);
-
-  // Signal the fence with an empty submit, then poll releases the deleter.
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  ASSERT_EQ(vkQueueSubmit(device().queue(), 1, &submit, fence.value().handle()),
-            VK_SUCCESS);
-  ASSERT_TRUE(fence.value().wait().ok());
-
-  EXPECT_EQ(retire.poll(), 1u);
-  EXPECT_EQ(released, 1);
-  EXPECT_EQ(retire.pending(), 0u);
-}
-
-// poll() releases only the entries whose fence is ready, keeping the rest.
-TEST_F(RetireQueueTest, PollReleasesOnlyReadyFenceEntries) {
-  auto signaled = vkc::Fence::create(device().handle(), /*signaled=*/true);
-  auto deferred = vkc::Fence::create(device().handle(), /*signaled=*/false);
-  ASSERT_TRUE(signaled.ok()) << signaled.status().message();
-  ASSERT_TRUE(deferred.ok()) << deferred.status().message();
-
-  int ready_ran = 0;
-  int deferred_ran = 0;
-  vg::RetireQueue retire(device().handle());
-  retire.push(signaled.value().handle(), [&ready_ran]() { ++ready_ran; });
-  retire.push(deferred.value().handle(), [&deferred_ran]() { ++deferred_ran; });
-
-  EXPECT_EQ(retire.poll(), 1u);  // only the signaled entry's deleter runs
-  EXPECT_EQ(ready_ran, 1);
-  EXPECT_EQ(deferred_ran, 0);
-  EXPECT_EQ(retire.pending(), 1u);
-
-  // Signal the deferred fence so the destructor's drain() does not block on a
-  // never-signaled fence (it runs deferred_ran while the int is still alive,
-  // since `retire` is destroyed before it).
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  ASSERT_EQ(
-      vkQueueSubmit(device().queue(), 1, &submit, deferred.value().handle()),
-      VK_SUCCESS);
-  ASSERT_TRUE(deferred.value().wait().ok());
 }

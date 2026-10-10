@@ -44,9 +44,57 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.
+- `windowing`: **frames are numbered on a timeline.** `Frame::number` counts
+  from 1, and `FrameLoop::timeline()` reaches a frame's number once its work
+  completes; `completed()` reads it, and `submitted()` gives the newest frame
+  submitted. `Frame::waits` (`FrameWait`: a `core::TimelinePoint` and the
+  stages that wait) and `Frame::signals` add timeline waits and signals to
+  `end_frame`'s submit, so another queue's work can feed a frame on the GPU.
+  `end_frame` checks them as the core's submits check theirs, refuses a wait
+  for a value not yet submitted to be set, and adds what each frame sets to
+  the core's record of submitted values.
+- `core`: `record_image_update` and `record_image_upload`
+  (`core/image_update.hpp`) record an image's update into a frame's command
+  buffer between the transitions that order it, from one buffer or from
+  several (`ImageCopy`, a source and a region each), and refuse regions that
+  write a texel in common or row pitches above `2^31 - 1` bytes; an upload
+  stages its pixels through a buffer a `RetireQueue` frees once the frame
+  completes.
+- `pipelines`: `StreamedAtlas` (`pipelines/streamed_atlas.hpp`), the atlas a
+  live `HybridMeshPipeline` mesh samples: a ring of images reused by frame
+  number, updated by copies recorded into the frame -- tiles from one device
+  buffer or each from its own (`record_update`), or host pixels
+  (`record_upload`) -- bound with
+  `use(frame.number)`, and given back with `discard(frame.number)` for a frame
+  that fails. At least two slots are required. A frame that starts with a
+  picture can record at most `slots - 1` updates, preserving that picture
+  for discard even if the frame's commands ran.
+- `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
+  color, the atlas bound or not.
 
 ### Changed
 
+- `pipelines`: **`HybridMeshPipeline` owns a fallback atlas**, and a frame
+  with no atlas draws in vertex color instead of drawing nothing. Migrating:
+  `HybridMeshPipeline::create(device.handle(), layout)` →
+  `create(device, allocator, layout)`; a 1x1 set bound only to satisfy the old
+  precondition can go (pass `VK_NULL_HANDLE`).
+- `core`: **`RetireQueue` is keyed on timeline values**, not `VkFence`s.
+  Migrating: `RetireQueue(device.handle())` → `RetireQueue(timeline)` on a
+  `core::TimelineSemaphore` -- `FrameLoop::timeline()` for what frames use --
+  and `push(fence, deleter)` → `push(value, deleter)`, with the value the
+  guarding work sets (a `Frame::number`).
+- `windowing`: `end_frame` refuses a `Frame` other than the one
+  `begin_frame` handed out (another number or command buffer), and a frame
+  that fails before its submit is replaced by an empty submit, so its number
+  is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
+  release the frame's unpresented image.
+- build: gfx pins volumetric_kit_core at `ce76978`, which includes the
+  timeline-value checks and the 0.1.0 package helpers.
+- `windowing`: a `Frame::waits` value must be reached before `end_frame`,
+  as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
+  host first; a submitted producer can still depend on an unresolved host
+  signal. The frame's GPU wait continues to supply the memory dependency.
 - `VG_WARNINGS_AS_ERRORS` defaults ON only when gfx is the top-level project,
   as the core's `VKC_WARNINGS_AS_ERRORS` does, so an application that fetches
   gfx no longer compiles it with `-Werror`; set it ON to keep that.
@@ -271,3 +319,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
   26.04, so no leg builds on the core's 1.3.204 header floor; the oldest
   headers in CI are 24.04's 1.3.275.
+- `windowing`: **`FrameLoop` is neither copied nor moved.**
+  `FrameLoop::create` returns `core::Result<std::unique_ptr<FrameLoop>>`, and
+  the default constructor and `valid()` are gone: a loop is never empty.
+  Migrating: `loop.value().begin_frame(...)` → `loop.value()->begin_frame(...)`,
+  and hold a loop by `std::unique_ptr` where it was held by value.
+  `WindowedApp::frame_loop()` still returns a reference. `end_frame` refuses,
+  with `InvalidArgument`, any frame but the one `begin_frame` last handed out,
+  and one whose swapchain was rebuilt or emptied since.

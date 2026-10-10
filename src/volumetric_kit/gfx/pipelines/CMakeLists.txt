@@ -26,7 +26,8 @@ target_sources(
           pbr_material.cpp
           pbr_model.cpp
           pbr_pipeline.cpp
-          pbr_scene.cpp)
+          pbr_scene.cpp
+          streamed_atlas.cpp)
 
 generate_export_header(
   gfx_pipelines

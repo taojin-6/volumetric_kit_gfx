@@ -130,6 +130,8 @@ class VG_WINDOWING_API Swapchain {
                                         core::Allocator* allocator = nullptr);
 
   ~Swapchain();
+  // TODO: an aggregate (DECISIONS.md, 2026-10-10): delete the move pair and
+  // hand it out by std::unique_ptr, as FrameLoop is.
   Swapchain(Swapchain&& other) noexcept;
   Swapchain& operator=(Swapchain&& other) noexcept;
   Swapchain(const Swapchain&) = delete;

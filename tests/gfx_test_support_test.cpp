@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // gfx_test_support.hpp: the fixtures ask for the renderer's requirements, and
-// the headless-surface instance is validated as the environment asks.
+// the headless-surface instance is validated as the environment asks, or at a
+// level a test gives.
 
 #include "gfx_test_support.hpp"
 
@@ -55,6 +56,16 @@ TEST(HeadlessInstanceConfigTest, ValidatesAsTheEnvironmentAsks) {
     const test::ScopedEnv off("VKC_TEST_VALIDATION", nullptr);
     EXPECT_FALSE(vg_test::headless_instance_config().enable_validation);
   }
+}
+
+// A test that validates above the environment asks at its own level.
+TEST(HeadlessInstanceConfigTest, ValidatesAtALevelGiven) {
+  const test::ScopedEnv sync("VKC_TEST_SYNC_VALIDATION", nullptr);
+  const test::ScopedEnv off("VKC_TEST_VALIDATION", nullptr);
+  EXPECT_TRUE(vg_test::headless_instance_config(test::Validation::Sync)
+                  .enable_validation);
+  EXPECT_FALSE(vg_test::headless_instance_config(test::Validation::Off)
+                   .enable_validation);
 }
 
 TEST(HeadlessInstanceConfigTest, AsksForTheSurfaceExtensions) {

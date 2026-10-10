@@ -32,10 +32,9 @@ core::Status WindowedApp::finish_bring_up(State& state,
                                           config.swapchain, depth_allocator));
   state.swapchain = std::move(swapchain);
 
-  VKC_ASSIGN(windowing::FrameLoop frame_loop,
+  VKC_ASSIGN(state.frame_loop,
              windowing::FrameLoop::create(*state.device, state.swapchain,
                                           config.frames_in_flight));
-  state.frame_loop = std::move(frame_loop);
   return {};
 }
 
@@ -182,26 +181,26 @@ core::Result<std::optional<windowing::Frame>> WindowedApp::begin_frame(
     return core::Status::invalid_argument(
         "WindowedApp::begin_frame: empty app");
   }
-  return state_->frame_loop.begin_frame(current_extent);
+  return state_->frame_loop->begin_frame(current_extent);
 }
 
 core::Status WindowedApp::end_frame(const windowing::Frame& frame) {
   if (state_ == nullptr) {
     return core::Status::invalid_argument("WindowedApp::end_frame: empty app");
   }
-  return state_->frame_loop.end_frame(frame);
+  return state_->frame_loop->end_frame(frame);
 }
 
 void WindowedApp::set_recreate_callback(
     std::function<core::Status(VkExtent2D)> callback) {
   if (state_ != nullptr) {
-    state_->frame_loop.set_recreate_callback(std::move(callback));
+    state_->frame_loop->set_recreate_callback(std::move(callback));
   }
 }
 
 void WindowedApp::set_profiler(Profiler* profiler) noexcept {
   if (state_ != nullptr) {
-    state_->frame_loop.set_profiler(profiler);
+    state_->frame_loop->set_profiler(profiler);
   }
 }
 
