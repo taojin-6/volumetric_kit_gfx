@@ -63,6 +63,8 @@ if(VG_INSTALL)
     # header includes it, so keep it out. The other impl/ headers ship because
     # public headers include them (impl/retire_list.hpp, ...).
     REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE
+    # Source-layout validation is shared only by implementation files.
+    REGEX "volumetric_kit/gfx/core/impl/image_copy_layout\\.hpp$" EXCLUDE
     # impl/pipeline_util.hpp is internal (command-recording helpers shared by
     # the tier's submit() .cpp files); no public header includes it, so keep it
     # out.

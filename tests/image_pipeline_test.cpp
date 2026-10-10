@@ -467,6 +467,56 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
   EXPECT_TRUE(cmd.value().end().ok());
 }
 
+// Source validation must not wrap its byte range or accept a Vulkan-invalid
+// pitch just because a single-row copy does not read that stride.
+TEST_F(ImagePipelineDeviceTest, UpdateRejectsOverflowingBufferLayouts) {
+  const pipelines::ImagePipeline pipeline = make_pipeline();
+  ASSERT_TRUE(pipeline.valid());
+  pipelines::ImageTexture texture =
+      make_texture(pipeline, {1, 1}, pipelines::ImageMapping::Color, kUnorm);
+  ASSERT_TRUE(texture.valid());
+  const vkc::Buffer source = source_buffer({255, 0, 0, 255});
+  ASSERT_TRUE(source.valid());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
+  ASSERT_TRUE(pool.ok());
+  auto cmd = pool.value().allocate_primary();
+  ASSERT_TRUE(cmd.ok());
+  ASSERT_TRUE(cmd.value().begin().ok());
+
+  pipelines::ImageUpdate update;
+  update.planes[0].buffer = &source;
+  update.planes[0].offset = std::numeric_limits<VkDeviceSize>::max() - 3;
+  ASSERT_EQ(
+      pipeline.record_update(cmd.value().handle(), texture, update).domain(),
+      vkc::Status::Code::InvalidArgument);
+  EXPECT_FALSE(texture.has_picture());
+
+  update.planes[0].offset = 0;
+  for (uint32_t row_length :
+       {1u << 29, 1u << 30, std::numeric_limits<uint32_t>::max()}) {
+    SCOPED_TRACE(row_length);
+    update.planes[0].row_length = row_length;
+    ASSERT_EQ(
+        pipeline.record_update(cmd.value().handle(), texture, update).domain(),
+        vkc::Status::Code::InvalidArgument);
+    EXPECT_FALSE(texture.has_picture());
+  }
+  ASSERT_TRUE(cmd.value().end().ok());
+  // Only submit after every refusal passed; a regression never executes an
+  // invalid copy. This also checks that refusals recorded no work.
+  ASSERT_TRUE(device().submit_and_wait(cmd.value().handle()).ok());
+
+  // The largest legal RGBA8 pitch remains accepted for one row. As in the
+  // core image-update test, record this boundary case without submitting it.
+  ASSERT_TRUE(cmd.value().begin().ok());
+  update.planes[0].row_length = (1u << 29) - 1;
+  ASSERT_TRUE(
+      pipeline.record_update(cmd.value().handle(), texture, update).ok());
+  EXPECT_TRUE(texture.has_picture());
+  ASSERT_TRUE(cmd.value().end().ok());
+}
+
 // A Color source drawn one texel per pixel stores its own bytes, on a _UNORM
 // target and an _SRGB one alike -- the decode, the _SRGB display and the
 // draw's encode round-trip -- and a B8G8R8A8 source keeps its channel order.
