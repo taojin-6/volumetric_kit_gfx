@@ -46,6 +46,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.
+- `pipelines`: PBR shading carries `assets::Vertex::color` (glTF `COLOR_0`)
+  through the GPU pipeline and modulates base color in linear light.
 - `windowing`: **frames are numbered on a timeline.** `Frame::number` counts
   from 1, and `FrameLoop::timeline()` reaches a frame's number once its work
   completes; `completed()` reads it, and `submitted()` gives the newest frame
