@@ -44,9 +44,30 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.
+- `windowing`: **frames are numbered on a timeline.** `Frame::number` counts
+  from 1, and `FrameLoop::timeline()` reaches a frame's number once its work
+  completes; `completed()` reads it, and `submitted()` gives the newest frame
+  submitted. `Frame::waits` (`FrameWait`: a `core::TimelinePoint` and the
+  stages that wait) and `Frame::signals` add timeline waits and signals to
+  `end_frame`'s submit, so another queue's work can feed a frame on the GPU.
+  `end_frame` checks them as the core's submits check theirs, refuses a wait
+  for a value not yet submitted to be set, and adds what each frame sets to
+  the core's record of submitted values.
 
 ### Changed
 
+- `core`: **`RetireQueue` is keyed on timeline values**, not `VkFence`s.
+  Migrating: `RetireQueue(device.handle())` → `RetireQueue(timeline)` on a
+  `core::TimelineSemaphore` -- `FrameLoop::timeline()` for what frames use --
+  and `push(fence, deleter)` → `push(value, deleter)`, with the value the
+  guarding work sets (a `Frame::number`).
+- `windowing`: `end_frame` refuses a `Frame` other than the one
+  `begin_frame` handed out (another number or command buffer), and a frame
+  that fails before its submit is replaced by an empty submit, so its number
+  is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
+  release the frame's unpresented image.
+- build: gfx pins volumetric_kit_core at its PR #18 (`5913731`) and refuses an
+  older core at configure and in the installed package.
 - `core`: **labels record through the core's device, and queue labels take
   the queue's mutex.** `QueueLabelScope` labelled the queue without
   `Device::submit_mutex`, racing any submit on another thread or from another

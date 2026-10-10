@@ -105,7 +105,7 @@ struct ImageTextureDesc {
 ///   queue -- in the same command buffer or an earlier submission, which the
 ///   update's barrier waits for -- or done on another queue: a fence waited
 ///   on, or a semaphore the update's submission waits on at the `TRANSFER`
-///   stage;
+///   stage (under the frame loop, a `windowing::Frame::waits` entry);
 /// - it must be readable from that queue's family: created `CONCURRENT`
 ///   across the producer's and the renderer's families, or written on the
 ///   renderer's family (MoltenVK gives two libraries different families);
@@ -194,8 +194,8 @@ class ImagePipeline;
 ///          whose descriptor sets name the pipeline's samplers. The device
 ///          the @p allocator allocates on must outlive it too, and the GPU
 ///          must be done with it -- every frame that updated or drew it --
-///          before it is destroyed: retire it through a fence
-///          (@ref RetireQueue) or after `core::Device::wait_idle`.
+///          before it is destroyed: retire it through a @ref RetireQueue or
+///          after `core::Device::wait_idle`.
 ///
 /// @code
 /// pipelines::ImageTextureDesc desc;

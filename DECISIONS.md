@@ -32,6 +32,9 @@ what has landed since then. Record amendments when a contract changes.
   (`create` is unchanged). The indirect-draw path a *live* mesh needs has since landed
   (`pipelines::LiveMesh`, below); per-slot material/atlas ringing for a live-updated texture is
   what remains.
+- **2026-10-08 — Frames are numbered on a timeline.** `windowing::FrameLoop` sets each
+  frame's number on one timeline semaphore; `RetireQueue` frees on that timeline's values,
+  and a frame may wait for and set other timeline values. See the dated entry below.
 - **2026-10-05 — gfx writes every core name as the core does** -- `core::Status`,
   `core::Device`, `VKC_TRY` in gfx; `vkc::` in tests and examples -- and its re-export
   headers and `VG_*` macro aliases are gone (amends the device and error-handling entries).
@@ -121,6 +124,47 @@ a handle wrapper, which owns one Vulkan object, stays a move-only value
 - `FrameLoop` is the first. The other types with hand-written move pairs are
   sorted into the two kinds and converted one at a time; a `TODO:` marks each
   aggregate found so far.
+
+## 2026-10-08 — Frames are numbered on a timeline
+
+`windowing::FrameLoop` numbers its frames on one `core::TimelineSemaphore`
+(`timeline()`): `begin_frame` hands out `Frame::number`, one more than the last
+frame submitted, and `end_frame`'s submit sets that value once the frame's
+work completes. Every frame up to `completed()` has finished, so "free this
+once the last frame that used it is done" is one comparison, made in one
+place: a `RetireQueue` on the timeline.
+
+- **The loop reuses its slots on their fences.** Through MoltenVK a timeline
+  value is reached before the submission's completion handler has run, and
+  timestamp queries read as unavailable until it has, so a slot's command
+  buffer, semaphore and queries are reused once its fence signals. Waits on
+  what consumers and the acquired image need -- that the GPU is done -- are by
+  number; the per-image fence handles are gone. The acquire and the present
+  keep their binary semaphores, as presentation requires.
+- **A failed frame still sets its number.** A frame that fails between its
+  acquire and its submit -- one whose values `end_frame` refuses among them --
+  is replaced by an empty submit that consumes the acquire and sets the number
+  and the slot's fence, and the frame's signals unless they were the ones
+  refused. The numbers stay contiguous, the slot's semaphore is free for its
+  next use without a blocking wait, and nothing waiting for those values
+  hangs. The frame's image was never presented, so the next extent-taking
+  `begin_frame` rebuilds the swapchain, which releases it.
+- **`RetireQueue` is keyed on timeline values.** It borrows a
+  `TimelineSemaphore` -- the loop's, or another producer's -- and runs a
+  deleter once the value pushed with it is reached. The `VkFence` key is gone:
+  the loop's fences are private, and a slot's fence, reused every `N` frames,
+  still reads as signalled while a newer frame on the slot is being recorded.
+- **A frame carries timeline waits and signals.** `Frame::waits` (a
+  `TimelinePoint` and the stages that wait) and `Frame::signals` join
+  `end_frame`'s one submit through `VkTimelineSemaphoreSubmitInfo`, so another
+  queue's or library's work can feed a frame, and wait for one, on the GPU.
+  `end_frame` checks them with the core's `check_timeline_points`, taking a
+  wait only for a value already reached or submitted to be set
+  (`TimelineWaits::Submitted`), and adds what each frame sets to the core's
+  record of submitted values; `FrameLoop::end_frame` says why. A producer whose
+  value is not yet submitted is gated on the host
+  ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
+- **The core pin is core #18** (`5913731`), which makes those checks public.
 
 ## 2026-10-05 — GPU tests share a device per process
 
@@ -486,9 +530,9 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   `VKC_WITH_VULKAN` yield to a project that made the core available first, and
   FetchContent may find an installed core; the core's version does not advance
   between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
-  to configure unless the tier is there and has `format.hpp`, the newest header
-  gfx needs, naming the pin and where the core came from; the package config
-  checks the same.
+  to configure unless the tier is there and declares the newest thing gfx uses
+  from it (`TimelineWaits`, in `sync.hpp`), naming the pin and where the core
+  came from; the package config checks the same.
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
   and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one

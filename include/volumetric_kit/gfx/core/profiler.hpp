@@ -56,9 +56,10 @@ struct ProfilerConfig {
 /// their label, never an error), and labels emit only where
 /// `VK_EXT_debug_utils` is enabled (`core::Device::debug_labels_available`).
 /// Drive it once per frame: @ref begin_frame at the top (after the slot's
-/// in-flight fence is waited), @ref cpu_scope / @ref gpu_scope around work,
-/// @ref end_frame at the bottom; read the latest resolved snapshot from
-/// @ref metrics.
+/// in-flight fence has signalled, not only its frame's timeline value: see
+/// @ref windowing::FrameLoop::timeline), @ref cpu_scope / @ref gpu_scope
+/// around work, @ref end_frame at the bottom; read the latest resolved
+/// snapshot from @ref metrics.
 ///
 /// @warning The @p device passed to @ref create must outlive the profiler (it
 ///          owns a timestamp pool freed through that device, and borrows the
@@ -153,9 +154,10 @@ class VG_CORE_API Profiler {
   /// @brief Begin a frame: publish the frame this slot last held, reset its
   ///        timestamp range, and start the frame's CPU clock.
   /// @param slot  The in-flight slot index in `[0, frames_in_flight)`. The
-  ///              caller must already have waited this slot's in-flight fence,
-  ///              so the prior submission's timestamps are readable without
-  ///              stalling (@ref windowing::FrameLoop::begin_frame does this).
+  ///              caller must already have waited this slot's in-flight fence
+  ///              (not only its frame's timeline value), so the prior
+  ///              submission's timestamps are readable without stalling
+  ///              (@ref windowing::FrameLoop::begin_frame does this).
   /// @param cmd   The frame's recording command buffer, outside any render pass
   ///              (where `vkCmdResetQueryPool` is legal). Pass `VK_NULL_HANDLE`
   ///              for a CPU-only frame; GPU scopes then record no timestamps.
