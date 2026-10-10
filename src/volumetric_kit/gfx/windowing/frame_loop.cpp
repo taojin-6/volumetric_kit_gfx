@@ -14,8 +14,17 @@
 
 namespace volumetric_kit::gfx::windowing {
 
-FrameLoop::FrameLoop(const core::Device& device, Swapchain& swapchain)
-    : device_(device), swapchain_(swapchain) {}
+FrameLoop::FrameLoop(const core::Device& device, Swapchain& swapchain,
+                     core::CommandPool pool,
+                     std::vector<core::CommandBuffer> command_buffers,
+                     std::vector<core::Semaphore> image_available,
+                     std::vector<core::Fence> in_flight)
+    : device_(device),
+      swapchain_(swapchain),
+      pool_(std::move(pool)),
+      command_buffers_(std::move(command_buffers)),
+      image_available_(std::move(image_available)),
+      in_flight_(std::move(in_flight)) {}
 
 core::Result<std::unique_ptr<FrameLoop>> FrameLoop::create(
     const core::Device& device, Swapchain& swapchain,
@@ -33,44 +42,42 @@ core::Result<std::unique_ptr<FrameLoop>> FrameLoop::create(
   VKC_TRY(device.check_enabled(device_requirements())
               .with_context("FrameLoop::create"));
 
-  // The constructor is private, so no std::make_unique.
-  std::unique_ptr<FrameLoop> loop(new FrameLoop(device, swapchain));
-
-  VKC_ASSIGN(core::CommandPool pool,
-             core::CommandPool::create(device.handle(), device.queue_family()));
-  loop->pool_ = std::move(pool);
-
+  // Build what the loop owns before the loop, so a failure here frees objects
+  // no submit has used, and only a whole loop's destructor drains the queues.
   // Per frame-in-flight slot: a command buffer, an image-available semaphore,
   // and an in-flight fence (created signaled so the first wait does not block).
+  // The per-image sync waits for the first begin_frame's ensure_image_sync.
+  VKC_ASSIGN(core::CommandPool pool,
+             core::CommandPool::create(device.handle(), device.queue_family()));
+  std::vector<core::CommandBuffer> command_buffers;
+  std::vector<core::Semaphore> image_available;
+  std::vector<core::Fence> in_flight;
   for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VKC_ASSIGN(core::CommandBuffer cmd, loop->pool_.allocate_primary());
-    loop->command_buffers_.push_back(std::move(cmd));
+    VKC_ASSIGN(core::CommandBuffer cmd, pool.allocate_primary());
+    command_buffers.push_back(std::move(cmd));
     VKC_ASSIGN(core::Semaphore available,
                core::Semaphore::create(device.handle()));
-    loop->image_available_.push_back(std::move(available));
+    image_available.push_back(std::move(available));
     VKC_ASSIGN(core::Fence fence,
                core::Fence::create(device.handle(), /*signaled=*/true));
-    loop->in_flight_.push_back(std::move(fence));
+    in_flight.push_back(std::move(fence));
   }
 
-  // Per swapchain image: a render-finished semaphore (keyed by image, not slot,
-  // to avoid racing the presentation engine) + an in-flight-fence tracking
-  // slot. Built here and rebuilt by ensure_image_sync() if a later
-  // Swapchain::recreate changes the image count.
-  VKC_TRY(loop->ensure_image_sync());
-
-  return loop;
+  // The constructor is private, so no std::make_unique.
+  return std::unique_ptr<FrameLoop>(new FrameLoop(
+      device, swapchain, std::move(pool), std::move(command_buffers),
+      std::move(image_available), std::move(in_flight)));
 }
 
 core::Status FrameLoop::ensure_image_sync() {
-  // Rebuild the per-image sync objects when the swapchain handle changes — i.e.
-  // after a Swapchain::recreate produced a fresh chain. Keying on the handle
-  // (not just the image count) also covers a same-count rebuild: that still
-  // retires the old images, and a failed present (OUT_OF_DATE) can leave a
-  // render-finished semaphore signaled, so reusing it would double-signal on
-  // the next submit. recreate() idles the device first, so the old per-image
-  // objects are drained and safe to replace. A no-op (two comparisons) on the
-  // common path.
+  // Build the per-image sync objects for the first chain, and rebuild them when
+  // the swapchain handle changes — i.e. after a Swapchain::recreate produced a
+  // fresh chain. Keying on the handle (not just the image count) also covers a
+  // same-count rebuild: that still retires the old images, and a failed present
+  // (OUT_OF_DATE) can leave a render-finished semaphore signaled, so reusing it
+  // would double-signal on the next submit. recreate() idles the device first,
+  // so the old per-image objects are drained and safe to replace. A no-op (two
+  // comparisons) on the common path.
   //
   // The handle alone is not a sufficient key: a retired VkSwapchainKHR value
   // can be recycled by the driver, so the array sizes are checked too. That
@@ -163,7 +170,8 @@ core::Result<std::optional<Frame>> FrameLoop::begin_frame(
 core::Result<Frame> FrameLoop::begin_frame() {
   if (!swapchain_.valid()) {
     return core::Status::invalid_argument(
-        "FrameLoop::begin_frame: swapchain is empty (a failed rebuild)");
+        "FrameLoop::begin_frame: swapchain is empty (moved from, or a failed "
+        "rebuild)");
   }
   // A Swapchain::recreate may have changed the image count since the last
   // frame; resize the per-image sync arrays before indexing them below.
@@ -238,27 +246,42 @@ core::Result<Frame> FrameLoop::begin_frame() {
   frame.target = &swapchain_.render_target(image_index);
   frame.image_index = image_index;
   frame.slot = slot;
+  acquired_image_ = image_index;
   return frame;
 }
 
 core::Status FrameLoop::end_frame(const Frame& frame) {
-  // Frame is a public aggregate with every member defaulted, so a hand-built
-  // Frame reaches here with indices that may address nothing: reject it
-  // rather than index past the per-slot and per-image vectors.
-  const uint32_t slot = frame.slot;
-  if (slot >= command_buffers_.size() ||
-      frame.image_index >= render_finished_.size() ||
-      frame.cmd == VK_NULL_HANDLE) {
+  // Frame is a public aggregate, so a hand-built, repeated or other loop's
+  // Frame can reach here: take only the one begin_frame last handed out. Its
+  // command buffer is this loop's own, which tells it from another loop's.
+  const uint32_t slot = current_slot_;
+  if (!acquired_image_ || frame.image_index != *acquired_image_ ||
+      frame.slot != slot || frame.cmd != command_buffers_[slot].handle()) {
     return core::Status::invalid_argument(
-        "FrameLoop::end_frame: frame did not come from this loop's "
-        "begin_frame (slot / image index out of range, or no command buffer)");
+        "FrameLoop::end_frame: frame is not the one this loop's begin_frame "
+        "last handed out");
   }
+  // Spent whatever happens below: a failure before the submit restores the
+  // slot, and after it the slot advances.
+  acquired_image_.reset();
 
   // Close the profiler's frame (no-op when none is attached): the caller's
   // scopes have finalized into this command buffer, so the per-frame CPU/memory
   // figures can be stamped before the submit below.
   if (profiler_ != nullptr) {
     profiler_->end_frame();
+  }
+
+  if (swapchain_.handle() != last_swapchain_) {
+    // The chain the image came from was rebuilt or emptied (moved from, or a
+    // failed rebuild) since begin_frame, and the image went with it. Reset,
+    // not end, the command buffer: a destroyed chain has already left it
+    // invalid, which only a reset or begin leaves. Then restore the slot.
+    (void)vkResetCommandBuffer(command_buffers_[slot].handle(), 0);
+    (void)recover_slot(slot);
+    return core::Status::invalid_argument(
+        "FrameLoop::end_frame: the swapchain was rebuilt or emptied since "
+        "begin_frame");
   }
 
   // Transition the rendered image to PRESENT_SRC.
@@ -392,11 +415,14 @@ void FrameLoop::set_recreate_callback(
   recreate_callback_ = std::move(callback);
 }
 
-FrameLoop::~FrameLoop() { drain(); }
-
-void FrameLoop::drain() noexcept {
-  // Wait on the renderer's own queues (never device-wide) so a shared adopted
-  // device does not idle a sibling library's queues too.
+FrameLoop::~FrameLoop() {
+  // Drain the renderer's own queues (`core::Device::wait_idle`: graphics, and
+  // present when distinct) so teardown cannot free command buffers / semaphores
+  // the GPU still references. Waiting the queues (not this loop's fences) still
+  // covers a present that reported out-of-date and left a render-finished
+  // semaphore with no fence to wait on. Never device-wide: on a shared adopted
+  // device that would idle a sibling library's queues too. Best-effort: errors
+  // are unreportable from the destructor and moot on a lost device.
   (void)device_.wait_idle();
 }
 

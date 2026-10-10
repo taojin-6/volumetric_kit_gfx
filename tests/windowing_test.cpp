@@ -464,6 +464,28 @@ TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   vkDeviceWaitIdle(device_->handle());
 }
 
+// The swapchain emptied between begin_frame and end_frame takes the frame's
+// image with it: end_frame fails with InvalidArgument rather than aborting on
+// the missing image, and restores the slot, so once the caller rebuilds the
+// chain the loop drives frames again without validation errors.
+TEST_F(WindowingTest, FrameLoopEndFrameOnEmptiedSwapchainFailsCleanly) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  auto frame = loop.value()->begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+
+  win::Swapchain stolen = std::move(sc);
+  const vkc::Status ended = loop.value()->end_frame(frame.value());
+  ASSERT_FALSE(ended.ok());
+  EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
+
+  sc = std::move(stolen);
+  ASSERT_TRUE(sc.recreate({256, 256}).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
 TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
   win::Swapchain sc = make_swapchain({256, 256});
   auto loop = win::FrameLoop::create(*device_, sc, 2);
@@ -591,24 +613,82 @@ TEST(SwapchainEmpty, OperationsFailCleanly) {
   EXPECT_EQ(recreated.domain(), vkc::Status::Code::InvalidArgument);
 }
 
-// A loop stays where create made it: it can be neither copied nor moved, so it
-// is never empty.
 static_assert(!std::is_copy_constructible_v<win::FrameLoop> &&
                   !std::is_copy_assignable_v<win::FrameLoop> &&
                   !std::is_move_constructible_v<win::FrameLoop> &&
                   !std::is_move_assignable_v<win::FrameLoop>,
               "FrameLoop is neither copied nor moved");
 
-// Frame is a public aggregate with every member defaulted, so end_frame can
-// be handed one its begin_frame never returned. It fails with InvalidArgument
-// instead of indexing the loop's per-slot and per-image state.
+// Frame is a public aggregate, so end_frame can be handed a Frame its
+// begin_frame did not hand out last. Each fails with InvalidArgument and
+// leaves the frame in flight to end normally. One slot, so a frame ended twice
+// matches the loop's slot, command buffer and image: only the loop's record of
+// what it handed out refuses it.
 TEST_F(WindowingTest, FrameLoopEndFrameRefusesAFrameItDidNotHandOut) {
   win::Swapchain sc = make_swapchain();
-  auto loop = win::FrameLoop::create(*device_, sc, 2);
-  ASSERT_TRUE(loop.ok()) << loop.status().message();
-  const vkc::Status ended = loop.value()->end_frame(win::Frame{});
-  ASSERT_FALSE(ended.ok());
-  EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
+  auto created = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/1);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  win::FrameLoop& loop = *created.value();
+  EXPECT_EQ(loop.end_frame(win::Frame{}).domain(),
+            vkc::Status::Code::InvalidArgument);  // none handed out yet
+
+  auto begun = loop.begin_frame();
+  ASSERT_TRUE(begun.ok()) << begun.status().message();
+  const win::Frame frame = begun.value();
+  std::vector<win::Frame> wrong(5, frame);
+  wrong[0] = win::Frame{};
+  wrong[1].slot = 1;  // past the one slot
+  wrong[2].image_index = frame.image_index + 1;
+  wrong[3].image_index = 99;
+  wrong[4].cmd = VK_NULL_HANDLE;
+  for (size_t i = 0; i < wrong.size(); ++i) {
+    EXPECT_EQ(loop.end_frame(wrong[i]).domain(),
+              vkc::Status::Code::InvalidArgument)
+        << "wrong[" << i << "]";
+  }
+
+  vg::RenderTargetBeginInfo begin;
+  begin.clear_color.float32[3] = 1.0f;
+  frame.target->begin(frame.cmd, begin);
+  frame.target->end(frame.cmd);
+  ASSERT_TRUE(loop.end_frame(frame).ok());
+  EXPECT_EQ(loop.end_frame(frame).domain(),
+            vkc::Status::Code::InvalidArgument);  // already ended
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// A frame from another loop carries an index and slot this loop could have
+// handed out, but not its command buffer: each loop refuses the other's frame
+// and still ends its own.
+TEST_F(WindowingTest, FrameLoopEndFrameRefusesAnotherLoopsFrame) {
+  // Each swapchain needs its own surface (one live swapchain per surface).
+  win::Surface surface_b = make_headless_surface();
+  ASSERT_TRUE(surface_b.valid());
+  win::Swapchain sc_a = make_swapchain();
+  win::Swapchain sc_b = make_swapchain_on(surface_b.handle());
+  auto a = win::FrameLoop::create(*device_, sc_a, 2);
+  auto b = win::FrameLoop::create(*device_, sc_b, 2);
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+
+  auto frame_a = a.value()->begin_frame();
+  auto frame_b = b.value()->begin_frame();
+  ASSERT_TRUE(frame_a.ok()) << frame_a.status().message();
+  ASSERT_TRUE(frame_b.ok()) << frame_b.status().message();
+  EXPECT_EQ(a.value()->end_frame(frame_b.value()).domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(b.value()->end_frame(frame_a.value()).domain(),
+            vkc::Status::Code::InvalidArgument);
+
+  vg::RenderTargetBeginInfo begin;
+  begin.clear_color.float32[3] = 1.0f;
+  for (const win::Frame& f : {frame_a.value(), frame_b.value()}) {
+    f.target->begin(f.cmd, begin);
+    f.target->end(f.cmd);
+  }
+  EXPECT_TRUE(a.value()->end_frame(frame_a.value()).ok());
+  EXPECT_TRUE(b.value()->end_frame(frame_b.value()).ok());
+  vkDeviceWaitIdle(device_->handle());
 }
 
 TEST_F(WindowingTest, SwapchainMoveLeavesSourceEmpty) {

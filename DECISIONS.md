@@ -107,19 +107,20 @@ A type that owns several Vulkan objects and borrows others, such as
 `windowing::FrameLoop`, is a thing with an identity, not a value. Nothing
 needs to move one: `FrameLoop` moved only from `create` to its owner. Its
 hand-written move pair still cost 57 lines that moved and then reset each of
-its 13 members by hand, and every new member had to join both lists.
+its 13 members by hand, and every new member had to join both lists. So an
+aggregate deletes copy and move and is handed out by `std::unique_ptr`, while
+a handle wrapper, which owns one Vulkan object, stays a move-only value
+([AGENTS.md](AGENTS.md#raii-resource-types) states the rule).
 
-- **An aggregate deletes copy and move.** `create` returns
-  `core::Result<std::unique_ptr<T>>`, from a private constructor.
-- **It is never empty:** no default constructor, `valid()`, `destroy()` or
-  empty-state guards. Borrowed objects are references. The destructor tears
-  down once, after draining the work that uses its objects; a defaulted move
-  assignment would skip that drain.
-- **A handle wrapper**, which owns one Vulkan object, stays a move-only value
-  ([AGENTS.md](AGENTS.md#raii-resource-types)).
-- `FrameLoop` is the first; the others with hand-written move pairs are
-  sorted into the two kinds and converted one at a time. recon keeps the same
-  rule for its aggregates.
+- **Not defaulted moves.** A defaulted move assignment frees the old objects
+  without first draining the work that uses them, and a moved-from aggregate
+  is an empty one again, with the guards that come with it.
+- **recon is narrower.** It deletes both only for internal aggregates; its
+  public `VoxelBlockGrid` keeps a defaulted move constructor. gfx deletes both
+  for public aggregates too.
+- `FrameLoop` is the first. The other types with hand-written move pairs are
+  sorted into the two kinds and converted one at a time; a `TODO:` marks each
+  aggregate found so far.
 
 ## 2026-10-05 — GPU tests share a device per process
 

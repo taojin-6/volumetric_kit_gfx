@@ -270,4 +270,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   the default constructor and `valid()` are gone: a loop is never empty.
   Migrating: `loop.value().begin_frame(...)` → `loop.value()->begin_frame(...)`,
   and hold a loop by `std::unique_ptr` where it was held by value.
-  `WindowedApp::frame_loop()` still returns a reference.
+  `WindowedApp::frame_loop()` still returns a reference. `end_frame` refuses,
+  with `InvalidArgument`, any frame but the one `begin_frame` last handed out,
+  and one whose swapchain was rebuilt or emptied since.
