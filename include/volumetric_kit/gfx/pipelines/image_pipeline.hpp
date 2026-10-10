@@ -121,12 +121,14 @@ struct ImagePlane {
   /// format of the plane's texel size and channel order (`_UNORM` and
   /// `_SRGB` are interchangeable).
   const core::Image* image = nullptr;
-  /// Or a buffer with `TRANSFER_SRC` usage, holding the plane's rows.
+  /// Or a buffer with `TRANSFER_SRC` usage, holding every copied texel of
+  /// the plane's rows, including the offset and any row padding.
   const core::Buffer* buffer = nullptr;
   /// The buffer's byte offset of the first row: a multiple of the texel
   /// size.
   VkDeviceSize offset = 0;
-  /// The buffer's row length in texels; 0 for tightly packed rows.
+  /// The buffer's row length in texels; 0 for tightly packed rows. A nonzero
+  /// value must cover the picture width and fit in 2^31 - 1 bytes per row.
   uint32_t row_length = 0;
 };
 
