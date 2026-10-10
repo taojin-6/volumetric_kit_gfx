@@ -487,9 +487,13 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
   // And every later command on the queue waits for the copies, so a producer
   // may write the next picture into a source without a barrier of its own: an
   // execution dependency settles write-after-read.
+  // MoltenVK 1.4.2 drops an execution-only dependency with no barrier entries.
+  // A zero-access memory barrier preserves the dependency on that backend.
+  const VkMemoryBarrier copies_complete{VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                                        nullptr, 0, 0};
   vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
-                       nullptr, 0, nullptr);
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                       &copies_complete, 0, nullptr, 0, nullptr);
 
   // 2. Convert into level 0 of the display image. Its old contents are
   //    discarded; earlier draws sampling it and the earlier chain's blits
