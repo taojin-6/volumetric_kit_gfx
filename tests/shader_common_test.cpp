@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "gfx_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -25,7 +26,6 @@
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -93,23 +93,21 @@ std::vector<float> unit_values() {
   return values;
 }
 
-class ShaderCommonTest : public VulkanDeviceTest {
+class ShaderCommonTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    RendererDeviceTest::SetUp();
     if (base_setup_incomplete()) {
       return;
     }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
-
     const std::vector<uint32_t> spv =
         vg_test::load_spirv(vg_test::spirv_path("common_probe.comp.spv"));
     ASSERT_FALSE(spv.empty());
-    vkc::KernelSetBuilder builder(*device_);
+    vkc::KernelSetBuilder builder(device());
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(uint32_t)};
     const vkc::Status added =
@@ -139,11 +137,11 @@ class ShaderCommonTest : public VulkanDeviceTest {
     const VkDeviceSize input_bytes = inputs.size() * sizeof(inputs[0]);
     const VkDeviceSize output_bytes = count * sizeof(Outputs);
 
-    auto in = vkc::device_storage_buffer(*allocator_, input_bytes);
-    auto out = vkc::device_storage_buffer(*allocator_, output_bytes);
+    auto in = vkc::device_storage_buffer(allocator(), input_bytes);
+    auto out = vkc::device_storage_buffer(allocator(), output_bytes);
     std::array<float, 6> got_corners{};
     auto corner_buf =
-        vkc::device_storage_buffer(*allocator_, sizeof(got_corners));
+        vkc::device_storage_buffer(allocator(), sizeof(got_corners));
     EXPECT_TRUE(in.ok() && out.ok() && corner_buf.ok());
     if (!in.ok() || !out.ok() || !corner_buf.ok()) {
       return {};
@@ -154,12 +152,12 @@ class ShaderCommonTest : public VulkanDeviceTest {
                                     VK_WHOLE_SIZE);
 
     std::vector<Outputs> results(count);
-    vkc::CommandBatch batch(*device_, *allocator_);
+    vkc::CommandBatch batch(device(), allocator());
     // A failed call poisons the batch, so submit() reports the first.
     (void)batch.upload(in.value(), 0, inputs.data(), input_bytes);
     (void)batch.dispatch(probe_, &count, sizeof(count),
                          vkc::group_count(count, 64),
-                         caps_.limits().maxComputeWorkGroupCount[0]);
+                         device().caps().limits().maxComputeWorkGroupCount[0]);
     (void)batch.readback(out.value(), 0, output_bytes, results.data());
     (void)batch.readback(corner_buf.value(), 0, sizeof(got_corners),
                          got_corners.data());
@@ -195,7 +193,6 @@ class ShaderCommonTest : public VulkanDeviceTest {
     return {};
   }
 
-  std::optional<vkc::Allocator> allocator_;
   vkc::ComputeKernel probe_;
   std::optional<vkc::DescriptorPool> pool_;
 };

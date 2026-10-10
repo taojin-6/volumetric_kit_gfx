@@ -31,7 +31,19 @@ ctest --test-dir "$gfx_root/build" --output-on-failure
 ```
 
 GPU-backed tests skip automatically when no Vulkan device is present, so the
-suite runs on headless machines.
+suite runs on headless machines. They are built on volumetric_kit_core's test
+fixtures, and CI runs them under its test policy
+([README](https://github.com/taojin-6/volumetric_kit_core/blob/main/README.md#build-and-test)):
+a test without a device fails, and every test runs under the validation layer
+and fails on an error it reports. Run them as CI does:
+
+```sh
+VKC_REQUIRE_VULKAN_DEVICE=1 VKC_TEST_VALIDATION=1 \
+  ctest --test-dir "$gfx_root/build" --output-on-failure
+```
+
+On macOS the layer needs the setup in the core's
+[CONTRIBUTING](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONTRIBUTING.md#gpu-tests).
 
 ## Formatting and CI
 

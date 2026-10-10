@@ -9,9 +9,9 @@
 #include <thread>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -20,14 +20,16 @@ namespace {
 // hand-written move ops. The ordering / run-once / drain logic is covered
 // device-free in retire_list_test.cpp; the frame loop's timeline feeding it is
 // in windowing_test.cpp.
-class RetireQueueTest : public VulkanDeviceTest {
+class RetireQueueTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    vg_test::RendererDeviceTest::SetUp();
     if (base_setup_incomplete()) return;
-    auto timeline = vkc::TimelineSemaphore::create(*device_);
+    auto timeline = vkc::TimelineSemaphore::create(device());
     ASSERT_TRUE(timeline.ok()) << timeline.status().message();
     timeline_ = std::move(timeline).value();
   }

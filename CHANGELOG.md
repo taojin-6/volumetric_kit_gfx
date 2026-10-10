@@ -85,8 +85,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at its PR #18 (`5913731`) and refuses an
-  older core at configure and in the installed package.
+- build: gfx pins volumetric_kit_core at its PR #18 with the core's main merged
+  in (`e124622`), and refuses an older core at configure and in the installed
+  package.
 - `core`: **labels record through the core's device, and queue labels take
   the queue's mutex.** `QueueLabelScope` labelled the queue without
   `Device::submit_mutex`, racing any submit on another thread or from another

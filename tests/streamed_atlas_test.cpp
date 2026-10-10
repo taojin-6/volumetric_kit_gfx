@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -41,7 +42,6 @@
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -158,13 +158,13 @@ TEST(StreamedAtlasEmptyTest, DefaultConstructedIsEmpty) {
 
 // --- On a device: frames under synchronization validation -------------------
 
-class StreamedAtlasTest : public VulkanDeviceTest {
+class StreamedAtlasTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
-  bool wants_sync_validation() const override { return true; }
   // The draws sample the atlas through a descriptor, which synchronization
   // validation tracks only with this.
-  bool wants_shader_access_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::ShaderAccesses;
+  }
 
   // One frame: its number, its command buffer and the target it draws into.
   struct Frame {
@@ -174,27 +174,25 @@ class StreamedAtlasTest : public VulkanDeviceTest {
   };
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    vg_test::RendererDeviceTest::SetUp();
     if (base_setup_incomplete()) {
       return;
     }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
-    auto pipeline = pipelines::HybridMeshPipeline::create(*device_, *allocator_,
+    auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
                                                           target_layout());
     ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
     pipeline_.emplace(std::move(pipeline).value());
-    auto mesh = pipelines::upload_mesh(*device_, *allocator_, make_quad());
+    auto mesh = pipelines::upload_mesh(device(), allocator(), make_quad());
     ASSERT_TRUE(mesh.ok()) << mesh.status().message();
     mesh_.emplace(std::move(mesh).value());
-    auto timeline = vkc::TimelineSemaphore::create(*device_, 0);
+    auto timeline = vkc::TimelineSemaphore::create(device(), 0);
     ASSERT_TRUE(timeline.ok()) << timeline.status().message();
     timeline_.emplace(std::move(timeline).value());
-    auto gate = vkc::TimelineSemaphore::create(*device_, 0);
+    auto gate = vkc::TimelineSemaphore::create(device(), 0);
     ASSERT_TRUE(gate.ok()) << gate.status().message();
     gate_.emplace(std::move(gate).value());
-    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     pool_.emplace(std::move(pool).value());
   }
@@ -205,7 +203,7 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     if (gate_) {
       open_gate(*gate_);
     }
-    VulkanDeviceTest::TearDown();
+    vg_test::RendererDeviceTest::TearDown();
   }
 
   vkc::Result<pipelines::StreamedAtlas> make_atlas(uint32_t slots) {
@@ -213,7 +211,7 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     desc.extent = {kSide, kSide};
     desc.format = kFormat;
     desc.slots = slots;
-    return pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_,
+    return pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_,
                                             desc);
   }
 
@@ -271,7 +269,7 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     desc.extent = {kSide, kSide};
     desc.color_format = kFormat;
     desc.depth_format = kDepthFormat;
-    return vg::OffscreenTarget::create(*allocator_, desc);
+    return vg::OffscreenTarget::create(allocator(), desc);
   }
 
   // End and submit the frame, which sets its number on the timeline when it
@@ -312,7 +310,7 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     submit.pCommandBuffers = cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &timeline;
-    ASSERT_EQ(device_->queue_submit(1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
+    ASSERT_EQ(device().queue_submit(1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
     vkc::note_timeline_signals({{&*timeline_, number}});
   }
 
@@ -360,15 +358,16 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     upload.format = kFormat;
     upload.pixels = picture.data();
     upload.size = sizeof(picture);
-    auto image = vg::upload_texture(*device_, *allocator_, upload);
+    auto image = vg::upload_texture(device(), allocator(), upload);
     ASSERT_TRUE(image.ok()) << image.status().message();
     out.image = std::move(image).value();
-    auto sampler = vg::Sampler::create(device());
+    auto sampler = vg::Sampler::create(device().handle());
     ASSERT_TRUE(sampler.ok()) << sampler.status().message();
     out.sampler.emplace(std::move(sampler).value());
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
+    auto pool =
+        vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     out.pool = std::move(pool).value();
     auto set = out.pool.allocate(pipeline_->descriptor_set_layout(0));
@@ -385,12 +384,11 @@ class StreamedAtlasTest : public VulkanDeviceTest {
     desc.size = sizeof(picture);
     desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     desc.memory = vkc::MemoryUsage::Staging;
-    VKC_ASSIGN(vkc::Buffer source, allocator_->create_buffer(desc));
+    VKC_ASSIGN(vkc::Buffer source, allocator().create_buffer(desc));
     std::memcpy(source.mapped(), picture.data(), sizeof(picture));
     return source;
   }
 
-  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::HybridMeshPipeline> pipeline_;
   std::optional<pipelines::GpuMesh> mesh_;
   std::optional<vkc::TimelineSemaphore> timeline_;
@@ -406,13 +404,13 @@ TEST_F(StreamedAtlasTest, CreateRefusesWhatItCannotHold) {
   desc.format = kFormat;
 
   const pipelines::HybridMeshPipeline empty_pipeline;
-  EXPECT_EQ(pipelines::StreamedAtlas::create(empty_pipeline, *allocator_,
+  EXPECT_EQ(pipelines::StreamedAtlas::create(empty_pipeline, allocator(),
                                              *timeline_, desc)
                 .status()
                 .domain(),
             vkc::Status::Code::InvalidArgument);
   const vkc::TimelineSemaphore empty_timeline;
-  EXPECT_EQ(pipelines::StreamedAtlas::create(*pipeline_, *allocator_,
+  EXPECT_EQ(pipelines::StreamedAtlas::create(*pipeline_, allocator(),
                                              empty_timeline, desc)
                 .status()
                 .domain(),
@@ -421,34 +419,34 @@ TEST_F(StreamedAtlasTest, CreateRefusesWhatItCannotHold) {
   pipelines::StreamedAtlasDesc bad = desc;
   bad.extent = {0, kSide};
   EXPECT_EQ(
-      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+      pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_, bad)
           .status()
           .domain(),
       vkc::Status::Code::InvalidArgument);
   bad = desc;
   bad.slots = 0;
   EXPECT_EQ(
-      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+      pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_, bad)
           .status()
           .domain(),
       vkc::Status::Code::InvalidArgument);
   bad.slots = 1;  // cannot both update and preserve the picture for discard
   EXPECT_EQ(
-      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+      pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_, bad)
           .status()
           .domain(),
       vkc::Status::Code::InvalidArgument);
   bad = desc;
-  bad.extent = {caps_.limits().maxImageDimension2D + 1, kSide};
+  bad.extent = {physical().limits().maxImageDimension2D + 1, kSide};
   EXPECT_EQ(
-      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+      pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_, bad)
           .status()
           .domain(),
       vkc::Status::Code::InvalidArgument);
   bad = desc;
   bad.format = VK_FORMAT_D32_SFLOAT;  // not a color format
   EXPECT_EQ(
-      pipelines::StreamedAtlas::create(*pipeline_, *allocator_, *timeline_, bad)
+      pipelines::StreamedAtlas::create(*pipeline_, allocator(), *timeline_, bad)
           .status()
           .domain(),
       vkc::Status::Code::Unsupported);
@@ -495,7 +493,7 @@ TEST_F(StreamedAtlasTest, UpdateCopiesTilesFromADeviceBuffer) {
   desc.size = sizeof(rows);
   desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
   desc.memory = vkc::MemoryUsage::Staging;
-  auto source = allocator_->create_buffer(desc);
+  auto source = allocator().create_buffer(desc);
   ASSERT_TRUE(source.ok()) << source.status().message();
   std::memcpy(source.value().mapped(), rows.data(), sizeof(rows));
 

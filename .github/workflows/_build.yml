@@ -147,7 +147,7 @@ jobs:
             # validates and the check exists on Linux alone.
             if brew install cmake molten-vk glfw glm \
                 vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross \
-                spirv-tools; then
+                spirv-tools vulkan-validationlayers; then
               ok=1
               break
             fi
@@ -158,6 +158,11 @@ jobs:
             echo "::error::brew install failed after 3 attempts"
             exit 1
           }
+          # The layer's manifest names its library without a path; the Test
+          # step alone searches Homebrew's lib for it, as job-wide its
+          # libraries would shadow those of every later tool.
+          echo "VKC_LAYER_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
           # make ships with the Xcode command-line tools.
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
@@ -282,12 +287,20 @@ jobs:
           # Each shard runs its tests in a random order (the seed is printed),
           # so a test that passes only after another one fails here instead.
           GTEST_SHUFFLE: '1'
-          # Every leg has a Vulkan device -- the GPU box's (the GPU diagnostic
-          # step insists), MoltenVK, or lavapipe on a hosted runner -- so a
-          # fixture test that cannot get one is a failure, not a skip: a shard
-          # would otherwise pass with all of its tests skipped.
-          VG_REQUIRE_VULKAN_DEVICE: '1'
-        run: ctest --test-dir build --output-on-failure
+          # The core's test policy (its README, "Build and test"). Every leg
+          # has a Vulkan device -- the GPU box's (the GPU diagnostic step
+          # insists), MoltenVK, or lavapipe on a hosted runner -- so a fixture
+          # test that cannot get one is a failure, not a skip: a shard would
+          # otherwise pass with all of its tests skipped. Every test runs under
+          # the validation layer, and fails on an error it reports or without
+          # it.
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+        # Set on the command, as macOS strips DYLD_* from a step's env when it
+        # starts the system's bash.
+        run: |
+          DYLD_LIBRARY_PATH="${VKC_LAYER_LIBRARY_PATH:-}" \
+            ctest --test-dir build --output-on-failure
 
       # Nothing above compiles the *installed* tree, so an install-list mistake
       # -- shipping a header whose own #include was excluded -- reaches
@@ -407,9 +420,9 @@ jobs:
           cmake -S . -B build-xcode -G Xcode "${flags[@]}"
 
       # Runtime-validate the windowing tier through the real window -> surface ->
-      # swapchain -> present path. lavapipe has no VK_EXT_headless_surface (so the
-      # headless windowing test skips), but it supports the X11 WSI, so drive the
-      # windowed example through a virtual X server with validation layers on.
+      # swapchain -> present path, which the headless-surface tests do not
+      # reach: drive the windowed example through the X11 WSI on a virtual X
+      # server with validation layers on.
       # macOS runners are display-less, so the example is build-only there (it is
       # runtime-validated locally on MoltenVK). On the self-hosted GPU box this
       # runs against the real 5090, still under Xvfb since the example opens a

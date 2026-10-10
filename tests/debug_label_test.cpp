@@ -10,10 +10,10 @@
 #include <thread>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -22,10 +22,16 @@ namespace {
 // label the layer rejects -- an unbalanced or double end, a null name, a queue
 // touched by two threads at once -- fails the test. Where the layer is
 // unavailable the tests still run, without that backstop.
-class DebugLabelTest : public VulkanDeviceTest {
+class DebugLabelTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 };
+
+// A test that makes its own instance, under the core fixture's policy for a
+// machine without Vulkan.
+class DebugLabelOwnInstanceTest : public vg_test::RendererTest {};
 
 }  // namespace
 
@@ -33,15 +39,15 @@ class DebugLabelTest : public VulkanDeviceTest {
 // the active path: VkDebugUtilsLabelEXT::pLabelName must be non-null, so the
 // scope refuses it rather than emit a label the validation layer rejects.
 TEST_F(DebugLabelTest, NullNameOrBufferLeavesScopeInert) {
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
-    vg::DebugLabelScope scope(*device_, cmd, nullptr);
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
+    vg::DebugLabelScope scope(device(), cmd, nullptr);
     EXPECT_FALSE(scope.active());
   });
   EXPECT_TRUE(status.ok()) << status.message();
 
-  vg::DebugLabelScope no_buffer(*device_, VK_NULL_HANDLE, "x");
+  vg::DebugLabelScope no_buffer(device(), VK_NULL_HANDLE, "x");
   EXPECT_FALSE(no_buffer.active());
-  vg::QueueLabelScope queue_scope(*device_, nullptr);
+  vg::QueueLabelScope queue_scope(device(), nullptr);
   EXPECT_FALSE(queue_scope.active());
 }
 
@@ -51,27 +57,27 @@ TEST_F(DebugLabelTest, NullNameOrBufferLeavesScopeInert) {
 // submit into an error. The validation layer checks that what was emitted is
 // well formed and balanced; there is no in-process API to capture a label.
 TEST_F(DebugLabelTest, EmitsLabelsWithoutError) {
-  const bool labels = device_->debug_labels_available();
+  const bool labels = device().debug_labels_available();
   vkc::Status record_status =
-      device_->submit_single_time([&](VkCommandBuffer cmd) {
+      device().submit_single_time([&](VkCommandBuffer cmd) {
         // The inner block ends the region before submit_single_time ends the
         // command buffer.
         {
-          vg::DebugLabelScope pass(*device_, cmd, "pass");
+          vg::DebugLabelScope pass(device(), cmd, "pass");
           EXPECT_EQ(pass.active(), labels);
-          vg::DebugLabelScope nested(*device_, cmd, "nested");
+          vg::DebugLabelScope nested(device(), cmd, "nested");
           EXPECT_EQ(nested.active(), labels);
         }
         // A second, sequential region; it ends as the lambda returns.
-        vg::DebugLabelScope upload(*device_, cmd, "upload");
+        vg::DebugLabelScope upload(device(), cmd, "upload");
         EXPECT_EQ(upload.active(), labels);
       });
   EXPECT_TRUE(record_status.ok()) << record_status.message();
 
-  vg::QueueLabelScope frame(*device_, "frame");
+  vg::QueueLabelScope frame(device(), "frame");
   EXPECT_EQ(frame.active(), labels);
   vkc::Status submit_status =
-      device_->submit_single_time([](VkCommandBuffer) {});
+      device().submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(submit_status.ok()) << submit_status.message();
 }
 
@@ -87,7 +93,7 @@ TEST_F(DebugLabelTest, QueueLabelsAndSubmitsFromTwoThreadsDoNotRace) {
     while (!go.load()) {
     }
     for (int i = 0; i < kIterations; ++i) {
-      vg::QueueLabelScope frame(*device_, "frame");
+      vg::QueueLabelScope frame(device(), "frame");
     }
   });
   std::thread submitter([&] {
@@ -95,7 +101,7 @@ TEST_F(DebugLabelTest, QueueLabelsAndSubmitsFromTwoThreadsDoNotRace) {
     }
     for (int i = 0; i < kIterations; ++i) {
       // An empty batch: the shortest call that writes the queue.
-      EXPECT_EQ(device_->queue_submit(0, nullptr, VK_NULL_HANDLE), VK_SUCCESS);
+      EXPECT_EQ(device().queue_submit(0, nullptr, VK_NULL_HANDLE), VK_SUCCESS);
     }
   });
   go.store(true);
@@ -108,8 +114,8 @@ TEST_F(DebugLabelTest, QueueLabelsAndSubmitsFromTwoThreadsDoNotRace) {
 // active would emit a second vkCmdEndDebugUtilsLabelEXT, which the validation
 // layer reports as unbalanced.
 TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
-    vg::DebugLabelScope source(*device_, cmd, "region");
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
+    vg::DebugLabelScope source(device(), cmd, "region");
     const bool was_active = source.active();
 
     vg::DebugLabelScope moved(std::move(source));
@@ -124,9 +130,9 @@ TEST_F(DebugLabelTest, DebugLabelMoveConstructLeavesSourceInert) {
 // `dst` last, so dst's own end (the top of the label stack) and the final
 // destruction stay strictly nested for the validation layer.
 TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
-    vg::DebugLabelScope src(*device_, cmd, "src region");
-    vg::DebugLabelScope dst(*device_, cmd, "dst region");
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
+    vg::DebugLabelScope src(device(), cmd, "src region");
+    vg::DebugLabelScope dst(device(), cmd, "dst region");
     const bool src_active = src.active();
 
     dst = std::move(src);  // dst ends its own region, then adopts src's
@@ -139,8 +145,8 @@ TEST_F(DebugLabelTest, DebugLabelMoveAssignOverLiveScope) {
 // self-move: pointer-laundered to dodge -Wself-move under -Werror. The scope
 // keeps its state and emits exactly one end at exit.
 TEST_F(DebugLabelTest, DebugLabelSelfMoveIsSafe) {
-  vkc::Status status = device_->submit_single_time([&](VkCommandBuffer cmd) {
-    vg::DebugLabelScope scope(*device_, cmd, "region");
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
+    vg::DebugLabelScope scope(device(), cmd, "region");
     const bool was_active = scope.active();
 
     vg::DebugLabelScope* alias = &scope;
@@ -153,7 +159,7 @@ TEST_F(DebugLabelTest, DebugLabelSelfMoveIsSafe) {
 // The queue scope's move-construct: the same inert-source contract, on the
 // queue's label stack.
 TEST_F(DebugLabelTest, QueueLabelMoveConstructLeavesSourceInert) {
-  vg::QueueLabelScope source(*device_, "queue region");
+  vg::QueueLabelScope source(device(), "queue region");
   const bool was_active = source.active();
 
   vg::QueueLabelScope moved(std::move(source));
@@ -164,8 +170,8 @@ TEST_F(DebugLabelTest, QueueLabelMoveConstructLeavesSourceInert) {
 // The queue scope's move-assign over a live scope, nested as in the command
 // buffer case.
 TEST_F(DebugLabelTest, QueueLabelMoveAssignOverLiveScope) {
-  vg::QueueLabelScope src(*device_, "src region");
-  vg::QueueLabelScope dst(*device_, "dst region");
+  vg::QueueLabelScope src(device(), "src region");
+  vg::QueueLabelScope dst(device(), "dst region");
   const bool src_active = src.active();
 
   dst = std::move(src);  // dst ends its own region, then adopts src's
@@ -175,7 +181,7 @@ TEST_F(DebugLabelTest, QueueLabelMoveAssignOverLiveScope) {
 
 // The queue scope's self-move keeps its state and ends once.
 TEST_F(DebugLabelTest, QueueLabelSelfMoveIsSafe) {
-  vg::QueueLabelScope scope(*device_, "region");
+  vg::QueueLabelScope scope(device(), "region");
   const bool was_active = scope.active();
 
   vg::QueueLabelScope* alias = &scope;
@@ -199,19 +205,16 @@ TEST(DebugLabelInertTest, DefaultScopesAreInert) {
 
 // On a device whose instance did not enable VK_EXT_debug_utils, named scopes
 // are inert and emit nothing: the device resolved no label entry points, and
-// the queue scope looks none up.
-TEST(DebugLabelInertTest, ScopesAreInertWithoutDebugUtils) {
+// the queue scope looks none up. The instance is unvalidated: the validation
+// messenger needs VK_EXT_debug_utils and would keep it on.
+TEST_F(DebugLabelOwnInstanceTest, ScopesAreInertWithoutDebugUtils) {
   vkc::InstanceConfig instance_config;
   instance_config.request_debug_utils = false;
   auto instance = vkc::Instance::create(instance_config);
-  if (!instance.ok()) {
-    GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-  }
+  ASSERT_TRUE(instance.ok()) << instance.status().message();
   const vkc::DeviceRequirements reqs = vg::device_requirements();
   auto physical = instance.value().select_physical_device(reqs);
-  if (!physical.ok()) {
-    GTEST_SKIP() << "no Vulkan device: " << physical.status().message();
-  }
+  ASSERT_TRUE(physical.ok()) << physical.status().message();
   std::optional<vkc::Device> device;
   {
     auto made = vkc::Device::create(instance.value(), physical.value(), reqs);

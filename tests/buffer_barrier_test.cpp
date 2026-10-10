@@ -12,35 +12,22 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <optional>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// Adds a VMA allocator on top of the shared device fixture (mirrors
-// ImageBarrierTest) to create the buffers the barriers order.
-class BufferBarrierTest : public VulkanDeviceTest {
+class BufferBarrierTest : public vg_test::RendererDeviceTest {
  protected:
-  // Records real barriers, so run under the validation layer with teeth: a
-  // range past the buffer or a stage the queue lacks fails the test (on CI,
-  // where the layer is present), and so does a copy the barriers fail to
-  // order, under synchronization validation.
-  bool wants_validation() const override { return true; }
-  bool wants_sync_validation() const override { return true; }
-
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;  // no device, or the base SetUp failed fatally
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
+  // Records real barriers, so run under synchronization validation: a range
+  // past the buffer, a stage the queue lacks, or a copy the barriers fail to
+  // order fails the test wherever the layer is installed.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
   }
 
   vkc::Buffer make_buffer(VkBufferUsageFlags usage, vkc::MemoryUsage memory,
@@ -50,13 +37,12 @@ class BufferBarrierTest : public VulkanDeviceTest {
     desc.usage = usage;
     desc.memory = memory;
     desc.host_access = access;
-    auto buffer = allocator_->create_buffer(desc);
+    auto buffer = allocator().create_buffer(desc);
     EXPECT_TRUE(buffer.ok()) << buffer.status().message();
     return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
   }
 
   static constexpr VkDeviceSize kBytes = 64;
-  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -85,7 +71,7 @@ TEST_F(BufferBarrierTest, OrdersACopyChainThroughTheGpu) {
   const VkBuffer up = upload.handle();
   const VkBuffer mid = device_only.handle();
   const VkBuffer down = readback.handle();
-  auto recorded = device_->submit_single_time([&](VkCommandBuffer cmd) {
+  auto recorded = device().submit_single_time([&](VkCommandBuffer cmd) {
     // Two halves, the second ordered after the first's sub-range.
     VkBufferCopy first{0, 0, kBytes / 2};
     vkCmdCopyBuffer(cmd, up, mid, 1, &first);

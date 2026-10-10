@@ -162,8 +162,9 @@ git -C "$gfx_root" diff --check
   contracts or the change's scope warrant it.
 - Documentation-only changes need formatting, link, and consistency checks;
   no build is needed. Hooks can be scoped with `pre-commit run --files`.
-- GPU tests can skip when no Vulkan device is present. Report actual GPU
-  coverage separately from host-only success. Sanitizer CI requires lavapipe.
+- GPU tests can skip when no Vulkan device is present. Run them as CI does
+  (CONTRIBUTING.md, "Build and test"), and report actual GPU coverage
+  separately from host-only success. Sanitizer CI requires lavapipe.
 - `VG_WITH_GLFW` gates examples, not library windowing. `VG_WITH_CUDA` is
   reserved until its interop implementation is wired; verify current CMake.
 
