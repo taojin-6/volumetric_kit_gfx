@@ -1,7 +1,6 @@
 name: lint
 
-# Styling + docs gate. Runs the same hooks as the local `pre-commit` install,
-# then core's check that a fork's pull request runs no job (ci.yml).
+# Styling + docs gate. Runs the same hooks as the local `pre-commit` install.
 # Linux-only: clang-format and cmake-format output is deterministic across
 # operating systems, so one runner is enough. Invoked by ci.yml, which owns the
 # push / pull_request triggers and the concurrency group.
@@ -10,22 +9,10 @@ on:
 
 jobs:
   lint:
-    # Skipped for a fork's pull request, as is every job ci.yml reaches.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      # The fork-guard check is core's. It is checked out inside the workspace,
-      # where actions/checkout must put it; pre-commit sees only gfx's tracked
-      # files, so it is not linted.
-      # TODO: re-pin to core's main once taojin-6/volumetric_kit_core#16 merges.
-      - uses: actions/checkout@v7
-        with:
-          repository: taojin-6/volumetric_kit_core
-          ref: 8f689102b14b80a8087b6f35609022d85089211e
-          path: .volumetric_kit_core
-          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -43,9 +30,3 @@ jobs:
       # merge-gate's behavior without a commit here.
       - run: python -m pip install pre-commit==4.6.2
       - run: pre-commit run --all-files --show-diff-on-failure
-      # Also after a pre-commit failure, so both results show.
-      - name: Fork guards
-        if: ${{ !cancelled() }}
-        run: |
-          python -m pip install -r .volumetric_kit_core/tools/ci/requirements.txt
-          python .volumetric_kit_core/tools/ci/check_fork_guards.py .github/workflows

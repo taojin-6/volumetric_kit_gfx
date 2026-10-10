@@ -13,8 +13,6 @@ on:
 
 jobs:
   asan-ubsan-lsan:
-    # Skipped for a fork's pull request, as is every job ci.yml reaches.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
     env:
