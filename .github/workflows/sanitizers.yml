@@ -86,10 +86,8 @@ jobs:
           path: build/_deps
           key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/vg_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}
 
-      # Debug + clang gives the most reliable sanitizer + mesa interop. (Vulkan
-      # validation is a runtime opt-in via InstanceConfig; the test fixture can
-      # enable it for the complementary handle/lifetime checking ASan can't see.)
-      # No examples: this job never runs them. VG_TEST_SHARDS: each test binary
+      # Debug + clang gives the most reliable sanitizer + mesa interop. No
+      # examples: this job never runs them. VG_TEST_SHARDS: each test binary
       # runs as 4 one-process shards (tests/CMakeLists.txt), so its tests share
       # Vulkan devices and the sanitizer runtime starts 36 times, not 385.
       - name: Configure
@@ -114,9 +112,11 @@ jobs:
       # fails its shard, and the report's stack traces name the code.
       - name: Test
         env:
-          # As in _build.yml: shuffled order, and a fixture test without a
-          # Vulkan device fails rather than skips, since a shard has no skip
-          # expression to report it by.
+          # As in _build.yml: shuffled order, a fixture test without a Vulkan
+          # device fails rather than skips, since a shard has no skip
+          # expression to report it by, and the validation layer checks the
+          # handles and lifetimes ASan cannot see.
           GTEST_SHUFFLE: '1'
-          VG_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
         run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"

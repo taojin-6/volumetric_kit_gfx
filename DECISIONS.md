@@ -225,18 +225,13 @@ place: a `RetireQueue` on the timeline.
 
 ## 2026-10-05 — GPU tests share a device per process
 
-**The contract.** `tests/vulkan_test_fixture.hpp`'s `VulkanDeviceTest` no
-longer makes an instance and device per test. Every test in a process that
-asks for the same instance setup -- plain, validation, validation + sync, or
-validation + sync + shader-access tracking, from the `wants_*_validation()`
-overrides -- borrows one instance and device, made on first use and kept until
-the process ends. Each test still makes and destroys its own objects on it,
-and its validation errors still fail it, through a capture installed for that
-test alone. A fixture that needs other device requirements returns them from
-`custom_requirements()` and gets its own instance and device per test. A test
-that loses the device fails, and the next one gets a fresh device. An object a
-test never destroys is reported when the shared device is destroyed, at the
-end of the process: the run fails, though no single test is named.
+**The contract.** *Amended 2026-10-08:* the fixtures and the require-device
+variable are volumetric_kit_core's. gfx's GPU tests derive from the core's test
+fixtures (`volumetric_kit::core_test_support`) through
+`tests/gfx_test_support.hpp`, which adds the renderer's requirements and the
+headless-surface helpers. The fixtures share one instance and device among the
+tests of a process rather than make them per test, as the core's DECISIONS.md
+records ("One Vulkan test fixture for the family").
 
 **Why.** Measured in CI (the draft PR #111, closed after measuring), on
 NVIDIA's Linux driver 615.71.09:
@@ -255,7 +250,7 @@ NVIDIA's Linux driver 615.71.09:
   allocate memory in static TLS block" and finds no driver. Descriptors,
   threads and memory stay flat, with or without the validation layer; one
   instance held open throughout keeps the library loaded, and the limit never
-  comes. The fixture's shared instances do that, and the test binary's global
+  comes. The fixtures' shared instances do that, and the test binary's global
   environment holds one more whenever a process runs several tests, for the
   tests that make their own. An application that recreates its `VkInstance`
   many times in one process would hit this limit too.
@@ -267,9 +262,10 @@ running its quarter of the tests in one process (`GTEST_TOTAL_SHARDS` /
 fixture's devices. A shard passes or fails on its exit code alone: given a skip
 expression, one skipped test would mark the whole shard skipped, failures
 included -- the failure that hid the Ubuntu 22.04 leg's results from August to
-#113. Instead CI sets `VG_REQUIRE_VULKAN_DEVICE`, under which a fixture test that
-cannot get an instance or device fails rather than skips, so no shard passes
-with its tests skipped. Locally the default stays one CTest entry per test.
+#113. Instead CI sets `VKC_REQUIRE_VULKAN_DEVICE`, under which a fixture test
+that cannot get an instance or device fails rather than skips, so no shard
+passes with its tests skipped. Locally the default stays one CTest entry per
+test.
 
 ## 2026-10-05 — 2D images: convert, then mip, then draw
 
@@ -585,11 +581,16 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
   PUBLIC and the installed package refuses a core built without it.
 - **gfx checks the core it got, not the one it asked for.** Its pin and
   `VKC_WITH_VULKAN` yield to a project that made the core available first, and
-  FetchContent may find an installed core; the core's version does not advance
-  between commits. So `vg_require_core_vulkan` (`cmake/vg_core.cmake`) refuses
-  to configure unless the tier is there and declares the newest thing gfx uses
-  from it (`TimelineWaits`, in `sync.hpp`), naming the pin and where the core
-  came from; the package config checks the same.
+  FetchContent may find an installed core. *Amended 2026-10-08:* the check is
+  the core's `vkc_require_core` (the core's DECISIONS.md, "Consumers pin, and
+  an application declares the core first"). On a core older than
+  `VG_VKC_MIN_VERSION`, the oldest gfx builds with, or one without the vulkan
+  tier, gfx's top-level CMakeLists.txt fails the configure, and its package
+  config reports `volumetric_kit_gfx` not found (`PACKAGE`), so a consumer
+  that can do without gfx carries on. Either way the message names where the
+  core came from and how to fix it. A core older than 0.1.0 has no
+  `vkc_require_core`, so the configure stops at gfx's call as an unknown
+  command (the core's README, "Use it in your project").
 - **The `VkResult` bridge and the shader build functions are the core's.**
   `vk_error`, `vk_result` and `to_string` are using-declarations of the tier's
   and `VG_VK_TRY` aliases `VKC_VK_TRY`, so an unqualified call finds one
@@ -642,7 +643,9 @@ shared core (the core's DECISIONS.md, "Tiers"), following recon's.
   asks it only of its own statuses. It does return empty for a detail wider
   than 32 bits, which would be undefined to convert. Recording the backend in
   `Status` is the core's to decide, and its `vk_result`, now gfx's, has the
-  gap.
+  gap. *Amended 2026-10-08:* superseded: a backend status records the backend
+  that set it, and `vk_result` is empty for any but Vulkan (the core's
+  DECISIONS.md, "Merging the three `Status`/`Result` types").
 - **`VG_TRY` / `VG_ASSIGN` / `VG_CHECK` remain**, as object-like aliases of
   the core's `VKC_*` macros, so open branches merge cleanly and a check
   reports its condition unexpanded; a `TODO:` marks the rename, as recon has

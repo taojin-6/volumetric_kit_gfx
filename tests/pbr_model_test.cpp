@@ -15,11 +15,11 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -113,40 +113,37 @@ assets::Model textured_model() {
   return model;
 }
 
-// An allocator + a PbrPipeline (for the reflected material layout), on top of
-// the shared device fixture. Skips wholesale when no Vulkan device is present.
-class PbrModelTest : public VulkanDeviceTest {
+// A PbrPipeline, for the reflected material layout.
+class PbrModelTest : public vg_test::RendererDeviceTest {
  protected:
   // Upload records copies + layout transitions + descriptor writes, so run
-  // under the validation layer with teeth (on CI, where the layer is present).
-  bool wants_validation() const override { return true; }
+  // under the validation layer.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    RendererDeviceTest::SetUp();
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
 
     vg::RenderTargetLayout layout;
     layout.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
     layout.color_count = 1;
     layout.depth_format = VK_FORMAT_D32_SFLOAT;
-    auto pipeline = pipelines::PbrPipeline::create(device(), layout);
+    auto pipeline = pipelines::PbrPipeline::create(device().handle(), layout);
     ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
     pipeline_.emplace(std::move(pipeline).value());
   }
 
   pipelines::PbrModel make_model(const assets::Model& model) {
     auto made =
-        pipelines::PbrModel::create(*device_, *allocator_, *pipeline_, model);
+        pipelines::PbrModel::create(device(), allocator(), *pipeline_, model);
     EXPECT_TRUE(made.ok()) << made.status().message();
     return made.ok() ? std::move(made).value() : pipelines::PbrModel{};
   }
 
-  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
 };
 
@@ -305,7 +302,7 @@ TEST_F(PbrModelTest, EmptyModelIsValidWithZeroDraws) {
 
 TEST_F(PbrModelTest, RejectsInvalidPipeline) {
   const pipelines::PbrPipeline empty;  // default-constructed: valid() is false
-  auto made = pipelines::PbrModel::create(*device_, *allocator_, empty,
+  auto made = pipelines::PbrModel::create(device(), allocator(), empty,
                                           one_mesh_model());
   ASSERT_FALSE(made.ok());
   EXPECT_EQ(made.status().domain(), vkc::Status::Code::InvalidArgument);
@@ -315,12 +312,12 @@ TEST_F(PbrModelTest, RejectsNullDevice) {
   // A moved-from Device is the only way to hold one with a null handle. Take
   // it from a device of the test's own: the fixture's is shared.
   auto made_device =
-      vkc::Device::create(*instance_, caps_, vg::device_requirements());
+      vkc::Device::create(instance(), physical(), vg::device_requirements());
   ASSERT_TRUE(made_device.ok()) << made_device.status().message();
   vkc::Device own = std::move(made_device).value();
   const vkc::Device taken = std::move(own);
   const vkc::Device& null_device = own;  // NOLINT(bugprone-use-after-move)
-  auto made = pipelines::PbrModel::create(null_device, *allocator_, *pipeline_,
+  auto made = pipelines::PbrModel::create(null_device, allocator(), *pipeline_,
                                           one_mesh_model());
   EXPECT_FALSE(made.ok());
   EXPECT_EQ(made.status().domain(), vkc::Status::Code::InvalidArgument);
