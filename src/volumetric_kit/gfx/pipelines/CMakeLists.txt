@@ -81,6 +81,8 @@ vkc_embed_shaders(
   vg_
   TARGET_ENV
   vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/model.vert"
   "${PROJECT_SOURCE_DIR}/shaders/model.frag")
@@ -95,6 +97,8 @@ vkc_embed_shaders(
   vg_
   TARGET_ENV
   vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
@@ -109,6 +113,8 @@ vkc_embed_shaders(
   vg_
   TARGET_ENV
   vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/image_convert.vert"
   "${PROJECT_SOURCE_DIR}/shaders/image_convert.frag"
