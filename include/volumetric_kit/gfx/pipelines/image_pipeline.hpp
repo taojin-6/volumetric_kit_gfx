@@ -371,6 +371,8 @@ class VG_PIPELINES_API ImagePipeline {
                                             const RenderTargetLayout& layout);
 
   ~ImagePipeline() = default;
+  // TODO: an aggregate (DECISIONS.md, 2026-10-10): delete the move pair and
+  // hand it out by std::unique_ptr, as windowing::FrameLoop is.
   ImagePipeline(ImagePipeline&& other) noexcept;
   ImagePipeline& operator=(ImagePipeline&& other) noexcept;
   ImagePipeline(const ImagePipeline&) = delete;
