@@ -270,6 +270,61 @@ TEST_F(ImageUpdateTest, RefusesOverflowingRegionSizesWithoutRecording) {
   ASSERT_TRUE(submitted.ok()) << submitted.message();
 }
 
+// Even a single-row copy has a bounded byte pitch, although source bounds
+// only need its first texel. Refuse both forms before recording anything,
+// including when a valid region precedes the malformed one.
+TEST_F(ImageUpdateTest, RefusesRowPitchBeyondVulkanLimitWithoutRecording) {
+  auto image = make_image({2, 1});
+  ASSERT_TRUE(image.ok()) << image.status().message();
+  auto source = make_source(Texels{0x11223344});
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto buffer = pool.value().allocate_primary();
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  ASSERT_TRUE(buffer.value().begin().ok());
+  const VkCommandBuffer cmd = buffer.value().handle();
+
+  VkBufferImageCopy left{};
+  left.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  left.imageExtent = {1, 1, 1};
+  // RGBA8: the first pitch above 2^31 - 1 bytes, a pitch whose byte count
+  // wraps in uint32_t, and the largest representable row length.
+  for (const uint32_t row_length :
+       {1u << 29, 1u << 30, std::numeric_limits<uint32_t>::max()}) {
+    SCOPED_TRACE(row_length);
+    VkBufferImageCopy right = left;
+    right.imageOffset.x = 1;
+    right.bufferRowLength = row_length;
+    ASSERT_EQ(
+        vg::record_image_update(cmd, source.value(), image.value(), &right, 1)
+            .domain(),
+        vkc::Status::Code::InvalidArgument);
+    const std::array<vg::ImageCopy, 2> copies{
+        {{&source.value(), left}, {&source.value(), right}}};
+    ASSERT_EQ(
+        vg::record_image_update(cmd, copies.data(), 2, image.value()).domain(),
+        vkc::Status::Code::InvalidArgument);
+    EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
+  }
+  ASSERT_TRUE(buffer.value().end().ok());
+  // Only submit once every refusal passed: a regression never executes an
+  // invalid copy.
+  const vkc::Status submitted = device().submit_and_wait(cmd);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
+
+  // The largest legal RGBA8 pitch still records. Do not submit this boundary
+  // case: the contract being checked is validation of the declared pitch.
+  ASSERT_TRUE(buffer.value().begin().ok());
+  left.bufferRowLength = (1u << 29) - 1;
+  const vkc::Status recorded =
+      vg::record_image_update(cmd, source.value(), image.value(), &left, 1);
+  ASSERT_TRUE(recorded.ok()) << recorded.message();
+  EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  ASSERT_TRUE(buffer.value().end().ok());
+}
+
 // Everything refused is refused before anything is recorded: the command
 // buffer still submits clean, and the image keeps its layout.
 TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {

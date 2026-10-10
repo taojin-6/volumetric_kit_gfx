@@ -57,8 +57,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   (`core/image_update.hpp`) record an image's update into a frame's command
   buffer between the transitions that order it, from one buffer or from
   several (`ImageCopy`, a source and a region each), and refuse regions that
-  write a texel in common; an upload stages its pixels through a buffer a
-  `RetireQueue` frees once the frame completes.
+  write a texel in common or row pitches above `2^31 - 1` bytes; an upload
+  stages its pixels through a buffer a `RetireQueue` frees once the frame
+  completes.
 - `pipelines`: `StreamedAtlas` (`pipelines/streamed_atlas.hpp`), the atlas a
   live `HybridMeshPipeline` mesh samples: a ring of images reused by frame
   number, updated by copies recorded into the frame -- tiles from one device

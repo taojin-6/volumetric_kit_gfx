@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -98,6 +99,12 @@ core::Status check_region(const std::string& name, const core::Image& image,
       (r.bufferImageHeight != 0 && r.bufferImageHeight < e.height)) {
     return core::Status::invalid_argument(
         which + "'s row length or image height is shorter than the region");
+  }
+  // VUID-vkCmdCopyBufferToImage-bufferRowLength-09108 bounds the byte pitch
+  // even when only one row is copied and source bounds do not constrain it.
+  if (r.bufferRowLength > std::numeric_limits<std::int32_t>::max() / texel) {
+    return core::Status::invalid_argument(
+        which + "'s row pitch exceeds 2^31 - 1 bytes");
   }
   if (r.bufferOffset % texel != 0) {
     return core::Status::invalid_argument(

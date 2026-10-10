@@ -74,7 +74,9 @@ struct ImageUpdateScope {
 ///                      (they run with no barrier between them), each
 ///                      `bufferOffset` a multiple of the texel size and each
 ///                      row length and image height 0 (tightly packed) or at
-///                      least the region's.
+///                      least the region's. `bufferRowLength` times the
+///                      texel size must not exceed `2^31 - 1` bytes, even
+///                      for a single-row copy.
 /// @param region_count  The number of @p regions; non-zero.
 /// @param scope         The stages that read the image before and after.
 /// @return OK once recorded; `core::Status::Code::InvalidArgument` for a null
@@ -82,8 +84,9 @@ struct ImageUpdateScope {
 ///         multisampled image, no regions, a region outside the image or
 ///         reading past the end of @p source, two regions that write a
 ///         texel in common, a misaligned offset, a row
-///         length or image height shorter than the region's, or a stage
-///         mask that is empty or not shader stages;
+///         length or image height shorter than the region's, a row pitch
+///         above `2^31 - 1` bytes, or a stage mask that is empty or not shader
+///         stages;
 ///         `core::Status::Code::Unsupported` for a compressed, multi-planar
 ///         or depth/stencil format.
 ///
