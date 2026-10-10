@@ -4,27 +4,24 @@
 #pragma once
 
 /// @file debug_label.hpp
-/// @brief The cross-tool GPU capture-label surface: `VK_EXT_debug_utils`
-///        command/queue label scopes and object naming.
+/// @brief The cross-tool GPU capture-label scopes: `VK_EXT_debug_utils`
+///        command-buffer and queue regions, opened and closed by RAII.
 ///
 /// One emitter serves every standard capture tool — RenderDoc, Nsight Graphics,
 /// Nsight Systems, and Xcode's Metal frame debugger all consume the same
-/// `VK_EXT_debug_utils` labels and object names, so there is no per-tool code.
+/// `VK_EXT_debug_utils` labels, so there is no per-tool code.
 /// @ref DebugLabelScope nests a region inside a command buffer (where most
 /// captures group draws); @ref QueueLabelScope nests a region on a queue's
-/// submit timeline (where Nsight Systems shows it); @ref set_object_name gives
-/// a handle a readable name in a capture.
+/// submit timeline (where Nsight Systems shows it). Name objects with the
+/// core's `Device::set_object_name`.
 ///
-/// Every entry point routes through a @ref DebugUtilsTable, which
-/// @ref debug_utils loads from a `core::Device`. When the extension is not
-/// enabled the table is inactive, and every operation here compiles to a
-/// branch-to-noop — no labels are emitted and no error is raised.
-
-#include <cstdint>
+/// Both scopes emit only where the device's instance enabled the extension
+/// (the core's `Device::debug_labels_available`); elsewhere they are inert —
+/// no labels are emitted and no error is raised. Labels carry no color, as the
+/// core's do not.
 
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
-#include "volumetric_kit/gfx/core/impl/debug_utils_table.hpp"
 
 namespace volumetric_kit::core {
 class Device;
@@ -32,43 +29,23 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
-/// @brief The `VK_EXT_debug_utils` entry points of @p device, for the scopes
-///        and naming below.
-///
-/// Active only where the device's instance enabled the extension (the core's
-/// `Device::debug_labels_available`); inactive otherwise, so every label is a
-/// no-op. Resolving the entry points costs a few `vkGetDeviceProcAddr` calls,
-/// so keep the table for the device's lifetime rather than load it per label.
-///
-/// The core's Device resolves the command-buffer label and object-name entry
-/// points too (`Device::begin_debug_label`, `Device::set_object_name`), but
-/// its labels take no color and it records no queue labels, both of which the
-/// scopes below offer, so gfx resolves its own.
-///
-/// TODO: take labels and names from the core's Device once it records label
-/// colors and queue labels, if a second library needs them; the table can
-/// then go.
-/// @param device  The device to label on; it must outlive the table.
-/// @return The device's entry points, or an inactive table.
-VG_CORE_API DebugUtilsTable debug_utils(const core::Device& device);
-
 /// @brief A nested debug-label region inside a command buffer, opened on
 ///        construction and closed on destruction.
 ///
 /// The region groups the commands recorded between construction and destruction
-/// under @p name in a GPU capture. An inert (default-constructed) scope, or one
-/// built against an inactive @ref DebugUtilsTable, emits nothing.
+/// under @p name in a GPU capture. It records through the core's
+/// `Device::begin_debug_label` / `end_debug_label`. An inert
+/// (default-constructed) scope emits nothing.
 ///
 /// @warning The command buffer must stay in the recording state for the scope's
 ///          whole lifetime: the destructor records
 ///          `vkCmdEndDebugUtilsLabelEXT` into it. Destroy the scope before
-///          ending the command buffer, and keep the @ref DebugUtilsTable
-///          (i.e. the device it came from) alive for the scope's lifetime.
+///          ending the command buffer, and keep the device alive, unmoved, for
+///          the scope's lifetime.
 ///
 /// @code
-/// const DebugUtilsTable labels = debug_utils(device);  // once per device
 /// {
-///   DebugLabelScope pass(cmd, labels, "shadow pass");
+///   DebugLabelScope pass(device, cmd, "shadow pass");
 ///   record_shadow_draws(cmd);
 /// }  // region ends here
 /// @endcode
@@ -77,17 +54,16 @@ class VG_CORE_API DebugLabelScope {
   /// @brief An inert scope: emits nothing and ends nothing.
   DebugLabelScope() noexcept = default;
 
-  /// @brief Open a labelled region in @p cmd (when @p table is active).
-  /// @param cmd    The recording command buffer to mark up.
-  /// @param table  The resolved entry points; an inactive table makes this a
-  ///               no-op.
-  /// @param name   The region label shown in the capture (must outlive only
-  ///               this call — the driver copies it). A null name makes the
-  ///               scope inert — Vulkan requires a non-null label name.
-  /// @param color  Optional RGBA tint in `[0, 1]` as a 4-float array; a null
-  ///               pointer leaves the color unset.
-  DebugLabelScope(VkCommandBuffer cmd, const DebugUtilsTable& table,
-                  const char* name, const float color[4] = nullptr) noexcept;
+  /// @brief Open a labelled region in @p cmd, where @p device has debug
+  ///        labels.
+  /// @param device  The device @p cmd was allocated from.
+  /// @param cmd     The recording command buffer to mark up.
+  /// @param name    The region label shown in the capture. It must outlive the
+  ///                scope, whose end hands it back to the core's
+  ///                `Device::end_debug_label`. A null name makes the scope
+  ///                inert — Vulkan requires a non-null label name.
+  DebugLabelScope(const core::Device& device, VkCommandBuffer cmd,
+                  const char* name) noexcept;
 
   ~DebugLabelScope();
   DebugLabelScope(DebugLabelScope&& other) noexcept;
@@ -96,30 +72,39 @@ class VG_CORE_API DebugLabelScope {
   DebugLabelScope& operator=(const DebugLabelScope&) = delete;
 
   /// @return Whether this scope has an open region it will end on destruction.
-  bool active() const noexcept { return end_ != nullptr; }
+  bool active() const noexcept { return device_ != nullptr; }
 
  private:
+  void close() noexcept;
+
+  const core::Device* device_ = nullptr;  // borrowed; null when inert
   VkCommandBuffer cmd_ = VK_NULL_HANDLE;
-  PFN_vkCmdEndDebugUtilsLabelEXT end_ = nullptr;
+  const char* name_ = nullptr;
 };
 
-/// @brief A nested debug-label region on a queue's submit timeline, opened on
+/// @brief A nested debug-label region on a device's queue timeline, opened on
 ///        construction and closed on destruction.
 ///
-/// The queue counterpart of @ref DebugLabelScope: it marks up the queue itself
-/// rather than a command buffer, so the region appears on the submit timeline
-/// (where Nsight Systems shows queue work) rather than inside a captured frame.
-/// An inert scope, or one built against an inactive @ref DebugUtilsTable, emits
-/// nothing.
+/// The queue counterpart of @ref DebugLabelScope: it marks up the device's
+/// queue itself rather than a command buffer, so the region appears on the
+/// submit timeline (where Nsight Systems shows queue work) rather than inside
+/// a captured frame. Vulkan requires the queue be externally synchronized for
+/// both label calls, so each holds the device's `submit_mutex` — the mutex the
+/// core's submits, and another library sharing the queue, hold. An inert
+/// scope emits nothing.
 ///
-/// @warning Keep the @ref DebugUtilsTable (the device it came from) alive for
-///          the scope's lifetime; the destructor records
-///          `vkQueueEndDebugUtilsLabelEXT` on the queue.
+/// The core's device does not resolve the queue-label entry points, so each
+/// scope looks up its two with `vkGetDeviceProcAddr`.
+///
+/// @warning Keep the device alive, unmoved, for the scope's lifetime: the
+///          destructor records `vkQueueEndDebugUtilsLabelEXT` on its queue,
+///          under its mutex. Do not open or close a scope while holding that
+///          mutex; it is not recursive.
 ///
 /// @code
 /// {
-///   QueueLabelScope frame(device.queue(), labels, "frame 42");
-///   vkQueueSubmit(...);
+///   QueueLabelScope frame(device, "frame 42");
+///   device.queue_submit(1, &submit, fence);
 /// }  // region ends here
 /// @endcode
 class VG_CORE_API QueueLabelScope {
@@ -127,17 +112,13 @@ class VG_CORE_API QueueLabelScope {
   /// @brief An inert scope: emits nothing and ends nothing.
   QueueLabelScope() noexcept = default;
 
-  /// @brief Open a labelled region on @p queue (when @p table is active).
-  /// @param queue  The queue whose timeline to mark up.
-  /// @param table  The resolved entry points; an inactive table makes this a
-  ///               no-op.
-  /// @param name   The region label shown in the capture (the driver copies
-  ///               it). A null name makes the scope inert — Vulkan requires a
-  ///               non-null label name.
-  /// @param color  Optional RGBA tint in `[0, 1]` as a 4-float array; a null
-  ///               pointer leaves the color unset.
-  QueueLabelScope(VkQueue queue, const DebugUtilsTable& table, const char* name,
-                  const float color[4] = nullptr) noexcept;
+  /// @brief Open a labelled region on @p device's queue, where @p device has
+  ///        debug labels.
+  /// @param device  The device whose queue (`Device::queue`) to mark up.
+  /// @param name    The region label shown in the capture (the driver copies
+  ///                it). A null name makes the scope inert — Vulkan requires a
+  ///                non-null label name.
+  QueueLabelScope(const core::Device& device, const char* name) noexcept;
 
   ~QueueLabelScope();
   QueueLabelScope(QueueLabelScope&& other) noexcept;
@@ -149,22 +130,10 @@ class VG_CORE_API QueueLabelScope {
   bool active() const noexcept { return end_ != nullptr; }
 
  private:
-  VkQueue queue_ = VK_NULL_HANDLE;
+  void close() noexcept;
+
+  const core::Device* device_ = nullptr;  // borrowed; null when inert
   PFN_vkQueueEndDebugUtilsLabelEXT end_ = nullptr;
 };
-
-/// @brief Give a Vulkan object a human-readable name in GPU captures.
-/// @param device  The device that owns @p handle.
-/// @param table   The resolved entry points; an inactive table makes this a
-///                no-op.
-/// @param type    The object's `VkObjectType` (e.g. `VK_OBJECT_TYPE_IMAGE`).
-/// @param handle  The object handle, reinterpreted to `uint64_t`. A
-///                `VK_NULL_HANDLE` (0) handle is ignored.
-/// @param name    The name to attach (the driver copies it).
-/// @note A no-op when @p table is inactive or @p handle is null; the named
-///       object then simply shows its address in a capture instead.
-VG_CORE_API void set_object_name(VkDevice device, const DebugUtilsTable& table,
-                                 VkObjectType type, uint64_t handle,
-                                 const char* name);
 
 }  // namespace volumetric_kit::gfx

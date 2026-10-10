@@ -7,9 +7,8 @@ name: ci
 # types, OSes) are added or renamed — adding an OS never silently leaves an old
 # required context unreported and blocking every PR.
 #
-# A pull request from a fork runs none of it (CONTRIBUTING.md, "Pull requests
-# from forks"): every job a pull_request reaches, here and in the workflows it
-# calls, carries the same-repository `if:` guard.
+# Only the owner triggers this repository's workflows, so no job carries a fork
+# guard (CONTRIBUTING.md, "Who can trigger CI").
 on:
   push:
     branches: [main]
@@ -22,12 +21,11 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.os }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
-      # The three Ubuntu legs run on the self-hosted GPU box (label
+      # The two Ubuntu legs run on the self-hosted GPU box (label
       # `vk-linux-gpu`), each in an OS-matched container with the RTX 5090 passed
-      # through (`--gpus all`), so one host covers 22.04 / 24.04 / 26.04 against
+      # through (`--gpus all`), so one host covers 24.04 / 26.04 against
       # the real driver. Run one runner instance per leg on that box so they
       # execute in parallel, not serially (CONTRIBUTING.md, "Self-hosted
       # runners").
@@ -47,10 +45,6 @@ jobs:
       # builds and tests Debug on Linux (clang + ASan/UBSan).
       matrix:
         include:
-          - os: ubuntu-22.04
-            runner: vk-linux-gpu
-            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
-            build_types: '["Release"]'
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
@@ -71,29 +65,22 @@ jobs:
       build_types: ${{ matrix.build_types }}
 
   lint:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/lint.yml
 
   sanitizers:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/sanitizers.yml
 
   required:
     # The single status check branch protection requires. It passes only when
     # every build leg, lint, and sanitizers succeeded, and FAILS (never skips)
-    # on any other outcome, a fork's pull request included: a required check
-    # its `if:` skips counts as passed. Runs on a hosted runner so the gate can
-    # always report, even while a platform is mid-migration to self-hosted.
+    # on any other outcome: a skipped required check never reports its result
+    # and would block every merge forever. Runs on a hosted runner so the gate
+    # can always report, even while a platform is mid-migration to self-hosted.
     needs: [build, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Refuse a pull request from a fork
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: |
-          echo "::error::CI does not run for pull requests from forks. A maintainer will push this branch to $GITHUB_REPOSITORY to run CI."
-          exit 1
       - name: Assert every required job succeeded
         run: |
           echo "build=${{ needs.build.result }}" \
