@@ -144,10 +144,14 @@ the fragment stage all the same, so the queue itself orders those reads
 before the copy; without that wait, validation layers that do not track host
 waits on timeline semaphores (Ubuntu 24.04's 1.3.275) report a
 write-after-read hazard. The ring keeps the picture an update replaces
-intact, so `discard` can restore it, and is the structure a producer writing
-an atlas image from its own queue will need, where no barrier reaches. When
-every image is still used by an earlier frame, the update waits for the
-oldest on the host, as the frame loop waits for a slot; with frames in flight
+intact, so `discard` can restore it even if the frame ran before its present
+failed. That picture is excluded from updates until the next frame: the ring
+requires at least two images. A frame that starts with a picture can update
+at most `slots - 1` images; without a prior picture all slots are available.
+The ring is also the structure a producer writing an atlas image from its own
+queue will need, where no barrier reaches. When every writable image is still
+used by an earlier frame, the update waits for the oldest on the host, as the
+frame loop waits for a slot; with frames in flight
 plus one images and one update a frame it never does. It waits only for a
 frame the core's record shows submitted, so a frame that failed before its
 submit is refused rather than waited for forever. Destroying an atlas waits
@@ -163,19 +167,20 @@ A type that owns several Vulkan objects and borrows others, such as
 `windowing::FrameLoop`, is a thing with an identity, not a value. Nothing
 needs to move one: `FrameLoop` moved only from `create` to its owner. Its
 hand-written move pair still cost 57 lines that moved and then reset each of
-its 13 members by hand, and every new member had to join both lists.
+its 13 members by hand, and every new member had to join both lists. So an
+aggregate deletes copy and move and is handed out by `std::unique_ptr`, while
+a handle wrapper, which owns one Vulkan object, stays a move-only value
+([AGENTS.md](AGENTS.md#raii-resource-types) states the rule).
 
-- **An aggregate deletes copy and move.** `create` returns
-  `core::Result<std::unique_ptr<T>>`, from a private constructor.
-- **It is never empty:** no default constructor, `valid()`, `destroy()` or
-  empty-state guards. Borrowed objects are references. The destructor tears
-  down once, after draining the work that uses its objects; a defaulted move
-  assignment would skip that drain.
-- **A handle wrapper**, which owns one Vulkan object, stays a move-only value
-  ([AGENTS.md](AGENTS.md#raii-resource-types)).
-- `FrameLoop` is the first; the others with hand-written move pairs are
-  sorted into the two kinds and converted one at a time. recon keeps the same
-  rule for its aggregates.
+- **Not defaulted moves.** A defaulted move assignment frees the old objects
+  without first draining the work that uses them, and a moved-from aggregate
+  is an empty one again, with the guards that come with it.
+- **recon is narrower.** It deletes both only for internal aggregates; its
+  public `VoxelBlockGrid` keeps a defaulted move constructor. gfx deletes both
+  for public aggregates too.
+- `FrameLoop` is the first. The other types with hand-written move pairs are
+  sorted into the two kinds and converted one at a time; a `TODO:` marks each
+  aggregate found so far.
 
 ## 2026-10-08 — Frames are numbered on a timeline
 
@@ -216,22 +221,18 @@ place: a `RetireQueue` on the timeline.
   record of submitted values; `FrameLoop::end_frame` says why. A producer whose
   value is not yet submitted is gated on the host
   ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
-- **The core pin is core #18** (`5913731`), which makes those checks public.
+- **The core pin is core #18** (`e124622`, with the core's main merged in),
+  which makes those checks public.
 
 ## 2026-10-05 — GPU tests share a device per process
 
-**The contract.** `tests/vulkan_test_fixture.hpp`'s `VulkanDeviceTest` no
-longer makes an instance and device per test. Every test in a process that
-asks for the same instance setup -- plain, validation, validation + sync, or
-validation + sync + shader-access tracking, from the `wants_*_validation()`
-overrides -- borrows one instance and device, made on first use and kept until
-the process ends. Each test still makes and destroys its own objects on it,
-and its validation errors still fail it, through a capture installed for that
-test alone. A fixture that needs other device requirements returns them from
-`custom_requirements()` and gets its own instance and device per test. A test
-that loses the device fails, and the next one gets a fresh device. An object a
-test never destroys is reported when the shared device is destroyed, at the
-end of the process: the run fails, though no single test is named.
+**The contract.** *Amended 2026-10-08:* the fixtures and the require-device
+variable are volumetric_kit_core's. gfx's GPU tests derive from the core's test
+fixtures (`volumetric_kit::core_test_support`) through
+`tests/gfx_test_support.hpp`, which adds the renderer's requirements and the
+headless-surface helpers. The fixtures share one instance and device among the
+tests of a process rather than make them per test, as the core's DECISIONS.md
+records ("One Vulkan test fixture for the family").
 
 **Why.** Measured in CI (the draft PR #111, closed after measuring), on
 NVIDIA's Linux driver 615.71.09:
@@ -250,7 +251,7 @@ NVIDIA's Linux driver 615.71.09:
   allocate memory in static TLS block" and finds no driver. Descriptors,
   threads and memory stay flat, with or without the validation layer; one
   instance held open throughout keeps the library loaded, and the limit never
-  comes. The fixture's shared instances do that, and the test binary's global
+  comes. The fixtures' shared instances do that, and the test binary's global
   environment holds one more whenever a process runs several tests, for the
   tests that make their own. An application that recreates its `VkInstance`
   many times in one process would hit this limit too.
@@ -262,9 +263,10 @@ running its quarter of the tests in one process (`GTEST_TOTAL_SHARDS` /
 fixture's devices. A shard passes or fails on its exit code alone: given a skip
 expression, one skipped test would mark the whole shard skipped, failures
 included -- the failure that hid the Ubuntu 22.04 leg's results from August to
-#113. Instead CI sets `VG_REQUIRE_VULKAN_DEVICE`, under which a fixture test that
-cannot get an instance or device fails rather than skips, so no shard passes
-with its tests skipped. Locally the default stays one CTest entry per test.
+#113. Instead CI sets `VKC_REQUIRE_VULKAN_DEVICE`, under which a fixture test
+that cannot get an instance or device fails rather than skips, so no shard
+passes with its tests skipped. Locally the default stays one CTest entry per
+test.
 
 ## 2026-10-05 — 2D images: convert, then mip, then draw
 

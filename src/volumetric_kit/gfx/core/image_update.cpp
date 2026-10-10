@@ -106,7 +106,38 @@ core::Status check_region(const std::string& name, const core::Image& image,
   return core::Status{};
 }
 
-// Region `i` reads only `source`, a buffer a copy may read.
+// Check the copy's last texel against the source capacity by subtracting and
+// dividing that capacity. Multiplying the caller's row/slice strides first
+// can wrap even when the image itself is tiny. check_image and check_region
+// have established non-zero extents, layer counts and strides, and a non-zero
+// texel size.
+bool fits_source(VkDeviceSize size, VkDeviceSize texel,
+                 const VkBufferImageCopy& region) {
+  if (region.bufferOffset > size) {
+    return false;
+  }
+  const VkDeviceSize available = (size - region.bufferOffset) / texel;
+  if (region.imageExtent.width > available) {
+    return false;
+  }
+  const VkDeviceSize row = region.bufferRowLength != 0
+                               ? region.bufferRowLength
+                               : region.imageExtent.width;
+  const VkDeviceSize rows = region.bufferImageHeight != 0
+                                ? region.bufferImageHeight
+                                : region.imageExtent.height;
+  // Both factors are uint32_t, so this product fits in VkDeviceSize.
+  const VkDeviceSize slices = VkDeviceSize{region.imageSubresource.layerCount} *
+                              region.imageExtent.depth;
+  const VkDeviceSize preceding_rows =
+      (available - region.imageExtent.width) / row;
+  const VkDeviceSize last_slice_rows = region.imageExtent.height - 1;
+  return last_slice_rows <= preceding_rows &&
+         slices - 1 <= (preceding_rows - last_slice_rows) / rows;
+}
+
+// Region `i` reads only `source`, a buffer a copy may read. check_region has
+// passed it.
 core::Status check_source(const std::string& name, const core::Buffer* source,
                           const VkBufferImageCopy& r, std::uint32_t i,
                           VkDeviceSize texel) {
@@ -116,19 +147,7 @@ core::Status check_source(const std::string& name, const core::Buffer* source,
     return core::Status::invalid_argument(
         which + "'s source buffer is null, empty or lacks TRANSFER_SRC usage");
   }
-  // The last texel the copy reads: rows of `row` texels, `rows` rows to a
-  // slice, a slice per layer (or per depth step of a 3D image).
-  const VkDeviceSize row =
-      r.bufferRowLength != 0 ? r.bufferRowLength : r.imageExtent.width;
-  const VkDeviceSize rows =
-      r.bufferImageHeight != 0 ? r.bufferImageHeight : r.imageExtent.height;
-  const VkDeviceSize slices =
-      VkDeviceSize{r.imageSubresource.layerCount} * r.imageExtent.depth;
-  const VkDeviceSize texels = (slices - 1) * rows * row +
-                              (r.imageExtent.height - 1) * row +
-                              r.imageExtent.width;
-  if (r.bufferOffset > source->size() ||
-      texels * texel > source->size() - r.bufferOffset) {
+  if (!fits_source(source->size(), texel, r)) {
     return core::Status::invalid_argument(
         which + " reads past the end of its source buffer");
   }

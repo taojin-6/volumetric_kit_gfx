@@ -4,23 +4,17 @@
 // Windowing tier on a headless surface (VK_EXT_headless_surface): swapchain
 // creation, the FrameLoop acquire -> render -> present choreography, recreate,
 // and the move-only lifecycle. The whole suite skips when the runner has no
-// headless surface (e.g. MoltenVK) or no present-capable device, so it provides
-// real coverage on Linux CI (lavapipe) without needing a display.
-//
-// Validation is enabled AND given teeth: a second debug messenger records every
-// validation error, and TearDown fails the test if any were emitted -- so a
-// mis-wired barrier / semaphore is caught, not just a non-VK_SUCCESS return.
+// headless surface or no present-capable device, so it needs no display.
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <cstring>
 #include <optional>
-#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -33,80 +27,37 @@
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
-#include "vulkan_test_fixture.hpp"
 
-namespace vg = volumetric_kit::gfx;
-namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
-bool instance_has_headless_surface() {
-  uint32_t count = 0;
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  std::vector<VkExtensionProperties> props(count);
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data()) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  for (const VkExtensionProperties& p : props) {
-    if (std::strcmp(p.extensionName, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) ==
-        0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Records validation errors into the std::vector<std::string> passed as
-// pUserData; never asks the driver to abort the call (returns VK_FALSE).
-VKAPI_ATTR VkBool32 VKAPI_CALL record_validation_error(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void* user) {
-  if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0 &&
-      user != nullptr) {
-    auto* errors = static_cast<std::vector<std::string>*>(user);
-    errors->emplace_back(data != nullptr && data->pMessage != nullptr
-                             ? data->pMessage
-                             : "(validation error)");
-  }
-  return VK_FALSE;
-}
-
-class WindowingTest : public ::testing::Test {
+// A present-capable device on an instance of the test's own, which a headless
+// surface needs. The fixture under it skips or fails the test without a
+// device, and fails it on any validation error, a mis-wired barrier or
+// semaphore included.
+class WindowingTest : public vg_test::RendererTest {
  protected:
-  // Also run the layer's synchronization validation, which reports a missing
-  // dependency between submits as a hazard.
-  virtual bool wants_sync_validation() const { return false; }
-
   void SetUp() override {
-    if (!instance_has_headless_surface()) {
-      GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
+    RendererTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
     }
-    vkc::InstanceConfig icfg;
-    icfg.enable_validation = true;
-    icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                       VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-    std::optional<vg_test::ScopedEnv> sync;
-    if (wants_sync_validation()) {
-      sync.emplace("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true");
+    if (!vg_test::has_headless_surface()) {
+      GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
     }
-    auto instance = vkc::Instance::create(icfg);
-    sync.reset();
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
-    }
-    instance_.emplace(std::move(instance).value());
+    // The instance validates at the test's level, which may be above the
+    // environment's: the layer reads its settings as the instance is created.
+    const vkc::test::ValidationSession settings(active_validation());
+    auto instance = vkc::Instance::create(
+        vg_test::headless_instance_config(active_validation()));
+    ASSERT_TRUE(instance.ok()) << instance.status().message();
+    headless_instance_.emplace(std::move(instance).value());
+    const vkc::Status loaded =
+        vkc::test::check_layer_loaded(*headless_instance_);
+    ASSERT_TRUE(loaded.ok()) << loaded.message();
 
-    // Attach an error-recording messenger so validation has teeth (no-op when
-    // the instance lacks VK_EXT_debug_utils, e.g. no validation layer present).
-    install_validation_capture();
-
-    auto surface = win::Surface::headless(instance_->handle());
+    auto surface = win::Surface::headless(headless_instance_->handle());
     if (!surface.ok()) {
       GTEST_SKIP() << "headless surface: " << surface.status().message();
     }
@@ -114,18 +65,20 @@ class WindowingTest : public ::testing::Test {
 
     vkc::DeviceRequirements reqs = vg::device_requirements();
     reqs.needs_present = true;
-    auto physical = instance_->select_physical_device(reqs, surface_.handle());
+    auto physical =
+        headless_instance_->select_physical_device(reqs, surface_.handle());
     if (!physical.ok()) {
       GTEST_SKIP() << "no present-capable device: "
                    << physical.status().message();
     }
 
-    auto device = vkc::Device::create(*instance_, physical.value(), reqs,
-                                      surface_.handle());
+    auto device = vkc::Device::create(*headless_instance_, physical.value(),
+                                      reqs, surface_.handle());
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
 
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
+    auto allocator =
+        vkc::Allocator::create(headless_instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -134,43 +87,11 @@ class WindowingTest : public ::testing::Test {
     if (device_) {
       vkDeviceWaitIdle(device_->handle());
     }
-    // Destroy the messenger (created on the instance) before the instance is
-    // torn down with the fixture, then surface any captured validation errors.
-    if (messenger_ != VK_NULL_HANDLE && destroy_messenger_ != nullptr) {
-      destroy_messenger_(instance_->handle(), messenger_, nullptr);
-      messenger_ = VK_NULL_HANDLE;
-    }
-    for (const std::string& msg : validation_errors_) {
-      ADD_FAILURE() << "Vulkan validation error: " << msg;
-    }
-  }
-
-  void install_validation_capture() {
-    auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance_->handle(),
-                              "vkCreateDebugUtilsMessengerEXT"));
-    destroy_messenger_ = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance_->handle(),
-                              "vkDestroyDebugUtilsMessengerEXT"));
-    if (create == nullptr || destroy_messenger_ == nullptr) {
-      return;  // VK_EXT_debug_utils not enabled; capture stays inert.
-    }
-    VkDebugUtilsMessengerCreateInfoEXT mcfg{};
-    mcfg.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    mcfg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    mcfg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    mcfg.pfnUserCallback = record_validation_error;
-    mcfg.pUserData = &validation_errors_;
-    if (create(instance_->handle(), &mcfg, nullptr, &messenger_) !=
-        VK_SUCCESS) {
-      messenger_ = VK_NULL_HANDLE;
-    }
+    RendererTest::TearDown();
   }
 
   win::Surface make_headless_surface() {
-    auto s = win::Surface::headless(instance_->handle());
+    auto s = win::Surface::headless(headless_instance_->handle());
     EXPECT_TRUE(s.ok()) << s.status().message();
     return s.ok() ? std::move(s).value() : win::Surface{};
   }
@@ -251,21 +172,20 @@ class WindowingTest : public ::testing::Test {
     return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
   }
 
-  std::optional<vkc::Instance> instance_;
+  std::optional<vkc::Instance> headless_instance_;
   win::Surface surface_;
   std::optional<vkc::Device> device_;
   // Declared after device_ so reverse member-destruction tears the allocator
   // down before the device it wraps.
   std::optional<vkc::Allocator> allocator_;
-  std::vector<std::string> validation_errors_;
-  VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
-  PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger_ = nullptr;
 };
 
 // The frame-timeline tests that order work across submits.
 class FrameTimelineTest : public WindowingTest {
  protected:
-  bool wants_sync_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
+  }
 };
 
 TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
@@ -493,8 +413,8 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
 // as after a failed rebuild) fails cleanly instead of acquiring on a null
 // handle. NOTE: this covers begin_frame's empty-swapchain guard only; the
-// post-acquire recover_slot path runs on a refused frame
-// (EndFrameRefusesPointsItCannotHonour), but its other callers need a Vulkan
+// post-acquire recover_slot path runs on a refused frame or a changed
+// swapchain, but its other callers need a Vulkan
 // call (timeline wait / command begin/end / queue submit) to fail, which does
 // not happen on a healthy device; see the TODO in FrameLoop::recover_slot.
 TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
@@ -511,6 +431,104 @@ TEST_F(WindowingTest, FrameLoopBeginFrameOnEmptiedSwapchainFailsCleanly) {
   ASSERT_FALSE(frame.ok());
   EXPECT_EQ(frame.status().domain(), vkc::Status::Code::InvalidArgument);
   vkDeviceWaitIdle(device_->handle());
+}
+
+// The swapchain emptied between begin_frame and end_frame takes the frame's
+// image with it: end_frame fails with InvalidArgument rather than aborting on
+// the missing image, and restores the slot, so once the caller rebuilds the
+// chain the loop drives frames again without validation errors.
+TEST_F(WindowingTest, FrameLoopEndFrameOnEmptiedSwapchainFailsCleanly) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  auto frame = loop.value()->begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+
+  win::Swapchain stolen = std::move(sc);
+  const vkc::Status ended = loop.value()->end_frame(frame.value());
+  ASSERT_FALSE(ended.ok());
+  EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
+
+  sc = std::move(stolen);
+  ASSERT_TRUE(sc.recreate({256, 256}).ok());
+  EXPECT_TRUE(run_frames(*loop.value(), 3).ok());
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// Losing the acquired image discards the frame's commands, but still retires
+// its number and any accepted signals. Its unwritten profiler queries must
+// not be published when the slot is reused, including when its points are
+// also refused and the destroyed swapchain has invalidated the command buffer.
+TEST_F(WindowingTest,
+       DiscardedSwapchainFramesCompleteWithoutPublishingQueries) {
+  for (const bool recreate : {false, true}) {
+    for (const bool refuse_points : {false, true}) {
+      SCOPED_TRACE(recreate);
+      SCOPED_TRACE(refuse_points);
+      win::Swapchain sc = make_swapchain({256, 256});
+      vg::ProfilerConfig pcfg;
+      pcfg.frames_in_flight = 1;
+      auto profiler = vg::Profiler::create(*device_, pcfg);
+      ASSERT_TRUE(profiler.ok()) << profiler.status().message();
+      vkc::TimelineSemaphore done = make_timeline();
+      auto loop = win::FrameLoop::create(*device_, sc, 1);
+      ASSERT_TRUE(loop.ok()) << loop.status().message();
+      loop.value()->set_profiler(&profiler.value());
+      int released = 0;
+      vg::RetireQueue retire(loop.value()->timeline());
+
+      auto frame = loop.value()->begin_frame();
+      ASSERT_TRUE(frame.ok()) << frame.status().message();
+      win::Frame& f = frame.value();
+      {
+        auto scope = profiler.value().gpu_scope(f.cmd, "discarded");
+        record_clear(f);
+      }
+      f.signals.push_back({&done, 1});
+      if (refuse_points) f.waits.push_back({{nullptr, 1}});
+      retire.push(f.number, [&released]() { ++released; });
+      EXPECT_EQ(retire.poll(), 0u);
+
+      win::Swapchain stolen;
+      if (recreate) {
+        ASSERT_TRUE(sc.recreate({320, 240}).ok());
+      } else {
+        stolen = std::move(sc);
+      }
+      EXPECT_EQ(loop.value()->end_frame(f).domain(),
+                vkc::Status::Code::InvalidArgument);
+      EXPECT_EQ(loop.value()->submitted(), f.number);
+      ASSERT_TRUE(loop.value()->timeline().wait(f.number, 1000000000).ok());
+      EXPECT_EQ(retire.poll(), 1u);
+      EXPECT_EQ(released, 1);
+      if (refuse_points) {
+        EXPECT_EQ(done.value().value(), 0u);
+      } else {
+        EXPECT_TRUE(done.wait(1, 1000000000).ok());
+      }
+      EXPECT_EQ(loop.value()->end_frame(f).domain(),
+                vkc::Status::Code::InvalidArgument);
+      EXPECT_EQ(loop.value()->submitted(), f.number);
+
+      if (!recreate) sc = std::move(stolen);
+      auto next = loop.value()->begin_frame(VkExtent2D{256, 256});
+      ASSERT_TRUE(next.ok()) << next.status().message();
+      ASSERT_TRUE(next.value().has_value());
+      EXPECT_EQ(next.value()->number, f.number + 1);
+      EXPECT_TRUE(profiler.value().metrics().sections.empty());
+      {
+        auto scope = profiler.value().gpu_scope(next.value()->cmd, "accepted");
+        record_clear(*next.value());
+      }
+      ASSERT_TRUE(loop.value()->end_frame(*next.value()).ok());
+      ASSERT_TRUE(run_frames(*loop.value(), 1).ok());
+      const vg::FrameMetrics& metrics = profiler.value().metrics();
+      ASSERT_EQ(metrics.sections.size(), 1u);
+      EXPECT_STREQ(metrics.sections[0].name, "accepted");
+      EXPECT_EQ(metrics.sections[0].has_gpu, profiler.value().gpu_timing());
+      vkDeviceWaitIdle(device_->handle());
+    }
+  }
 }
 
 TEST_F(WindowingTest, FrameLoopSurvivesSwapchainRecreate) {
@@ -997,24 +1015,82 @@ TEST(SwapchainEmpty, OperationsFailCleanly) {
   EXPECT_EQ(recreated.domain(), vkc::Status::Code::InvalidArgument);
 }
 
-// A loop stays where create made it: it can be neither copied nor moved, so it
-// is never empty.
 static_assert(!std::is_copy_constructible_v<win::FrameLoop> &&
                   !std::is_copy_assignable_v<win::FrameLoop> &&
                   !std::is_move_constructible_v<win::FrameLoop> &&
                   !std::is_move_assignable_v<win::FrameLoop>,
               "FrameLoop is neither copied nor moved");
 
-// Frame is a public aggregate with every member defaulted, so end_frame can
-// be handed one its begin_frame never returned. It fails with InvalidArgument
-// instead of indexing the loop's per-slot and per-image state.
+// Frame is a public aggregate, so end_frame can be handed a Frame its
+// begin_frame did not hand out last. Each fails with InvalidArgument and
+// leaves the frame in flight to end normally. One slot, so a frame ended twice
+// matches the loop's slot, command buffer and image: only the loop's record of
+// what it handed out refuses it.
 TEST_F(WindowingTest, FrameLoopEndFrameRefusesAFrameItDidNotHandOut) {
   win::Swapchain sc = make_swapchain();
-  auto loop = win::FrameLoop::create(*device_, sc, 2);
-  ASSERT_TRUE(loop.ok()) << loop.status().message();
-  const vkc::Status ended = loop.value()->end_frame(win::Frame{});
-  ASSERT_FALSE(ended.ok());
-  EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
+  auto created = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/1);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  win::FrameLoop& loop = *created.value();
+  EXPECT_EQ(loop.end_frame(win::Frame{}).domain(),
+            vkc::Status::Code::InvalidArgument);  // none handed out yet
+
+  auto begun = loop.begin_frame();
+  ASSERT_TRUE(begun.ok()) << begun.status().message();
+  const win::Frame frame = begun.value();
+  std::vector<win::Frame> wrong(5, frame);
+  wrong[0] = win::Frame{};
+  wrong[1].slot = 1;  // past the one slot
+  wrong[2].image_index = frame.image_index + 1;
+  wrong[3].image_index = 99;
+  wrong[4].cmd = VK_NULL_HANDLE;
+  for (size_t i = 0; i < wrong.size(); ++i) {
+    EXPECT_EQ(loop.end_frame(wrong[i]).domain(),
+              vkc::Status::Code::InvalidArgument)
+        << "wrong[" << i << "]";
+  }
+
+  vg::RenderTargetBeginInfo begin;
+  begin.clear_color.float32[3] = 1.0f;
+  frame.target->begin(frame.cmd, begin);
+  frame.target->end(frame.cmd);
+  ASSERT_TRUE(loop.end_frame(frame).ok());
+  EXPECT_EQ(loop.end_frame(frame).domain(),
+            vkc::Status::Code::InvalidArgument);  // already ended
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// A frame from another loop carries an index and slot this loop could have
+// handed out, but not its command buffer: each loop refuses the other's frame
+// and still ends its own.
+TEST_F(WindowingTest, FrameLoopEndFrameRefusesAnotherLoopsFrame) {
+  // Each swapchain needs its own surface (one live swapchain per surface).
+  win::Surface surface_b = make_headless_surface();
+  ASSERT_TRUE(surface_b.valid());
+  win::Swapchain sc_a = make_swapchain();
+  win::Swapchain sc_b = make_swapchain_on(surface_b.handle());
+  auto a = win::FrameLoop::create(*device_, sc_a, 2);
+  auto b = win::FrameLoop::create(*device_, sc_b, 2);
+  ASSERT_TRUE(a.ok()) << a.status().message();
+  ASSERT_TRUE(b.ok()) << b.status().message();
+
+  auto frame_a = a.value()->begin_frame();
+  auto frame_b = b.value()->begin_frame();
+  ASSERT_TRUE(frame_a.ok()) << frame_a.status().message();
+  ASSERT_TRUE(frame_b.ok()) << frame_b.status().message();
+  EXPECT_EQ(a.value()->end_frame(frame_b.value()).domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(b.value()->end_frame(frame_a.value()).domain(),
+            vkc::Status::Code::InvalidArgument);
+
+  vg::RenderTargetBeginInfo begin;
+  begin.clear_color.float32[3] = 1.0f;
+  for (const win::Frame& f : {frame_a.value(), frame_b.value()}) {
+    f.target->begin(f.cmd, begin);
+    f.target->end(f.cmd);
+  }
+  EXPECT_TRUE(a.value()->end_frame(frame_a.value()).ok());
+  EXPECT_TRUE(b.value()->end_frame(frame_b.value()).ok());
+  vkDeviceWaitIdle(device_->handle());
 }
 
 TEST_F(WindowingTest, SwapchainMoveLeavesSourceEmpty) {

@@ -318,7 +318,8 @@ class VG_APP_API WindowedApp {
   // every address stable. Declaration order is the teardown contract — members
   // destruct in reverse, so the loop drains its in-flight frames first and the
   // instance dies last. std::optional stands in where a type has no public
-  // default constructor.
+  // default constructor, and std::unique_ptr where it cannot move either (the
+  // loop).
   struct State {
     // Set only on the create path; empty when the instance is the embedder's.
     std::optional<core::Instance> instance;

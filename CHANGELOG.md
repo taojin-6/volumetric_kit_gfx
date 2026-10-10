@@ -65,7 +65,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   buffer or each from its own (`record_update`), or host pixels
   (`record_upload`) -- bound with
   `use(frame.number)`, and given back with `discard(frame.number)` for a frame
-  that never reaches the queue.
+  that fails. At least two slots are required. A frame that starts with a
+  picture can record at most `slots - 1` updates, preserving that picture
+  for discard even if the frame's commands ran.
 - `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
   color, the atlas bound or not.
 
@@ -86,8 +88,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at its PR #18 (`5913731`) and refuses an
-  older core at configure and in the installed package.
+- build: gfx pins volumetric_kit_core at its PR #18 with the core's main merged
+  in (`e124622`), and refuses an older core at configure and in the installed
+  package.
 - `core`: **labels record through the core's device, and queue labels take
   the queue's mutex.** `QueueLabelScope` labelled the queue without
   `Device::submit_mutex`, racing any submit on another thread or from another
@@ -311,4 +314,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   the default constructor and `valid()` are gone: a loop is never empty.
   Migrating: `loop.value().begin_frame(...)` → `loop.value()->begin_frame(...)`,
   and hold a loop by `std::unique_ptr` where it was held by value.
-  `WindowedApp::frame_loop()` still returns a reference.
+  `WindowedApp::frame_loop()` still returns a reference. `end_frame` refuses,
+  with `InvalidArgument`, any frame but the one `begin_frame` last handed out,
+  and one whose swapchain was rebuilt or emptied since.

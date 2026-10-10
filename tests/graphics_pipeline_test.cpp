@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -24,7 +25,6 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -96,7 +96,7 @@ void set_full_viewport_scissor(VkCommandBuffer cmd, uint32_t size) {
 
 // --- Real pipeline creation + move semantics + draw: needs a device ----------
 
-class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
+class GraphicsPipelineDeviceTest : public vg_test::RendererDeviceTest {
  protected:
   // A single-color-attachment layout matching the offscreen target the draw
   // test renders into.
@@ -114,7 +114,7 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
     desc.vertex_shader = &vert;
     desc.fragment_shader = &frag;
     desc.layout = layout;
-    auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+    auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
     return std::move(pipeline).value();
   }
@@ -126,7 +126,8 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
   void render_mesh(vg::OffscreenTarget& target,
                    const vg::GraphicsPipeline& pipeline, VkBuffer vbuf,
                    VkBuffer ibuf, uint32_t count) {
-    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -158,13 +159,16 @@ class GraphicsPipelineDeviceTest : public VulkanDeviceTest {
     rt.end(raw);
     target.record_readback(raw);
     ASSERT_TRUE(cmd.value().end().ok());
-    ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+    const vkc::Status submitted = device().submit_and_wait(raw);
+    ASSERT_TRUE(submitted.ok()) << submitted.message();
   }
 };
 
 TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
 
   vg::GraphicsPipeline pipeline = build_pipeline(color_layout(), vert, frag);
   EXPECT_TRUE(pipeline.valid());
@@ -173,35 +177,41 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
   // desc.layout left default: color_count == 0.
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, NullEntryPointRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
   desc.layout = color_layout();
   desc.entry_point = nullptr;  // rejected before Vulkan is touched
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
@@ -209,7 +219,7 @@ TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
   desc.layout = color_layout();
   // Patch-list needs tessellation stages this pipeline does not provide.
   desc.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -217,8 +227,10 @@ TEST_F(GraphicsPipelineDeviceTest, PatchTopologyRejected) {
 TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
   // Every desc field is valid, so the null device -- checked last, just before
   // the first Vulkan call -- is what create() rejects.
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
 
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
@@ -230,8 +242,10 @@ TEST_F(GraphicsPipelineDeviceTest, NullDeviceRejected) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
   vg::GraphicsPipeline source = build_pipeline(color_layout(), vert, frag);
   ASSERT_TRUE(source.valid());
 
@@ -243,8 +257,10 @@ TEST_F(GraphicsPipelineDeviceTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
   vg::GraphicsPipeline dst = build_pipeline(color_layout(), vert, frag);
   vg::GraphicsPipeline src = build_pipeline(color_layout(), vert, frag);
 
@@ -258,22 +274,22 @@ TEST_F(GraphicsPipelineDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
   constexpr uint32_t kSize = 32;
 
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   vg::OffscreenTargetDesc target_desc;
   target_desc.extent = {kSize, kSize};
   target_desc.color_format = kFormat;
-  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  auto target = vg::OffscreenTarget::create(allocator(), target_desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
 
-  vg::ShaderModule vert = vg_test::load_module(device(), "triangle.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "triangle.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "triangle.frag.spv");
   vg::GraphicsPipeline pipeline =
       build_pipeline(target.value().layout(), vert, frag);
   ASSERT_TRUE(pipeline.valid());
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -319,7 +335,8 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsTriangleIntoOffscreenTarget) {
 
   target.value().record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+  const vkc::Status submitted = device().submit_and_wait(raw);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);
@@ -413,12 +430,14 @@ vg::GraphicsPipeline build_mesh_pipeline(
 // defaulted move-assign would clear on self-move -- while the two self-guarded
 // core::UniqueHandle members kept valid() and handle() intact, hiding it.
 TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh_mvp.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), color_layout(), vert, frag, &binding, 1, attrs.data(),
+      device().handle(), color_layout(), vert, frag, &binding, 1, attrs.data(),
       static_cast<uint32_t>(attrs.size()), false);
   ASSERT_TRUE(pipeline.valid());
   ASSERT_EQ(pipeline.descriptor_set_count(), 1u);
@@ -440,7 +459,7 @@ TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
   // ...and still be live objects: allocating a set from the layout would be a
   // use-after-free if the self-move had destroyed it.
   const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
-  auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
+  auto pool = vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
   ASSERT_TRUE(set.ok()) << set.status().message();
@@ -448,34 +467,40 @@ TEST_F(GraphicsPipelineDeviceTest, SelfMoveAssignIsSafe) {
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DepthTestWithoutDepthFormatRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
   desc.layout = color_layout();  // carries no depth format
   desc.depth_test = true;        // rejected before Vulkan is touched
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, VertexBindingCountWithoutPointerRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   vg::GraphicsPipelineDesc desc;
   desc.vertex_shader = &vert;
   desc.fragment_shader = &frag;
   desc.layout = color_layout();
   desc.vertex_binding_count = 1;  // but vertex_bindings stays null
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   vg::RenderTargetLayout layout = color_layout();
   layout.depth_format = kDepthFormat;  // a depth format is present...
   vg::GraphicsPipelineDesc desc;
@@ -484,20 +509,17 @@ TEST_F(GraphicsPipelineDeviceTest, DepthWriteWithoutDepthTestRejected) {
   desc.layout = layout;
   desc.depth_write = true;  // ...but depth_write without depth_test is a no-op
   desc.depth_test = false;  // in Vulkan, so create() rejects the combination.
-  auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+  auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   vg::OffscreenTargetDesc target_desc;
   target_desc.extent = {kSize, kSize};
   target_desc.color_format = kFormat;
-  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  auto target = vg::OffscreenTarget::create(allocator(), target_desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
 
   // One green triangle covering the image center, fed from a vertex buffer.
@@ -507,17 +529,19 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
       {{0.0f, 0.9f, 0.0f}, {0.0f, 1.0f, 0.0f}},
   };
   vkc::Buffer vbuf =
-      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+      make_device_buffer(device(), allocator(), verts, sizeof(verts),
                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
   ASSERT_TRUE(vbuf.valid());
 
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
-      static_cast<uint32_t>(attrs.size()), false);
+      device().handle(), target.value().layout(), vert, frag, &binding, 1,
+      attrs.data(), static_cast<uint32_t>(attrs.size()), false);
   ASSERT_TRUE(pipeline.valid());
 
   render_mesh(target.value(), pipeline, vbuf.handle(), VK_NULL_HANDLE, 3);
@@ -535,14 +559,11 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsFromVertexBuffer) {
 
 TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   vg::OffscreenTargetDesc target_desc;
   target_desc.extent = {kSize, kSize};
   target_desc.color_format = kFormat;
   target_desc.depth_format = kDepthFormat;
-  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  auto target = vg::OffscreenTarget::create(allocator(), target_desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
   ASSERT_EQ(target.value().layout().depth_format, kDepthFormat);
   ASSERT_NE(target.value().depth_image(), VK_NULL_HANDLE);
@@ -561,20 +582,22 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   };
   const uint32_t indices[6] = {0, 1, 2, 3, 4, 5};
   vkc::Buffer vbuf =
-      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+      make_device_buffer(device(), allocator(), verts, sizeof(verts),
                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
   vkc::Buffer ibuf =
-      make_device_buffer(*device_, allocator.value(), indices, sizeof(indices),
+      make_device_buffer(device(), allocator(), indices, sizeof(indices),
                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
   ASSERT_TRUE(vbuf.valid() && ibuf.valid());
 
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
-      static_cast<uint32_t>(attrs.size()), true);
+      device().handle(), target.value().layout(), vert, frag, &binding, 1,
+      attrs.data(), static_cast<uint32_t>(attrs.size()), true);
   ASSERT_TRUE(pipeline.valid());
 
   render_mesh(target.value(), pipeline, vbuf.handle(), ibuf.handle(), 6);
@@ -594,13 +617,10 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
 
 TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   vg::OffscreenTargetDesc target_desc;
   target_desc.extent = {kSize, kSize};
   target_desc.color_format = kFormat;
-  auto target = vg::OffscreenTarget::create(allocator.value(), target_desc);
+  auto target = vg::OffscreenTarget::create(allocator(), target_desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
 
   // A small green triangle around the origin -- it covers the image center when
@@ -611,7 +631,7 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
       {{0.0f, 0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}},
   };
   vkc::Buffer vbuf =
-      make_device_buffer(*device_, allocator.value(), verts, sizeof(verts),
+      make_device_buffer(device(), allocator(), verts, sizeof(verts),
                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
   ASSERT_TRUE(vbuf.valid());
 
@@ -623,18 +643,19 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
       0.0f,  0.0f,  1.0f, 0.0f,  // column 2
       -0.6f, -0.6f, 0.0f, 1.0f,  // column 3 (translation)
   };
-  vkc::Buffer ubo =
-      make_device_buffer(*device_, allocator.value(), mvp, sizeof(mvp),
-                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+  vkc::Buffer ubo = make_device_buffer(device(), allocator(), mvp, sizeof(mvp),
+                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
   ASSERT_TRUE(ubo.valid());
 
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh_mvp.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh_mvp.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   vg::GraphicsPipeline pipeline = build_mesh_pipeline(
-      device(), target.value().layout(), vert, frag, &binding, 1, attrs.data(),
-      static_cast<uint32_t>(attrs.size()), false);
+      device().handle(), target.value().layout(), vert, frag, &binding, 1,
+      attrs.data(), static_cast<uint32_t>(attrs.size()), false);
   ASSERT_TRUE(pipeline.valid());
 
   // The vertex shader's MVP is one descriptor set (set 0, a uniform buffer) the
@@ -643,13 +664,14 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   ASSERT_NE(pipeline.descriptor_set_layout(0), VK_NULL_HANDLE);
 
   const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
-  auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
+  auto pool = vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
   ASSERT_TRUE(set.ok()) << set.status().message();
   set.value().write_uniform_buffer(0, ubo.handle(), 0, sizeof(mvp));
 
-  auto cmd_pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto cmd_pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(cmd_pool.ok()) << cmd_pool.status().message();
   auto cmd = cmd_pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -676,7 +698,8 @@ TEST_F(GraphicsPipelineDeviceTest, DrawsWithMvpUniform) {
   rt.end(raw);
   target.value().record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+  const vkc::Status submitted = device().submit_and_wait(raw);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 
   const auto* px = static_cast<const uint8_t*>(target.value().pixels());
   ASSERT_NE(px, nullptr);
@@ -716,11 +739,10 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
   // regardless of which winding the framebuffer treats as front. Without the
   // desc wired through, both would draw and this would be equal.
   constexpr uint32_t kSize = 32;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "mesh.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "mesh.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
 
@@ -737,7 +759,7 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
     vg::OffscreenTargetDesc td;
     td.extent = {kSize, kSize};
     td.color_format = kFormat;
-    auto target = vg::OffscreenTarget::create(allocator.value(), td);
+    auto target = vg::OffscreenTarget::create(allocator(), td);
     EXPECT_TRUE(target.ok()) << target.status().message();
 
     vg::GraphicsPipelineDesc desc;
@@ -749,12 +771,12 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
     desc.vertex_attributes = attrs.data();
     desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
     desc.cull_mode = VK_CULL_MODE_BACK_BIT;
-    auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+    auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
 
-    vkc::Buffer vbuf = make_device_buffer(*device_, allocator.value(), tri,
-                                          sizeof(MeshVertex) * 3,
-                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    vkc::Buffer vbuf =
+        make_device_buffer(device(), allocator(), tri, sizeof(MeshVertex) * 3,
+                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     if (!vbuf.valid()) {
       return false;  // make_device_buffer failed the test
     }
@@ -781,11 +803,10 @@ TEST_F(GraphicsPipelineDeviceTest, BackFaceCullingDropsOneWinding) {
 // fragment_specialization reaches the stage: unwired, both would stay black.
 TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
   constexpr uint32_t kSize = 32;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "spec_probe.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "spec_probe.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
   const MeshVertex tri[3] = {
@@ -793,9 +814,8 @@ TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
       {{0.8f, -0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
       {{0.0f, 0.8f, 0.0f}, {0.0f, 0.0f, 0.0f}},
   };
-  vkc::Buffer vbuf =
-      make_device_buffer(*device_, allocator.value(), tri, sizeof(tri),
-                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  vkc::Buffer vbuf = make_device_buffer(device(), allocator(), tri, sizeof(tri),
+                                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
   ASSERT_TRUE(vbuf.valid());
 
   // Renders the triangle under `spec`; returns the red at the image center.
@@ -803,7 +823,7 @@ TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
     vg::OffscreenTargetDesc td;
     td.extent = {kSize, kSize};
     td.color_format = kFormat;
-    auto target = vg::OffscreenTarget::create(allocator.value(), td);
+    auto target = vg::OffscreenTarget::create(allocator(), td);
     EXPECT_TRUE(target.ok()) << target.status().message();
     if (!target.ok()) {
       return -1;
@@ -818,7 +838,7 @@ TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
     desc.vertex_attributes = attrs.data();
     desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
     desc.fragment_specialization = spec;
-    auto pipeline = vg::GraphicsPipeline::create(device(), desc);
+    auto pipeline = vg::GraphicsPipeline::create(device().handle(), desc);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
     if (!pipeline.ok()) {
       return -1;
@@ -846,8 +866,10 @@ TEST_F(GraphicsPipelineDeviceTest, FragmentSpecializationReachesTheStage) {
 // a null pointer behind a non-zero count, or a map entry reaching past
 // dataSize.
 TEST_F(GraphicsPipelineDeviceTest, MalformedFragmentSpecializationRejected) {
-  vg::ShaderModule vert = vg_test::load_module(device(), "mesh.vert.spv");
-  vg::ShaderModule frag = vg_test::load_module(device(), "spec_probe.frag.spv");
+  vg::ShaderModule vert =
+      vg_test::load_module(device().handle(), "mesh.vert.spv");
+  vg::ShaderModule frag =
+      vg_test::load_module(device().handle(), "spec_probe.frag.spv");
   const VkVertexInputBindingDescription binding = mesh_binding();
   const auto attrs = mesh_attributes();
 
@@ -861,7 +883,7 @@ TEST_F(GraphicsPipelineDeviceTest, MalformedFragmentSpecializationRejected) {
     desc.vertex_attributes = attrs.data();
     desc.vertex_attribute_count = static_cast<uint32_t>(attrs.size());
     desc.fragment_specialization = &spec;
-    return vg::GraphicsPipeline::create(device(), desc);
+    return vg::GraphicsPipeline::create(device().handle(), desc);
   };
 
   const float red = 1.0f;

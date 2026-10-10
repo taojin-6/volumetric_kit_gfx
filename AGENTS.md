@@ -77,9 +77,10 @@ A type that owns Vulkan/VMA objects is one of two kinds
 ([DECISIONS.md](DECISIONS.md#2026-10-10--an-aggregate-is-neither-copied-nor-moved)):
 
 - **An aggregate** owns several objects and borrows others (`windowing::FrameLoop`). It
-  deletes copy *and* move, and `create` returns `core::Result<std::unique_ptr<T>>` from a
-  private constructor. It is never empty: no default constructor, `valid()` or
-  `destroy()`; borrowed objects are references; the destructor tears down once.
+  deletes copy *and* move. `create` builds what it owns, then returns
+  `core::Result<std::unique_ptr<T>>` from a private constructor, so a failed `create`
+  never runs the destructor. It is never empty: no default constructor, `valid()` or
+  `destroy()`; a non-null borrowed object is a reference; the destructor tears down once.
 - **A handle wrapper** owns one handle, with its metadata and deleter. It is a move-only
   value, and these are the mistakes reviews keep catching:
   - **Move-only.** `= delete` the copy ctor/assign; `= default` (or hand-write) the move pair.
@@ -161,8 +162,9 @@ git -C "$gfx_root" diff --check
   contracts or the change's scope warrant it.
 - Documentation-only changes need formatting, link, and consistency checks;
   no build is needed. Hooks can be scoped with `pre-commit run --files`.
-- GPU tests can skip when no Vulkan device is present. Report actual GPU
-  coverage separately from host-only success. Sanitizer CI requires lavapipe.
+- GPU tests can skip when no Vulkan device is present. Run them as CI does
+  (CONTRIBUTING.md, "Build and test"), and report actual GPU coverage
+  separately from host-only success. Sanitizer CI requires lavapipe.
 - `VG_WITH_GLFW` gates examples, not library windowing. `VG_WITH_CUDA` is
   reserved until its interop implementation is wired; verify current CMake.
 

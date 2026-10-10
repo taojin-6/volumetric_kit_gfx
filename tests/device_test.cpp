@@ -10,28 +10,20 @@
 #include <cstdint>
 #include <utility>
 
-#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// The shared instance + physical-device + headless logical-device fixture,
-// its device made from device_requirements().
-using DeviceTest = VulkanDeviceTest;
+using DeviceTest = vg_test::RendererDeviceTest;
 
 // A device made to another library's requirements -- the core's defaults:
 // Vulkan 1.2 on a compute queue, without dynamic rendering -- as an embedder
 // might hand gfx one made for recon.
-class ForeignDeviceTest : public VulkanDeviceTest {
- protected:
-  std::optional<vkc::DeviceRequirements> custom_requirements() const override {
-    return vkc::DeviceRequirements{};
-  }
-};
+using ForeignDeviceTest = vkc::test::VulkanDeviceTest;
 
 // Borrow a live device on its queue, declaring what Device::create enabled
 // for the renderer's requirements -- the shared-VkDevice interop shape.
@@ -90,19 +82,19 @@ TEST(DeviceRequirementsTest, MergesWithAComputeLibrarysRequirements) {
 // A device made from the renderer's requirements has what every pass needs,
 // on a graphics queue.
 TEST_F(DeviceTest, CreatesADeviceTheRendererCanUse) {
-  EXPECT_NE(device_->handle(), VK_NULL_HANDLE);
-  EXPECT_NE(device_->queue(), VK_NULL_HANDLE);
-  EXPECT_NE(device_->queue_flags() & VK_QUEUE_GRAPHICS_BIT, 0U);
-  EXPECT_FALSE(device_->has_present());  // headless
-  EXPECT_GE(device_->caps().api_version(), VK_API_VERSION_1_3);
-  const vkc::Status enabled = device_->check_enabled(vg::device_requirements());
+  EXPECT_NE(device().handle(), VK_NULL_HANDLE);
+  EXPECT_NE(device().queue(), VK_NULL_HANDLE);
+  EXPECT_NE(device().queue_flags() & VK_QUEUE_GRAPHICS_BIT, 0U);
+  EXPECT_FALSE(device().has_present());  // headless
+  EXPECT_GE(device().caps().api_version(), VK_API_VERSION_1_3);
+  const vkc::Status enabled = device().check_enabled(vg::device_requirements());
   EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
 
 TEST_F(DeviceTest, SingleTimeSubmitRoundTrips) {
   // No-op recording exercises allocate / begin / end / submit / fence-wait.
   const vkc::Status status =
-      device_->submit_single_time([](VkCommandBuffer) {});
+      device().submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(status.ok()) << status.message();
 }
 
@@ -110,12 +102,12 @@ TEST_F(DeviceTest, SingleTimeSubmitRoundTrips) {
 // held to its own requirements, and leaves it alive when it goes.
 TEST_F(DeviceTest, AdoptBorrowsASharedDeviceWithoutOwningIt) {
   {
-    auto borrowed = vkc::Device::adopt(borrow_device(*instance_, *device_),
+    auto borrowed = vkc::Device::adopt(borrow_device(instance(), device()),
                                        vg::device_requirements());
     ASSERT_TRUE(borrowed.ok()) << borrowed.status().message();
     EXPECT_FALSE(borrowed.value().owns_device());
-    EXPECT_EQ(borrowed.value().handle(), device_->handle());
-    EXPECT_EQ(borrowed.value().queue(), device_->queue());
+    EXPECT_EQ(borrowed.value().handle(), device().handle());
+    EXPECT_EQ(borrowed.value().queue(), device().queue());
     // Fully usable: records + submits on the shared queue, under its lock.
     const vkc::Status s =
         borrowed.value().submit_single_time([](VkCommandBuffer) {});
@@ -125,14 +117,14 @@ TEST_F(DeviceTest, AdoptBorrowsASharedDeviceWithoutOwningIt) {
   // The owner's device is still valid: a second submit proves the adopted
   // wrapper left it intact (a double-free trips the sanitizer job; a
   // use-after-free would fail this submit).
-  const vkc::Status after = device_->submit_single_time([](VkCommandBuffer) {});
+  const vkc::Status after = device().submit_single_time([](VkCommandBuffer) {});
   EXPECT_TRUE(after.ok()) << after.message();
 }
 
 // A share that did not enable what the renderer needs is refused, naming it,
 // rather than failing later inside a pass.
 TEST_F(DeviceTest, AdoptRefusesAShareWithoutDynamicRendering) {
-  vkc::AdoptedDevice adopted = borrow_device(*instance_, *device_);
+  vkc::AdoptedDevice adopted = borrow_device(instance(), device());
   adopted.enabled_features.dynamic_rendering = false;
   auto borrowed = vkc::Device::adopt(adopted, vg::device_requirements());
   ASSERT_FALSE(borrowed.ok());
@@ -144,10 +136,7 @@ TEST_F(DeviceTest, AdoptRefusesAShareWithoutDynamicRendering) {
 // rather than record barriers its queue may not support or passes it did not
 // enable dynamic rendering for.
 TEST_F(ForeignDeviceTest, RendererEntryPointsRefuseIt) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto batch = vg::UploadBatch::begin(*device_, allocator.value());
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_FALSE(batch.ok());
   EXPECT_EQ(batch.status().domain(), vkc::Status::Code::Unsupported)
       << batch.status().message();
@@ -157,11 +146,11 @@ TEST_F(ForeignDeviceTest, RendererEntryPointsRefuseIt) {
   desc.data = &word;
   desc.size = sizeof(word);
   desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-  auto buffer = vg::upload_buffer(*device_, allocator.value(), desc);
+  auto buffer = vg::upload_buffer(device(), allocator(), desc);
   ASSERT_FALSE(buffer.ok());
   EXPECT_EQ(buffer.status().domain(), vkc::Status::Code::Unsupported);
 
-  auto profiler = vg::Profiler::create(*device_);
+  auto profiler = vg::Profiler::create(device());
   ASSERT_FALSE(profiler.ok());
   EXPECT_EQ(profiler.status().domain(), vkc::Status::Code::Unsupported)
       << profiler.status().message();

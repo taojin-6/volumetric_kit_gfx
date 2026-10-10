@@ -3,34 +3,21 @@
 
 #include <gtest/gtest.h>
 
-#include <optional>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
 namespace assets = volumetric_kit::gfx::assets;
 namespace pipelines = volumetric_kit::gfx::pipelines;
 
-// Adds a VMA allocator on top of the shared device fixture; skips with the base
-// when no Vulkan device is present.
-class GpuMeshTest : public VulkanDeviceTest {
+class GpuMeshTest : public vg_test::RendererDeviceTest {
  protected:
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;  // no device, or the base SetUp failed fatally
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
-  }
-
   // A minimal two-triangle quad (4 default vertices, 6 indices).
   static assets::Mesh quad() {
     assets::Mesh mesh;
@@ -38,14 +25,12 @@ class GpuMeshTest : public VulkanDeviceTest {
     mesh.indices = {0, 1, 2, 0, 2, 3};
     return mesh;
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
 
 TEST_F(GpuMeshTest, UploadsVerticesAndIndices) {
-  auto mesh = pipelines::upload_mesh(*device_, *allocator_, quad());
+  auto mesh = pipelines::upload_mesh(device(), allocator(), quad());
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
   EXPECT_TRUE(mesh.value().valid());
   EXPECT_EQ(mesh.value().index_count(), 6u);
@@ -53,13 +38,13 @@ TEST_F(GpuMeshTest, UploadsVerticesAndIndices) {
 
 TEST_F(GpuMeshTest, EmptyMeshIsRejected) {
   const assets::Mesh empty;  // no vertices / indices
-  auto mesh = pipelines::upload_mesh(*device_, *allocator_, empty);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), empty);
   ASSERT_FALSE(mesh.ok());
   EXPECT_EQ(mesh.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(GpuMeshTest, BatchUploadsManyMeshesInOneSubmit) {
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
 
   // An invalid mesh is rejected before anything records: the batch stays open
@@ -90,7 +75,7 @@ TEST_F(GpuMeshTest, BatchFormRejectsEmptyBatch) {
 }
 
 TEST_F(GpuMeshTest, MoveLeavesSourceEmpty) {
-  auto made = pipelines::upload_mesh(*device_, *allocator_, quad());
+  auto made = pipelines::upload_mesh(device(), allocator(), quad());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::GpuMesh source = std::move(made).value();
   ASSERT_TRUE(source.valid());
@@ -103,8 +88,8 @@ TEST_F(GpuMeshTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(GpuMeshTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  auto a = pipelines::upload_mesh(*device_, *allocator_, quad());
-  auto b = pipelines::upload_mesh(*device_, *allocator_, quad());
+  auto a = pipelines::upload_mesh(device(), allocator(), quad());
+  auto b = pipelines::upload_mesh(device(), allocator(), quad());
   ASSERT_TRUE(a.ok()) << a.status().message();
   ASSERT_TRUE(b.ok()) << b.status().message();
   pipelines::GpuMesh dst = std::move(a).value();
@@ -117,7 +102,7 @@ TEST_F(GpuMeshTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(GpuMeshTest, SelfMoveAssignIsSafe) {
-  auto made = pipelines::upload_mesh(*device_, *allocator_, quad());
+  auto made = pipelines::upload_mesh(device(), allocator(), quad());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::GpuMesh mesh = std::move(made).value();
 

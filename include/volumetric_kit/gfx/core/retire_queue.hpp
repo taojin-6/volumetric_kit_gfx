@@ -30,10 +30,10 @@ namespace volumetric_kit::gfx {
 /// in @ref RetireList.
 ///
 /// @warning The timeline is borrowed by address: it must outlive this queue
-///          and stay where it is (@ref windowing::FrameLoop::timeline does,
-///          moves of the loop included). So must the `core::Device` a queued
-///          deleter frees through: destruction drains (waits for + runs)
-///          every pending deleter. Compose so the queue is destroyed first. A
+///          and stay where it is (@ref windowing::FrameLoop::timeline does).
+///          The `core::Device` a queued deleter frees through must outlive it
+///          too: destruction drains (waits for + runs) every pending deleter.
+///          Compose so the queue is destroyed first. A
 ///          `core::Buffer` or `core::Image` keeps its allocator's state alive
 ///          itself, so the `core::Allocator` need not outlive the queue.
 ///

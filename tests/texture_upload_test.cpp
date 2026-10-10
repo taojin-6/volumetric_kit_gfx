@@ -11,33 +11,21 @@
 #include <utility>
 #include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// Adds an allocator on top of the shared device fixture: the derived
-// allocator_ is destroyed before the base's device_/instance_, and each test's
-// textures/buffers before any of them.
-class TextureUploadTest : public VulkanDeviceTest {
+class TextureUploadTest : public vg_test::RendererDeviceTest {
  protected:
-  // Records copies + subresource barriers, so run under the validation layer
-  // with teeth: a wrong per-mip/layer copy region or barrier fails the test (on
-  // CI, where the layer is present).
-  bool wants_validation() const override { return true; }
-
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;  // no device, or the base SetUp failed fatally
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
+  // Records copies + subresource barriers, so run under the validation layer:
+  // a wrong per-mip/layer copy region or barrier fails the test.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
   }
 
   // Copy one (mip, layer-range) subresource of `image` -- which the upload left
@@ -56,14 +44,14 @@ class TextureUploadTest : public VulkanDeviceTest {
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     rb.memory = vkc::MemoryUsage::Staging;
     rb.host_access = vkc::HostAccess::Random;
-    auto readback = allocator_->create_buffer(rb);
+    auto readback = allocator().create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
       return {};
     }
     const VkBuffer dst = readback.value().handle();
     const vkc::Status recorded =
-        device_->submit_single_time([&](VkCommandBuffer cmd) {
+        device().submit_single_time([&](VkCommandBuffer cmd) {
           vg::ImageBarrierDesc to_src;
           to_src.image = image;
           to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -88,8 +76,6 @@ class TextureUploadTest : public VulkanDeviceTest {
         static_cast<const std::uint8_t*>(readback.value().mapped());
     return std::vector<std::uint8_t>(mapped, mapped + bytes);
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -107,7 +93,7 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   desc.pixels = src.data();
   desc.size = src.size();
 
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
@@ -126,13 +112,13 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   rb.memory = vkc::MemoryUsage::Staging;
   rb.host_access = vkc::HostAccess::Random;
-  auto readback = allocator_->create_buffer(rb);
+  auto readback = allocator().create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
   const VkImage image = texture.value().handle();
   const VkBuffer dst = readback.value().handle();
   auto recorded =
-      device_->submit_single_time([image, dst](VkCommandBuffer cmd) {
+      device().submit_single_time([image, dst](VkCommandBuffer cmd) {
         // upload_texture left the image in SHADER_READ_ONLY_OPTIMAL.
         VkImageMemoryBarrier to_src{};
         to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -185,7 +171,7 @@ TEST_F(TextureUploadTest, GeneratesMipChain) {
   desc.size = src.size();
   desc.generate_mips = true;
 
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
@@ -212,7 +198,7 @@ TEST_F(TextureUploadTest, RejectsZeroExtent) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -225,7 +211,7 @@ TEST_F(TextureUploadTest, RejectsExtentAboveDeviceLimit) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::Unsupported);
 }
 
@@ -236,7 +222,7 @@ TEST_F(TextureUploadTest, RejectsUndefinedFormat) {
   desc.format = VK_FORMAT_UNDEFINED;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -246,7 +232,7 @@ TEST_F(TextureUploadTest, RejectsNullPixels) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.pixels = nullptr;
   desc.size = 4;
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -257,7 +243,7 @@ TEST_F(TextureUploadTest, RejectsSizeMismatch) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;  // expects 2*2*4 = 16 bytes
   desc.pixels = src.data();
   desc.size = src.size();  // 8 — wrong
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -269,7 +255,7 @@ TEST_F(TextureUploadTest, RejectsCompressedFormat) {
   desc.format = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::Unsupported);
 }
 
@@ -285,7 +271,7 @@ TEST_F(TextureUploadTest, RejectsVendorExtensionFormat) {
   desc.format = kVendorFormat;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::Unsupported);
 }
 
@@ -298,7 +284,7 @@ TEST_F(TextureUploadTest, RejectsFormatNeedingYcbcrConversion) {
   desc.format = VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16;
   desc.pixels = src.data();
   desc.size = src.size();
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::Unsupported);
 }
 
@@ -309,7 +295,7 @@ TEST_F(TextureUploadTest, UploadsCoreFormatFromTheExtensionRange) {
   VkFormat format = VK_FORMAT_UNDEFINED;
   for (const VkFormat candidate :
        {VK_FORMAT_A4B4G4R4_UNORM_PACK16, VK_FORMAT_A4R4G4B4_UNORM_PACK16}) {
-    if (device_->caps().format_supports(candidate, VK_IMAGE_TILING_OPTIMAL,
+    if (device().caps().format_supports(candidate, VK_IMAGE_TILING_OPTIMAL,
                                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
       format = candidate;
       break;
@@ -324,7 +310,7 @@ TEST_F(TextureUploadTest, UploadsCoreFormatFromTheExtensionRange) {
   desc.format = format;
   desc.pixels = src.data();
   desc.size = src.size();
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   EXPECT_TRUE(texture.ok()) << texture.status().message();
 }
 
@@ -350,7 +336,7 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
   desc.array_layers = 6;
   desc.cube = true;
 
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
@@ -363,13 +349,13 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   rb.memory = vkc::MemoryUsage::Staging;
   rb.host_access = vkc::HostAccess::Random;
-  auto readback = allocator_->create_buffer(rb);
+  auto readback = allocator().create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
   const VkImage image = texture.value().handle();
   const VkBuffer dst = readback.value().handle();
   auto recorded =
-      device_->submit_single_time([image, dst](VkCommandBuffer cmd) {
+      device().submit_single_time([image, dst](VkCommandBuffer cmd) {
         // upload_texture left every face in SHADER_READ_ONLY_OPTIMAL; move
         // just layer 5 to TRANSFER_SRC through the public barrier helper.
         vg::ImageBarrierDesc to_src;
@@ -417,7 +403,7 @@ TEST_F(TextureUploadTest, UploadsTwoDArrayAndRoutesLayers) {
   desc.size = src.size();
   desc.array_layers = kLayers;  // cube stays false -> a plain 2D array
 
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
@@ -452,7 +438,7 @@ TEST_F(TextureUploadTest, UploadsPreMippedCube) {
   desc.cube = true;
   desc.mip_levels = 2;
 
-  auto texture = vg::upload_texture(*device_, *allocator_, desc);
+  auto texture = vg::upload_texture(device(), allocator(), desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
   EXPECT_TRUE(texture.value().valid());
   EXPECT_NE(texture.value().view(), VK_NULL_HANDLE);
@@ -484,7 +470,7 @@ TEST_F(TextureUploadTest, RejectsCubeSizeMismatch) {
   desc.size = src.size();  // one face, not six
   desc.array_layers = 6;
   desc.cube = true;
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -496,7 +482,7 @@ TEST_F(TextureUploadTest, RejectsCubeWithoutSixLayers) {
   desc.pixels = src.data();
   desc.size = src.size();
   desc.cube = true;  // but array_layers stays 1
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -509,7 +495,7 @@ TEST_F(TextureUploadTest, RejectsGenerateMipsOnArrayUpload) {
   desc.size = src.size();
   desc.array_layers = 2;
   desc.generate_mips = true;  // generation is single-layer only
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -522,7 +508,7 @@ TEST_F(TextureUploadTest, RejectsGenerateMipsWithSuppliedMips) {
   desc.size = src.size();
   desc.mip_levels = 2;        // pixels carry mips already...
   desc.generate_mips = true;  // ...so generating them too is contradictory
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -534,7 +520,7 @@ TEST_F(TextureUploadTest, RejectsMipLevelsBeyondFullChain) {
   desc.pixels = src.data();
   desc.size = src.size();
   desc.mip_levels = 4;
-  EXPECT_EQ(vg::upload_texture(*device_, *allocator_, desc).status().domain(),
+  EXPECT_EQ(vg::upload_texture(device(), allocator(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -574,7 +560,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
     }
   }
 
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   EXPECT_TRUE(batch.value().valid());
 
@@ -617,7 +603,7 @@ TEST_F(TextureUploadTest, BatchUploadsManyTexturesInOneSubmit) {
 
 TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
 
   vg::ImageUploadDesc bad = small_desc(px);
@@ -635,7 +621,7 @@ TEST_F(TextureUploadTest, BatchFailedAddLeavesBatchUsable) {
 
 TEST_F(TextureUploadTest, BatchMoveConstructLeavesSourceEmpty) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto texture = batch.value().add(small_desc(px));
   ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -652,12 +638,12 @@ TEST_F(TextureUploadTest, BatchMoveConstructLeavesSourceEmpty) {
 
 TEST_F(TextureUploadTest, BatchMoveAssignOverLiveDiscardsTheOldBatch) {
   const std::array<std::uint8_t, 16> px{};
-  auto dst = vg::UploadBatch::begin(*device_, *allocator_);
+  auto dst = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(dst.ok()) << dst.status().message();
   auto discarded = dst.value().add(small_desc(px));  // outlives the discard
   ASSERT_TRUE(discarded.ok()) << discarded.status().message();
 
-  auto src = vg::UploadBatch::begin(*device_, *allocator_);
+  auto src = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(src.ok()) << src.status().message();
   auto texture = src.value().add(small_desc(px));
   ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -673,7 +659,7 @@ TEST_F(TextureUploadTest, BatchMoveAssignOverLiveDiscardsTheOldBatch) {
 
 TEST_F(TextureUploadTest, BatchSelfMoveAssignIsSafe) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto texture = batch.value().add(small_desc(px));  // must outlive finish()
   ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -691,7 +677,7 @@ TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
   const std::array<std::uint8_t, 16> px{};
   std::vector<vkc::Image> textures;
   {
-    auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+    auto batch = vg::UploadBatch::begin(device(), allocator());
     ASSERT_TRUE(batch.ok()) << batch.status().message();
     auto texture = batch.value().add(small_desc(px));
     ASSERT_TRUE(texture.ok()) << texture.status().message();
@@ -707,7 +693,7 @@ TEST_F(TextureUploadTest, BatchDestructorWithoutFinishDiscardsCleanly) {
 
 TEST_F(TextureUploadTest, AddBufferRejectsInvalidDescs) {
   const std::array<std::uint8_t, 4> bytes{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
 
   vg::BufferUploadDesc null_data = buffer_desc(nullptr, bytes.size());
@@ -734,7 +720,11 @@ TEST_F(TextureUploadTest, AddBufferRejectsInvalidDescs) {
 TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
   const std::array<std::uint8_t, 16> px{};
   const std::array<float, 12> vertices{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  // An allocator of the test's own, which it drops before the resources.
+  auto made = vkc::Allocator::create(instance().handle(), device());
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  std::optional<vkc::Allocator> own(std::move(made).value());
+  auto batch = vg::UploadBatch::begin(device(), *own);
   ASSERT_TRUE(batch.ok()) << batch.status().message();
 
   auto texture = batch.value().add(small_desc(px));
@@ -764,7 +754,7 @@ TEST_F(TextureUploadTest, MixedBatchUploadsTextureAndBufferInOneSubmit) {
   // The resources hold their allocator's state: dropping the allocator first
   // is safe, which is what lets a device keep a failed batch's staging
   // buffers past it.
-  allocator_.reset();
+  own.reset();
 }
 
 TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
@@ -778,7 +768,7 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
   // TRANSFER_SRC on top of the draw usage so the test can copy the
   // device-local result back out.
   desc.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  auto buffer = vg::upload_buffer(*device_, *allocator_, desc);
+  auto buffer = vg::upload_buffer(device(), allocator(), desc);
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
   EXPECT_TRUE(buffer.value().valid());
   EXPECT_EQ(buffer.value().size(), src.size());
@@ -791,12 +781,12 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
   rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   rb.memory = vkc::MemoryUsage::Staging;
   rb.host_access = vkc::HostAccess::Random;
-  auto readback = allocator_->create_buffer(rb);
+  auto readback = allocator().create_buffer(rb);
   ASSERT_TRUE(readback.ok()) << readback.status().message();
 
   const VkBuffer gpu = buffer.value().handle();
   const VkBuffer dst = readback.value().handle();
-  auto recorded = device_->submit_single_time([gpu, dst](VkCommandBuffer cmd) {
+  auto recorded = device().submit_single_time([gpu, dst](VkCommandBuffer cmd) {
     VkBufferCopy region{};
     region.size = kBytes;
     vkCmdCopyBuffer(cmd, gpu, dst, 1, &region);
@@ -814,7 +804,7 @@ TEST_F(TextureUploadTest, UploadBufferRoundTripsBytesThroughTheGpu) {
 // otherwise submit a copy referencing freed memory.
 TEST_F(TextureUploadTest, PoisonedBatchFinishDiscardsWithoutSubmitting) {
   const std::array<std::uint8_t, 16> px{};
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto buffer = batch.value().add_buffer(buffer_desc(px.data(), px.size()));
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();

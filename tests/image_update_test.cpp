@@ -12,10 +12,12 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -25,7 +27,6 @@
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/image_update.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -34,19 +35,10 @@ constexpr uint32_t kTexel = 4;
 
 using Texels = std::vector<uint32_t>;  // one RGBA8 texel a word
 
-class ImageUpdateTest : public VulkanDeviceTest {
+class ImageUpdateTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
-  bool wants_sync_validation() const override { return true; }
-
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
   }
 
   vkc::Result<vkc::Image> make_image(
@@ -60,7 +52,7 @@ class ImageUpdateTest : public VulkanDeviceTest {
     desc.array_layers = layers;
     desc.format = format;
     desc.usage = usage;
-    return allocator_->create_image(desc);
+    return allocator().create_image(desc);
   }
 
   // A mapped buffer holding `texels`.
@@ -71,7 +63,7 @@ class ImageUpdateTest : public VulkanDeviceTest {
     desc.size = texels.size() * sizeof(uint32_t);
     desc.usage = usage;
     desc.memory = vkc::MemoryUsage::Staging;
-    VKC_ASSIGN(vkc::Buffer buffer, allocator_->create_buffer(desc));
+    VKC_ASSIGN(vkc::Buffer buffer, allocator().create_buffer(desc));
     std::memcpy(buffer.mapped(), texels.data(), desc.size);
     return buffer;
   }
@@ -86,13 +78,13 @@ class ImageUpdateTest : public VulkanDeviceTest {
     desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     desc.memory = vkc::MemoryUsage::Staging;
     desc.host_access = vkc::HostAccess::Random;
-    auto readback = allocator_->create_buffer(desc);
+    auto readback = allocator().create_buffer(desc);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
       return {};
     }
     const vkc::Status read =
-        device_->submit_single_time([&](VkCommandBuffer cmd) {
+        device().submit_single_time([&](VkCommandBuffer cmd) {
           vg::ImageBarrierDesc to_src;
           to_src.image = image.handle();
           to_src.src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -114,8 +106,6 @@ class ImageUpdateTest : public VulkanDeviceTest {
     std::memcpy(texels.data(), readback.value().mapped(), desc.size);
     return texels;
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 // Two regions from one buffer, each with a row length and an image height of
@@ -152,7 +142,7 @@ TEST_F(ImageUpdateTest, CopiesRegionsFromRowsOfABuffer) {
 
   vkc::Status recorded;
   const vkc::Status submitted =
-      device_->submit_single_time([&](VkCommandBuffer cmd) {
+      device().submit_single_time([&](VkCommandBuffer cmd) {
         recorded = vg::record_image_update(cmd, source.value(), image.value(),
                                            regions.data(), 2);
       });
@@ -187,7 +177,7 @@ TEST_F(ImageUpdateTest, CopiesEachRegionFromItsOwnBuffer) {
 
   vkc::Status recorded;
   const vkc::Status submitted =
-      device_->submit_single_time([&](VkCommandBuffer cmd) {
+      device().submit_single_time([&](VkCommandBuffer cmd) {
         recorded =
             vg::record_image_update(cmd, copies.data(), 3, image.value());
       });
@@ -203,15 +193,15 @@ TEST_F(ImageUpdateTest, CopiesEachRegionFromItsOwnBuffer) {
 TEST_F(ImageUpdateTest, UploadStagesThroughTheRetireQueue) {
   auto image = make_image({2, 1});
   ASSERT_TRUE(image.ok()) << image.status().message();
-  auto timeline = vkc::TimelineSemaphore::create(*device_, 0);
+  auto timeline = vkc::TimelineSemaphore::create(device(), 0);
   ASSERT_TRUE(timeline.ok()) << timeline.status().message();
   vg::RetireQueue retire(timeline.value());
 
   Texels pixels{0xAABBCCDD, 0x11223344};
   vkc::Status recorded;
   const vkc::Status submitted =
-      device_->submit_single_time([&](VkCommandBuffer cmd) {
-        recorded = vg::record_image_upload(cmd, *allocator_, retire, 1,
+      device().submit_single_time([&](VkCommandBuffer cmd) {
+        recorded = vg::record_image_upload(cmd, allocator(), retire, 1,
                                            image.value(), pixels.data(),
                                            pixels.size() * sizeof(uint32_t));
         pixels.assign(pixels.size(), 0);  // already staged
@@ -225,6 +215,59 @@ TEST_F(ImageUpdateTest, UploadStagesThroughTheRetireQueue) {
   EXPECT_EQ(retire.poll(), 1u);
   EXPECT_EQ(retire.pending(), 0u);
   EXPECT_EQ(read(image.value()), (Texels{0xAABBCCDD, 0x11223344}));
+}
+
+// Large caller-supplied strides must be refused before they can overflow a
+// last-texel or byte-count calculation. Use tiny real resources, and never
+// submit a malformed copy even if a regression accepts it.
+TEST_F(ImageUpdateTest, RefusesOverflowingRegionSizesWithoutRecording) {
+  auto image = make_image({1, 3}, 17);
+  ASSERT_TRUE(image.ok()) << image.status().message();
+  auto source = make_source(Texels{0x11223344});
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  auto buffer = pool.value().allocate_primary();
+  ASSERT_TRUE(buffer.ok()) << buffer.status().message();
+  ASSERT_TRUE(buffer.value().begin().ok());
+  const VkCommandBuffer cmd = buffer.value().handle();
+
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 17};
+  region.imageExtent = {1, 1, 1};
+  region.bufferRowLength = 1u << 28;
+  region.bufferImageHeight = 1u << 30;
+  // 2^64 + 4 bytes used to wrap to four and fit the one-texel source.
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  // Overflow the texel count itself, before conversion to bytes.
+  region.imageSubresource.layerCount = 5;
+  region.bufferRowLength = 1u << 31;
+  region.bufferImageHeight = 1u << 31;
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  // The stride product fits, but adding the final rows used to wrap to zero.
+  region.imageSubresource.layerCount = 2;
+  region.imageExtent.height = 3;
+  region.bufferRowLength = std::numeric_limits<uint32_t>::max();
+  region.bufferImageHeight = std::numeric_limits<uint32_t>::max();
+  ASSERT_EQ(
+      vg::record_image_update(cmd, source.value(), image.value(), &region, 1)
+          .domain(),
+      vkc::Status::Code::InvalidArgument);
+
+  EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
+  ASSERT_TRUE(buffer.value().end().ok());
+  // Nothing was recorded.
+  const vkc::Status submitted = device().submit_and_wait(cmd);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 }
 
 // Everything refused is refused before anything is recorded: the command
@@ -244,11 +287,12 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
   auto not_a_source =
       make_source(Texels(4, 0), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
   ASSERT_TRUE(not_a_source.ok()) << not_a_source.status().message();
-  auto timeline = vkc::TimelineSemaphore::create(*device_, 0);
+  auto timeline = vkc::TimelineSemaphore::create(device(), 0);
   ASSERT_TRUE(timeline.ok()) << timeline.status().message();
   vg::RetireQueue retire(timeline.value());
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto buffer = pool.value().allocate_primary();
   ASSERT_TRUE(buffer.ok()) << buffer.status().message();
@@ -357,11 +401,11 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
             Code::InvalidArgument);
 
   const Texels pixels(4, 0);
-  EXPECT_EQ(vg::record_image_upload(cmd, *allocator_, retire, 1, image.value(),
+  EXPECT_EQ(vg::record_image_upload(cmd, allocator(), retire, 1, image.value(),
                                     nullptr, 16)
                 .domain(),
             Code::InvalidArgument);
-  EXPECT_EQ(vg::record_image_upload(cmd, *allocator_, retire, 1, image.value(),
+  EXPECT_EQ(vg::record_image_upload(cmd, allocator(), retire, 1, image.value(),
                                     pixels.data(), 12)
                 .domain(),
             Code::InvalidArgument);
@@ -369,7 +413,8 @@ TEST_F(ImageUpdateTest, RefusesWhatItCannotRecord) {
 
   EXPECT_EQ(image.value().layout(), VK_IMAGE_LAYOUT_UNDEFINED);
   ASSERT_TRUE(buffer.value().end().ok());
-  submit_and_wait(cmd);
+  const vkc::Status submitted = device().submit_and_wait(cmd);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 }
 
 }  // namespace

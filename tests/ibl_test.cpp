@@ -12,12 +12,12 @@
 
 #include <glm/vec3.hpp>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -43,20 +43,9 @@ pipelines::IblBakeDesc tiny_desc() {
   return d;
 }
 
-// Adds a VMA allocator on top of the shared device fixture, plus a
-// whole-texture readback so two bakes can be compared byte for byte.
-class IblTest : public VulkanDeviceTest {
+// Adds a whole-texture readback, so two bakes can be compared byte for byte.
+class IblTest : public vg_test::RendererDeviceTest {
  protected:
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;  // no device, or the base SetUp failed fatally
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
-  }
-
   // Copy every (mip, layer) of `texture` (left in SHADER_READ_ONLY_OPTIMAL by
   // the bake) into host memory, packed mip-major like ImageUploadDesc. Fails
   // the current test and returns empty on any error.
@@ -76,7 +65,7 @@ class IblTest : public VulkanDeviceTest {
     rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     rb.memory = vkc::MemoryUsage::Staging;
     rb.host_access = vkc::HostAccess::Random;
-    auto readback = allocator_->create_buffer(rb);
+    auto readback = allocator().create_buffer(rb);
     EXPECT_TRUE(readback.ok()) << readback.status().message();
     if (!readback.ok()) {
       return {};
@@ -84,7 +73,7 @@ class IblTest : public VulkanDeviceTest {
 
     const VkImage image = texture.handle();
     const VkBuffer dst = readback.value().handle();
-    const auto recorded = device_->submit_single_time([&](VkCommandBuffer cmd) {
+    const auto recorded = device().submit_single_time([&](VkCommandBuffer cmd) {
       VkImageMemoryBarrier to_src{};
       to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
       to_src.srcAccessMask = 0;
@@ -122,8 +111,6 @@ class IblTest : public VulkanDeviceTest {
     std::memcpy(bytes.data(), readback.value().mapped(), bytes.size());
     return bytes;
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -154,7 +141,7 @@ TEST(IblMapsTest, DefaultIsEmpty) {
 
 TEST_F(IblTest, BakesTinyMapSet) {
   auto baked =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   ASSERT_TRUE(baked.ok()) << baked.status().message();
   const pipelines::IblMaps maps = std::move(baked).value();
 
@@ -181,7 +168,7 @@ TEST_F(IblTest, BakesTinyMapSet) {
 
 TEST_F(IblTest, SceneDescNamesEveryViewAndTheSampler) {
   auto baked =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   ASSERT_TRUE(baked.ok()) << baked.status().message();
   const pipelines::PbrSceneDesc desc = baked.value().scene_desc();
   EXPECT_EQ(desc.irradiance, baked.value().irradiance.view());
@@ -195,7 +182,7 @@ TEST_F(IblTest, SceneDescNamesEveryViewAndTheSampler) {
 }
 
 TEST_F(IblTest, BakesBrdfLutStandalone) {
-  auto lut = pipelines::bake_brdf_lut(*device_, *allocator_, 8, 8);
+  auto lut = pipelines::bake_brdf_lut(device(), allocator(), 8, 8);
   ASSERT_TRUE(lut.ok()) << lut.status().message();
   EXPECT_TRUE(lut.value().valid());
   EXPECT_NE(lut.value().view(), VK_NULL_HANDLE);
@@ -207,10 +194,10 @@ TEST_F(IblTest, BakesBrdfLutStandalone) {
 
 TEST_F(IblTest, BrdfLutRejectsZeroSizeZeroSamplesAndEmptyBatch) {
   EXPECT_EQ(
-      pipelines::bake_brdf_lut(*device_, *allocator_, 0).status().domain(),
+      pipelines::bake_brdf_lut(device(), allocator(), 0).status().domain(),
       vkc::Status::Code::InvalidArgument);
   EXPECT_EQ(
-      pipelines::bake_brdf_lut(*device_, *allocator_, 8, 0).status().domain(),
+      pipelines::bake_brdf_lut(device(), allocator(), 8, 0).status().domain(),
       vkc::Status::Code::InvalidArgument);
   vg::UploadBatch empty;  // never begun
   EXPECT_EQ(pipelines::bake_brdf_lut(empty, 8, 8).status().domain(),
@@ -219,7 +206,7 @@ TEST_F(IblTest, BrdfLutRejectsZeroSizeZeroSamplesAndEmptyBatch) {
 
 TEST_F(IblTest, RejectsInvalidBakeDesc) {
   const auto domain_for = [&](const pipelines::IblBakeDesc& d) {
-    return pipelines::bake_ibl(*device_, *allocator_, gradient_env, d)
+    return pipelines::bake_ibl(device(), allocator(), gradient_env, d)
         .status()
         .domain();
   };
@@ -259,7 +246,7 @@ TEST_F(IblTest, RejectsInvalidBakeDesc) {
 
 TEST_F(IblTest, RejectsNullEnvironment) {
   auto baked = pipelines::bake_ibl(
-      *device_, *allocator_, pipelines::EnvironmentSampler{}, tiny_desc());
+      device(), allocator(), pipelines::EnvironmentSampler{}, tiny_desc());
   ASSERT_FALSE(baked.ok());
   EXPECT_EQ(baked.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -269,8 +256,8 @@ TEST_F(IblTest, RejectsNullEnvironment) {
 // the packing order are fixed, so the bytes may not drift.
 TEST_F(IblTest, RebakeIsByteIdentical) {
   const pipelines::IblBakeDesc desc = tiny_desc();
-  auto first = pipelines::bake_ibl(*device_, *allocator_, gradient_env, desc);
-  auto second = pipelines::bake_ibl(*device_, *allocator_, gradient_env, desc);
+  auto first = pipelines::bake_ibl(device(), allocator(), gradient_env, desc);
+  auto second = pipelines::bake_ibl(device(), allocator(), gradient_env, desc);
   ASSERT_TRUE(first.ok()) << first.status().message();
   ASSERT_TRUE(second.ok()) << second.status().message();
 
@@ -292,7 +279,7 @@ TEST_F(IblTest, RebakeIsByteIdentical) {
 
 TEST_F(IblTest, MoveLeavesSourceEmpty) {
   auto baked =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   ASSERT_TRUE(baked.ok()) << baked.status().message();
   pipelines::IblMaps source = std::move(baked).value();
   ASSERT_TRUE(source.valid());
@@ -309,9 +296,9 @@ TEST_F(IblTest, MoveLeavesSourceEmpty) {
 
 TEST_F(IblTest, MoveAssignOverLiveLeavesSourceEmpty) {
   auto a =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   auto b =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   ASSERT_TRUE(a.ok()) << a.status().message();
   ASSERT_TRUE(b.ok()) << b.status().message();
   pipelines::IblMaps dst = std::move(a).value();
@@ -327,7 +314,7 @@ TEST_F(IblTest, MoveAssignOverLiveLeavesSourceEmpty) {
 
 TEST_F(IblTest, SelfMoveAssignIsSafe) {
   auto baked =
-      pipelines::bake_ibl(*device_, *allocator_, gradient_env, tiny_desc());
+      pipelines::bake_ibl(device(), allocator(), gradient_env, tiny_desc());
   ASSERT_TRUE(baked.ok()) << baked.status().message();
   pipelines::IblMaps maps = std::move(baked).value();
 
