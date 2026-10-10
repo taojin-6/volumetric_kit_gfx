@@ -6,17 +6,17 @@
 #include <limits>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-using SamplerTest = VulkanDeviceTest;
+using SamplerTest = vg_test::RendererDeviceTest;
 
 }  // namespace
 
 TEST_F(SamplerTest, CreatesWithDefaults) {
-  auto sampler = vg::Sampler::create(device());
+  auto sampler = vg::Sampler::create(device().handle());
   ASSERT_TRUE(sampler.ok()) << sampler.status().message();
   EXPECT_TRUE(sampler.value().valid());
   EXPECT_NE(sampler.value().handle(), VK_NULL_HANDLE);
@@ -32,7 +32,7 @@ TEST_F(SamplerTest, CreatesWithCustomDesc) {
   desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   desc.max_lod = 4.0f;
 
-  auto sampler = vg::Sampler::create(device(), desc);
+  auto sampler = vg::Sampler::create(device().handle(), desc);
   ASSERT_TRUE(sampler.ok()) << sampler.status().message();
   EXPECT_TRUE(sampler.value().valid());
 }
@@ -46,7 +46,7 @@ TEST_F(SamplerTest, CreateRejectsMaxLodBelowMinLod) {
   vg::SamplerDesc desc;
   desc.min_lod = 4.0f;
   desc.max_lod = 1.0f;  // empty LOD range — rejected up front
-  EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
+  EXPECT_EQ(vg::Sampler::create(device().handle(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
@@ -55,12 +55,12 @@ TEST_F(SamplerTest, CreateRejectsNanLod) {
   // NaN compares false against everything, so it would slip past a bare
   // max_lod < min_lod test; the explicit isnan check must catch it.
   desc.min_lod = std::numeric_limits<float>::quiet_NaN();
-  EXPECT_EQ(vg::Sampler::create(device(), desc).status().domain(),
+  EXPECT_EQ(vg::Sampler::create(device().handle(), desc).status().domain(),
             vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(SamplerTest, MoveLeavesSourceEmpty) {
-  auto created = vg::Sampler::create(device());
+  auto created = vg::Sampler::create(device().handle());
   ASSERT_TRUE(created.ok()) << created.status().message();
   vg::Sampler source = std::move(created).value();
   ASSERT_NE(source.handle(), VK_NULL_HANDLE);
@@ -73,8 +73,8 @@ TEST_F(SamplerTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(SamplerTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  auto a = vg::Sampler::create(device());
-  auto b = vg::Sampler::create(device());
+  auto a = vg::Sampler::create(device().handle());
+  auto b = vg::Sampler::create(device().handle());
   ASSERT_TRUE(a.ok()) << a.status().message();
   ASSERT_TRUE(b.ok()) << b.status().message();
   vg::Sampler dst = std::move(a).value();
@@ -86,7 +86,7 @@ TEST_F(SamplerTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(SamplerTest, SelfMoveAssignIsSafe) {
-  auto created = vg::Sampler::create(device());
+  auto created = vg::Sampler::create(device().handle());
   ASSERT_TRUE(created.ok()) << created.status().message();
   vg::Sampler sampler = std::move(created).value();
 

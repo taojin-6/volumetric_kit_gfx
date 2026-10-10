@@ -27,6 +27,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -41,7 +42,6 @@
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -278,24 +278,12 @@ TEST(HybridMeshPipelineTest, DefaultConstructedIsEmpty) {
 
 // --- Creation + move semantics: needs a device -------------------------------
 
-class HybridMeshPipelineDeviceTest : public VulkanDeviceTest {
+class HybridMeshPipelineDeviceTest : public vg_test::RendererDeviceTest {
  protected:
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
-  }
-
   vkc::Result<pipelines::HybridMeshPipeline> create(
       const vg::RenderTargetLayout& layout = color_depth_layout()) {
-    return pipelines::HybridMeshPipeline::create(*device_, *allocator_, layout);
+    return pipelines::HybridMeshPipeline::create(device(), allocator(), layout);
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 TEST_F(HybridMeshPipelineDeviceTest, CreatesWithReflectedAtlasSet) {
@@ -368,9 +356,11 @@ TEST_F(HybridMeshPipelineDeviceTest, SelfMoveAssignStaysValid) {
 
 // --- End-to-end offscreen draw: validation-with-teeth ------------------------
 
-class HybridMeshRenderTest : public VulkanDeviceTest {
+class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
+  }
 
   // Renders `draws` (bound with `atlas` as set 0) into a fresh offscreen target
   // with the given flags, and returns a copy of the RGBA pixels. Each draw
@@ -392,7 +382,8 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
       return {};
     }
 
-    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
     EXPECT_TRUE(pool.ok()) << pool.status().message();
     if (!pool.ok()) {
       return {};
@@ -425,12 +416,12 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
     rt.end(raw);
     target.value().record_readback(raw);
     EXPECT_TRUE(cmd.value().end().ok());
-    submit_and_wait(raw);
-    // This helper returns a value, so ASSERT_NO_FATAL_FAILURE (which expands to
-    // a bare `return`) cannot be used; check explicitly instead. A failed
-    // submit or fence wait leaves the GPU potentially still reading `target`,
-    // so bail out rather than read back and then destroy it underneath.
-    if (HasFatalFailure()) {
+    // A failed submit or fence wait leaves the GPU potentially still reading
+    // `target`, so bail out rather than read back and then destroy it
+    // underneath.
+    const vkc::Status submitted = device().submit_and_wait(raw);
+    if (!submitted.ok()) {
+      ADD_FAILURE() << submitted.message();
       return {};
     }
 
@@ -469,7 +460,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
     adesc.format = kColorFormat;
     adesc.pixels = pixels;
     adesc.size = size;
-    auto texture = vg::upload_texture(*device_, allocator, adesc);
+    auto texture = vg::upload_texture(device(), allocator, adesc);
     if (!texture.ok()) {
       ADD_FAILURE() << texture.status().message();
       return VK_NULL_HANDLE;
@@ -482,7 +473,7 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
     sdesc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sdesc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sdesc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    auto sampler = vg::Sampler::create(device(), sdesc);
+    auto sampler = vg::Sampler::create(device().handle(), sdesc);
     if (!sampler.ok()) {
       ADD_FAILURE() << sampler.status().message();
       return VK_NULL_HANDLE;
@@ -490,7 +481,8 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
 
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool = vkc::DescriptorPool::create(device(), &pool_size, 1, 1);
+    auto pool =
+        vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
     if (!pool.ok()) {
       ADD_FAILURE() << pool.status().message();
       return VK_NULL_HANDLE;
@@ -512,15 +504,12 @@ class HybridMeshRenderTest : public VulkanDeviceTest {
 };
 
 TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   // A 2x2 atlas: texel (0,0) red, the rest blue. uv0 (0.25, 0.25) + NEAREST
@@ -530,14 +519,14 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
                                 0,   0, 255, 255, 0, 0, 255, 255};
   std::vector<AtlasResources> atlas_res;
   const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), atlas_px, {2, 2},
+      make_atlas(allocator(), pipeline.value(), atlas_px, {2, 2},
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   // Unlit: albedo passes straight through, so the two halves show their raw
   // sources.
   const std::vector<uint8_t> unlit =
-      render(allocator.value(), pipeline.value(),
+      render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
   ASSERT_EQ(unlit.size(), static_cast<size_t>(kSize) * kSize * 4);
 
@@ -560,10 +549,9 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   // proves the directional term is applied: dropping it would leave the
   // ambient-only ~0.25 * unlit (~64), which "dimmer than unlit" would still
   // accept.
-  const std::vector<uint8_t> lit =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{&mesh.value()}, atlas,
-             pipelines::kHybridMeshLit);
+  const std::vector<uint8_t> lit = render(
+      allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
+      atlas, pipelines::kHybridMeshLit);
   ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
 
   const glm::vec3 n{0.0f, 0.0f, 1.0f};
@@ -588,21 +576,18 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
 // quad reading exactly what a front-facing -Y would is the documented
 // winding-blindness.
 TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_normals_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
   std::vector<AtlasResources> atlas_res;
   const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+      make_atlas(allocator(), pipeline.value(), atlas_px, {1, 1},
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
@@ -611,9 +596,8 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
   // Guard against a vacuous pass: lit shading flips the right quad's -Y to +Y
   // only if it really is back-facing, and +Y then catches the default light's
   // directional term. Front-facing, -Y would face away and leave ambient only.
-  const std::vector<uint8_t> lit =
-      render(allocator.value(), pipeline.value(), draw, atlas,
-             pipelines::kHybridMeshLit);
+  const std::vector<uint8_t> lit = render(allocator(), pipeline.value(), draw,
+                                          atlas, pipelines::kHybridMeshLit);
   ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
   const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
   EXPECT_NEAR(pixel_at(lit, 3 * kSize / 4, kSize / 2)[1],
@@ -621,7 +605,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
       << "the right quad must be back-facing for the no-flip check to bite";
 
   const std::vector<uint8_t> normals =
-      render(allocator.value(), pipeline.value(), draw, atlas,
+      render(allocator(), pipeline.value(), draw, atlas,
              pipelines::kHybridMeshNormals);
   ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
 
@@ -640,7 +624,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
 
   // The view takes precedence over the lit flag: adding it changes nothing.
   const std::vector<uint8_t> normals_lit =
-      render(allocator.value(), pipeline.value(), draw, atlas,
+      render(allocator(), pipeline.value(), draw, atlas,
              pipelines::kHybridMeshNormals | pipelines::kHybridMeshLit);
   EXPECT_EQ(normals_lit, normals)
       << "kHybridMeshNormals ignores kHybridMeshLit";
@@ -649,31 +633,27 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
 // A zero normal has no direction to encode: safe_normalize() maps it to 0, so
 // the view shows mid-grey rather than the NaN a bare normalize() would write.
 TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   assets::Mesh mesh_cpu = make_hybrid_mesh();
   for (assets::Vertex& v : mesh_cpu.vertices) {
     v.normal = {0.0f, 0.0f, 0.0f};
   }
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
   std::vector<AtlasResources> atlas_res;
   const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+      make_atlas(allocator(), pipeline.value(), atlas_px, {1, 1},
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
-  const std::vector<uint8_t> normals =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{&mesh.value()}, atlas,
-             pipelines::kHybridMeshNormals);
+  const std::vector<uint8_t> normals = render(
+      allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
+      atlas, pipelines::kHybridMeshNormals);
   ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
   for (uint32_t x : {kSize / 4, 3 * kSize / 4}) {
     const uint8_t* p = pixel_at(normals, x, kSize / 2);
@@ -690,28 +670,24 @@ TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
 // what bite.
 TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
   constexpr VkFormat kSrgb = VK_FORMAT_R8G8B8A8_SRGB;
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout(kSrgb));
+      device(), allocator(), color_depth_layout(kSrgb));
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_normals_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
   std::vector<AtlasResources> atlas_res;
   const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+      make_atlas(allocator(), pipeline.value(), atlas_px, {1, 1},
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
-  const std::vector<uint8_t> normals =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{&mesh.value()}, atlas,
-             pipelines::kHybridMeshNormals, kSrgb);
+  const std::vector<uint8_t> normals = render(
+      allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
+      atlas, pipelines::kHybridMeshNormals, kSrgb);
   ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
 
   const uint8_t* left = pixel_at(normals, kSize / 4, kSize / 2);  // +X
@@ -728,21 +704,18 @@ TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
 // Bits HybridMeshFlags does not name are reserved, and the shader tests only
 // the named ones, so setting every reserved bit changes no pixel.
 TEST_F(HybridMeshRenderTest, ReservedFlagBitsAreIgnored) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const uint8_t atlas_px[4] = {255, 0, 0, 255};
   std::vector<AtlasResources> atlas_res;
   const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), atlas_px, {1, 1},
+      make_atlas(allocator(), pipeline.value(), atlas_px, {1, 1},
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
@@ -750,11 +723,10 @@ TEST_F(HybridMeshRenderTest, ReservedFlagBitsAreIgnored) {
   constexpr uint32_t kReserved =
       ~uint32_t{pipelines::kHybridMeshLit | pipelines::kHybridMeshNormals |
                 pipelines::kHybridMeshVertexColor};
-  const std::vector<uint8_t> lit =
-      render(allocator.value(), pipeline.value(), draw, atlas,
-             pipelines::kHybridMeshLit);
+  const std::vector<uint8_t> lit = render(allocator(), pipeline.value(), draw,
+                                          atlas, pipelines::kHybridMeshLit);
   ASSERT_TRUE(any_pixel_drawn(lit));
-  EXPECT_EQ(render(allocator.value(), pipeline.value(), draw, atlas,
+  EXPECT_EQ(render(allocator(), pipeline.value(), draw, atlas,
                    pipelines::kHybridMeshLit | kReserved),
             lit)
       << "a reserved bit must not switch the shading mode";
@@ -776,19 +748,16 @@ assets::Mesh make_magenta_atlas_half_mesh() {
 // white. Under the validation layer with teeth, a draw against an unbound or
 // undefined set would fail the test.
 TEST_F(HybridMeshRenderTest, NullAtlasDrawsEveryTriangleInItsVertexColor) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_magenta_atlas_half_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const std::vector<uint8_t> px =
-      render(allocator.value(), pipeline.value(),
+      render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&mesh.value()}, VK_NULL_HANDLE, 0u);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
 
@@ -805,33 +774,29 @@ TEST_F(HybridMeshRenderTest, NullAtlasDrawsEveryTriangleInItsVertexColor) {
 // kHybridMeshVertexColor shows the vertex color where an atlas is bound and
 // uv0 would sample it; without it the same frame shows the atlas.
 TEST_F(HybridMeshRenderTest, VertexColorFlagIgnoresABoundAtlas) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_magenta_atlas_half_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
 
   const uint8_t red_px[4] = {255, 0, 0, 255};
   std::vector<AtlasResources> atlas_res;
-  const VkDescriptorSet atlas =
-      make_atlas(allocator.value(), pipeline.value(), red_px, {1, 1},
-                 sizeof(red_px), atlas_res);
+  const VkDescriptorSet atlas = make_atlas(
+      allocator(), pipeline.value(), red_px, {1, 1}, sizeof(red_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
   const pipelines::HybridMeshDraw draw{&mesh.value()};
   const std::vector<uint8_t> textured =
-      render(allocator.value(), pipeline.value(), draw, atlas, 0u);
+      render(allocator(), pipeline.value(), draw, atlas, 0u);
   ASSERT_EQ(textured.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_EQ(pixel_at(textured, kSize / 4, kSize / 2)[2], 0)
       << "without the flag the atlas half samples the red atlas";
 
   const std::vector<uint8_t> flagged =
-      render(allocator.value(), pipeline.value(), draw, atlas,
+      render(allocator(), pipeline.value(), draw, atlas,
              pipelines::kHybridMeshVertexColor);
   ASSERT_EQ(flagged.size(), textured.size());
   const uint8_t* left = pixel_at(flagged, kSize / 4, kSize / 2);
@@ -845,19 +810,16 @@ TEST_F(HybridMeshRenderTest, VertexColorFlagIgnoresABoundAtlas) {
 // still draws, against a defined set (validation with teeth), and the
 // moved-from pipeline records nothing.
 TEST_F(HybridMeshRenderTest, MovesKeepTheFallback) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
   const assets::Mesh mesh_cpu = make_magenta_atlas_half_mesh();
-  auto mesh = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
   const pipelines::HybridMeshDraw draw{&mesh.value()};
 
-  auto created = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto created = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                       color_depth_layout());
   ASSERT_TRUE(created.ok()) << created.status().message();
-  auto other = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto other = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                     color_depth_layout());
   ASSERT_TRUE(other.ok()) << other.status().message();
 
   pipelines::HybridMeshPipeline moved(std::move(created).value());
@@ -867,13 +829,13 @@ TEST_F(HybridMeshRenderTest, MovesKeepTheFallback) {
   assigned = std::move(*alias);
 
   const std::vector<uint8_t> px =
-      render(allocator.value(), assigned, draw, VK_NULL_HANDLE, 0u);
+      render(allocator(), assigned, draw, VK_NULL_HANDLE, 0u);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_EQ(pixel_at(px, kSize / 4, kSize / 2)[2], 255)
       << "the moved pipeline draws with its fallback";
   // NOLINTNEXTLINE(bugprone-use-after-move)
   const std::vector<uint8_t> empty =
-      render(allocator.value(), moved, draw, VK_NULL_HANDLE, 0u);
+      render(allocator(), moved, draw, VK_NULL_HANDLE, 0u);
   EXPECT_TRUE(all_pixels_cleared(empty))
       << "the moved-from pipeline records nothing";
 }
@@ -891,23 +853,20 @@ TEST_F(HybridMeshRenderTest, MovesKeepTheFallback) {
 // producer->draw barrier itself (see LiveMesh's synchronization warning); that
 // seam belongs to the streamed-app driver, not this pipeline.
 TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
 
   // Direct path: the static GpuMesh (owns its buffers, fixed index count).
-  auto gpu = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto gpu = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(gpu.ok()) << gpu.status().message();
 
   // Indirect path: upload the same vertices + indices into device-local buffers
   // whose handles we keep, and fill a one-element indirect command with the
   // index count -- exactly what recon would populate GPU-side.
-  auto batch = vg::UploadBatch::begin(*device_, allocator.value());
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   vg::BufferUploadDesc vdesc;
   vdesc.data = mesh_cpu.vertices.data();
@@ -930,7 +889,7 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
   cmd_desc.size = sizeof(command);
   cmd_desc.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
   cmd_desc.memory = vkc::MemoryUsage::DeviceMapped;
-  auto indbuf = allocator.value().create_buffer(cmd_desc);
+  auto indbuf = allocator().create_buffer(cmd_desc);
   ASSERT_TRUE(indbuf.ok()) << indbuf.status().message();
   std::memcpy(indbuf.value().mapped(), &command, sizeof(command));
 
@@ -941,11 +900,11 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
   ASSERT_TRUE(live.valid());
 
   const std::vector<uint8_t> direct =
-      render(allocator.value(), pipeline.value(),
+      render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&gpu.value()}, VK_NULL_HANDLE, 0u);
   const std::vector<uint8_t> indirect =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{live}, VK_NULL_HANDLE, 0u);
+      render(allocator(), pipeline.value(), pipelines::HybridMeshDraw{live},
+             VK_NULL_HANDLE, 0u);
 
   ASSERT_EQ(direct.size(), static_cast<size_t>(kSize) * kSize * 4);
   ASSERT_EQ(indirect.size(), direct.size());
@@ -962,11 +921,8 @@ TEST_F(HybridMeshRenderTest, IndirectDrawMatchesDirectDraw) {
 // VK_NULL_HANDLE buffers, which the validation-with-teeth this fixture runs
 // would fail on. With every draw empty, the readback stays cleared.
 TEST_F(HybridMeshRenderTest, SkipsEmptyGeometryInsteadOfDrawingUnbound) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   // A default LiveMesh (no buffers) and a null static GpuMesh -- both fail
@@ -977,7 +933,7 @@ TEST_F(HybridMeshRenderTest, SkipsEmptyGeometryInsteadOfDrawingUnbound) {
           static_cast<const pipelines::GpuMesh*>(nullptr)},
   };
   const std::vector<uint8_t> px =
-      render(allocator.value(), pipeline.value(), draws, VK_NULL_HANDLE, 0u);
+      render(allocator(), pipeline.value(), draws, VK_NULL_HANDLE, 0u);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_TRUE(all_pixels_cleared(px)) << "empty draws must record nothing";
 }
@@ -988,31 +944,28 @@ TEST_F(HybridMeshRenderTest, SkipsEmptyGeometryInsteadOfDrawingUnbound) {
 // require the result to match the direct draw -- if record_draw ignored any
 // offset it would fetch the zeroed pad instead of the mesh, and differ.
 TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
-  auto gpu = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto gpu = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(gpu.ok()) << gpu.status().message();
 
   // 256 leading bytes on every buffer -- a multiple of 4, so it meets the
   // index/indirect (and MoltenVK vertex) offset alignment the contract states.
   LiveBuffers buffers;
   const pipelines::LiveMesh live =
-      make_live_mesh(allocator.value(), mesh_cpu, /*pad=*/256, buffers);
+      make_live_mesh(allocator(), mesh_cpu, /*pad=*/256, buffers);
   ASSERT_TRUE(live.valid());
   ASSERT_NE(live.vertex_offset, 0u);
 
   const std::vector<uint8_t> direct =
-      render(allocator.value(), pipeline.value(),
+      render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&gpu.value()}, VK_NULL_HANDLE, 0u);
   const std::vector<uint8_t> offset =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{live}, VK_NULL_HANDLE, 0u);
+      render(allocator(), pipeline.value(), pipelines::HybridMeshDraw{live},
+             VK_NULL_HANDLE, 0u);
 
   ASSERT_EQ(direct.size(), offset.size());
   EXPECT_EQ(direct, offset) << "non-zero bind offsets must be honored";
@@ -1029,32 +982,29 @@ TEST_F(HybridMeshRenderTest, IndirectDrawHonorsBufferOffsets) {
 // region: blue in the centre only when the live draw ran, and the static mesh's
 // own shading unchanged outside it.
 TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
-  auto gpu = pipelines::upload_mesh(*device_, allocator.value(), mesh_cpu);
+  auto gpu = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
   ASSERT_TRUE(gpu.ok()) << gpu.status().message();
 
   const assets::Mesh quad_cpu = make_center_quad();
   LiveBuffers buffers;
   const pipelines::LiveMesh live =
-      make_live_mesh(allocator.value(), quad_cpu, /*pad=*/0, buffers);
+      make_live_mesh(allocator(), quad_cpu, /*pad=*/0, buffers);
   ASSERT_TRUE(live.valid());
 
   const std::vector<uint8_t> single =
-      render(allocator.value(), pipeline.value(),
+      render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&gpu.value()}, VK_NULL_HANDLE, 0u);
   const std::vector<pipelines::HybridMeshDraw> mixed = {
       pipelines::HybridMeshDraw{&gpu.value()},
       pipelines::HybridMeshDraw{live},
   };
   const std::vector<uint8_t> both =
-      render(allocator.value(), pipeline.value(), mixed, VK_NULL_HANDLE, 0u);
+      render(allocator(), pipeline.value(), mixed, VK_NULL_HANDLE, 0u);
 
   ASSERT_EQ(single.size(), static_cast<size_t>(kSize) * kSize * 4);
   ASSERT_EQ(both.size(), single.size());
@@ -1089,11 +1039,8 @@ TEST_F(HybridMeshRenderTest, MixedStaticAndLiveInOneFrame) {
 // violates the contract's `instanceCount = 1` draws nothing at all, which is
 // why the contract fixes it.
 TEST_F(HybridMeshRenderTest, ZeroInstanceCountCommandDrawsNothing) {
-  auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-
-  auto pipeline = pipelines::HybridMeshPipeline::create(
-      *device_, allocator.value(), color_depth_layout());
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
 
   const assets::Mesh mesh_cpu = make_hybrid_mesh();
@@ -1102,12 +1049,12 @@ TEST_F(HybridMeshRenderTest, ZeroInstanceCountCommandDrawsNothing) {
 
   LiveBuffers buffers;
   const pipelines::LiveMesh live =
-      make_live_mesh(allocator.value(), mesh_cpu, /*pad=*/0, command, buffers);
+      make_live_mesh(allocator(), mesh_cpu, /*pad=*/0, command, buffers);
   ASSERT_TRUE(live.valid()) << "bound buffers -- submit() must reach the draw";
 
   const std::vector<uint8_t> px =
-      render(allocator.value(), pipeline.value(),
-             pipelines::HybridMeshDraw{live}, VK_NULL_HANDLE, 0u);
+      render(allocator(), pipeline.value(), pipelines::HybridMeshDraw{live},
+             VK_NULL_HANDLE, 0u);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_TRUE(all_pixels_cleared(px))
       << "instanceCount = 0 draws no instances -- the frame stays cleared";

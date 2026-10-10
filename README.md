@@ -67,18 +67,20 @@ commit and linked PUBLIC, so a `Status`, a device or a buffer passes between
 gfx, recon and calib unchanged and one `set_log_handler` routes all three. An
 installed gfx carries the core beside it and re-finds it; an application that
 also fetches recon declares `volumetric_kit_core` first to pick one pin for
-both, at or after gfx's and with the core's vulkan tier on (`VKC_WITH_VULKAN`),
-which gfx checks at configure. Build against a local core checkout with
+both, no older than `VG_VKC_MIN_VERSION` (CMakeLists.txt) and with the core's
+vulkan tier on (`VKC_WITH_VULKAN`), which gfx checks at configure with the
+core's `vkc_require_core`. Build against a local core checkout with
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
 gfx compiles against the system's Vulkan headers -- 1.3.204 or newer, 1.3.208
 on Apple, the core's floor -- and vendors none. To build against a pinned copy,
 point `Vulkan_INCLUDE_DIR` at it; the loader still comes from the system.
 
-Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, and `VG_INSTALL` default
-ON only when `volumetric_kit_gfx` is the top-level project (OFF when it is
-consumed via FetchContent / `add_subdirectory`). `VG_WITH_GLFW` and
-`VG_WARNINGS_AS_ERRORS` default ON regardless; `VG_WITH_CUDA` defaults OFF.
+Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL` and
+`VG_WARNINGS_AS_ERRORS` default ON only when `volumetric_kit_gfx` is the
+top-level project (OFF when it is consumed via FetchContent /
+`add_subdirectory`). `VG_WITH_GLFW` defaults ON regardless; `VG_WITH_CUDA`
+defaults OFF.
 `VG_SANITIZE` is a semicolon list, empty (off) by default — e.g.
 `-DVG_SANITIZE="address;undefined"`.
 

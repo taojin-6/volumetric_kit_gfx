@@ -25,6 +25,7 @@
 
 #include <glm/vec2.hpp>
 
+#include "gfx_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -39,7 +40,6 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/image_pipeline.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -102,28 +102,19 @@ TEST(MipChainTest, CountsLevelsDownToOneByOne) {
 
 // --- On a device -------------------------------------------------------------
 
-class ImagePipelineDeviceTest : public VulkanDeviceTest {
+class ImagePipelineDeviceTest : public vg_test::RendererDeviceTest {
  protected:
-  bool wants_validation() const override { return true; }
   // The update's barriers -- plane copies, the convert pass, the chain, the
-  // draws -- are what these tests exercise, so missing ones must be reported.
-  bool wants_sync_validation() const override { return true; }
-  // And a producer's compute shader writes a plane the update copies.
-  bool wants_shader_access_validation() const override { return true; }
-
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
+  // draws -- are what these tests exercise, so missing ones must be reported,
+  // including after a producer's compute shader writes a plane the update
+  // copies.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::ShaderAccesses;
   }
 
   pipelines::ImagePipeline make_pipeline(VkFormat target = kUnorm) {
     auto pipeline =
-        pipelines::ImagePipeline::create(*device_, color_layout(target));
+        pipelines::ImagePipeline::create(device(), color_layout(target));
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
     return pipeline.ok() ? std::move(pipeline).value()
                          : pipelines::ImagePipeline{};
@@ -137,7 +128,7 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
     desc.extent = extent;
     desc.mapping = mapping;
     desc.format = format;
-    auto texture = pipelines::ImageTexture::create(pipeline, *allocator_, desc);
+    auto texture = pipelines::ImageTexture::create(pipeline, allocator(), desc);
     EXPECT_TRUE(texture.ok()) << texture.status().message();
     return texture.ok() ? std::move(texture).value()
                         : pipelines::ImageTexture{};
@@ -152,7 +143,7 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
     desc.data = bytes.data();
     desc.size = bytes.size();
     desc.usage = usage;
-    auto buffer = vg::upload_buffer(*device_, *allocator_, desc);
+    auto buffer = vg::upload_buffer(device(), allocator(), desc);
     EXPECT_TRUE(buffer.ok()) << buffer.status().message();
     return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
   }
@@ -167,7 +158,7 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
     desc.format = format;
     desc.pixels = bytes.data();
     desc.size = bytes.size();
-    auto image = vg::upload_texture(*device_, *allocator_, desc);
+    auto image = vg::upload_texture(device(), allocator(), desc);
     EXPECT_TRUE(image.ok()) << image.status().message();
     if (!image.ok()) {
       return vkc::Image{};
@@ -206,7 +197,7 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
       vg::OffscreenTargetDesc desc;
       desc.extent = extent;
       desc.color_format = format;
-      auto target = vg::OffscreenTarget::create(*allocator_, desc);
+      auto target = vg::OffscreenTarget::create(allocator(), desc);
       EXPECT_TRUE(target.ok()) << target.status().message();
       if (!target.ok()) {
         return {};
@@ -214,7 +205,8 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
       targets.push_back(std::move(target).value());
     }
 
-    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
     EXPECT_TRUE(pool.ok()) << pool.status().message();
     if (!pool.ok()) {
       return {};
@@ -244,8 +236,9 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
       targets[i].record_readback(raw);
     }
     EXPECT_TRUE(cmd.value().end().ok());
-    submit_and_wait(raw);
-    if (HasFatalFailure()) {
+    const vkc::Status submitted = device().submit_and_wait(raw);
+    if (!submitted.ok()) {
+      ADD_FAILURE() << submitted.message();
       return {};
     }
 
@@ -291,13 +284,11 @@ class ImagePipelineDeviceTest : public VulkanDeviceTest {
     draw.scale = scale;
     return draw;
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithoutColor) {
   auto pipeline =
-      pipelines::ImagePipeline::create(*device_, vg::RenderTargetLayout{});
+      pipelines::ImagePipeline::create(device(), vg::RenderTargetLayout{});
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -305,7 +296,7 @@ TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithoutColor) {
 TEST_F(ImagePipelineDeviceTest, CreateRejectsAMultisampledLayout) {
   vg::RenderTargetLayout layout = color_layout(kUnorm);
   layout.samples = VK_SAMPLE_COUNT_4_BIT;
-  auto pipeline = pipelines::ImagePipeline::create(*device_, layout);
+  auto pipeline = pipelines::ImagePipeline::create(device(), layout);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -315,7 +306,7 @@ TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithSeveralColors) {
   vg::RenderTargetLayout layout = color_layout(kUnorm);
   layout.color_formats[1] = kUnorm;
   layout.color_count = 2;
-  auto pipeline = pipelines::ImagePipeline::create(*device_, layout);
+  auto pipeline = pipelines::ImagePipeline::create(device(), layout);
   ASSERT_FALSE(pipeline.ok());
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -341,7 +332,7 @@ TEST_F(ImagePipelineDeviceTest, TextureCreateRejectsBadDescriptions) {
     desc.extent = extent;
     desc.mapping = mapping;
     desc.format = format;
-    return pipelines::ImageTexture::create(pipeline, *allocator_, desc);
+    return pipelines::ImageTexture::create(pipeline, allocator(), desc);
   };
   using M = pipelines::ImageMapping;
   const auto zero = create({0, 8}, M::Color, kUnorm);
@@ -359,7 +350,7 @@ TEST_F(ImagePipelineDeviceTest, TextureCreateRejectsBadDescriptions) {
   desc.extent = {8, 8};
   const pipelines::ImagePipeline empty;
   const auto no_pipeline =
-      pipelines::ImageTexture::create(empty, *allocator_, desc);
+      pipelines::ImageTexture::create(empty, allocator(), desc);
   EXPECT_EQ(no_pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
@@ -386,7 +377,8 @@ TEST_F(ImagePipelineDeviceTest, UpdateRejectsBadPlanesAndParameters) {
   vkc::Image r8_small =
       source_image(VK_FORMAT_R8_UNORM, {2, 2}, std::vector<uint8_t>(4, 0));
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok());
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok());
@@ -837,7 +829,7 @@ TEST_F(ImagePipelineDeviceTest, UpdatesOrderAProducerOnTheSameQueue) {
       vg_test::load_spirv(vg_test::spirv_path("write_words.comp.spv"));
   ASSERT_FALSE(spv.empty());
   vkc::ComputeKernel write_words;
-  vkc::KernelSetBuilder builder(*device_);
+  vkc::KernelSetBuilder builder(device());
   const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                  sizeof(uint32_t)};
   const vkc::Status added =
@@ -983,7 +975,7 @@ TEST_F(ImagePipelineDeviceTest, PipelineMoveLeavesTheSourceEmpty) {
   pipelines::ImageTextureDesc desc;
   desc.extent = {4, 4};
   EXPECT_EQ(
-      pipelines::ImageTexture::create(a, *allocator_, desc).status().domain(),
+      pipelines::ImageTexture::create(a, allocator(), desc).status().domain(),
       vkc::Status::Code::InvalidArgument);
 
   pipelines::ImagePipeline c = make_pipeline();

@@ -9,36 +9,21 @@
 
 #include <gtest/gtest.h>
 
-#include <optional>
-#include <utility>
-
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
-// Adds a VMA allocator on top of the shared device fixture (mirrors
-// TextureUploadTest) to create the images the barriers address.
-class ImageBarrierTest : public VulkanDeviceTest {
+class ImageBarrierTest : public vg_test::RendererDeviceTest {
  protected:
-  // Records real barriers, so run under the validation layer with teeth: a
-  // wrong subresource range / stage / layout fails the test (on CI, where the
-  // layer is present).
-  bool wants_validation() const override { return true; }
-
-  void SetUp() override {
-    VulkanDeviceTest::SetUp();
-    if (base_setup_incomplete()) {
-      return;  // no device, or the base SetUp failed fatally
-    }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
+  // Records real barriers, so run under the validation layer: a wrong
+  // subresource range, stage or layout fails the test wherever the layer is
+  // installed.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
   }
-
-  std::optional<vkc::Allocator> allocator_;
 };
 
 }  // namespace
@@ -52,11 +37,11 @@ TEST_F(ImageBarrierTest, TransitionsExplicitLayerRanges) {
   desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   desc.array_layers = 4;
-  auto texture = allocator_->create_image(desc);
+  auto texture = allocator().create_image(desc);
   ASSERT_TRUE(texture.ok()) << texture.status().message();
 
   const VkImage image = texture.value().handle();
-  auto recorded = device_->submit_single_time([image](VkCommandBuffer cmd) {
+  auto recorded = device().submit_single_time([image](VkCommandBuffer cmd) {
     vg::ImageBarrierDesc to_dst;
     to_dst.image = image;
     to_dst.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -102,15 +87,15 @@ TEST_F(ImageBarrierTest, BatchesTransitionsIntoOneBarrier) {
   desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   desc.mip_levels = 4;
-  auto chain = allocator_->create_image(desc);
+  auto chain = allocator().create_image(desc);
   ASSERT_TRUE(chain.ok()) << chain.status().message();
   desc.mip_levels = 1;
-  auto plain = allocator_->create_image(desc);
+  auto plain = allocator().create_image(desc);
   ASSERT_TRUE(plain.ok()) << plain.status().message();
 
   const VkImage a = chain.value().handle();
   const VkImage b = plain.value().handle();
-  auto recorded = device_->submit_single_time([a, b](VkCommandBuffer cmd) {
+  auto recorded = device().submit_single_time([a, b](VkCommandBuffer cmd) {
     vg::ImageBarrierDesc to_dst[2];
     for (vg::ImageBarrierDesc& d : to_dst) {
       d.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
