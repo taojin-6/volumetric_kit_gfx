@@ -4,21 +4,14 @@
 // Windowing tier on a headless surface (VK_EXT_headless_surface): swapchain
 // creation, the FrameLoop acquire -> render -> present choreography, recreate,
 // and the move-only lifecycle. The whole suite skips when the runner has no
-// headless surface (e.g. MoltenVK) or no present-capable device, so it provides
-// real coverage on Linux CI (lavapipe) without needing a display.
-//
-// Validation is enabled AND given teeth: a second debug messenger records every
-// validation error, and TearDown fails the test if any were emitted -- so a
-// mis-wired barrier / semaphore is caught, not just a non-VK_SUCCESS return.
+// headless surface or no present-capable device, so it needs no display.
 
 #include <gtest/gtest.h>
 
-#include <cstring>
 #include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -30,69 +23,32 @@
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
-namespace vg = volumetric_kit::gfx;
-namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
-bool instance_has_headless_surface() {
-  uint32_t count = 0;
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  std::vector<VkExtensionProperties> props(count);
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data()) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  for (const VkExtensionProperties& p : props) {
-    if (std::strcmp(p.extensionName, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) ==
-        0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Records validation errors into the std::vector<std::string> passed as
-// pUserData; never asks the driver to abort the call (returns VK_FALSE).
-VKAPI_ATTR VkBool32 VKAPI_CALL record_validation_error(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void* user) {
-  if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0 &&
-      user != nullptr) {
-    auto* errors = static_cast<std::vector<std::string>*>(user);
-    errors->emplace_back(data != nullptr && data->pMessage != nullptr
-                             ? data->pMessage
-                             : "(validation error)");
-  }
-  return VK_FALSE;
-}
-
-class WindowingTest : public ::testing::Test {
+// A present-capable device on an instance of the test's own, which a headless
+// surface needs. The fixture under it skips or fails the test without a
+// device, and fails it on any validation error, a mis-wired barrier or
+// semaphore included.
+class WindowingTest : public vg_test::RendererTest {
  protected:
   void SetUp() override {
-    if (!instance_has_headless_surface()) {
-      GTEST_SKIP() << "VK_EXT_headless_surface unavailable (e.g. MoltenVK)";
+    RendererTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
     }
-    vkc::InstanceConfig icfg;
-    icfg.enable_validation = true;
-    icfg.extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                       VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
-    auto instance = vkc::Instance::create(icfg);
-    if (!instance.ok()) {
-      GTEST_SKIP() << "no Vulkan instance: " << instance.status().message();
+    if (!vg_test::has_headless_surface()) {
+      GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
     }
-    instance_.emplace(std::move(instance).value());
+    auto instance = vkc::Instance::create(vg_test::headless_instance_config());
+    ASSERT_TRUE(instance.ok()) << instance.status().message();
+    headless_instance_.emplace(std::move(instance).value());
+    const vkc::Status loaded =
+        vkc::test::check_layer_loaded(*headless_instance_);
+    ASSERT_TRUE(loaded.ok()) << loaded.message();
 
-    // Attach an error-recording messenger so validation has teeth (no-op when
-    // the instance lacks VK_EXT_debug_utils, e.g. no validation layer present).
-    install_validation_capture();
-
-    auto surface = win::Surface::headless(instance_->handle());
+    auto surface = win::Surface::headless(headless_instance_->handle());
     if (!surface.ok()) {
       GTEST_SKIP() << "headless surface: " << surface.status().message();
     }
@@ -100,18 +56,20 @@ class WindowingTest : public ::testing::Test {
 
     vkc::DeviceRequirements reqs = vg::device_requirements();
     reqs.needs_present = true;
-    auto physical = instance_->select_physical_device(reqs, surface_.handle());
+    auto physical =
+        headless_instance_->select_physical_device(reqs, surface_.handle());
     if (!physical.ok()) {
       GTEST_SKIP() << "no present-capable device: "
                    << physical.status().message();
     }
 
-    auto device = vkc::Device::create(*instance_, physical.value(), reqs,
-                                      surface_.handle());
+    auto device = vkc::Device::create(*headless_instance_, physical.value(),
+                                      reqs, surface_.handle());
     ASSERT_TRUE(device.ok()) << device.status().message();
     device_.emplace(std::move(device).value());
 
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
+    auto allocator =
+        vkc::Allocator::create(headless_instance_->handle(), *device_);
     ASSERT_TRUE(allocator.ok()) << allocator.status().message();
     allocator_.emplace(std::move(allocator).value());
   }
@@ -120,43 +78,11 @@ class WindowingTest : public ::testing::Test {
     if (device_) {
       vkDeviceWaitIdle(device_->handle());
     }
-    // Destroy the messenger (created on the instance) before the instance is
-    // torn down with the fixture, then surface any captured validation errors.
-    if (messenger_ != VK_NULL_HANDLE && destroy_messenger_ != nullptr) {
-      destroy_messenger_(instance_->handle(), messenger_, nullptr);
-      messenger_ = VK_NULL_HANDLE;
-    }
-    for (const std::string& msg : validation_errors_) {
-      ADD_FAILURE() << "Vulkan validation error: " << msg;
-    }
-  }
-
-  void install_validation_capture() {
-    auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance_->handle(),
-                              "vkCreateDebugUtilsMessengerEXT"));
-    destroy_messenger_ = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance_->handle(),
-                              "vkDestroyDebugUtilsMessengerEXT"));
-    if (create == nullptr || destroy_messenger_ == nullptr) {
-      return;  // VK_EXT_debug_utils not enabled; capture stays inert.
-    }
-    VkDebugUtilsMessengerCreateInfoEXT mcfg{};
-    mcfg.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    mcfg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    mcfg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    mcfg.pfnUserCallback = record_validation_error;
-    mcfg.pUserData = &validation_errors_;
-    if (create(instance_->handle(), &mcfg, nullptr, &messenger_) !=
-        VK_SUCCESS) {
-      messenger_ = VK_NULL_HANDLE;
-    }
+    RendererTest::TearDown();
   }
 
   win::Surface make_headless_surface() {
-    auto s = win::Surface::headless(instance_->handle());
+    auto s = win::Surface::headless(headless_instance_->handle());
     EXPECT_TRUE(s.ok()) << s.status().message();
     return s.ok() ? std::move(s).value() : win::Surface{};
   }
@@ -207,15 +133,12 @@ class WindowingTest : public ::testing::Test {
     return {};
   }
 
-  std::optional<vkc::Instance> instance_;
+  std::optional<vkc::Instance> headless_instance_;
   win::Surface surface_;
   std::optional<vkc::Device> device_;
   // Declared after device_ so reverse member-destruction tears the allocator
   // down before the device it wraps.
   std::optional<vkc::Allocator> allocator_;
-  std::vector<std::string> validation_errors_;
-  VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
-  PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger_ = nullptr;
 };
 
 TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {

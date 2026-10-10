@@ -6,19 +6,17 @@
 #include <cstdint>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
-#include "vulkan_test_fixture.hpp"
-
-namespace vg = volumetric_kit::gfx;
 
 namespace {
 
 // Creating a real module needs a device, so these tests use the shared
-// VulkanDeviceTest fixture (skips when the runner has none). Modules are local
-// to each test, so they tear down before the fixture's device. The triangle
+// device (skipping when the runner has none). Modules are local to each test,
+// so they tear down before the device. The triangle
 // vertex module is loaded via the shared vg_test::load_module helper.
-using ShaderTest = VulkanDeviceTest;
+using ShaderTest = vg_test::RendererDeviceTest;
 
 }  // namespace
 
@@ -62,7 +60,8 @@ TEST(ShaderModuleTest, DefaultConstructedIsEmpty) {
 // --- Real module creation + move semantics: needs a device ------------------
 
 TEST_F(ShaderTest, LoadsTriangleVertexShader) {
-  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule module =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
   EXPECT_TRUE(module.valid());
   EXPECT_NE(module.handle(), VK_NULL_HANDLE);
 }
@@ -71,7 +70,7 @@ TEST_F(ShaderTest, LoadsTriangleVertexShader) {
 
 TEST_F(ShaderTest, ReflectsDescriptorBindingsAndPushConstants) {
   vg::ShaderModule module =
-      vg_test::load_module(device(), "reflect_probe.frag.spv");
+      vg_test::load_module(device().handle(), "reflect_probe.frag.spv");
   ASSERT_TRUE(module.valid());
 
   // The probe is a fragment shader (stage recovered from the execution model).
@@ -112,7 +111,8 @@ TEST_F(ShaderTest, ResourcelessShaderReflectsEmpty) {
   // The hello-triangle vertex shader binds no descriptors and declares no push
   // constants, so reflection reports an empty interface -- with the stage still
   // recovered from the SPIR-V.
-  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule module =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
   ASSERT_TRUE(module.valid());
   EXPECT_EQ(module.stage(), VK_SHADER_STAGE_VERTEX_BIT);
   EXPECT_TRUE(module.resources().empty());
@@ -124,7 +124,7 @@ TEST_F(ShaderTest, ReflectsStorageSeparateAndArrayResources) {
   // not -- storage buffer, storage image, a separate sampled-image array, and a
   // separate sampler -- across two sets, with the stage recovered as compute.
   vg::ShaderModule module =
-      vg_test::load_module(device(), "reflect_storage.comp.spv");
+      vg_test::load_module(device().handle(), "reflect_storage.comp.spv");
   ASSERT_TRUE(module.valid());
   EXPECT_EQ(module.stage(), VK_SHADER_STAGE_COMPUTE_BIT);
   EXPECT_EQ(module.push_constant_size(), 0u);
@@ -178,7 +178,7 @@ TEST_F(ShaderTest, MoveLeavesSourceEmpty) {
   // not just null the handle. A defaulted move would leave the source's scalar
   // stage()/push_constant_size() stale while valid() is already false.
   vg::ShaderModule source =
-      vg_test::load_module(device(), "reflect_probe.frag.spv");
+      vg_test::load_module(device().handle(), "reflect_probe.frag.spv");
   ASSERT_TRUE(source.valid());
   ASSERT_FALSE(source.resources().empty());
 
@@ -196,9 +196,10 @@ TEST_F(ShaderTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(ShaderTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vg::ShaderModule dst = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule dst =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
   vg::ShaderModule src =
-      vg_test::load_module(device(), "reflect_probe.frag.spv");
+      vg_test::load_module(device().handle(), "reflect_probe.frag.spv");
 
   dst = std::move(src);  // runs dst's deleter once, then adopts src's
   EXPECT_TRUE(dst.valid());
@@ -215,7 +216,8 @@ TEST_F(ShaderTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(ShaderTest, SelfMoveAssignIsSafe) {
-  vg::ShaderModule module = vg_test::load_module(device(), "triangle.vert.spv");
+  vg::ShaderModule module =
+      vg_test::load_module(device().handle(), "triangle.vert.spv");
 
   // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
   // this != &other guard must keep the module intact and not run its deleter.

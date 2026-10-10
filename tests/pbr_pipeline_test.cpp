@@ -8,15 +8,15 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
 namespace pipelines = volumetric_kit::gfx::pipelines;
 
-using PbrPipelineTest = VulkanDeviceTest;
+using PbrPipelineTest = vg_test::RendererDeviceTest;
 
 vg::RenderTargetLayout color_depth_layout() {
   vg::RenderTargetLayout layout;
@@ -49,7 +49,8 @@ TEST(PipelinesGlmConvention, ProjectionUsesVulkanDepthRange) {
 }
 
 TEST_F(PbrPipelineTest, CreatesWithReflectedSets) {
-  auto pbr = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  auto pbr =
+      pipelines::PbrPipeline::create(device().handle(), color_depth_layout());
   ASSERT_TRUE(pbr.ok()) << pbr.status().message();
   EXPECT_TRUE(pbr.value().valid());
   EXPECT_NE(pbr.value().handle(), VK_NULL_HANDLE);
@@ -63,13 +64,14 @@ TEST_F(PbrPipelineTest, RejectsLayoutWithoutDepth) {
   vg::RenderTargetLayout layout;
   layout.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
   layout.color_count = 1;  // no depth format -> depth-tested pipeline rejected
-  auto pbr = pipelines::PbrPipeline::create(device(), layout);
+  auto pbr = pipelines::PbrPipeline::create(device().handle(), layout);
   ASSERT_FALSE(pbr.ok());
   EXPECT_EQ(pbr.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrPipelineTest, MoveLeavesSourceEmpty) {
-  auto created = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  auto created =
+      pipelines::PbrPipeline::create(device().handle(), color_depth_layout());
   ASSERT_TRUE(created.ok()) << created.status().message();
   pipelines::PbrPipeline source = std::move(created).value();
   ASSERT_TRUE(source.valid());
@@ -80,9 +82,11 @@ TEST_F(PbrPipelineTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(PbrPipelineTest, MoveAssignOverLiveObjectAdoptsSource) {
-  auto first = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  auto first =
+      pipelines::PbrPipeline::create(device().handle(), color_depth_layout());
   ASSERT_TRUE(first.ok()) << first.status().message();
-  auto second = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  auto second =
+      pipelines::PbrPipeline::create(device().handle(), color_depth_layout());
   ASSERT_TRUE(second.ok()) << second.status().message();
 
   pipelines::PbrPipeline dst = std::move(first).value();
@@ -98,7 +102,8 @@ TEST_F(PbrPipelineTest, MoveAssignOverLiveObjectAdoptsSource) {
 }
 
 TEST_F(PbrPipelineTest, SelfMoveAssignStaysValid) {
-  auto created = pipelines::PbrPipeline::create(device(), color_depth_layout());
+  auto created =
+      pipelines::PbrPipeline::create(device().handle(), color_depth_layout());
   ASSERT_TRUE(created.ok()) << created.status().message();
   pipelines::PbrPipeline pbr = std::move(created).value();
   const VkPipeline before = pbr.handle();

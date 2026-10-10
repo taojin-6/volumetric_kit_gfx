@@ -95,13 +95,13 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin is main after core PR #13, which settled that the family builds on the
-# system's Vulkan headers (the core's DECISIONS.md, "Vulkan headers come from
-# the system").
+# The pin is the head of core PR #17, whose core_test_support gfx's tests build
+# on.
 #
-# TODO: pin a release tag once the core tags one (v0.1.0).
+# TODO: re-pin to the core's main once PR #17 merges, and to a release tag once
+# the core tags one (v0.1.0).
 include(FetchContent)
-set(VG_VKC_PIN a60398b7aeb2cad722a3f79cb71696bda10fc054)
+set(VG_VKC_PIN fcc24dabbbdc87b0a05a997b64920b3b70c8477f)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
@@ -116,6 +116,10 @@ endif()
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers find_package(Vulkan) found above.
 set(VKC_WITH_VULKAN ON)
+# gfx's tests build on the core's test fixtures (tests/CMakeLists.txt).
+if(VG_BUILD_TESTS)
+  set(VKC_BUILD_TEST_SUPPORT ON)
+endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 # The pin and the set() above are lost when calib or the application made the
 # core available first, and FetchContent may have found an installed core.

@@ -26,20 +26,32 @@ include(GoogleTest)
 # VG_TEST_SHARDS > 0 registers each test binary as that many CTest entries
 # instead of one per test: shard i runs the binary with GTEST_TOTAL_SHARDS and
 # GTEST_SHARD_INDEX set, so its share of the tests runs in one process and
-# shares the fixture's Vulkan devices (tests/vulkan_test_fixture.hpp). CI uses
-# it, as on NVIDIA's Linux driver every device costs ~70-90 ms of work the
-# driver serializes machine-wide. 0, the default, keeps one entry per test, so
-# `ctest -R <test>` still runs a single test.
+# shares the core test fixtures' Vulkan devices. CI uses it, as on NVIDIA's
+# Linux driver every device costs ~70-90 ms of work the driver serializes
+# machine-wide. 0, the default, keeps one entry per test, so `ctest -R <test>`
+# still runs a single test.
 #
 # A shard gets no SKIP_REGULAR_EXPRESSION: one skipped test among its many would
 # mark the whole shard skipped, failures included. It passes or fails on its
 # exit code alone. Skips stay visible where it matters through
-# VG_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
+# VKC_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
 # Vulkan device fails rather than skips.
 set(VG_TEST_SHARDS
     0
     CACHE STRING
           "Run each test binary as this many CTest shards (0: one per test)")
+
+# The GPU tests derive from the core's test fixtures
+# (tests/gfx_test_support.hpp; the core's README, "Use it in your project"),
+# which gfx's top-level CMakeLists.txt asks the core to build.
+if(NOT TARGET volumetric_kit::core_test_support)
+  message(
+    FATAL_ERROR
+      "gfx's tests need volumetric_kit::core_test_support: set "
+      "VKC_BUILD_TEST_SUPPORT ON before the first "
+      "FetchContent_MakeAvailable(volumetric_kit_core); an installed core has "
+      "none.")
+endif()
 
 function(vg_discover_tests target)
   if(NOT VG_TEST_SHARDS GREATER 0)
@@ -71,6 +83,7 @@ add_executable(
   vg_core_test
   frame_metrics_test.cpp
   device_test.cpp
+  gfx_test_support_test.cpp
   debug_label_test.cpp
   log_test.cpp
   profiler_test.cpp
@@ -84,8 +97,9 @@ add_executable(
   offscreen_target_test.cpp
   sampler_test.cpp
   texture_upload_test.cpp)
-target_link_libraries(vg_core_test PRIVATE volumetric_kit::gfx_core
-                                           GTest::gtest_main)
+target_link_libraries(
+  vg_core_test PRIVATE volumetric_kit::gfx_core
+                       volumetric_kit::core_test_support GTest::gtest_main)
 vg_target_warnings(vg_core_test)
 
 # shader_test loads a compiled SPIR-V blob; compile the triangle shaders next to
@@ -112,20 +126,22 @@ vg_discover_tests(vg_core_test)
 
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface). Skips wholesale where that surface or a
-# present-capable device is unavailable (e.g. MoltenVK).
+# present-capable device is unavailable.
 add_executable(vg_windowing_test windowing_test.cpp)
-target_link_libraries(vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
-                                                GTest::gtest_main)
+target_link_libraries(
+  vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
+                            volumetric_kit::core_test_support GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and
-# skips where that surface or a present-capable device is unavailable (e.g.
-# MoltenVK); HeadlessApp runs wherever a Vulkan device exists.
+# skips where that surface or a present-capable device is unavailable;
+# HeadlessApp runs wherever a Vulkan device exists.
 add_executable(vg_app_test app_test.cpp)
-target_link_libraries(vg_app_test PRIVATE volumetric_kit::gfx_app
-                                          GTest::gtest_main)
+target_link_libraries(
+  vg_app_test PRIVATE volumetric_kit::gfx_app volumetric_kit::core_test_support
+                      GTest::gtest_main)
 vg_target_warnings(vg_app_test)
 vg_discover_tests(vg_app_test TEST_PREFIX "app.")
 
@@ -157,8 +173,9 @@ add_executable(
   pbr_scene_test.cpp
   shader_common_test.cpp)
 target_link_libraries(
-  vg_pipelines_test PRIVATE volumetric_kit::gfx_pipelines
-                            volumetric_kit::gfx_io GTest::gtest_main)
+  vg_pipelines_test
+  PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io
+          volumetric_kit::core_test_support GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
 # update's barriers are checked against a writer in a stage of its own; and
@@ -255,8 +272,9 @@ vg_discover_tests(vg_io_test TEST_PREFIX "io.")
 # vkQueueSubmit (the loader does not propagate through a shared gfx_ui for the
 # test's own calls).
 add_executable(vg_ui_test ui_test.cpp "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
-target_link_libraries(vg_ui_test PRIVATE volumetric_kit::gfx_ui
-                                         GTest::gtest_main Vulkan::Vulkan)
+target_link_libraries(
+  vg_ui_test PRIVATE volumetric_kit::gfx_ui volumetric_kit::core_test_support
+                     GTest::gtest_main Vulkan::Vulkan)
 vg_target_warnings(vg_ui_test)
 set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")

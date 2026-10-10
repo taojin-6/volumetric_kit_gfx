@@ -5,9 +5,9 @@
 
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -15,16 +15,16 @@ namespace {
 // vkGetFenceStatus path, plus the move-only queue's hand-written move ops. The
 // ordering / run-once / drain logic is covered device-free in
 // retire_list_test.cpp.
-using RetireQueueTest = VulkanDeviceTest;
+using RetireQueueTest = vg_test::RendererDeviceTest;
 
 }  // namespace
 
 TEST_F(RetireQueueTest, SignaledFenceReleasesDeleterOnPoll) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/true);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int released = 0;
-  vg::RetireQueue retire(device());
+  vg::RetireQueue retire(device().handle());
   retire.push(fence.value().handle(), [&released]() { ++released; });
   EXPECT_EQ(retire.pending(), 1u);
 
@@ -37,11 +37,11 @@ TEST_F(RetireQueueTest, ReclaimRunsDeletersWithoutWaitingOnFence) {
   // An unsignaled fence: poll() defers and drain() would block on it forever.
   // reclaim() runs the deleter immediately — the no-wait forced-reclaim path
   // for an idle/lost-device teardown.
-  auto fence = vkc::Fence::create(device(), /*signaled=*/false);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/false);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int released = 0;
-  vg::RetireQueue retire(device());
+  vg::RetireQueue retire(device().handle());
   retire.push(fence.value().handle(), [&released]() { ++released; });
   EXPECT_EQ(retire.poll(), 0u);  // unsignaled → deferred
 
@@ -51,11 +51,11 @@ TEST_F(RetireQueueTest, ReclaimRunsDeletersWithoutWaitingOnFence) {
 }
 
 TEST_F(RetireQueueTest, MoveConstructTransfersPendingDeleters) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/true);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int ran = 0;
-  vg::RetireQueue source(device());
+  vg::RetireQueue source(device().handle());
   source.push(fence.value().handle(), [&ran]() { ++ran; });
   ASSERT_EQ(source.pending(), 1u);
 
@@ -69,16 +69,16 @@ TEST_F(RetireQueueTest, MoveConstructTransfersPendingDeleters) {
 }
 
 TEST_F(RetireQueueTest, MoveAssignOverLiveRunsExistingDeletersThenAdopts) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/true);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int dst_ran = 0;
   int src_ran = 0;
-  vg::RetireQueue dst(device());
+  vg::RetireQueue dst(device().handle());
   dst.push(fence.value().handle(), [&dst_ran]() { ++dst_ran; });
 
   {
-    vg::RetireQueue src(device());
+    vg::RetireQueue src(device().handle());
     src.push(fence.value().handle(), [&src_ran]() { ++src_ran; });
     // Move-assign runs dst's already-queued deleter (device assumed idle), then
     // adopts src's still-pending one.
@@ -93,11 +93,11 @@ TEST_F(RetireQueueTest, MoveAssignOverLiveRunsExistingDeletersThenAdopts) {
 }
 
 TEST_F(RetireQueueTest, SelfMoveAssignKeepsDeletersPending) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/true);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int ran = 0;
-  vg::RetireQueue queue(device());
+  vg::RetireQueue queue(device().handle());
   queue.push(fence.value().handle(), [&ran]() { ++ran; });
 
   // Pointer-laundered self-move (dodges -Wself-move); the this != &other guard
@@ -112,12 +112,12 @@ TEST_F(RetireQueueTest, SelfMoveAssignKeepsDeletersPending) {
 }
 
 TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/true);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/true);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int ran = 0;
   {
-    vg::RetireQueue retire(device());
+    vg::RetireQueue retire(device().handle());
     retire.push(fence.value().handle(), [&ran]() { ++ran; });
     // No poll(): the destructor must drain (wait for the signaled fence, then
     // run the deleter), not leak it.
@@ -129,11 +129,11 @@ TEST_F(RetireQueueTest, DestructorDrainsPendingDeleters) {
 // guarded by an UNSIGNALED fence is deferred, then released once the fence
 // signals. (Every other test here uses a pre-signaled fence.)
 TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
-  auto fence = vkc::Fence::create(device(), /*signaled=*/false);
+  auto fence = vkc::Fence::create(device().handle(), /*signaled=*/false);
   ASSERT_TRUE(fence.ok()) << fence.status().message();
 
   int released = 0;
-  vg::RetireQueue retire(device());
+  vg::RetireQueue retire(device().handle());
   retire.push(fence.value().handle(), [&released]() { ++released; });
 
   EXPECT_EQ(retire.poll(), 0u);  // unsignaled -> deferred, not run
@@ -143,7 +143,7 @@ TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
   // Signal the fence with an empty submit, then poll releases the deleter.
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  ASSERT_EQ(vkQueueSubmit(device_->queue(), 1, &submit, fence.value().handle()),
+  ASSERT_EQ(vkQueueSubmit(device().queue(), 1, &submit, fence.value().handle()),
             VK_SUCCESS);
   ASSERT_TRUE(fence.value().wait().ok());
 
@@ -154,14 +154,14 @@ TEST_F(RetireQueueTest, DefersOnUnsignaledFenceThenReleasesWhenSignaled) {
 
 // poll() releases only the entries whose fence is ready, keeping the rest.
 TEST_F(RetireQueueTest, PollReleasesOnlyReadyFenceEntries) {
-  auto signaled = vkc::Fence::create(device(), /*signaled=*/true);
-  auto deferred = vkc::Fence::create(device(), /*signaled=*/false);
+  auto signaled = vkc::Fence::create(device().handle(), /*signaled=*/true);
+  auto deferred = vkc::Fence::create(device().handle(), /*signaled=*/false);
   ASSERT_TRUE(signaled.ok()) << signaled.status().message();
   ASSERT_TRUE(deferred.ok()) << deferred.status().message();
 
   int ready_ran = 0;
   int deferred_ran = 0;
-  vg::RetireQueue retire(device());
+  vg::RetireQueue retire(device().handle());
   retire.push(signaled.value().handle(), [&ready_ran]() { ++ready_ran; });
   retire.push(deferred.value().handle(), [&deferred_ran]() { ++deferred_ran; });
 
@@ -176,7 +176,7 @@ TEST_F(RetireQueueTest, PollReleasesOnlyReadyFenceEntries) {
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   ASSERT_EQ(
-      vkQueueSubmit(device_->queue(), 1, &submit, deferred.value().handle()),
+      vkQueueSubmit(device().queue(), 1, &submit, deferred.value().handle()),
       VK_SUCCESS);
   ASSERT_TRUE(deferred.value().wait().ok());
 }

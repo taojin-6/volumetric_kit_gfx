@@ -14,11 +14,11 @@
 #include <cstdint>
 #include <utility>
 
+#include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
@@ -30,46 +30,34 @@ TEST(OffscreenTargetTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(target.pixels(), nullptr);
 }
 
-class OffscreenTargetDeviceTest : public VulkanDeviceTest {
+class OffscreenTargetDeviceTest : public vg_test::RendererDeviceTest {
  protected:
-  // Records attachment/readback barriers, so run under the validation layer
-  // with teeth: a wrong color/depth transition fails the test (on CI, where the
-  // layer is present).
-  bool wants_validation() const override { return true; }
-
-  vkc::Allocator make_allocator() {
-    // Allocator has no public empty state, so this one keeps the value()
-    // (a VKC_CHECK abort on the near-impossible failure of allocator creation
-    // against the already-asserted device); the fallible image allocations that
-    // can realistically OOM live in make_target / make_depth_target, which
-    // return empty on failure instead of aborting.
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    EXPECT_TRUE(allocator.ok()) << allocator.status().message();
-    return std::move(allocator).value();
+  // Records attachment/readback barriers, so run under the validation layer:
+  // a wrong color/depth transition fails the test.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::On;
   }
 
-  vg::OffscreenTarget make_target(vkc::Allocator& allocator,
-                                  VkExtent2D extent = {32, 32}) {
+  vg::OffscreenTarget make_target(VkExtent2D extent = {32, 32}) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = kFormat;
-    auto target = vg::OffscreenTarget::create(allocator, desc);
+    auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    // Empty on failure: fail cleanly, never abort.
     return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 
   // A target that also owns a depth attachment, for exercising the depth member
   // through the move-only lifecycle.
-  vg::OffscreenTarget make_depth_target(vkc::Allocator& allocator,
-                                        VkExtent2D extent = {32, 32}) {
+  vg::OffscreenTarget make_depth_target(VkExtent2D extent = {32, 32}) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = kFormat;
     desc.depth_format = VK_FORMAT_D32_SFLOAT;
-    auto target = vg::OffscreenTarget::create(allocator, desc);
+    auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
-    // Empty on failure (see make_allocator): fail cleanly, never abort.
+    // Empty on failure: fail cleanly, never abort.
     return target.ok() ? std::move(target).value() : vg::OffscreenTarget{};
   }
 };
@@ -77,21 +65,19 @@ class OffscreenTargetDeviceTest : public VulkanDeviceTest {
 // --- Validation: rejected before any allocation ----------------------------
 
 TEST_F(OffscreenTargetDeviceTest, ZeroExtentRejected) {
-  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTargetDesc desc;
   desc.extent = {0, 0};
   desc.color_format = kFormat;
-  auto target = vg::OffscreenTarget::create(allocator, desc);
+  auto target = vg::OffscreenTarget::create(allocator(), desc);
   ASSERT_FALSE(target.ok());
   EXPECT_EQ(target.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(OffscreenTargetDeviceTest, UndefinedColorFormatRejected) {
-  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTargetDesc desc;
   desc.extent = {32, 32};
   desc.color_format = VK_FORMAT_UNDEFINED;
-  auto target = vg::OffscreenTarget::create(allocator, desc);
+  auto target = vg::OffscreenTarget::create(allocator(), desc);
   ASSERT_FALSE(target.ok());
   EXPECT_EQ(target.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -100,11 +86,10 @@ TEST_F(OffscreenTargetDeviceTest, UndefinedColorFormatRejected) {
 // (core Vulkan and KHR only), so its readback buffer cannot be sized. Passed by
 // value: VK_FORMAT_R16G16_SFIXED5_NV, which older headers do not name.
 TEST_F(OffscreenTargetDeviceTest, ReadbackOfVendorFormatUnsupported) {
-  vkc::Allocator allocator = make_allocator();
   vg::OffscreenTargetDesc desc;
   desc.extent = {32, 32};
   desc.color_format = static_cast<VkFormat>(1000464000);
-  auto target = vg::OffscreenTarget::create(allocator, desc);
+  auto target = vg::OffscreenTarget::create(allocator(), desc);
   ASSERT_FALSE(target.ok());
   EXPECT_EQ(target.status().domain(), vkc::Status::Code::Unsupported);
 }
@@ -112,8 +97,7 @@ TEST_F(OffscreenTargetDeviceTest, ReadbackOfVendorFormatUnsupported) {
 // --- Move-only lifecycle ---------------------------------------------------
 
 TEST_F(OffscreenTargetDeviceTest, MoveConstructLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget source = make_target(allocator);
+  vg::OffscreenTarget source = make_target();
   ASSERT_TRUE(source.valid());
 
   vg::OffscreenTarget moved(std::move(source));
@@ -123,9 +107,8 @@ TEST_F(OffscreenTargetDeviceTest, MoveConstructLeavesSourceEmpty) {
 }
 
 TEST_F(OffscreenTargetDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget dst = make_target(allocator);
-  vg::OffscreenTarget src = make_target(allocator);
+  vg::OffscreenTarget dst = make_target();
+  vg::OffscreenTarget src = make_target();
 
   dst = std::move(src);  // frees dst's images + buffer, then adopts src's
   EXPECT_TRUE(dst.valid());
@@ -133,8 +116,7 @@ TEST_F(OffscreenTargetDeviceTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(OffscreenTargetDeviceTest, SelfMoveAssignIsSafe) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator);
+  vg::OffscreenTarget target = make_target();
 
   // Pointer-laundered self-move (dodges -Wself-move under -Werror); the
   // composed members' self-move guards must keep the target intact.
@@ -145,8 +127,7 @@ TEST_F(OffscreenTargetDeviceTest, SelfMoveAssignIsSafe) {
 
 TEST_F(OffscreenTargetDeviceTest,
        MoveConstructCarriesDepthAndLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget source = make_depth_target(allocator);
+  vg::OffscreenTarget source = make_depth_target();
   ASSERT_TRUE(source.valid());
   ASSERT_NE(source.depth_image(), VK_NULL_HANDLE);
 
@@ -158,9 +139,8 @@ TEST_F(OffscreenTargetDeviceTest,
 
 TEST_F(OffscreenTargetDeviceTest,
        MoveAssignOverLiveDepthTargetLeavesSourceEmpty) {
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget dst = make_depth_target(allocator);
-  vg::OffscreenTarget src = make_depth_target(allocator);
+  vg::OffscreenTarget dst = make_depth_target();
+  vg::OffscreenTarget src = make_depth_target();
 
   dst = std::move(src);  // frees dst's depth + color, then adopts src's
   EXPECT_NE(dst.depth_image(), VK_NULL_HANDLE);
@@ -172,10 +152,10 @@ TEST_F(OffscreenTargetDeviceTest,
 
 TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
   constexpr uint32_t kSize = 4;
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_target(allocator, {kSize, kSize});
+  vg::OffscreenTarget target = make_target({kSize, kSize});
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -210,7 +190,8 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
 
   target.record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+  const vkc::Status submitted = device().submit_and_wait(raw);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 
   const auto* px = static_cast<const uint8_t*>(target.pixels());
   ASSERT_NE(px, nullptr);
@@ -229,10 +210,10 @@ TEST_F(OffscreenTargetDeviceTest, ClearsAndReadsBackThroughDynamicRendering) {
 // when the target has one -- so the render needs no hand-written barriers.
 TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
   constexpr uint32_t kSize = 4;
-  vkc::Allocator allocator = make_allocator();
-  vg::OffscreenTarget target = make_depth_target(allocator, {kSize, kSize});
+  vg::OffscreenTarget target = make_depth_target({kSize, kSize});
 
-  auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
   auto cmd = pool.value().allocate_primary();
   ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -253,7 +234,8 @@ TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
 
   target.record_readback(raw);
   ASSERT_TRUE(cmd.value().end().ok());
-  ASSERT_NO_FATAL_FAILURE(submit_and_wait(raw));
+  const vkc::Status submitted = device().submit_and_wait(raw);
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
 
   const auto* px = static_cast<const uint8_t*>(target.pixels());
   ASSERT_NE(px, nullptr);
@@ -269,10 +251,8 @@ TEST_F(OffscreenTargetDeviceTest, PrepareReplacesHandWrittenBarriers) {
 // --- Optional depth attachment ---------------------------------------------
 
 TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
-  vkc::Allocator allocator = make_allocator();
-
   // Color-only (the default): no depth image, and the layout reports no depth.
-  vg::OffscreenTarget color_only = make_target(allocator);
+  vg::OffscreenTarget color_only = make_target();
   EXPECT_EQ(color_only.depth_image(), VK_NULL_HANDLE);
   EXPECT_EQ(color_only.layout().depth_format, VK_FORMAT_UNDEFINED);
 
@@ -282,7 +262,7 @@ TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
   desc.extent = {32, 32};
   desc.color_format = kFormat;
   desc.depth_format = VK_FORMAT_D32_SFLOAT;
-  auto target = vg::OffscreenTarget::create(allocator, desc);
+  auto target = vg::OffscreenTarget::create(allocator(), desc);
   ASSERT_TRUE(target.ok()) << target.status().message();
   EXPECT_NE(target.value().depth_image(), VK_NULL_HANDLE);
   EXPECT_EQ(target.value().layout().depth_format, VK_FORMAT_D32_SFLOAT);

@@ -13,6 +13,8 @@
 
 #include <glm/vec3.hpp>
 
+#include "gfx_test_support.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
@@ -27,35 +29,30 @@
 #include "volumetric_kit/gfx/pipelines/pbr_material.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_scene.hpp"
-#include "vulkan_test_fixture.hpp"
 
 namespace {
 
 namespace pipelines = volumetric_kit::gfx::pipelines;
 
-// A PbrPipeline (for the reflected set-0 layout), an allocator, a sampler, and
-// a 1x1 texture whose view stands in for the three IBL maps. Skips with the
-// base fixture when no Vulkan device is present.
-class PbrSceneTest : public VulkanDeviceTest {
+// A PbrPipeline (for the reflected set-0 layout), a sampler, and a 1x1 texture
+// whose view stands in for the three IBL maps.
+class PbrSceneTest : public vg_test::RendererDeviceTest {
  protected:
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    RendererDeviceTest::SetUp();
     if (base_setup_incomplete()) {
       return;  // no device, or the base SetUp failed fatally
     }
-    auto allocator = vkc::Allocator::create(instance_->handle(), *device_);
-    ASSERT_TRUE(allocator.ok()) << allocator.status().message();
-    allocator_.emplace(std::move(allocator).value());
 
     vg::RenderTargetLayout layout;
     layout.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
     layout.color_count = 1;
     layout.depth_format = VK_FORMAT_D32_SFLOAT;
-    auto pipeline = pipelines::PbrPipeline::create(device(), layout);
+    auto pipeline = pipelines::PbrPipeline::create(device().handle(), layout);
     ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
     pipeline_.emplace(std::move(pipeline).value());
 
-    auto sampler = vg::Sampler::create(device());
+    auto sampler = vg::Sampler::create(device().handle());
     ASSERT_TRUE(sampler.ok()) << sampler.status().message();
     sampler_.emplace(std::move(sampler).value());
 
@@ -65,7 +62,7 @@ class PbrSceneTest : public VulkanDeviceTest {
     d.format = VK_FORMAT_R8G8B8A8_UNORM;
     d.pixels = white;
     d.size = sizeof(white);
-    auto tex = vg::upload_texture(*device_, *allocator_, d);
+    auto tex = vg::upload_texture(device(), allocator(), d);
     ASSERT_TRUE(tex.ok()) << tex.status().message();
     tex_.emplace(std::move(tex).value());
   }
@@ -89,25 +86,24 @@ class PbrSceneTest : public VulkanDeviceTest {
   // runs (and validation sees it).
   void set_camera(const pipelines::PbrScene& scene, uint32_t slot,
                   const glm::vec3& eye) {
-    const vkc::Status status = device_->submit_single_time(
+    const vkc::Status status = device().submit_single_time(
         [&](VkCommandBuffer cmd) { scene.set_camera(cmd, slot, eye, 4.0f); });
     EXPECT_TRUE(status.ok()) << status.message();
   }
 
-  std::optional<vkc::Allocator> allocator_;
   std::optional<pipelines::PbrPipeline> pipeline_;
   std::optional<vg::Sampler> sampler_;
   std::optional<vkc::Image> tex_;
 };
 
-// The same fixture under validation-with-teeth: the base TearDown fails the
-// test on any captured VUID, which is what gives the submit() guards below
-// something to assert against.
+// The same fixture under validation, whose errors fail the test: what gives
+// the submit() guards below something to assert against. The camera tests
+// below hinge on the barriers around each recorded write.
 class PbrSubmitTest : public PbrSceneTest {
  protected:
-  bool wants_validation() const override { return true; }
-  // The camera tests below hinge on the barriers around each recorded write.
-  bool wants_sync_validation() const override { return true; }
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
+  }
 
   // A minimal two-triangle quad (4 default vertices, 6 indices).
   static volumetric_kit::gfx::assets::Mesh quad() {
@@ -133,10 +129,11 @@ class PbrSubmitTest : public PbrSceneTest {
   vkc::Result<pipelines::PbrMaterial> make_material(
       const pipelines::PbrMaterialDesc& desc) {
     VKC_ASSIGN(vg::UploadBatch batch,
-               vg::UploadBatch::begin(*device_, *allocator_));
+               vg::UploadBatch::begin(device(), allocator()));
     VKC_ASSIGN(pipelines::PbrMaterial material,
                pipelines::PbrMaterial::create(
-                   device(), batch, pipeline_->descriptor_set_layout(1), desc));
+                   device().handle(), batch,
+                   pipeline_->descriptor_set_layout(1), desc));
     VKC_TRY(batch.finish());
     return material;
   }
@@ -145,7 +142,8 @@ class PbrSubmitTest : public PbrSceneTest {
   // command buffer, outside any render pass -- enough for the set-0 bind under
   // test, and legal on its own when submit() correctly records nothing.
   void record_submit(const pipelines::PbrFrame& frame) {
-    auto pool = vkc::CommandPool::create(device(), device_->queue_family());
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
     ASSERT_TRUE(pool.ok()) << pool.status().message();
     auto cmd = pool.value().allocate_primary();
     ASSERT_TRUE(cmd.ok()) << cmd.status().message();
@@ -167,7 +165,7 @@ class PbrSubmitTest : public PbrSceneTest {
     bake.brdf_lut_size = 8;
     bake.brdf_lut_samples = 16;
     auto ibl = pipelines::bake_ibl(
-        *device_, *allocator_,
+        device(), allocator(),
         [](const glm::vec3& d) { return glm::vec3(0.2f) + 0.3f * d; }, bake);
     ASSERT_TRUE(ibl.ok()) << ibl.status().message();
     ibl_.emplace(std::move(ibl).value());
@@ -183,7 +181,7 @@ class PbrSubmitTest : public PbrSceneTest {
       mesh.vertices.push_back(v);
     }
     mesh.indices = {0, 1, 2, 0, 2, 3};
-    auto gpu_mesh = pipelines::upload_mesh(*device_, *allocator_, mesh);
+    auto gpu_mesh = pipelines::upload_mesh(device(), allocator(), mesh);
     ASSERT_TRUE(gpu_mesh.ok()) << gpu_mesh.status().message();
     quad_.emplace(std::move(gpu_mesh).value());
   }
@@ -194,7 +192,7 @@ class PbrSubmitTest : public PbrSceneTest {
     desc.extent = {kTargetSize, kTargetSize};
     desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;  // the fixture's layout
     desc.depth_format = VK_FORMAT_D32_SFLOAT;
-    return vg::OffscreenTarget::create(*allocator_, desc);
+    return vg::OffscreenTarget::create(allocator(), desc);
   }
 
   // A glossy dielectric, so the camera moves the specular highlight.
@@ -225,7 +223,7 @@ class PbrSubmitTest : public PbrSceneTest {
     frame.draws = &draw;
     frame.draw_count = 1;
     const vkc::Status status =
-        device_->submit_single_time([&](VkCommandBuffer cmd) {
+        device().submit_single_time([&](VkCommandBuffer cmd) {
           for (const View& view : views) {
             scene.set_camera(cmd, 0, view.eye, ibl_->prefilter_max_lod);
             view.target->prepare(cmd);
@@ -257,7 +255,7 @@ class PbrSubmitTest : public PbrSceneTest {
 }  // namespace
 
 TEST_F(PbrSceneTest, CreatesSet0) {
-  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
                                            scene_layout(), full_desc());
   ASSERT_TRUE(scene.ok()) << scene.status().message();
   EXPECT_TRUE(scene.value().valid());
@@ -273,7 +271,7 @@ TEST_F(PbrSceneTest, CreatesSet0) {
 // to assert that directly; AGENTS.md prefers behavior tests over private-state
 // backdoors.) Both slots accept a write; an out-of-range slot is a no-op.
 TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
-  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
                                            scene_layout(), full_desc(),
                                            /*frames_in_flight=*/2);
   ASSERT_TRUE(scene.ok()) << scene.status().message();
@@ -295,7 +293,7 @@ TEST_F(PbrSceneTest, RingsUboPerFrameInFlight) {
 // VUID-vkCmdBindDescriptorSets-pDescriptorSets-parameter -- so the frame must
 // be dropped whole rather than half-bound.
 TEST_F(PbrSubmitTest, DropsFrameWhoseSlotOutrunsTheSceneRing) {
-  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
                                            scene_layout(), full_desc());
   ASSERT_TRUE(scene.ok()) << scene.status().message();
   ASSERT_EQ(scene.value().frames_in_flight(), 1u);
@@ -317,7 +315,7 @@ TEST_F(PbrSubmitTest, DropsFrameWhoseSlotOutrunsTheSceneRing) {
 // recording it here, outside any render pass, is itself a VUID, so the captured
 // error proves the draw was recorded rather than dropped.
 TEST_F(PbrSubmitTest, DropsFrameWithNoScene) {
-  auto mesh = pipelines::upload_mesh(*device_, *allocator_, quad());
+  auto mesh = pipelines::upload_mesh(device(), allocator(), quad());
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
   auto material = make_material(material_desc());
   ASSERT_TRUE(material.ok()) << material.status().message();
@@ -335,9 +333,9 @@ TEST_F(PbrSubmitTest, DropsFrameWithNoScene) {
 }
 
 TEST_F(PbrSceneTest, RejectsZeroFramesInFlight) {
-  auto scene =
-      pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                  full_desc(), /*frames_in_flight=*/0);
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
+                                           scene_layout(), full_desc(),
+                                           /*frames_in_flight=*/0);
   ASSERT_FALSE(scene.ok());
   EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
@@ -345,22 +343,22 @@ TEST_F(PbrSceneTest, RejectsZeroFramesInFlight) {
 TEST_F(PbrSceneTest, RejectsNullMap) {
   pipelines::PbrSceneDesc d = full_desc();
   d.prefilter = VK_NULL_HANDLE;  // the shader samples every IBL map
-  auto scene =
-      pipelines::PbrScene::create(device(), *allocator_, scene_layout(), d);
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
+                                           scene_layout(), d);
   ASSERT_FALSE(scene.ok());
   EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, RejectsNullLayout) {
-  auto scene = pipelines::PbrScene::create(device(), *allocator_,
+  auto scene = pipelines::PbrScene::create(device().handle(), allocator(),
                                            VK_NULL_HANDLE, full_desc());
   ASSERT_FALSE(scene.ok());
   EXPECT_EQ(scene.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(PbrSceneTest, MoveLeavesSourceEmpty) {
-  auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                          full_desc());
+  auto made = pipelines::PbrScene::create(device().handle(), allocator(),
+                                          scene_layout(), full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrScene source = std::move(made).value();
   ASSERT_TRUE(source.valid());
@@ -373,10 +371,10 @@ TEST_F(PbrSceneTest, MoveLeavesSourceEmpty) {
 }
 
 TEST_F(PbrSceneTest, MoveAssignOverLiveLeavesSourceEmpty) {
-  auto a = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                       full_desc());
-  auto b = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                       full_desc());
+  auto a = pipelines::PbrScene::create(device().handle(), allocator(),
+                                       scene_layout(), full_desc());
+  auto b = pipelines::PbrScene::create(device().handle(), allocator(),
+                                       scene_layout(), full_desc());
   ASSERT_TRUE(a.ok()) << a.status().message();
   ASSERT_TRUE(b.ok()) << b.status().message();
   pipelines::PbrScene dst = std::move(a).value();
@@ -389,8 +387,8 @@ TEST_F(PbrSceneTest, MoveAssignOverLiveLeavesSourceEmpty) {
 }
 
 TEST_F(PbrSceneTest, SelfMoveAssignIsSafe) {
-  auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                          full_desc());
+  auto made = pipelines::PbrScene::create(device().handle(), allocator(),
+                                          scene_layout(), full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrScene scene = std::move(made).value();
 
@@ -406,8 +404,8 @@ TEST_F(PbrSceneTest, SelfMoveAssignIsSafe) {
 // scene set), which is valid outside a render scope -- exercises the set-0 bind
 // path end to end. The full draw path is covered below.
 TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
-  auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                          full_desc());
+  auto made = pipelines::PbrScene::create(device().handle(), allocator(),
+                                          scene_layout(), full_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   pipelines::PbrScene scene = std::move(made).value();
   set_camera(scene, 0, glm::vec3(0.0f, 0.0f, 3.0f));
@@ -419,7 +417,7 @@ TEST_F(PbrSceneTest, SubmitBindsSceneWithoutDraws) {
   frame.draws = nullptr;
   frame.draw_count = 0;
 
-  const vkc::Status status = device_->submit_single_time(
+  const vkc::Status status = device().submit_single_time(
       [&](VkCommandBuffer cmd) { pipeline_->submit(cmd, frame); });
   EXPECT_TRUE(status.ok()) << status.message();
 }
@@ -442,8 +440,8 @@ TEST_F(PbrSubmitTest, EachCameraWriteReachesTheWorkRecordedAfterIt) {
   auto view_b = make_target();
   ASSERT_TRUE(view_a.ok()) << view_a.status().message();
   ASSERT_TRUE(view_b.ok()) << view_b.status().message();
-  auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                          ibl_->scene_desc());
+  auto made = pipelines::PbrScene::create(device().handle(), allocator(),
+                                          scene_layout(), ibl_->scene_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
   const pipelines::PbrScene& scene = made.value();
   auto material = make_material(lit_material_desc());
@@ -474,8 +472,8 @@ TEST_F(PbrSubmitTest, PackedMaterialsEachReadTheirOwnFactors) {
   ASSERT_NO_FATAL_FAILURE(build_quad_scene());
   auto target = make_target();
   ASSERT_TRUE(target.ok()) << target.status().message();
-  auto made = pipelines::PbrScene::create(device(), *allocator_, scene_layout(),
-                                          ibl_->scene_desc());
+  auto made = pipelines::PbrScene::create(device().handle(), allocator(),
+                                          scene_layout(), ibl_->scene_desc());
   ASSERT_TRUE(made.ok()) << made.status().message();
 
   std::vector<pipelines::PbrMaterialDesc> descs(2, lit_material_desc());
@@ -484,10 +482,11 @@ TEST_F(PbrSubmitTest, PackedMaterialsEachReadTheirOwnFactors) {
   }
   descs[0].emissive_factor = glm::vec3(4.0f, 0.0f, 0.0f);
   descs[1].emissive_factor = glm::vec3(0.0f, 4.0f, 0.0f);
-  auto batch = vg::UploadBatch::begin(*device_, *allocator_);
+  auto batch = vg::UploadBatch::begin(device(), allocator());
   ASSERT_TRUE(batch.ok()) << batch.status().message();
   auto materials = pipelines::PbrMaterial::create_all(
-      device(), batch.value(), pipeline_->descriptor_set_layout(1), descs);
+      device().handle(), batch.value(), pipeline_->descriptor_set_layout(1),
+      descs);
   ASSERT_TRUE(materials.ok()) << materials.status().message();
   const vkc::Status finished = batch.value().finish();
   ASSERT_TRUE(finished.ok()) << finished.message();
