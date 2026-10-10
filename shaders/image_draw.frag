@@ -10,6 +10,9 @@
 // window resizes, zoom and display scaling with nothing for the host to pick.
 // It magnifies with the filter the draw asked for.
 
+#extension GL_GOOGLE_include_directive : require
+#include "common/srgb.glsl"
+
 layout(set = 0, binding = 0) uniform sampler2D display;
 
 // Supplied by ImagePipeline::create: whether this stage encodes sRGB itself.
@@ -20,12 +23,6 @@ layout(constant_id = 0) const bool kEncodeSrgb = true;
 
 layout(location = 0) in vec2 frag_uv;
 layout(location = 0) out vec4 out_color;
-
-// The sRGB encode (IEC 61966-2-1).
-vec3 linear_to_srgb(vec3 c) {
-  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055,
-             greaterThan(c, vec3(0.0031308)));
-}
 
 void main() {
   vec3 color = texture(display, frag_uv).rgb;
