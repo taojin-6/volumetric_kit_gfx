@@ -23,9 +23,9 @@ jobs:
     name: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # The three Ubuntu legs run on the self-hosted GPU box (label
+      # The two Ubuntu legs run on the self-hosted GPU box (label
       # `vk-linux-gpu`), each in an OS-matched container with the RTX 5090 passed
-      # through (`--gpus all`), so one host covers 22.04 / 24.04 / 26.04 against
+      # through (`--gpus all`), so one host covers 24.04 / 26.04 against
       # the real driver. Run one runner instance per leg on that box so they
       # execute in parallel, not serially (CONTRIBUTING.md, "Self-hosted
       # runners").
@@ -45,10 +45,6 @@ jobs:
       # builds and tests Debug on Linux (clang + ASan/UBSan).
       matrix:
         include:
-          - os: ubuntu-22.04
-            runner: vk-linux-gpu
-            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
-            build_types: '["Release"]'
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
