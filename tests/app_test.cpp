@@ -265,7 +265,6 @@ TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {
   EXPECT_TRUE(app.device().has_present());
   EXPECT_GE(app.allocator().memory_stats().heap_count, 1u);
   EXPECT_TRUE(app.swapchain().valid());
-  EXPECT_TRUE(app.frame_loop().valid());
   EXPECT_EQ(app.frame_loop().frames_in_flight(), 2u);
 
   const vkc::Status status = run_frames(app, 3);
