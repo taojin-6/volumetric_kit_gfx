@@ -107,43 +107,10 @@ TEST_F(TextureUploadTest, RoundTripsPixelsThroughTheGpu) {
   // Copy the uploaded image back into a staging buffer and confirm the
   // bytes survived the staging -> image -> readback round trip (proving the
   // copy and the layout transitions landed the data correctly).
-  vkc::BufferDesc rb;
-  rb.size = src.size();
-  rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vkc::MemoryUsage::Staging;
-  rb.host_access = vkc::HostAccess::Random;
-  auto readback = allocator().create_buffer(rb);
-  ASSERT_TRUE(readback.ok()) << readback.status().message();
-
-  const VkImage image = texture.value().handle();
-  const VkBuffer dst = readback.value().handle();
-  auto recorded =
-      device().submit_single_time([image, dst](VkCommandBuffer cmd) {
-        // upload_texture left the image in SHADER_READ_ONLY_OPTIMAL.
-        VkImageMemoryBarrier to_src{};
-        to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        to_src.srcAccessMask = 0;
-        to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.image = image;
-        to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &to_src);
-
-        VkBufferImageCopy copy{};
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.imageExtent = {2, 2, 1};
-        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               dst, 1, &copy);
-      });
-  ASSERT_TRUE(recorded.ok()) << recorded.message();
-
-  const auto* got = static_cast<const std::uint8_t*>(readback.value().mapped());
-  ASSERT_NE(got, nullptr);
+  const std::vector<std::uint8_t> got =
+      read_subresource(texture.value().handle(), /*mip=*/0, /*base_layer=*/0,
+                       /*layer_count=*/1, {2, 2}, /*texel_bytes=*/4);
+  ASSERT_EQ(got.size(), src.size());
   for (std::size_t i = 0; i < src.size(); ++i) {
     EXPECT_EQ(got[i], src[i]) << "byte " << i;
   }
@@ -344,41 +311,10 @@ TEST_F(TextureUploadTest, UploadsCubeAndRoutesLayers) {
 
   // Read the last face back: proves the per-layer buffer offsets landed each
   // face in its own layer, not just that the submit succeeded.
-  vkc::BufferDesc rb;
-  rb.size = kFaceBytes;
-  rb.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  rb.memory = vkc::MemoryUsage::Staging;
-  rb.host_access = vkc::HostAccess::Random;
-  auto readback = allocator().create_buffer(rb);
-  ASSERT_TRUE(readback.ok()) << readback.status().message();
-
-  const VkImage image = texture.value().handle();
-  const VkBuffer dst = readback.value().handle();
-  auto recorded =
-      device().submit_single_time([image, dst](VkCommandBuffer cmd) {
-        // upload_texture left every face in SHADER_READ_ONLY_OPTIMAL; move
-        // just layer 5 to TRANSFER_SRC through the public barrier helper.
-        vg::ImageBarrierDesc to_src;
-        to_src.image = image;
-        to_src.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        to_src.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        to_src.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
-        to_src.old_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_src.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        to_src.base_layer = 5;
-        to_src.layer_count = 1;
-        vg::cmd_image_barrier(cmd, to_src);
-
-        VkBufferImageCopy copy{};
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 5, 1};
-        copy.imageExtent = {kSize, kSize, 1};
-        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               dst, 1, &copy);
-      });
-  ASSERT_TRUE(recorded.ok()) << recorded.message();
-
-  const auto* got = static_cast<const std::uint8_t*>(readback.value().mapped());
-  ASSERT_NE(got, nullptr);
+  const std::vector<std::uint8_t> got =
+      read_subresource(texture.value().handle(), /*mip=*/0, /*base_layer=*/5,
+                       /*layer_count=*/1, {kSize, kSize}, /*texel_bytes=*/4);
+  ASSERT_EQ(got.size(), kFaceBytes);
   for (std::size_t i = 0; i < kFaceBytes; ++i) {
     ASSERT_EQ(got[i], 0x11 * 6) << "byte " << i;
   }

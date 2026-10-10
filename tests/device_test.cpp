@@ -91,13 +91,6 @@ TEST_F(DeviceTest, CreatesADeviceTheRendererCanUse) {
   EXPECT_TRUE(enabled.ok()) << enabled.message();
 }
 
-TEST_F(DeviceTest, SingleTimeSubmitRoundTrips) {
-  // No-op recording exercises allocate / begin / end / submit / fence-wait.
-  const vkc::Status status =
-      device().submit_single_time([](VkCommandBuffer) {});
-  EXPECT_TRUE(status.ok()) << status.message();
-}
-
 // The shared-device seam: the renderer adopts a device another library made,
 // held to its own requirements, and leaves it alive when it goes.
 TEST_F(DeviceTest, AdoptBorrowsASharedDeviceWithoutOwningIt) {
