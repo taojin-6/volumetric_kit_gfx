@@ -316,7 +316,7 @@ core::Result<Frame> FrameLoop::begin_frame() {
 
 core::Status FrameLoop::check_points(const Frame& frame) const {
   // The loop's own rules; the core checks the rest as it does for its own
-  // submits, and refuses a wait whose value nothing has been submitted to set.
+  // submits, and requires reached waits before presenting the frame.
   std::vector<core::TimelinePoint> waits;
   waits.reserve(frame.waits.size());
   for (const FrameWait& wait : frame.waits) {
@@ -334,7 +334,7 @@ core::Status FrameLoop::check_points(const Frame& frame) const {
   }
   return core::check_timeline_points(device_, waits, frame.signals,
                                      "FrameLoop::end_frame",
-                                     core::TimelineWaits::Submitted);
+                                     core::TimelineWaits::Reached);
 }
 
 void FrameLoop::record_submit(uint64_t number,

@@ -191,22 +191,17 @@ class VG_WINDOWING_API FrameLoop {
   ///        `frame.signals` once it completes -- present it, and advance to
   ///        the next slot.
   ///
-  /// A value in `frame.waits` must already be reached, or be set by work
-  /// already submitted -- to this queue or another -- that itself waits for
-  /// nothing not yet submitted. The present waits for this submit, and Vulkan
-  /// requires that of a present's waits
-  /// (`VUID-vkQueuePresentKHR-pWaitSemaphores-03268`); and a frame held for a
-  /// value nothing has been submitted to set holds every later wait on the
-  /// queue, so the next @ref begin_frame, a swapchain rebuild's queue drain
-  /// (which holds the submit mutex) and the loop's destruction would block
-  /// forever. Gate a producer whose value is not yet submitted on the host
-  /// instead. The values are checked as `core::check_timeline_points` checks
-  /// them with `core::TimelineWaits::Submitted`, against the core's record of
-  /// submitted values, which the core's submits, every frame's submit and
-  /// `core::note_timeline_signals` add to: a value waited for must be reached
-  /// or recorded, and a value in `frame.signals` must exceed its semaphore's
-  /// current value, every recorded value, and any value the frame waits for
-  /// on it. What the producer itself waits for is not checked.
+  /// A value in `frame.waits` must already be reached. A submitted producer
+  /// may still depend on an unresolved host signal, directly or through
+  /// earlier queue work. Such a dependency would invalidate the present's
+  /// waits (`VUID-vkQueuePresentKHR-pWaitSemaphores-03268`) and could hold a
+  /// later @ref begin_frame or queue drain forever. Wait for the producer on
+  /// the host before ending the frame; the GPU wait still supplies the
+  /// memory dependency. `core::check_timeline_points` checks the values with
+  /// `core::TimelineWaits::Reached`. A value in `frame.signals` must exceed
+  /// its semaphore's current value, every recorded signal value, and any
+  /// value the frame waits for on it. The core's submits, every frame's
+  /// submit and `core::note_timeline_signals` record the signal values.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with

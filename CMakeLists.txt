@@ -90,8 +90,8 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin includes the timeline-value checks, core_test_support and the
-# 0.1.0 package helpers, including vkc_require_core's PACKAGE mode.
+# The pin includes the timeline-value checks, core_test_support and the 0.1.0
+# package helpers, including vkc_require_core's PACKAGE mode.
 #
 # TODO: re-pin to the core's v0.1.0 tag once it is tagged.
 include(FetchContent)

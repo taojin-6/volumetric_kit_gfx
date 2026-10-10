@@ -318,8 +318,20 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
 
 core::Status StreamedAtlas::check_submitted(std::uint64_t frame,
                                             const char* call) const {
-  return core::check_timeline_points(*device_, {{timeline_, frame}}, {}, call,
-                                     core::TimelineWaits::Submitted);
+  const std::vector<core::TimelinePoint> point{{timeline_, frame}};
+  // Validate the device and semaphore first. Reached is a presentation rule:
+  // it cannot distinguish an unfinished submitted frame from a dropped one.
+  VKC_TRY(core::check_timeline_points(*device_, point, {}, call));
+  // For one valid signal with no waits, InvalidArgument means only that its
+  // value is at or below the counter or a recorded signal. This queries the
+  // core's submitted-value bound without submitting or recording anything.
+  const core::Status signal =
+      core::check_timeline_points(*device_, {}, point, call);
+  if (signal.domain() == core::Status::Code::InvalidArgument) return {};
+  VKC_TRY(signal);
+  return core::Status::invalid_argument(std::string(call) + ": frame " +
+                                        std::to_string(frame) +
+                                        " has not been submitted");
 }
 
 StreamedAtlas::Undo StreamedAtlas::before_update(std::uint32_t slot) const {

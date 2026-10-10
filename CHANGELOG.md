@@ -90,6 +90,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   release the frame's unpresented image.
 - build: gfx pins volumetric_kit_core at `ce76978`, which includes the
   timeline-value checks and the 0.1.0 package helpers.
+- `windowing`: a `Frame::waits` value must be reached before `end_frame`,
+  as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
+  host first; a submitted producer can still depend on an unresolved host
+  signal. The frame's GPU wait continues to supply the memory dependency.
 - `VG_WARNINGS_AS_ERRORS` defaults ON only when gfx is the top-level project,
   as the core's `VKC_WARNINGS_AS_ERRORS` does, so an application that fetches
   gfx no longer compiles it with `-Werror`; set it ON to keep that.

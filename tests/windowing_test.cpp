@@ -3,12 +3,14 @@
 
 // Windowing tier on a headless surface (VK_EXT_headless_surface): swapchain
 // creation, the FrameLoop acquire -> render -> present choreography, recreate,
-// and the move-only lifecycle. The whole suite skips when the runner has no
+// and resource ownership. The whole suite skips when the runner has no
 // headless surface or no present-capable device, so it needs no display.
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
+#include <future>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -705,9 +707,9 @@ TEST_F(WindowingTest, RetireQueueReleasesWhatAFrameUsedOnceItCompletes) {
 }
 
 // A frame's wait for a value another submit sets is honoured: the producer
-// fills a buffer and sets `produced`, and the frame copies the buffer out at
-// the TRANSFER stage after waiting for it. Under synchronization validation a
-// frame that ignored its wait would be reported: nothing else orders its copy
+// fills a buffer and sets `produced`; once that value is reached, the frame
+// copies the buffer out at the TRANSFER stage. Under synchronization validation
+// a frame that ignored its wait would be reported: nothing else orders its copy
 // after the producer's fill.
 TEST_F(FrameTimelineTest, FrameWaitsForAnExternalSubmitsTimelineValue) {
   win::Swapchain sc = make_swapchain();
@@ -742,6 +744,7 @@ TEST_F(FrameTimelineTest, FrameWaitsForAnExternalSubmitsTimelineValue) {
                        0, nullptr);
   record_clear(f);
   f.waits.push_back({{&produced, 1}, VK_PIPELINE_STAGE_TRANSFER_BIT});
+  ASSERT_TRUE(produced.wait(1).ok());
   ASSERT_TRUE(loop.value()->end_frame(f).ok());
 
   ASSERT_TRUE(loop.value()->timeline().wait(f.number).ok());
@@ -751,8 +754,47 @@ TEST_F(FrameTimelineTest, FrameWaitsForAnExternalSubmitsTimelineValue) {
   EXPECT_EQ(copied, kProduced);
 }
 
+// A submitted producer can still be held by a host signal. A frame that waits
+// for it must be refused before presenting, and can use it once it completes.
+TEST_F(FrameTimelineTest, FrameRefusesSubmittedProducerUntilItsValueIsReached) {
+  win::Swapchain sc = make_swapchain({256, 256});
+  vkc::TimelineSemaphore gate = make_timeline();
+  vkc::TimelineSemaphore produced = make_timeline();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  auto frame = loop.value()->begin_frame(VkExtent2D{256, 256});
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  ASSERT_TRUE(frame.value().has_value());
+  win::Frame& f = *frame.value();
+  record_clear(f);
+  f.waits.push_back({{&produced, 1}, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT});
+
+  auto producer = device_->submit_pending([](VkCommandBuffer) {}, {{&gate, 1}},
+                                          {{&produced, 1}});
+  ASSERT_TRUE(producer.ok()) << producer.status().message();
+  auto ended = std::async(std::launch::async,
+                          [&] { return loop.value()->end_frame(f); });
+  // Always release the producer, even if a regression blocks in present.
+  const auto ready = ended.wait_for(std::chrono::seconds(5));
+  EXPECT_TRUE(gate.signal(1).ok());
+  const vkc::Status status = ended.get();
+  EXPECT_EQ(ready, std::future_status::ready);
+  EXPECT_EQ(status.domain(), vkc::Status::Code::InvalidArgument)
+      << status.message();
+  ASSERT_TRUE(producer.value().wait().ok());
+  ASSERT_TRUE(loop.value()->timeline().wait(f.number).ok());
+
+  auto next = loop.value()->begin_frame(VkExtent2D{256, 256});
+  ASSERT_TRUE(next.ok()) << next.status().message();
+  ASSERT_TRUE(next.value().has_value());
+  record_clear(*next.value());
+  next.value()->waits.push_back(
+      {{&produced, 1}, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT});
+  ASSERT_TRUE(loop.value()->end_frame(*next.value()).ok());
+}
+
 // A swapchain rebuild drains the queue with frames still pending retirement
-// and one waiting on another submit's value -- one already submitted, so the
+// and one waiting on another submit's value -- one already reached, so the
 // drain returns. The numbers run on across the rebuild, and the retirements
 // release only through the queue's own poll.
 TEST_F(FrameTimelineTest, SwapchainRebuildWithPendingRetirements) {
@@ -784,6 +826,7 @@ TEST_F(FrameTimelineTest, SwapchainRebuildWithPendingRetirements) {
   retire.push(a.number, [&released]() { ++released; });
   record_clear(a);
   a.waits.push_back({{&produced, 1}, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT});
+  ASSERT_TRUE(produced.wait(1).ok());
   ASSERT_TRUE(loop.value()->end_frame(a).ok());
 
   auto second = loop.value()->begin_frame(VkExtent2D{320, 240});
@@ -812,7 +855,7 @@ TEST_F(FrameTimelineTest, SwapchainRebuildWithPendingRetirements) {
 // for it: its number is still set, so what waits for it does not hang, and
 // after the rebuild an unpresented image needs, the loop runs on. Its
 // profiler frame is never read: the slot's queries were reset only in the
-// refused command buffer. A wait for a submitted frame is accepted.
+// refused command buffer. A wait for a completed frame is accepted.
 TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
   win::Swapchain sc = make_swapchain();
   // Declared before the loop, which borrows it.
@@ -924,8 +967,7 @@ TEST_F(WindowingTest, ManagedBeginFrameRebuildsAfterARefusedFrame) {
 
 // What a frame sets joins the core's record of submitted values: a submit
 // after the frame may not set a value at or below it, whether or not the
-// frame has completed, and a later frame may wait for it before it is
-// reached.
+// frame has completed, and a later frame may wait for it once it is reached.
 TEST_F(WindowingTest, FrameSignalsJoinTheCoresRecordOfSubmittedValues) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, 2);
@@ -951,6 +993,7 @@ TEST_F(WindowingTest, FrameSignalsJoinTheCoresRecordOfSubmittedValues) {
   win::Frame& b = second.value();
   record_clear(b);
   b.waits.push_back({{&other, 10}});
+  ASSERT_TRUE(other.wait(10).ok());
   ASSERT_TRUE(loop.value()->end_frame(b).ok());
   ASSERT_TRUE(loop.value()->timeline().wait(b.number).ok());
   EXPECT_EQ(other.value().value(), 10u);

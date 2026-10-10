@@ -105,7 +105,8 @@ struct ImageTextureDesc {
 ///   queue -- in the same command buffer or an earlier submission, which the
 ///   update's barrier waits for -- or done on another queue: a fence waited
 ///   on, or a semaphore the update's submission waits on at the `TRANSFER`
-///   stage (under the frame loop, a `windowing::Frame::waits` entry);
+///   stage (under the frame loop, a `windowing::Frame::waits` entry whose
+///   value is already reached before `end_frame`);
 /// - it must be readable from that queue's family: created `CONCURRENT`
 ///   across the producer's and the renderer's families, or written on the
 ///   renderer's family (MoltenVK gives two libraries different families);

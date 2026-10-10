@@ -154,12 +154,13 @@ on it landing, since `LiveMesh` draws whatever command it is handed.
    host: the application polls the extract's readiness and skips a not-ready
    frame, which is what it already does for the host-mesh path. gfx also takes
    a GPU wait: once an extract is submitted through the core's
-   `CommandBatch::submit_async` with a timeline value to set, a frame can wait
-   for that value with a `windowing::Frame::waits` entry at
-   `VERTEX_INPUT | DRAW_INDIRECT`, whose semaphore carries the visibility too.
+   `CommandBatch::submit_async` with a timeline value to set, the host waits
+   for that value before ending the frame. The frame then waits through a
+   `windowing::Frame::waits` entry at `VERTEX_INPUT | DRAW_INDIRECT`, whose
+   semaphore carries the visibility too.
    recon's extract sets no timeline value yet, so it does not take that path.
-   A frame may not wait for a value nothing has been submitted to set
-   (`FrameLoop::end_frame` says why), so an extract not yet submitted stays
+   A frame may not wait for an unreached value, even when its producer is
+   submitted (`FrameLoop::end_frame` says why), so an unfinished extract stays
    gated on the host either way.
 
    On the host path visibility is a barrier, and recon now emits it: its

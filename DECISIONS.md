@@ -216,12 +216,17 @@ place: a `RetireQueue` on the timeline.
   `end_frame`'s one submit through `VkTimelineSemaphoreSubmitInfo`, so another
   queue's or library's work can feed a frame, and wait for one, on the GPU.
   `end_frame` checks them with the core's `check_timeline_points`, taking a
-  wait only for a value already reached or submitted to be set
-  (`TimelineWaits::Submitted`), and adds what each frame sets to the core's
-  record of submitted values; `FrameLoop::end_frame` says why. A producer whose
-  value is not yet submitted is gated on the host
+  wait only for a value already reached (`TimelineWaits::Reached`), and adds
+  what each frame sets to the core's record of submitted values;
+  `FrameLoop::end_frame` says why. A producer whose
+  value is not yet reached is gated on the host
   ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
-- **The core pin is core #18** (`5913731`), which makes those checks public.
+- **The core pin is `ce76978`**, which includes the timeline-value checks
+  and the 0.1.0 package helpers. The core's former `Submitted` spelling now
+  means `Reached`: a submitted producer alone does not prove its upstream
+  dependencies are resolved. Atlas retirement still checks whether work was
+  submitted, through the core's signal-value ordering check, before waiting
+  on the host or releasing a discarded frame's images.
 
 ## 2026-10-05 — GPU tests share a device per process
 
