@@ -289,9 +289,9 @@ vg_discover_tests(vg_ui_test TEST_PREFIX "ui.")
 
 # glfw tier: the window glue on GLFW's null platform (GLFW 3.4+), so no display
 # is needed; with an older GLFW its window cases skip. The surface and
-# shared-device cases also need a device with VK_EXT_headless_surface. Built
-# with gfx_glfw (VG_WITH_GLFW and GLFW installed); links the Vulkan loader
-# directly for vkDestroySurfaceKHR.
+# shared-device cases also need GLFW 3.5.1+, whose null platform presents, and a
+# device with VK_EXT_headless_surface. Built with gfx_glfw (VG_WITH_GLFW and
+# GLFW installed); links the Vulkan loader directly for vkDestroySurfaceKHR.
 if(TARGET volumetric_kit::gfx_glfw)
   add_executable(vg_glfw_test glfw_test.cpp)
   target_link_libraries(

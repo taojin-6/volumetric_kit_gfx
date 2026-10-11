@@ -5,8 +5,9 @@
 // size and cursor, the shared device, and ImGui's GLFW platform backend.
 // Windows are made on GLFW's null platform (GLFW 3.4+), so no display is
 // needed; with an older GLFW those cases skip. The surface and the shared
-// device also need a Vulkan device with VK_EXT_headless_surface, which the
-// null platform presents through.
+// device need more: GLFW 3.5.1+, whose null platform presents through
+// VK_EXT_headless_surface (3.4's makes no surface), and a Vulkan device with
+// that extension.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -90,6 +91,26 @@ class NullWindow {
   std::string reason_;
 };
 
+// Why the null platform cannot make a Vulkan surface, or empty if it can. Its
+// surface arrived in GLFW 3.5.1: 3.4 offers no extensions and refuses
+// glfwCreateWindowSurface. The version, not a call to the code under test,
+// decides, so a regression there still fails.
+std::string null_surface_unavailable() {
+  int major = 0;
+  int minor = 0;
+  int revision = 0;
+  glfwGetVersion(&major, &minor, &revision);
+  if (major == 3 && (minor < 5 || (minor == 5 && revision < 1))) {
+    return "GLFW " + std::to_string(major) + "." + std::to_string(minor) + "." +
+           std::to_string(revision) +
+           "'s null platform makes no Vulkan surface (3.5.1+ does)";
+  }
+  if (!vg_test::has_headless_surface()) {
+    return "VK_EXT_headless_surface unavailable";
+  }
+  return {};
+}
+
 // A test with a null-platform window.
 class GlfwWindowTest : public ::testing::Test {
  protected:
@@ -149,8 +170,8 @@ TEST(GlfwInstanceExtensionsTest, UninitializedGlfwIsAnError) {
 }
 
 TEST_F(GlfwWindowTest, InstanceExtensionsNameTheSurface) {
-  if (!vg_test::has_headless_surface()) {
-    GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
+  if (const std::string reason = null_surface_unavailable(); !reason.empty()) {
+    GTEST_SKIP() << reason;
   }
   const vkc::Result<std::vector<const char*>> extensions =
       glfw::instance_extensions();
@@ -279,8 +300,9 @@ class GlfwDeviceTest : public vg_test::RendererTest {
     if (base_setup_incomplete()) {
       return;
     }
-    if (!vg_test::has_headless_surface()) {
-      GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
+    if (const std::string reason = null_surface_unavailable();
+        !reason.empty()) {
+      GTEST_SKIP() << reason;
     }
     window_ = std::make_unique<NullWindow>();
     if (!window_->ready()) {
