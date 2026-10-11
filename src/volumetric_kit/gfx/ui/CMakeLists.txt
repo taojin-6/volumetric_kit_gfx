@@ -4,9 +4,9 @@
 # --- gfx_ui: Dear ImGui debug-overlay tier ----------------------------------
 # Wraps ImGui's Vulkan renderer backend (imgui_impl_vulkan) so a debug UI draws
 # into a RenderTarget through dynamic rendering, and draws marks over an image
-# view. The platform backend (imgui_impl_glfw) is deliberately NOT built here --
-# it stays in the example, so this tier inherits the windowing tier's GLFW-free
-# rule. Depends on gfx_core and gfx_camera.
+# view. The platform backend (imgui_impl_glfw) is gfx_glfw's
+# (glfw/CMakeLists.txt), so this tier stays GLFW-free like windowing. Depends on
+# gfx_core and gfx_camera.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 

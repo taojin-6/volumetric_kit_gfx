@@ -287,6 +287,21 @@ set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")
 vg_discover_tests(vg_ui_test TEST_PREFIX "ui.")
 
+# glfw tier: the window glue on GLFW's null platform (GLFW 3.4+), so no display
+# is needed; with an older GLFW its window cases skip. The surface and
+# shared-device cases also need a device with VK_EXT_headless_surface. Built
+# with gfx_glfw (VG_WITH_GLFW and GLFW installed); links the Vulkan loader
+# directly for vkDestroySurfaceKHR.
+if(TARGET volumetric_kit::gfx_glfw)
+  add_executable(vg_glfw_test glfw_test.cpp)
+  target_link_libraries(
+    vg_glfw_test
+    PRIVATE volumetric_kit::gfx_glfw volumetric_kit::core_test_support
+            GTest::gtest_main Vulkan::Vulkan)
+  vg_target_warnings(vg_glfw_test)
+  vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw.")
+endif()
+
 # gfx as its consumers take it (consumer/), configure only, with the dependency
 # sources this build fetched. As an application's subproject: the defaults hold,
 # and gfx refuses a core the application made available first that is older than

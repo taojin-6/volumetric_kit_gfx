@@ -110,6 +110,28 @@ what has landed since then. Record amendments when a contract changes.
   contract, which `hybrid_mesh_pipeline.cpp` `static_assert`s the vertex half of. Still outstanding
   for the full live path: the `app::StreamedApp` driver (per-slot atlas ringing landed
   2026-10-08).
+- **2026-10-11 — The GLFW window glue is a library tier, `glfw`.** It reverses "library
+  tiers never read GLFW": `gfx_glfw` does, and no other tier. See the dated entry below.
+
+## 2026-10-11 — The GLFW window glue is a library tier
+
+`gfx_glfw` holds what each GLFW application of the renderer wrote for itself:
+the instance extensions, the surface factory, the framebuffer extent, the
+cursor in framebuffer pixels, `make_shared_device` (one device for the window's
+renderer and a compute library, from the core's `SharedDevice`) and
+`ImGuiGlfw`, which compiles `imgui_impl_glfw` once. gfx's four examples,
+recon's two viewers and calib's coming rig app each had, or would have had, a
+copy: the family keeps one home per function. gfx learns only a compute
+library's `DeviceRequirements`, never the library.
+
+- **What it reverses.** gfx's tiers were GLFW-free, with the glue in each
+  consumer. Now `glfw` reads GLFW, and only it: `windowing`, `app` and `ui`
+  still take a `VkSurfaceKHR`, a surface factory and an ImGui context, so a
+  window system without GLFW (iOS's `CAMetalLayer`) uses them as before.
+- **Optional and build-tree only.** It is built with `VG_WITH_GLFW` where GLFW
+  is installed, and is not installed or exported, like `gfx_ui`, until the
+  ImGui headers are co-installed; recon and calib fetch gfx, so they can link
+  it.
 
 ## 2026-10-11 — ImGui uses 32-bit indices
 

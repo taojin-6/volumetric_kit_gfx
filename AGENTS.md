@@ -46,13 +46,14 @@ sections relevant to the task rather than every document before every edit.
   `volumetric_kit::gfx::`.
 - Headers: `include/volumetric_kit/gfx/<tier>/…` → e.g. `#include "volumetric_kit/gfx/core/context.hpp"`
 - CMake: `find_package(volumetric_kit_gfx)`; component targets `volumetric_kit::gfx_core`,
-  `…_passes`, `…_pipelines`, `…_app` (+ `…_windowing`, `…_interop`, `…_assets`, `…_io`,
-  `…_camera`, `…_ui`); umbrella alias `volumetric_kit::gfx`.
+  `…_passes`, `…_pipelines`, `…_app`, `…_glfw` (+ `…_windowing`, `…_interop`, `…_assets`,
+  `…_io`, `…_camera`, `…_ui`); umbrella alias `volumetric_kit::gfx`.
 
 ## Architecture
 
-`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`,
-`ui`). Simple consumers link `…_app`; advanced consumers compose their own passes on `…_core`.
+`core` → `passes` → `pipelines` → `app` → `glfw` (+ `windowing`, `interop`, `assets`, `io`,
+`camera`, `ui`). Simple consumers link `…_app`; advanced consumers compose their own passes on
+`…_core`.
 The dependency rule is strict: a tier may only depend on tiers to its left — with `core`
 and `assets` as foundational roots (no tier dependencies of their own) that any tier may
 build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets`). `assets` is the
@@ -60,8 +61,9 @@ format-neutral CPU data model (header-only, glm); `io` holds the file loaders th
 produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`. `ui` is a Dear
 ImGui debug overlay (on `core`, and `camera` for `ImageOverlay`): it wraps ImGui's
 *renderer* backend (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic
-rendering; like `windowing` it is GLFW-free, so the *platform* backend (`imgui_impl_glfw`)
-stays in the consumer/example.
+rendering. `glfw` (on `app` + `ui`) is the GLFW window glue, ImGui's *platform* backend
+(`imgui_impl_glfw`) included; it is the one tier that reads GLFW, so `windowing`, `app`
+and `ui` serve any window system.
 
 ## Key gotchas
 
@@ -165,7 +167,7 @@ git -C "$gfx_root" diff --check
 - GPU tests can skip when no Vulkan device is present. Run them as CI does
   (CONTRIBUTING.md, "Build and test"), and report actual GPU coverage
   separately from host-only success. Sanitizer CI requires lavapipe.
-- `VG_WITH_GLFW` gates examples, not library windowing. `VG_WITH_CUDA` is
+- `VG_WITH_GLFW` gates `gfx_glfw` and the examples on it. `VG_WITH_CUDA` is
   reserved until its interop implementation is wired; verify current CMake.
 
 ## Keeping guidance current

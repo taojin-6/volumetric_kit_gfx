@@ -15,13 +15,17 @@ add_subdirectory(volumetric_kit/gfx/io)
 add_subdirectory(volumetric_kit/gfx/ui)
 add_subdirectory(volumetric_kit/gfx/pipelines)
 add_subdirectory(volumetric_kit/gfx/app)
+# The GLFW window glue, when VG_WITH_GLFW found GLFW (CMakeLists.txt).
+if(VG_WITH_GLFW AND TARGET glfw)
+  add_subdirectory(volumetric_kit/gfx/glfw)
+endif()
 # TODO: add_subdirectory() for passes as that tier lands.
 
 # --- gfx: umbrella alias ----------------------------------------------------
 # Consumers link `volumetric_kit::gfx` and get whatever tiers are built. gfx_ui
-# is build-tree only (BUILD_INTERFACE) until its ImGui-header packaging is
-# sorted, so it joins the umbrella for in-tree consumers without entering the
-# installed export set (see ui/CMakeLists.txt).
+# and gfx_glfw are build-tree only (BUILD_INTERFACE) until the ImGui-header
+# packaging is sorted, so they join the umbrella for in-tree consumers without
+# entering the installed export set (see ui/CMakeLists.txt).
 add_library(gfx INTERFACE)
 add_library(volumetric_kit::gfx ALIAS gfx)
 target_link_libraries(
@@ -34,6 +38,9 @@ target_link_libraries(
             gfx_pipelines
             gfx_app
             $<BUILD_INTERFACE:gfx_ui>)
+if(TARGET gfx_glfw)
+  target_link_libraries(gfx INTERFACE $<BUILD_INTERFACE:gfx_glfw>)
+endif()
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_gfxTargets (above); here
@@ -52,6 +59,8 @@ if(VG_INSTALL)
     # volumetric_kit/gfx/ui/CMakeLists.txt), so an installed copy would not
     # compile -- keep the tier out until gfx_ui is exported.
     REGEX "volumetric_kit/gfx/ui(/|$)" EXCLUDE
+    # glfw/ is build-tree-only with gfx_ui, for the same reason.
+    REGEX "volumetric_kit/gfx/glfw(/|$)" EXCLUDE
     # impl/depth_attachment.hpp is internal: only offscreen_target.cpp and
     # swapchain.cpp include it, both in-tree, and no installed header does --
     # keep it out. Whenever a header is excluded here, every installed header

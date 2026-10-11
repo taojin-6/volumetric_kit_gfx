@@ -90,6 +90,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   rectangle of its own through its own view-projection. Points are 1 px
   unless the device enables `largePoints`; `submit` checks every draw before
   recording any.
+- `glfw`: `gfx_glfw`, the GLFW window glue as a library tier, built with
+  `VG_WITH_GLFW` where GLFW is installed: `instance_extensions`,
+  `glfw_surface_factory`, `framebuffer_extent` (at least 1 x 1),
+  `cursor_in_framebuffer`, `make_shared_device` (one device for the renderer
+  and a compute library, from the window) and `ImGuiGlfw`, ImGui's GLFW
+  platform backend on one context. The examples use it, and
+  `examples/common/glfw_surface.hpp` is gone.
 
 ### Changed
 

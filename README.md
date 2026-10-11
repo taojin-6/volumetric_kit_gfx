@@ -13,7 +13,8 @@ landed. The detailed `DESIGN.md` is intentionally local and gitignored.
 
 ## Architecture (tiered)
 
-`core` → `passes` → `pipelines` → `app` (+ `windowing`, `interop`, `assets`, `io`, `camera`, `ui`).
+`core` → `passes` → `pipelines` → `app` → `glfw` (+ `windowing`, `interop`, `assets`, `io`,
+`camera`, `ui`).
 Simple consumers link `volumetric_kit::gfx_app`; advanced consumers compose passes on
 `volumetric_kit::gfx_core`. The dependency rule is strict: a tier may only depend on tiers
 to its left, with `core` and `assets` as foundational roots. See
@@ -85,8 +86,8 @@ point `Vulkan_INCLUDE_DIR` at it; the loader still comes from the system.
 Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL` and
 `VG_WARNINGS_AS_ERRORS` default ON only when `volumetric_kit_gfx` is the
 top-level project (OFF when it is consumed via FetchContent /
-`add_subdirectory`). `VG_WITH_GLFW` defaults ON regardless; `VG_WITH_CUDA`
-defaults OFF.
+`add_subdirectory`). `VG_WITH_GLFW` (`gfx_glfw` and the examples, where GLFW
+is installed) defaults ON regardless; `VG_WITH_CUDA` defaults OFF.
 `VG_SANITIZE` is a semicolon list, empty (off) by default — e.g.
 `-DVG_SANITIZE="address;undefined"`.
 
