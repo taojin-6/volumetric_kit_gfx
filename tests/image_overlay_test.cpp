@@ -315,7 +315,8 @@ TEST_F(ImageOverlayTest, DegenerateMarksAddNothing) {
 }
 
 // A radius or thickness is clamped to 10000 display pixels, so ImGui never
-// converts one past INT_MAX to an int (undefined; UBSan flags it).
+// converts one past INT_MAX to an int (undefined; UBSan flags it). Extents are
+// checked to 0.1%: on x86 ImGui normalizes strokes with an approximate rsqrt.
 TEST_F(ImageOverlayTest, SizesAreClamped) {
   ImGui::GetStyle().AntiAliasedLines = true;  // the path taking (int)thickness
   begin_frame({1.0f, 1.0f});
@@ -328,21 +329,20 @@ TEST_F(ImageOverlayTest, SizesAreClamped) {
   overlay.point({100.0f, 100.0f}, kRed, 3e9f);
   const Added dot = added(list, first, kRed);
   ASSERT_GT(dot.count, 0);
-  expect_near(dot.max - dot.min, {2e4f, 2e4f}, 1.0f);
+  expect_near(dot.max - dot.min, {2e4f, 2e4f}, 20.0f);
 
-  // An anti-aliased line's opaque core is its thickness less 1 px of fringe.
   first = list.VtxBuffer.Size;
   const glm::vec2 leg[] = {{0.0f, 100.0f}, {100.0f, 100.0f}};
   overlay.polyline(leg, 2, kGreen, 3e9f);
   const Added line = added(list, first, kGreen);
   ASSERT_GT(line.count, 0);
-  EXPECT_NEAR(line.max.y - line.min.y, 1e4f - 1.0f, 1e-2f);
+  EXPECT_NEAR(line.max.y - line.min.y, 1e4f, 10.0f);
 
   first = list.VtxBuffer.Size;
   overlay.grid(1, 1, nullptr, 0, kBlue, 3e9f);
   const Added borders = added(list, first, kBlue);
   ASSERT_GT(borders.count, 0);
-  EXPECT_NEAR(borders.max.x - borders.min.x, 320.0f + 1e4f - 1.0f, 1e-2f);
+  EXPECT_NEAR(borders.max.x - borders.min.x, 320.0f + 1e4f, 10.0f);
 }
 
 // A given draw list is drawn into; the background list is the default.
