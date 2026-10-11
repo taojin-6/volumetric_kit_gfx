@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -176,6 +177,14 @@ TEST_F(PrimitivePipelineDeviceTest, RefusesALayoutWithoutExactlyOneColor) {
     ASSERT_FALSE(pipeline.ok()) << count << " color attachments";
     EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
   }
+  // One attachment of no format, refused before any Vulkan object is made.
+  auto pipeline =
+      PrimitivePipeline::create(device(), layout_for(VK_FORMAT_UNDEFINED));
+  ASSERT_FALSE(pipeline.ok());
+  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
+  EXPECT_NE(pipeline.status().message().find("PrimitivePipeline::create"),
+            std::string::npos)
+      << pipeline.status().message();
 }
 
 // A device made for another library -- here a compute one, without dynamic
@@ -218,6 +227,8 @@ class PrimitiveRenderTest : public vg_test::RendererDeviceTest {
   // Records `draws` into a kSize x kSize target of `color` cleared to opaque
   // black, runs it, and returns submit's status and the texels' bytes (4 or
   // 16 per texel).
+  // TODO: fold into one shared offscreen render-and-readback test helper,
+  // with the copies in the other pipeline and target tests.
   std::pair<vkc::Status, std::vector<uint8_t>> render_bytes(
       const PrimitivePipeline& pipeline, const PrimitiveDraw* draws,
       uint32_t draw_count, VkFormat color = kColorFormat) {
@@ -258,6 +269,10 @@ class PrimitiveRenderTest : public vg_test::RendererDeviceTest {
     }
     const size_t texel = color == VK_FORMAT_R32G32B32A32_SFLOAT ? 16 : 4;
     const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+    EXPECT_NE(px, nullptr);
+    if (px == nullptr) {
+      return {submitted, {}};
+    }
     return {submitted,
             std::vector<uint8_t>(px, px + texel * size_t{kSize} * kSize)};
   }
@@ -583,8 +598,9 @@ TEST_F(PrimitiveRenderTest, ColorsKeepTheirEncodingOnEveryTarget) {
   EXPECT_EQ(texel[3], 1.0f);
 }
 
-// submit checks every draw before recording any: a malformed draw after a
-// good one returns InvalidArgument, and the target stays clear.
+// submit checks every draw before recording any: a malformed draw before or
+// after a good one returns InvalidArgument naming it, and the target stays
+// clear.
 TEST_F(PrimitiveRenderTest, RefusesMalformedDrawsAndRecordsNothing) {
   auto pipeline = make_pipeline();
   ASSERT_NE(pipeline, nullptr);
@@ -610,10 +626,13 @@ TEST_F(PrimitiveRenderTest, RefusesMalformedDrawsAndRecordsNothing) {
   add("empty buffer", [&](PrimitiveDraw& d) { d.vertices = &empty; });
   add("no VERTEX_BUFFER usage",
       [&](PrimitiveDraw& d) { d.vertices = &storage.value(); });
+  add("one past the end", [](PrimitiveDraw& d) { d.first_vertex = 1; });
   add("past the end", [](PrimitiveDraw& d) { d.first_vertex = 2; });
   add("wraps uint32", [](PrimitiveDraw& d) {
     d.first_vertex = std::numeric_limits<uint32_t>::max();
   });
+  add("unknown topology",
+      [](PrimitiveDraw& d) { d.topology = static_cast<PrimitiveTopology>(7); });
   add("odd line count",
       [](PrimitiveDraw& d) { d.topology = PrimitiveTopology::Lines; });
   add("zero point size", [](PrimitiveDraw& d) { d.point_size = 0.0f; });
@@ -627,33 +646,56 @@ TEST_F(PrimitiveRenderTest, RefusesMalformedDrawsAndRecordsNothing) {
   add("viewport wider than the device's", [&](PrimitiveDraw& d) {
     d.viewport.extent.width = limits.maxViewportDimensions[0] + 1;
   });
-  add("viewport before the bounds range", [](PrimitiveDraw& d) {
+  add("viewport taller than the device's", [&](PrimitiveDraw& d) {
+    d.viewport.extent.height = limits.maxViewportDimensions[1] + 1;
+  });
+  add("viewport x before the bounds range", [](PrimitiveDraw& d) {
+    d.viewport.offset.x = std::numeric_limits<int32_t>::min();
+  });
+  add("viewport y before the bounds range", [](PrimitiveDraw& d) {
     d.viewport.offset.y = std::numeric_limits<int32_t>::min();
   });
-  add("viewport past the bounds range", [](PrimitiveDraw& d) {
+  add("viewport x past the bounds range", [](PrimitiveDraw& d) {
     d.viewport.offset.x = std::numeric_limits<int32_t>::max() - 8;
+  });
+  add("viewport y past the bounds range", [](PrimitiveDraw& d) {
+    d.viewport.offset.y = std::numeric_limits<int32_t>::max() - 8;
   });
 
   for (const auto& [name, bad] : cases) {
-    const PrimitiveDraw draws[2] = {good, bad};
-    auto [status, bytes] = render_bytes(*pipeline, draws, 2);
-    EXPECT_EQ(status.domain(), vkc::Status::Code::InvalidArgument) << name;
-    ASSERT_EQ(bytes.size(), size_t{kSize} * kSize * 4) << name;
-    EXPECT_EQ(Pixels{std::move(bytes)}.lit_count(), 0)
-        << name << ": nothing is recorded";
+    for (const bool bad_first : {false, true}) {
+      const PrimitiveDraw draws[2] = {bad_first ? bad : good,
+                                      bad_first ? good : bad};
+      auto [status, bytes] = render_bytes(*pipeline, draws, 2);
+      EXPECT_EQ(status.domain(), vkc::Status::Code::InvalidArgument)
+          << name << ", bad first: " << bad_first;
+      EXPECT_NE(status.message().find(bad_first ? "draw 0 " : "draw 1 "),
+                std::string::npos)
+          << status.message();
+      ASSERT_EQ(bytes.size(), size_t{kSize} * kSize * 4) << name;
+      EXPECT_EQ(Pixels{std::move(bytes)}.lit_count(), 0)
+          << name << ", bad first: " << bad_first << ": nothing is recorded";
+    }
   }
 
   auto [null_list, bytes] = render_bytes(*pipeline, nullptr, 1);
   EXPECT_EQ(null_list.domain(), vkc::Status::Code::InvalidArgument);
+  ASSERT_EQ(bytes.size(), size_t{kSize} * kSize * 4);
+  EXPECT_EQ(Pixels{std::move(bytes)}.lit_count(), 0);
 
-  // Not errors: a line's point size is ignored, and a draw of no vertices
-  // needs no buffer.
+  // Not errors: a range that ends at the buffer's end, a line's point size,
+  // which is ignored, and a draw of no vertices, which needs no buffer.
+  PrimitiveDraw last_two = good;
+  last_two.first_vertex = 1;
+  last_two.vertex_count = 2;
   PrimitiveDraw line = draw_of(buffer, 2, PrimitiveTopology::Lines);
   line.point_size = std::numeric_limits<float>::quiet_NaN();
   PrimitiveDraw nothing = good;
   nothing.vertices = nullptr;
   nothing.vertex_count = 0;
-  EXPECT_GT(render(*pipeline, {line, nothing}).lit_count(), 0);
+  const Pixels drawn = render(*pipeline, {last_two, line, nothing});
+  EXPECT_TRUE(drawn.lit(30, 30)) << "the buffer's last vertex is drawn";
+  EXPECT_GT(drawn.lit_count(), 2);
 }
 
 // --- largePoints -------------------------------------------------------------
@@ -696,6 +738,36 @@ TEST_F(PrimitiveLargePointsTest, PointsCoverTheirSize) {
   PrimitiveDraw small = draw_of(tiny, 1, PrimitiveTopology::Points);
   small.point_size = 0.25f;
   EXPECT_EQ(render(*pipeline, {small}).lit_count(), 1);
+}
+
+// A wide point stops at its viewport's edge, which only the scissor enforces:
+// Vulkan clips a point by its center alone. Centered on the viewport's left
+// column and on its top row, each 5 px point keeps 3 x 5 pixels inside.
+TEST_F(PrimitiveLargePointsTest, WidePointsStopAtTheirViewport) {
+  auto pipeline = make_pipeline();
+  ASSERT_NE(pipeline, nullptr);
+  if (pipeline->max_point_size() < 5.0f) {
+    GTEST_SKIP() << "the device's points stop at " << pipeline->max_point_size()
+                 << " px";
+  }
+  // The viewport spans pixels [16, 48) on both axes; NDC of pixel p's center.
+  const VkRect2D rect{{16, 16}, {32, 32}};
+  const auto ndc = [](float p) {
+    return (p + 0.5f - 16.0f) / 32.0f * 2.0f - 1.0f;
+  };
+  const vkc::Buffer buffer = upload(
+      {{{ndc(16), ndc(30), 0.5f}, kRed}, {{ndc(40), ndc(16), 0.5f}, kGreen}});
+  PrimitiveDraw draw =
+      draw_of(buffer, 2, PrimitiveTopology::Points, glm::mat4(1.0f), rect);
+  draw.point_size = 5.0f;
+  const Pixels drawn = render(*pipeline, {draw});
+  for (uint32_t y = 0; y < kSize; ++y) {
+    for (uint32_t x = 0; x < kSize; ++x) {
+      const bool left = x >= 16 && x <= 18 && y >= 28 && y <= 32;
+      const bool top = x >= 38 && x <= 42 && y >= 16 && y <= 18;
+      EXPECT_EQ(drawn.lit(x, y), left || top) << "(" << x << ", " << y << ")";
+    }
+  }
 }
 
 }  // namespace

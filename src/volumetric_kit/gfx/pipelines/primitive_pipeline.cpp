@@ -63,10 +63,11 @@ PrimitivePipeline::~PrimitivePipeline() = default;
 
 core::Result<std::unique_ptr<PrimitivePipeline>> PrimitivePipeline::create(
     const core::Device& device, const RenderTargetLayout& layout) {
-  if (layout.color_count != 1) {
+  if (layout.color_count != 1 ||
+      layout.color_formats[0] == VK_FORMAT_UNDEFINED) {
     return core::Status::invalid_argument(
         "PrimitivePipeline::create: the layout must have exactly one color "
-        "attachment");
+        "attachment, of a defined format");
   }
   if (layout.depth_format == VK_FORMAT_UNDEFINED) {
     return core::Status::invalid_argument(
@@ -97,11 +98,8 @@ core::Result<std::unique_ptr<PrimitivePipeline>> PrimitivePipeline::create(
       {1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(ColorVertex, rgba)},
   };
 
-  const VkFormat color_format = layout.color_formats[0];
   const VkBool32 linear_target =
-      (is_srgb_attachment(color_format) || is_float_attachment(color_format))
-          ? VK_TRUE
-          : VK_FALSE;
+      takes_linear_light(layout.color_formats[0]) ? VK_TRUE : VK_FALSE;
   const VkSpecializationMapEntry spec_entry{0, 0, sizeof(VkBool32)};
   const VkSpecializationInfo spec{1, &spec_entry, sizeof(linear_target),
                                   &linear_target};
@@ -148,6 +146,10 @@ core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
     if ((draw.vertices->usage() & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) == 0) {
       return draw_error(i, "has a buffer without VERTEX_BUFFER usage");
     }
+    if (draw.topology != PrimitiveTopology::Points &&
+        draw.topology != PrimitiveTopology::Lines) {
+      return draw_error(i, "has an unknown topology");
+    }
     // 64-bit, so a first_vertex + vertex_count past 2^32 cannot wrap.
     const uint64_t end =
         uint64_t{draw.first_vertex} + uint64_t{draw.vertex_count};
@@ -179,28 +181,18 @@ core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
     }
   }
 
-  if (frame.extent.width == 0 || frame.extent.height == 0) {
-    return core::Status{};
-  }
   const GraphicsPipeline* bound = nullptr;
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
     const PrimitiveDraw& draw = frame.draws[i];
     if (draw.vertex_count == 0) {
       continue;
     }
-    // The scissor is the viewport clipped to the target: Vulkan refuses a
-    // negative scissor offset, and nothing is drawn outside the target.
-    const VkRect2D& rect = draw.viewport;
-    const int64_t x0 = std::max<int64_t>(rect.offset.x, 0);
-    const int64_t y0 = std::max<int64_t>(rect.offset.y, 0);
-    const int64_t x1 = std::min<int64_t>(
-        int64_t{rect.offset.x} + rect.extent.width, frame.extent.width);
-    const int64_t y1 = std::min<int64_t>(
-        int64_t{rect.offset.y} + rect.extent.height, frame.extent.height);
-    if (x1 <= x0 || y1 <= y0) {
+    // Dynamic state, so it may be set before the pipeline is bound. An empty
+    // target or a viewport outside it draws nothing.
+    if (!set_viewport_scissor(cmd, draw.viewport, frame.extent)) {
       continue;
     }
-
+    // The checks above leave Points and Lines only.
     const GraphicsPipeline& pipeline =
         draw.topology == PrimitiveTopology::Points ? points_ : lines_;
     if (&pipeline != bound) {
@@ -208,20 +200,6 @@ core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
                         pipeline.handle());
       bound = &pipeline;
     }
-
-    VkViewport viewport{};
-    viewport.x = static_cast<float>(rect.offset.x);
-    viewport.y = static_cast<float>(rect.offset.y);
-    viewport.width = static_cast<float>(rect.extent.width);
-    viewport.height = static_cast<float>(rect.extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    VkRect2D scissor{};
-    scissor.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
-    scissor.extent = {static_cast<uint32_t>(x1 - x0),
-                      static_cast<uint32_t>(y1 - y0)};
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     PushConstants push;
     push.view_proj = draw.view_proj;

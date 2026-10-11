@@ -91,8 +91,7 @@ struct PrimitiveDraw {
   /// `camera::Camera::view_proj` gives it.
   glm::mat4 view_proj{1.0f};
   /// A point's width in pixels: positive and finite, and drawn clamped to
-  /// `[1, PrimitivePipeline::max_point_size()]`, so always 1 on a device
-  /// without `largePoints`. Lines ignore it.
+  /// `[1, PrimitivePipeline::max_point_size()]`. Lines ignore it.
   float point_size = 1.0f;
 };
 
@@ -148,12 +147,12 @@ class VG_PIPELINES_API PrimitivePipeline {
   /// @param device  The device; it must have enabled the renderer's
   ///                requirements (@ref device_requirements), and may enable
   ///                `largePoints` for points wider than a pixel.
-  /// @param layout  The target's signature: exactly one color attachment and
-  ///                a depth format.
+  /// @param layout  The target's signature: exactly one color attachment, of
+  ///                a defined format, and a depth format.
   /// @return The pipeline; or `core::Status::Code::InvalidArgument` for a
-  ///         layout without exactly one color attachment or without a depth
-  ///         format; `core::Status::Code::Unsupported` for a device without
-  ///         the renderer's requirements; or a backend failure.
+  ///         layout without exactly one defined color attachment or without
+  ///         a depth format; `core::Status::Code::Unsupported` for a device
+  ///         without the renderer's requirements; or a backend failure.
   static core::Result<std::unique_ptr<PrimitivePipeline>> create(
       const core::Device& device, const RenderTargetLayout& layout);
 
@@ -179,8 +178,9 @@ class VG_PIPELINES_API PrimitivePipeline {
   /// @param frame  The target's size and the draws.
   /// @return OK once recorded; or `core::Status::Code::InvalidArgument` for
   ///         a null draw list with a non-zero count, or a draw with a null or
-  ///         empty vertex buffer, one without `VERTEX_BUFFER` usage, a vertex
-  ///         range beyond the buffer, an odd vertex count for lines, a point
+  ///         empty vertex buffer, one without `VERTEX_BUFFER` usage, a
+  ///         topology that is neither points nor lines, a vertex range
+  ///         beyond the buffer, an odd vertex count for lines, a point
   ///         size that is not positive and finite for points, or a viewport
   ///         beyond the device's `maxViewportDimensions` or
   ///         `viewportBoundsRange`.

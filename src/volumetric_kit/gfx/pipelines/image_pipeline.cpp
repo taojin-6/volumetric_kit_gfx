@@ -285,9 +285,7 @@ core::Result<ImagePipeline> ImagePipeline::create(
   // _SRGB attachment encodes on write, and a float one holds linear light.
   const VkFormat target_format = layout.color_formats[0];
   const VkBool32 encode_srgb =
-      !is_srgb_attachment(target_format) && !is_float_attachment(target_format)
-          ? VK_TRUE
-          : VK_FALSE;
+      takes_linear_light(target_format) ? VK_FALSE : VK_TRUE;
   const VkSpecializationMapEntry spec_entry{0, 0, sizeof(VkBool32)};
   const VkSpecializationInfo spec{1, &spec_entry, sizeof(encode_srgb),
                                   &encode_srgb};

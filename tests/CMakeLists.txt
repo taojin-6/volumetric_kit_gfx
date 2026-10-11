@@ -160,7 +160,8 @@ vg_discover_tests(vg_camera_test)
 # shared device fixture (skips when no device). Links gfx_pipelines, which
 # brings core + assets, plus gfx_io so pbr_model_test can drive the real
 # load_gltf -> PbrModel::create path against the Box.glb fixture (defined below,
-# next to the fixture download).
+# next to the fixture download), and gfx_camera so primitive_pipeline_test can
+# draw through a camera::Camera.
 add_executable(
   vg_pipelines_test
   gpu_mesh_test.cpp
@@ -175,7 +176,6 @@ add_executable(
   primitive_pipeline_test.cpp
   shader_common_test.cpp
   streamed_atlas_test.cpp)
-# gfx_camera: primitive_pipeline_test draws through a camera::Camera.
 target_link_libraries(
   vg_pipelines_test
   PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io
