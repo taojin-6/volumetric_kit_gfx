@@ -703,10 +703,26 @@ TEST_F(PrimitiveRenderTest, RefusesMalformedDrawsAndRecordsNothing) {
 class PrimitiveLargePointsTest : public PrimitiveRenderTest {
  protected:
   vkc::DeviceRequirements requirements() const override {
-    vkc::DeviceRequirements reqs = vg::device_requirements();
-    reqs.features.largePoints = VK_TRUE;
-    return reqs;
+    return requirements_;
   }
+
+  void SetUp() override {
+    // Keep the require-device policy for the renderer's baseline, but skip
+    // an unavailable optional feature before requesting the shared device.
+    vkc::test::VulkanTest::SetUp();
+    if (base_setup_incomplete()) return;
+    requirements_.features.largePoints = VK_TRUE;
+    const auto wide = instance().select_physical_device(requirements_);
+    if (!wide.ok() &&
+        wide.status().domain() == vkc::Status::Code::Unsupported) {
+      GTEST_SKIP() << "largePoints is unavailable: " << wide.status().message();
+    }
+    ASSERT_TRUE(wide.ok()) << wide.status().message();
+    PrimitiveRenderTest::SetUp();
+  }
+
+ private:
+  vkc::DeviceRequirements requirements_ = vg::device_requirements();
 };
 
 // With largePoints, a point is a square of its size, centered on its pixel;
