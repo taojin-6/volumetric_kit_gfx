@@ -58,10 +58,10 @@ and `assets` as foundational roots (no tier dependencies of their own) that any 
 build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets`). `assets` is the
 format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
 produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`. `ui` is a Dear
-ImGui debug overlay (depends only on `core`): it wraps ImGui's *renderer* backend
-(`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic rendering; like
-`windowing` it is GLFW-free, so the *platform* backend (`imgui_impl_glfw`) stays in the
-consumer/example.
+ImGui debug overlay (on `core`, and `camera` for `ImageOverlay`): it wraps ImGui's
+*renderer* backend (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic
+rendering; like `windowing` it is GLFW-free, so the *platform* backend (`imgui_impl_glfw`)
+stays in the consumer/example.
 
 ## Key gotchas
 

@@ -9,18 +9,13 @@
 
 #include <glm/vec2.hpp>
 
+#include "glm_test_util.hpp"
 #include "volumetric_kit/gfx/camera/image_view_2d.hpp"
 
 namespace {
 
+using vg_test::expect_near;
 using volumetric_kit::gfx::camera::ImageView2D;
-
-constexpr float kEps = 1e-4f;
-
-void expect_near(glm::vec2 actual, glm::vec2 expected) {
-  EXPECT_NEAR(actual.x, expected.x, kEps);
-  EXPECT_NEAR(actual.y, expected.y, kEps);
-}
 
 TEST(ImageView2DTest, FitsAWideImageCenteredWithBarsAboveAndBelow) {
   // A 400 x 100 image in a 200 x 200 viewport at (10, 20): the width limits

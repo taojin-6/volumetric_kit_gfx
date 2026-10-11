@@ -3,10 +3,10 @@
 
 # --- gfx_ui: Dear ImGui debug-overlay tier ----------------------------------
 # Wraps ImGui's Vulkan renderer backend (imgui_impl_vulkan) so a debug UI draws
-# into a RenderTarget through dynamic rendering. The platform backend
-# (imgui_impl_glfw) is deliberately NOT built here -- it stays in the example,
-# so this tier inherits the windowing tier's GLFW-free rule. Depends only on
-# gfx_core.
+# into a RenderTarget through dynamic rendering, and draws marks over an image
+# view. The platform backend (imgui_impl_glfw) is deliberately NOT built here --
+# it stays in the example, so this tier inherits the windowing tier's GLFW-free
+# rule. Depends on gfx_core and gfx_camera.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -33,6 +33,11 @@ add_library(
 target_include_directories(
   vg_imgui SYSTEM PUBLIC "${VG_IMGUI_SOURCE_DIR}"
                          "${VG_IMGUI_SOURCE_DIR}/backends")
+# A single stroke can exceed 64K vertices; vertex offsets only split between
+# allocations. Use 32-bit indices throughout ImGui and publish the same ABI to
+# gfx_ui consumers below, including their platform backend and demo sources.
+set(_vg_imgui_definitions "ImDrawIdx=unsigned int")
+target_compile_definitions(vg_imgui PUBLIC ${_vg_imgui_definitions})
 # imgui_impl_vulkan.cpp uses the linked Vulkan prototypes (no volk): Headers to
 # compile against; the loader symbols resolve when this links into gfx_ui.
 target_link_libraries(vg_imgui PUBLIC Vulkan::Headers)
@@ -43,7 +48,8 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_ui)
 add_library(volumetric_kit::gfx_ui ALIAS gfx_ui)
 
-target_sources(gfx_ui PRIVATE imgui_overlay.cpp metrics_panel.cpp)
+target_sources(gfx_ui PRIVATE image_overlay.cpp imgui_overlay.cpp
+                              metrics_panel.cpp)
 
 generate_export_header(
   gfx_ui
@@ -66,6 +72,7 @@ if(_vg_type STREQUAL "STATIC_LIBRARY")
 endif()
 
 target_compile_features(gfx_ui PUBLIC cxx_std_17)
+target_compile_definitions(gfx_ui PUBLIC ${_vg_imgui_definitions})
 
 target_include_directories(
   gfx_ui
@@ -81,14 +88,14 @@ target_include_directories(
 target_include_directories(gfx_ui SYSTEM
                            PUBLIC "$<BUILD_INTERFACE:${VG_IMGUI_SOURCE_DIR}>")
 
-# gfx_core is PUBLIC (RenderTargetLayout is in this tier's API); the ImGui
-# backend and the Vulkan loader are PRIVATE -- neither imgui_impl_vulkan nor a
-# loader symbol appears in this tier's public surface. vg_imgui's backends/
-# include dir stays PRIVATE this way, so consumers see imgui.h (added PUBLIC
-# above) but not the renderer backend header.
+# gfx_core and gfx_camera are PUBLIC (RenderTargetLayout and ImageView2D are in
+# this tier's API); the ImGui backend and the Vulkan loader are PRIVATE --
+# neither imgui_impl_vulkan nor a loader symbol appears in this tier's public
+# surface. vg_imgui's backends/ include dir stays PRIVATE this way, so consumers
+# see imgui.h (added PUBLIC above) but not the renderer backend header.
 target_link_libraries(
   gfx_ui
-  PUBLIC volumetric_kit::gfx_core Vulkan::Headers
+  PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_camera Vulkan::Headers
   PRIVATE vg_imgui Vulkan::Vulkan)
 
 vg_target_warnings(gfx_ui)
