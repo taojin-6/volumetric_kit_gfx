@@ -197,16 +197,18 @@ class ShaderCommonTest : public vg_test::RendererDeviceTest {
   std::optional<vkc::DescriptorPool> pool_;
 };
 
-// srgb_to_linear and linear_to_srgb follow the reference curve at every 8-bit
-// code, across [0, 1], and on either side of each branch's threshold.
-TEST_F(ShaderCommonTest, SrgbFollowsTheReferenceCurve) {
+// One probe returns both curves, their round trips and the triangle corners.
+// Check them together so the same inputs are uploaded and dispatched only once.
+TEST_F(ShaderCommonTest, SrgbCurvesRoundTripsAndFullscreenTriangle) {
   std::vector<float> values = unit_values();
   for (const float threshold : {0.04045f, 0.0031308f}) {
     values.push_back(std::nextafter(threshold, 0.0f));
     values.push_back(threshold);
     values.push_back(std::nextafter(threshold, 1.0f));
   }
-  const std::vector<Sample> samples = run(values);
+  values.push_back(0.18f);  // standard mid-grey, beyond the regular grid
+  std::array<float, 6> corners{};
+  const std::vector<Sample> samples = run(values, &corners);
   ASSERT_EQ(samples.size(), values.size() * 3);
   for (const Sample& s : samples) {
     EXPECT_TRUE(near(s.decoded, srgb_decode(s.input), kTolerance))
@@ -216,14 +218,8 @@ TEST_F(ShaderCommonTest, SrgbFollowsTheReferenceCurve) {
         << "linear_to_srgb(" << s.input << ") = " << s.encoded << ", want "
         << srgb_encode(s.input);
   }
-}
-
-// The standard's own numbers: the ends, each branch's threshold (where the
-// linear toe meets the power curve), and mid-grey both ways.
-TEST_F(ShaderCommonTest, SrgbHitsKnownValues) {
-  const std::vector<Sample> samples =
-      run({0.0f, 1.0f, 0.5f, 0.04045f, 0.0031308f, 0.18f});
-  ASSERT_EQ(samples.size(), 18u);
+  // The standard's own numbers independently anchor the reference curves:
+  // the ends, each branch's threshold, and mid-grey both ways.
   EXPECT_EQ(find(samples, 0.0f).decoded, 0.0f);
   EXPECT_EQ(find(samples, 0.0f).encoded, 0.0f);
   EXPECT_NEAR(find(samples, 1.0f).decoded, 1.0f, 1e-6f);
@@ -233,14 +229,8 @@ TEST_F(ShaderCommonTest, SrgbHitsKnownValues) {
   EXPECT_NEAR(find(samples, 0.04045f).decoded, 0.0031308050f, 1e-8f);
   EXPECT_NEAR(find(samples, 0.0031308f).encoded, 0.040449936f, 1e-7f);
   EXPECT_NEAR(find(samples, 0.18f).encoded, 0.46135613f, 1e-6f);
-}
-
-// Decoding then encoding returns every 8-bit code exactly, and either order
-// returns any value in [0, 1] to within both curves' tolerance.
-TEST_F(ShaderCommonTest, SrgbRoundTrips) {
-  const std::vector<float> values = unit_values();
-  const std::vector<Sample> samples = run(values);
-  ASSERT_EQ(samples.size(), values.size() * 3);
+  // Decoding then encoding returns every 8-bit code exactly, and either order
+  // returns any value in [0, 1] to within both curves' tolerance.
   for (const Sample& s : samples) {
     EXPECT_TRUE(near(s.encoded_decoded, s.input, 2 * kTolerance))
         << "linear_to_srgb(srgb_to_linear(" << s.input
@@ -253,6 +243,10 @@ TEST_F(ShaderCommonTest, SrgbRoundTrips) {
     const Sample s = find(samples, static_cast<float>(code) / 255.0f);
     EXPECT_EQ(std::lround(s.encoded_decoded * 255.0f), code);
   }
+
+  // The triangle's hypotenuse passes through (1, 1), covering [-1, 1]^2.
+  const std::array<float, 6> want = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
+  EXPECT_EQ(corners, want);
 }
 
 // tonemap_aces follows the reference fit from black through HDR values well
@@ -274,15 +268,6 @@ TEST_F(ShaderCommonTest, TonemapAcesFollowsTheReference) {
   EXPECT_NEAR(find(samples, 0.18f).tonemapped, 0.26689892f, 1e-6f);
   EXPECT_NEAR(find(samples, 1.0f).tonemapped, 2.54f / 3.16f, 1e-6f);
   EXPECT_EQ(find(samples, 64.0f).tonemapped, 1.0f);
-}
-
-// The full-screen triangle's corners are (-1, -1), (3, -1) and (-1, 3), so its
-// hypotenuse passes through (1, 1) and it covers the [-1, 1] square.
-TEST_F(ShaderCommonTest, FullscreenTriangleCoversTheViewport) {
-  std::array<float, 6> corners{};
-  ASSERT_FALSE(run({0.0f}, &corners).empty());
-  const std::array<float, 6> want = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
-  EXPECT_EQ(corners, want);
 }
 
 }  // namespace

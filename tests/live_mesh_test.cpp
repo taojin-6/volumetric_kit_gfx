@@ -8,15 +8,11 @@
 
 #include <gtest/gtest.h>
 
-#include "gfx_test_support.hpp"
-#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 
 namespace {
 
 namespace pipelines = volumetric_kit::gfx::pipelines;
-
-// --- No device needed --------------------------------------------------------
 
 TEST(LiveMeshTest, DefaultConstructedIsEmpty) {
   pipelines::LiveMesh live;
@@ -29,29 +25,19 @@ TEST(LiveMeshTest, DefaultConstructedIsEmpty) {
   EXPECT_EQ(live.indirect_offset, 0u);
 }
 
-// --- valid() gating on real buffers ------------------------------------------
-
-using LiveMeshDeviceTest = vg_test::RendererDeviceTest;
-
-TEST_F(LiveMeshDeviceTest, ValidRequiresAllThreeBuffers) {
-  auto make = [&](VkBufferUsageFlags usage) {
-    vkc::BufferDesc desc;
-    desc.size = 256;
-    desc.usage = usage;
-    desc.memory = vkc::MemoryUsage::DeviceOnly;
-    return allocator().create_buffer(desc);
-  };
-  auto vtx = make(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-  auto idx = make(VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-  auto ind = make(VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-  ASSERT_TRUE(vtx.ok()) << vtx.status().message();
-  ASSERT_TRUE(idx.ok()) << idx.status().message();
-  ASSERT_TRUE(ind.ok()) << ind.status().message();
-
+TEST(LiveMeshTest, ValidRequiresAllThreeBuffers) {
+  // valid() only compares borrowed handles with null; these sentinels never
+  // reach Vulkan. VkBuffer can be a pointer or an integer, depending on the
+  // ABI.
+#if VK_USE_64_BIT_PTR_DEFINES
+  const VkBuffer bound = reinterpret_cast<VkBuffer>(1);
+#else
+  const VkBuffer bound = 1;
+#endif
   pipelines::LiveMesh full;
-  full.vertices = vtx.value().handle();
-  full.indices = idx.value().handle();
-  full.indirect = ind.value().handle();
+  full.vertices = bound;
+  full.indices = bound;
+  full.indirect = bound;
   EXPECT_TRUE(full.valid());
 
   // Dropping any one borrowed buffer makes the mesh non-drawable -- submit()
