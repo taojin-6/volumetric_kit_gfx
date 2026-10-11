@@ -111,6 +111,21 @@ what has landed since then. Record amendments when a contract changes.
   for the full live path: the `app::StreamedApp` driver (per-slot atlas ringing landed
   2026-10-08).
 
+## 2026-10-11 — ImGui uses 32-bit indices
+
+The ui tier builds Dear ImGui and its Vulkan backend with
+`ImDrawIdx=unsigned int`. `volumetric_kit::gfx_ui` publishes the same compile
+definition to every consumer, including platform backends and demo sources
+compiled by an application. All sources sharing the context must be rebuilt
+with that configuration; the index type is part of ImGui's ABI.
+
+A single `ImageOverlay::polyline` can generate more than 65,535 vertices.
+ImGui's vertex-offset support starts a new range between allocations, but
+cannot split one oversized stroke allocation. Using 32-bit indices preserves
+ImGui's joins, anti-aliasing and closed paths without a separate batching
+implementation. The Vulkan backend already supports this index width. Index
+storage doubles; vertex and texture storage do not change.
+
 ## 2026-10-08 — A streamed atlas, and the pipeline's own fallback
 
 **The contract.** `HybridMeshPipeline::create` now takes the device and an

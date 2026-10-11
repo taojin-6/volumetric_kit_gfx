@@ -15,6 +15,7 @@
 #include <future>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include "gfx_test_support.hpp"
 #include "imgui.h"
@@ -24,6 +25,7 @@
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
+#include "volumetric_kit/gfx/ui/image_overlay.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 
@@ -191,6 +193,17 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 
   overlay.new_frame();
   ImGui::ShowDemoWindow();  // a non-trivial draw list exercising the font atlas
+  // Put the following rect beyond the 16-bit vertex range. Its readback also
+  // checks that the Vulkan backend binds and reads the 32-bit index buffer.
+  std::vector<glm::vec2> points(33000);
+  for (size_t i = 0; i < points.size(); ++i) {
+    points[i] = {static_cast<float>(i % 32), static_cast<float>((i / 32) % 32)};
+  }
+  const ui::ImageOverlay marks(
+      vg::camera::ImageView2D({64.0f, 64.0f}, {0.0f, 0.0f}, {64.0f, 64.0f}),
+      ui::PixelCenters::Half);
+  marks.polyline(points.data(), points.size(), IM_COL32(255, 0, 0, 255));
+  ASSERT_GT(ImGui::GetBackgroundDrawList()->VtxBuffer.Size, 65536);
   // A deterministic opaque-white rect over the whole 64x64 viewport (on the
   // background draw list, behind the demo window) so the readback below can
   // assert ImGui actually rendered, not merely that recording was clean.

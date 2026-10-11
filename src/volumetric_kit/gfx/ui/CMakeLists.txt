@@ -33,6 +33,11 @@ add_library(
 target_include_directories(
   vg_imgui SYSTEM PUBLIC "${VG_IMGUI_SOURCE_DIR}"
                          "${VG_IMGUI_SOURCE_DIR}/backends")
+# A single stroke can exceed 64K vertices; vertex offsets only split between
+# allocations. Use 32-bit indices throughout ImGui and publish the same ABI to
+# gfx_ui consumers below, including their platform backend and demo sources.
+set(_vg_imgui_definitions "ImDrawIdx=unsigned int")
+target_compile_definitions(vg_imgui PUBLIC ${_vg_imgui_definitions})
 # imgui_impl_vulkan.cpp uses the linked Vulkan prototypes (no volk): Headers to
 # compile against; the loader symbols resolve when this links into gfx_ui.
 target_link_libraries(vg_imgui PUBLIC Vulkan::Headers)
@@ -67,6 +72,7 @@ if(_vg_type STREQUAL "STATIC_LIBRARY")
 endif()
 
 target_compile_features(gfx_ui PUBLIC cxx_std_17)
+target_compile_definitions(gfx_ui PUBLIC ${_vg_imgui_definitions})
 
 target_include_directories(
   gfx_ui

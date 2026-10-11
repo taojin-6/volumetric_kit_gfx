@@ -6,7 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <limits>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include <glm/common.hpp>
 #include <glm/vec2.hpp>
@@ -247,6 +251,97 @@ TEST_F(ImageOverlayTest, PolylineStrokesThroughItsPoints) {
   overlay.polyline(points, 3, kRed, 2.0f, true);
   EXPECT_GT(added(list, first, kRed).count, open.count);  // the closing leg
 }
+
+struct StrokeStyle {
+  const char* name;
+  ImDrawListFlags flags;
+  float thickness;
+};
+
+using LargePolylineParam = std::tuple<StrokeStyle, bool, bool>;
+class LargePolylineTest
+    : public ImageOverlayTest,
+      public ::testing::WithParamInterface<LargePolylineParam> {};
+
+// Resolve indices as the renderer does, including each command's vertex
+// offset. Every vertex of the mark must be reachable, and its indices must
+// never refer to a different mark, even if those indices are in bounds.
+void expect_referenced_vertices(const ImDrawList& list, int first_index,
+                                int last_index, int first_vertex,
+                                int last_vertex) {
+  ASSERT_GT(last_index, first_index);
+  ASSERT_GT(last_vertex, first_vertex);
+  std::vector<bool> referenced(last_vertex - first_vertex, false);
+  for (const ImDrawCmd& cmd : list.CmdBuffer) {
+    const unsigned int begin =
+        std::max(cmd.IdxOffset, static_cast<unsigned int>(first_index));
+    const unsigned int end = std::min(cmd.IdxOffset + cmd.ElemCount,
+                                      static_cast<unsigned int>(last_index));
+    for (unsigned int i = begin; i < end; ++i) {
+      const size_t vertex =
+          static_cast<size_t>(cmd.VtxOffset) + list.IdxBuffer[i];
+      ASSERT_GE(vertex, static_cast<size_t>(first_vertex));
+      ASSERT_LT(vertex, static_cast<size_t>(last_vertex));
+      referenced[vertex - first_vertex] = true;
+    }
+  }
+  EXPECT_EQ(std::count(referenced.begin(), referenced.end(), true),
+            last_vertex - first_vertex);
+}
+
+// A single stroke exceeds 64K vertices in every tessellation mode. Vertex
+// offsets alone cannot split that allocation; 16-bit indices wrap inside it
+// and, on the AA paths, also corrupt the point drawn afterward.
+TEST_P(LargePolylineTest, ReferencesEntirePathAndFollowingPoint) {
+  const auto& [style, closed, vertex_offsets] = GetParam();
+  if (vertex_offsets) {
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+  }
+  begin_frame({1.0f, 1.0f});
+  ImDrawList& list = background();
+  list.Flags &= ~(ImDrawListFlags_AntiAliasedLines |
+                  ImDrawListFlags_AntiAliasedLinesUseTex);
+  list.Flags |= style.flags;
+  const ui::ImageOverlay overlay(make_view(), ui::PixelCenters::Integer);
+  // Include existing geometry so the stroke need not start at vertex zero.
+  overlay.point({5.0f, 5.0f}, kBlue);
+
+  std::vector<glm::vec2> points(33000);
+  for (size_t i = 0; i < points.size(); ++i) {
+    points[i] = {static_cast<float>(i % 600),
+                 20.0f + static_cast<float>(i / 600)};
+  }
+  const int path_vertex = list.VtxBuffer.Size;
+  const int path_index = list.IdxBuffer.Size;
+  overlay.polyline(points.data(), points.size(), kRed, style.thickness, closed);
+  const int point_vertex = list.VtxBuffer.Size;
+  const int point_index = list.IdxBuffer.Size;
+  ASSERT_GT(point_vertex - path_vertex, 65536);
+  expect_referenced_vertices(list, path_index, point_index, path_vertex,
+                             point_vertex);
+
+  overlay.point({200.0f, 200.0f}, kGreen);
+  expect_referenced_vertices(list, point_index, list.IdxBuffer.Size,
+                             point_vertex, list.VtxBuffer.Size);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StrokeModes, LargePolylineTest,
+    ::testing::Combine(
+        ::testing::Values(
+            StrokeStyle{"NoAA", ImDrawListFlags_None, 2.0f},
+            StrokeStyle{"TexturedAA",
+                        ImDrawListFlags_AntiAliasedLines |
+                            ImDrawListFlags_AntiAliasedLinesUseTex,
+                        2.0f},
+            StrokeStyle{"ThinAA", ImDrawListFlags_AntiAliasedLines, 1.0f},
+            StrokeStyle{"ThickAA", ImDrawListFlags_AntiAliasedLines, 2.5f}),
+        ::testing::Bool(), ::testing::Bool()),
+    ([](const ::testing::TestParamInfo<LargePolylineParam>& info) {
+      const auto& [style, closed, vertex_offsets] = info.param;
+      return std::string(style.name) + (closed ? "Closed" : "Open") +
+             (vertex_offsets ? "WithOffsets" : "WithoutOffsets");
+    }));
 
 // The cells span the image's edges whatever the pixel-center convention, each
 // filled with its own color in row-major order (a transparent one, or one past
