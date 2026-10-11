@@ -34,6 +34,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `camera`: `ImageView2D` (`camera/image_view_2d.hpp`), a pan-and-zoom view of
   a 2D image in a viewport, mapping image coordinates to target pixels and
   back.
+- `ui`: `ImageOverlay` (`ui/image_overlay.hpp`) draws points, polylines,
+  labels and a cell grid, given in image coordinates, over an `ImageView2D`
+  on an ImGui draw list, clipped to its viewport. `PixelCenters::Integer`
+  takes OpenCV's texel centres, `Half` Vulkan's; the framebuffer scale is
+  divided out.
 - `core`: `cmd_generate_mips`, `mip_level_count` and `mip_level_extent`
   (`core/mip_chain.hpp`) build a mip chain on the GPU from level 0, for an
   image filled any way; `UploadBatch`'s `generate_mips` uses them.
