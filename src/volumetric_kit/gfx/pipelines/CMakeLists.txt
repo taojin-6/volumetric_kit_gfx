@@ -27,6 +27,7 @@ target_sources(
           pbr_model.cpp
           pbr_pipeline.cpp
           pbr_scene.cpp
+          primitive_pipeline.cpp
           streamed_atlas.cpp)
 
 generate_export_header(
@@ -121,6 +122,22 @@ vkc_embed_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/image_convert.frag"
   "${PROJECT_SOURCE_DIR}/shaders/image_draw.vert"
   "${PROJECT_SOURCE_DIR}/shaders/image_draw.frag")
+
+# --- Embedded point and line shaders ----------------------------------------
+# PrimitivePipeline embeds primitive.{vert,frag}, which its point-list and
+# line-list pipelines share (primitive_pipeline.cpp #includes
+# primitive_{vert,frag}.spv.hpp).
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/primitive.vert"
+  "${PROJECT_SOURCE_DIR}/shaders/primitive.frag")
 
 vg_target_warnings(gfx_pipelines)
 

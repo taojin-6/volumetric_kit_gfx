@@ -172,12 +172,15 @@ add_executable(
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
   pbr_scene_test.cpp
+  primitive_pipeline_test.cpp
   shader_common_test.cpp
   streamed_atlas_test.cpp)
+# gfx_camera: primitive_pipeline_test draws through a camera::Camera.
 target_link_libraries(
   vg_pipelines_test
   PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io
-          volumetric_kit::core_test_support GTest::gtest_main)
+          volumetric_kit::gfx_camera volumetric_kit::core_test_support
+          GTest::gtest_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
 # update's barriers are checked against a writer in a stage of its own; and

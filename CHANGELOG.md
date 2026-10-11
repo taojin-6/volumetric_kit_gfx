@@ -75,6 +75,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   for discard even if the frame's commands ran.
 - `pipelines`: `kHybridMeshVertexColor` draws every triangle in its vertex
   color, the atlas bound or not.
+- `pipelines`: `PrimitivePipeline` (`pipelines/primitive_pipeline.hpp`) draws
+  runs of `ColorVertex` (a world-space position and an sRGB-encoded RGBA8
+  color, 16 bytes) as points or lines, depth-tested, each draw in a viewport
+  rectangle of its own through its own view-projection. Points are 1 px
+  unless the device enables `largePoints`; `submit` checks every draw before
+  recording any.
 
 ### Changed
 
