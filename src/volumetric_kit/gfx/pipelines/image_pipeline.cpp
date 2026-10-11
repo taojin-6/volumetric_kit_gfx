@@ -20,6 +20,7 @@
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/impl/image_copy_layout.hpp"
 #include "volumetric_kit/gfx/core/mip_chain.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/pipeline_util.hpp"
@@ -194,35 +195,14 @@ core::Status check_plane(const ImagePlane& plane, uint32_t p, VkFormat format,
     }
     return core::Status{};
   }
-  const core::Buffer& buffer = *plane.buffer;
-  if (!buffer.valid() ||
-      (buffer.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: plane " + std::to_string(p) +
-        "'s buffer is empty or lacks TRANSFER_SRC usage");
-  }
-  const VkDeviceSize texel = core::texel_bytes(format);
-  if (plane.offset % texel != 0) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: plane " + std::to_string(p) +
-        "'s buffer offset is not a multiple of the texel size");
-  }
-  if (plane.row_length != 0 && plane.row_length < extent.width) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: plane " + std::to_string(p) +
-        "'s row length is shorter than a row");
-  }
-  const VkDeviceSize row =
-      plane.row_length != 0 ? plane.row_length : extent.width;
-  const VkDeviceSize needed =
-      plane.offset +
-      ((VkDeviceSize{extent.height} - 1) * row + extent.width) * texel;
-  if (needed > buffer.size()) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: plane " + std::to_string(p) +
-        "'s buffer is too small for the picture");
-  }
-  return core::Status{};
+  VkBufferImageCopy region{};
+  region.bufferOffset = plane.offset;
+  region.bufferRowLength = plane.row_length;
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {extent.width, extent.height, 1};
+  return gfx::detail::check_buffer_image_copy(
+      "ImagePipeline::record_update: plane " + std::to_string(p), plane.buffer,
+      region, core::texel_bytes(format));
 }
 
 core::Result<ShaderModule> embedded_module(VkDevice device,

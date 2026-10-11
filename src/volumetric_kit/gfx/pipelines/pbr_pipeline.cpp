@@ -43,15 +43,16 @@ core::Result<PbrPipeline> PbrPipeline::create(
                  device, reinterpret_cast<const uint32_t*>(vg_model_frag_spv),
                  vg_model_frag_spv_size));
 
-  // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), and
-  // tangent (3) -- the layout model.vert declares.
+  // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2),
+  // tangent (3), and color (4) -- the layout model.vert declares.
   const VkVertexInputBindingDescription binding{0, sizeof(assets::Vertex),
                                                 VK_VERTEX_INPUT_RATE_VERTEX};
-  const VkVertexInputAttributeDescription attrs[4] = {
+  const VkVertexInputAttributeDescription attrs[5] = {
       {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(assets::Vertex, position)},
       {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(assets::Vertex, normal)},
       {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(assets::Vertex, uv0)},
       {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(assets::Vertex, tangent)},
+      {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(assets::Vertex, color)},
   };
 
   GraphicsPipelineDesc desc;
@@ -61,7 +62,7 @@ core::Result<PbrPipeline> PbrPipeline::create(
   desc.vertex_bindings = &binding;
   desc.vertex_binding_count = 1;
   desc.vertex_attributes = attrs;
-  desc.vertex_attribute_count = 4;
+  desc.vertex_attribute_count = 5;
   desc.depth_test = true;
   desc.depth_write = true;
   VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(device, desc));

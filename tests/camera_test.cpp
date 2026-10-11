@@ -113,6 +113,29 @@ TEST(Camera, OrthographicMapsBoxToNdc) {
   EXPECT_NEAR(corner.y, -1.0f, 1e-5f);
 }
 
+// An off-center orthographic box has a Y translation as well as a scale.
+// Both must be flipped to keep its center and edges inside the viewport.
+TEST(Camera, AsymmetricOrthographicMapsBoxToNdc) {
+  for (const glm::vec4 bounds : {glm::vec4(0.0f, 640.0f, 0.0f, 480.0f),
+                                 glm::vec4(-20.0f, 40.0f, -30.0f, -10.0f)}) {
+    SCOPED_TRACE(bounds.z);
+    const cam::Camera camera = cam::Camera::look_at_ortho(
+        {0.0f, 0.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, bounds.x,
+        bounds.y, bounds.z, bounds.w, 0.1f, 100.0f);
+    const glm::vec3 center = to_ndc(
+        camera,
+        {(bounds.x + bounds.y) * 0.5f, (bounds.z + bounds.w) * 0.5f, 0.0f});
+    EXPECT_NEAR(center.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(center.y, 0.0f, 1e-5f);
+    const glm::vec3 bottom_left = to_ndc(camera, {bounds.x, bounds.z, 0.0f});
+    EXPECT_NEAR(bottom_left.x, -1.0f, 1e-5f);
+    EXPECT_NEAR(bottom_left.y, 1.0f, 1e-5f);
+    const glm::vec3 top_right = to_ndc(camera, {bounds.y, bounds.w, 0.0f});
+    EXPECT_NEAR(top_right.x, 1.0f, 1e-5f);
+    EXPECT_NEAR(top_right.y, -1.0f, 1e-5f);
+  }
+}
+
 // set_view(eye, center, up) then a separately-set projection composes to the
 // same matrix as the look_at_perspective factory.
 TEST(Camera, SettersComposeLikeFactory) {

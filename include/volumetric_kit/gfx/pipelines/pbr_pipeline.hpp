@@ -36,6 +36,9 @@ struct PbrFrame;
 /// empty
 /// (`valid()` is false) and safe to move-assign into.
 ///
+/// Vertex colors modulate the material base-color factor and texture in
+/// linear light. Meshes without colors use @ref assets::Vertex's white default.
+///
 /// @warning The @p device passed to @ref create must outlive the pipeline.
 ///
 /// @code

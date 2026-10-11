@@ -20,6 +20,7 @@ layout(location = 0) in vec3 frag_normal;
 layout(location = 1) in vec2 frag_uv;
 layout(location = 2) in vec3 frag_world_pos;
 layout(location = 3) in vec4 frag_tangent;
+layout(location = 4) in vec4 frag_color;
 
 layout(set = 0, binding = 0) uniform Scene {
   vec4 camera_pos;  // .xyz world-space eye, .w = prefiltered-specular max LOD
@@ -99,7 +100,7 @@ vec3 shading_normal(vec3 n_geo) {
 
 void main() {
   const vec3 albedo =
-      (mat.base_color_factor * texture(base_color_tex, frag_uv)).rgb;
+      (mat.base_color_factor * texture(base_color_tex, frag_uv) * frag_color).rgb;
 
   const vec3 mr = texture(metallic_roughness_tex, frag_uv).rgb;
   const float metallic = mat.metallic_factor * mr.b;  // glTF: B = metallic

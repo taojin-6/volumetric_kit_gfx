@@ -29,6 +29,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   or buffers), converts them to display color in an `_SRGB` image and rebuilds
   its mip chain, so a picture shrunk by window scaling or zoom averages in
   linear light; draws minify trilinearly and magnify nearest or linear.
+  Buffer updates reject overflowing source ranges and row pitches above
+  Vulkan's limit before recording, using the same validation as image updates.
 - `camera`: `ImageView2D` (`camera/image_view_2d.hpp`), a pan-and-zoom view of
   a 2D image in a viewport, mapping image coordinates to target pixels and
   back.
@@ -44,6 +46,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `pipelines`: `PbrMaterial::create_all` builds many materials on one upload:
   their factors share one uniform buffer, each at a 256-byte-aligned offset,
   uploaded by one copy. `PbrModel::create` builds its materials this way.
+- `pipelines`: PBR shading carries `assets::Vertex::color` (glTF `COLOR_0`)
+  through the GPU pipeline and modulates base color in linear light.
 - `windowing`: **frames are numbered on a timeline.** `Frame::number` counts
   from 1, and `FrameLoop::timeline()` reaches a frame's number once its work
   completes; `completed()` reads it, and `submitted()` gives the newest frame
@@ -74,6 +78,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `camera`: asymmetric orthographic projections flip their Y translation
+  along with their scale, keeping off-center boxes inside the viewport.
 - `pipelines`: **`HybridMeshPipeline` owns a fallback atlas**, and a frame
   with no atlas draws in vertex color instead of drawing nothing. Migrating:
   `HybridMeshPipeline::create(device.handle(), layout)` →
