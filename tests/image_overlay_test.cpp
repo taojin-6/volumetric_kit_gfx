@@ -11,7 +11,9 @@
 #include <glm/common.hpp>
 #include <glm/vec2.hpp>
 
+#include "glm_test_util.hpp"
 #include "imgui.h"
+#include "ui_test_support.hpp"
 #include "volumetric_kit/gfx/camera/image_view_2d.hpp"
 #include "volumetric_kit/gfx/ui/image_overlay.hpp"
 
@@ -20,10 +22,13 @@ namespace camera = volumetric_kit::gfx::camera;
 
 namespace {
 
+using vg_test::expect_near;
+
 constexpr ImU32 kRed = IM_COL32(255, 0, 0, 255);
 constexpr ImU32 kGreen = IM_COL32(0, 255, 0, 255);
 constexpr ImU32 kBlue = IM_COL32(0, 0, 255, 255);
 constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+constexpr float kInf = std::numeric_limits<float>::infinity();
 
 // A 640 x 480 image fitted in a 1280 x 960 viewport at (40, 20): 2 target
 // pixels per texel, image (0, 0) at target (40, 20).
@@ -32,7 +37,7 @@ camera::ImageView2D make_view() {
                              {1280.0f, 960.0f});
 }
 
-// The vertices added from index `first` on that carry colour `col`.
+// The vertices added from index `first` on that carry color `col`.
 struct Added {
   glm::vec2 min{std::numeric_limits<float>::max()};
   glm::vec2 max{std::numeric_limits<float>::lowest()};
@@ -54,34 +59,17 @@ Added added(const ImDrawList& list, int first, ImU32 col) {
   return a;
 }
 
-void expect_near(glm::vec2 actual, glm::vec2 expected, float eps = 1e-4f) {
-  EXPECT_NEAR(actual.x, expected.x, eps);
-  EXPECT_NEAR(actual.y, expected.y, eps);
-}
-
-// A headless 800 x 600 ImGui frame with no renderer backend: the font atlas
-// is built on the CPU so NewFrame's atlas assert holds. Anti-aliasing is off,
-// so every vertex of a mark carries its colour and sits on its outline.
+// A headless 800 x 600 ImGui frame. Anti-aliasing is off, so every vertex of a
+// mark carries its color and sits on its outline.
 class ImageOverlayTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    context_ = ImGui::CreateContext();
-    ImGui::SetCurrentContext(context_);
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;  // hermetic: no imgui.ini in the CWD
-    io.DisplaySize = ImVec2(800.0f, 600.0f);
-    io.DeltaTime = 1.0f / 60.0f;
-    unsigned char* pixels = nullptr;
-    int width = 0;
-    int height = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     ImGui::GetStyle().AntiAliasedFill = false;
     ImGui::GetStyle().AntiAliasedLines = false;
   }
 
   void TearDown() override {
     if (in_frame_) ImGui::EndFrame();
-    ImGui::DestroyContext(context_);
   }
 
   // The scale is set after NewFrame, which would otherwise bake the font at
@@ -99,13 +87,13 @@ class ImageOverlayTest : public ::testing::Test {
   static ImDrawList& background() { return *ImGui::GetBackgroundDrawList(); }
 
  private:
-  ImGuiContext* context_ = nullptr;
+  vg_test::HeadlessImGui imgui_{ImVec2(800.0f, 600.0f)};
   bool in_frame_ = false;
 };
 
-// OpenCV's (0, 0), the first texel's centre, lands at origin + 0.5 * scale
+// OpenCV's (0, 0), the first texel's center, lands at origin + 0.5 * scale
 // target pixels, divided by the framebuffer scale; Vulkan's is the corner.
-TEST_F(ImageOverlayTest, MapsTexelCentresToDisplayCoordinates) {
+TEST_F(ImageOverlayTest, MapsTexelCentersToDisplayCoordinates) {
   begin_frame({2.0f, 2.0f});
   const camera::ImageView2D view = make_view();
   const ui::ImageOverlay integer(view, ui::PixelCenters::Integer);
@@ -139,47 +127,52 @@ TEST_F(ImageOverlayTest, FollowsTheViewAndFramebufferScale) {
                 view.image_to_target(p + 0.5f) / glm::vec2(2.0f, 1.5f), 1e-3f);
   }
 
-  set_framebuffer_scale({0.0f, kNaN});
-  expect_near(
-      ui::ImageOverlay(view, ui::PixelCenters::Half).to_display({10.0f, 20.0f}),
-      view.image_to_target({10.0f, 20.0f}), 1e-3f);
+  for (const glm::vec2 unusable :
+       {glm::vec2{0.0f, kNaN}, glm::vec2{kInf, -1.0f}}) {
+    set_framebuffer_scale(unusable);
+    expect_near(ui::ImageOverlay(view, ui::PixelCenters::Half)
+                    .to_display({10.0f, 20.0f}),
+                view.image_to_target({10.0f, 20.0f}), 1e-3f);
+  }
 }
 
 // Every mark's draw command is clipped to the viewport in display coordinates
-// -- (40, 20) + (1280, 960) target pixels, halved, cut to the 800 x 600
-// display -- and the list's own clip is restored after each mark.
+// -- (40, 20) + (1280, 960) target pixels, halved: x 20 to 660, y 10 to 490 --
+// within the list's own clip, which is restored after each mark.
 TEST_F(ImageOverlayTest, MarksAreClippedToTheViewport) {
   begin_frame({2.0f, 2.0f});
   ImDrawList& list = background();
-  const ImVec4 outer = list._CmdHeader.ClipRect;
+  list.PushClipRect(ImVec2(0.0f, 50.0f), ImVec2(700.0f, 300.0f));
+  const ImVec2 outer_min = list.GetClipRectMin();
+  const ImVec2 outer_max = list.GetClipRectMax();
   const ui::ImageOverlay overlay(make_view(), ui::PixelCenters::Integer);
-  const glm::vec2 line[] = {{0.0f, 0.0f}, {100.0f, 50.0f}};
+  const glm::vec2 line[] = {{0.0f, 100.0f}, {100.0f, 150.0f}};
   const ImU32 fills[] = {kGreen};
-  overlay.point({10.0f, 10.0f}, kRed);
+  overlay.point({10.0f, 100.0f}, kRed);
   overlay.polyline(line, 2, kRed);
-  overlay.label({10.0f, 10.0f}, "id", kRed);
-  overlay.grid(1, 1, fills, kBlue);
+  overlay.label({10.0f, 100.0f}, "id", kRed);
+  overlay.grid(1, 1, fills, 1, kBlue);
 
   int drawn = 0;
   for (const ImDrawCmd& cmd : list.CmdBuffer) {
     if (cmd.ElemCount == 0) continue;
     ++drawn;
     EXPECT_FLOAT_EQ(cmd.ClipRect.x, 20.0f);
-    EXPECT_FLOAT_EQ(cmd.ClipRect.y, 10.0f);
+    EXPECT_FLOAT_EQ(cmd.ClipRect.y, 50.0f);
     EXPECT_FLOAT_EQ(cmd.ClipRect.z, 660.0f);
-    EXPECT_FLOAT_EQ(cmd.ClipRect.w, 490.0f);
+    EXPECT_FLOAT_EQ(cmd.ClipRect.w, 300.0f);
   }
   EXPECT_GT(drawn, 0);
-  const ImVec4 after = list._CmdHeader.ClipRect;
-  EXPECT_EQ(after.x, outer.x);
-  EXPECT_EQ(after.y, outer.y);
-  EXPECT_EQ(after.z, outer.z);
-  EXPECT_EQ(after.w, outer.w);
+  EXPECT_EQ(list.GetClipRectMin().x, outer_min.x);
+  EXPECT_EQ(list.GetClipRectMin().y, outer_min.y);
+  EXPECT_EQ(list.GetClipRectMax().x, outer_max.x);
+  EXPECT_EQ(list.GetClipRectMax().y, outer_max.y);
+  list.PopClipRect();
 }
 
 // A label wholly outside the viewport adds nothing, not even its background
 // box, however far off (ImGui's text layout truncates a position to an int);
-// one in it adds glyphs from its anchor on, over its box.
+// one in it adds glyphs from its anchor on, over a box that pads them.
 TEST_F(ImageOverlayTest, LabelsOnlyInTheViewport) {
   begin_frame({1.0f, 1.0f});
   ImDrawList& list = background();
@@ -201,10 +194,36 @@ TEST_F(ImageOverlayTest, LabelsOnlyInTheViewport) {
   EXPECT_GE(glyphs.min.y, 110.0f);
 
   first = list.VtxBuffer.Size;
-  overlay.label({10.0f, 10.0f}, "x", kRed, kBlue, {4.0f, 4.0f});
+  overlay.label({10.0f, 10.0f}, "Wg", kRed, kBlue, {4.0f, 4.0f});
   const Added box = added(list, first, kBlue);
+  const Added text = added(list, first, kRed);
   ASSERT_EQ(box.count, 4);
+  ASSERT_GT(text.count, 0);
   expect_near(box.min, {112.0f, 112.0f});  // anchor + offset - 2 px padding
+  EXPECT_LE(box.min.x, text.min.x);
+  EXPECT_LE(box.min.y, text.min.y);
+  EXPECT_GE(box.max.x, text.max.x);
+  EXPECT_GE(box.max.y, text.max.y);             // the descender too
+  EXPECT_EQ(list.VtxBuffer[first].col, kBlue);  // drawn first, under the text
+}
+
+// A fractional anchor is truncated to a display pixel, where ImGui draws the
+// text, so the box pads it evenly -- unless the list keeps text unsnapped.
+TEST_F(ImageOverlayTest, LabelsSnapAsImGuiTextDoes) {
+  begin_frame({1.0f, 1.0f});
+  ImDrawList& list = background();
+  const ui::ImageOverlay overlay(
+      camera::ImageView2D({320.0f, 240.0f}, {100.0f, 100.0f}, {320.0f, 240.0f}),
+      ui::PixelCenters::Half);
+
+  int first = list.VtxBuffer.Size;
+  overlay.label({10.9f, 10.25f}, "x", kRed, kBlue);
+  expect_near(added(list, first, kBlue).min, {108.0f, 108.0f}, 1e-3f);
+
+  list.Flags |= ImDrawListFlags_TextNoPixelSnap;
+  first = list.VtxBuffer.Size;
+  overlay.label({10.9f, 10.25f}, "x", kRed, kBlue);
+  expect_near(added(list, first, kBlue).min, {108.9f, 108.25f}, 1e-3f);
 }
 
 TEST_F(ImageOverlayTest, PolylineStrokesThroughItsPoints) {
@@ -220,7 +239,7 @@ TEST_F(ImageOverlayTest, PolylineStrokesThroughItsPoints) {
   const Added open = added(list, first, kRed);
   ASSERT_GT(open.count, 0);
   // Each leg is a quad half the thickness either side of its points (+ 0.5
-  // for integer centres), with no end caps.
+  // for integer centers), with no end caps.
   expect_near(open.min, {10.5f, 9.5f}, 1e-2f);
   expect_near(open.max, {101.5f, 60.5f}, 1e-2f);
 
@@ -229,9 +248,10 @@ TEST_F(ImageOverlayTest, PolylineStrokesThroughItsPoints) {
   EXPECT_GT(added(list, first, kRed).count, open.count);  // the closing leg
 }
 
-// The cells span the image's edges whatever the pixel-centre convention, each
-// filled with its own colour (a transparent one left empty), with borders
-// centred on the edges across the whole image.
+// The cells span the image's edges whatever the pixel-center convention, each
+// filled with its own color in row-major order (a transparent one, or one past
+// the fills given, left empty), with borders centered on the edges across the
+// whole image.
 TEST_F(ImageOverlayTest, GridSpansTheImageEdges) {
   begin_frame({2.0f, 2.0f});
   ImDrawList& list = background();
@@ -241,41 +261,88 @@ TEST_F(ImageOverlayTest, GridSpansTheImageEdges) {
     return view.image_to_target(p) / 2.0f;
   };
 
-  const ImU32 fills[] = {0, kGreen, 0, 0};  // row-major: (column 1, row 0)
+  // 3 x 2 cells, given 3 fills: (column 2, row 0) is green, (1, 1) unfilled.
+  const ImU32 fills[] = {0, 0, kGreen, 0, kRed, 0};
   const int first = list.VtxBuffer.Size;
-  overlay.grid(2, 2, fills, kBlue, 1.0f);
+  overlay.grid(3, 2, fills, 3, kBlue, 1.0f);
 
   const Added cell = added(list, first, kGreen);
   ASSERT_EQ(cell.count, 4);
-  expect_near(cell.min, display({320.0f, 0.0f}));
+  expect_near(cell.min, display({640.0f * 2.0f / 3.0f, 0.0f}), 1e-3f);
   expect_near(cell.max, display({640.0f, 240.0f}));
+  EXPECT_EQ(added(list, first, kRed).count, 0);
 
   const Added borders = added(list, first, kBlue);
-  EXPECT_EQ(borders.count, 6 * 4);  // 3 + 3 lines, a quad each
+  EXPECT_EQ(borders.count, 7 * 4);  // 4 + 3 lines, a quad each
   expect_near(borders.min, display({0.0f, 0.0f}) - 0.5f, 1e-2f);
   expect_near(borders.max, display({640.0f, 480.0f}) + 0.5f, 1e-2f);
 }
 
+// A non-finite coordinate on either axis, a NaN radius, too few points, null
+// or empty text, a non-positive grid size, or no visible fills or borders add
+// nothing; a polyline cut short drops the path it began.
 TEST_F(ImageOverlayTest, DegenerateMarksAddNothing) {
   begin_frame({1.0f, 1.0f});
   ImDrawList& list = background();
   const ui::ImageOverlay overlay(make_view(), ui::PixelCenters::Integer);
-  const float inf = std::numeric_limits<float>::infinity();
-  const glm::vec2 points[] = {{0.0f, 0.0f}, {kNaN, 1.0f}, {5.0f, 5.0f}};
+  const glm::vec2 bad_x[] = {{0.0f, 0.0f}, {kNaN, 1.0f}, {5.0f, 5.0f}};
+  const glm::vec2 bad_y[] = {{0.0f, 0.0f}, {1.0f, kInf}, {5.0f, 5.0f}};
   const ImU32 fills[] = {kGreen};
 
   const int first = list.VtxBuffer.Size;
   overlay.point({kNaN, 0.0f}, kRed);
-  overlay.polyline(points, 3, kRed);
-  EXPECT_EQ(list._Path.Size, 0);  // the half-built path was dropped
-  overlay.polyline(points, 1, kRed);
+  overlay.point({0.0f, kNaN}, kRed);
+  overlay.point({0.0f, 0.0f}, kRed, kNaN);
+  overlay.polyline(bad_x, 3, kRed);
+  overlay.polyline(bad_y, 3, kRed);
+  overlay.polyline(bad_x, 1, kRed);
   overlay.polyline(nullptr, 3, kRed);
-  overlay.label({0.0f, inf}, "x", kRed, kBlue);
+  overlay.label({0.0f, kNaN}, "x", kRed, kBlue);
+  overlay.label({0.0f, kInf}, "x", kRed, kBlue);
   overlay.label({0.0f, 0.0f}, nullptr, kRed, kBlue);
-  overlay.grid(0, 1, fills, kBlue);
-  overlay.grid(1, -1, fills, kBlue);
-  overlay.grid(1, 1, nullptr, 0);  // no fills, transparent borders
+  overlay.label({0.0f, 0.0f}, "", kRed, kBlue);
+  overlay.grid(0, 1, fills, 1, kBlue);
+  overlay.grid(1, -1, fills, 1, kBlue);
+  overlay.grid(1, 1, fills, 0, 0);    // no fills given, transparent borders
+  overlay.grid(1, 1, nullptr, 1, 0);  // null fills
   EXPECT_EQ(list.VtxBuffer.Size, first);
+
+  // A polyline after a cut-short one strokes only its own leg.
+  overlay.polyline(bad_y, 3, kRed);
+  const glm::vec2 leg[] = {{10.0f, 10.0f}, {20.0f, 10.0f}};
+  overlay.polyline(leg, 2, kGreen);
+  EXPECT_EQ(added(list, first, kGreen).count, 4);
+}
+
+// A radius or thickness is clamped to 10000 display pixels, so ImGui never
+// converts one past INT_MAX to an int (undefined; UBSan flags it).
+TEST_F(ImageOverlayTest, SizesAreClamped) {
+  ImGui::GetStyle().AntiAliasedLines = true;  // the path taking (int)thickness
+  begin_frame({1.0f, 1.0f});
+  ImDrawList& list = background();
+  const ui::ImageOverlay overlay(
+      camera::ImageView2D({320.0f, 240.0f}, {0.0f, 0.0f}, {320.0f, 240.0f}),
+      ui::PixelCenters::Half);
+
+  int first = list.VtxBuffer.Size;
+  overlay.point({100.0f, 100.0f}, kRed, 3e9f);
+  const Added dot = added(list, first, kRed);
+  ASSERT_GT(dot.count, 0);
+  expect_near(dot.max - dot.min, {2e4f, 2e4f}, 1.0f);
+
+  // An anti-aliased line's opaque core is its thickness less 1 px of fringe.
+  first = list.VtxBuffer.Size;
+  const glm::vec2 leg[] = {{0.0f, 100.0f}, {100.0f, 100.0f}};
+  overlay.polyline(leg, 2, kGreen, 3e9f);
+  const Added line = added(list, first, kGreen);
+  ASSERT_GT(line.count, 0);
+  EXPECT_NEAR(line.max.y - line.min.y, 1e4f - 1.0f, 1e-2f);
+
+  first = list.VtxBuffer.Size;
+  overlay.grid(1, 1, nullptr, 0, kBlue, 3e9f);
+  const Added borders = added(list, first, kBlue);
+  ASSERT_GT(borders.count, 0);
+  EXPECT_NEAR(borders.max.x - borders.min.x, 320.0f + 1e4f - 1.0f, 1e-2f);
 }
 
 // A given draw list is drawn into; the background list is the default.

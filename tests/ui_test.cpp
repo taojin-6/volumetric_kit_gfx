@@ -18,6 +18,7 @@
 
 #include "gfx_test_support.hpp"
 #include "imgui.h"
+#include "ui_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
@@ -290,20 +291,10 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
 
 // Builds a headless ImGui frame (no renderer backend) around `build`, returning
 // the total vertex count of the resulting draw data — a proxy for "the panel
-// produced geometry". The font atlas is built on the CPU so NewFrame's
-// atlas-built assert holds without a backend.
+// produced geometry".
 template <class Build>
 int panel_draw_vertices(Build&& build) {
-  ImGuiContext* ctx = ImGui::CreateContext();
-  ImGui::SetCurrentContext(ctx);
-  ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;  // hermetic: no imgui.ini in the CWD
-  io.DisplaySize = ImVec2(320.0f, 240.0f);
-  io.DeltaTime = 1.0f / 60.0f;
-  unsigned char* pixels = nullptr;
-  int width = 0;
-  int height = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);  // forces atlas build
+  const vg_test::HeadlessImGui imgui(ImVec2(320.0f, 240.0f));
 
   // Two frames: a brand-new auto-sizing window is rendered hidden on its first
   // frame while ImGui measures its content, emitting geometry only once
@@ -315,7 +306,6 @@ int panel_draw_vertices(Build&& build) {
     ImGui::Render();
     vertices = ImGui::GetDrawData()->TotalVtxCount;
   }
-  ImGui::DestroyContext(ctx);
   return vertices;
 }
 

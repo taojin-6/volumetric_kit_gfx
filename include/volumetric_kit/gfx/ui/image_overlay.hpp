@@ -19,11 +19,11 @@
 
 namespace volumetric_kit::gfx::ui {
 
-/// @brief Where texel centres sit in the image coordinates of the marks.
+/// @brief Where texel centers sit in the image coordinates of the marks.
 enum class PixelCenters : uint8_t {
-  /// Texel `(i, j)`'s centre is at `(i, j)`: OpenCV's and recon's convention.
+  /// Texel `(i, j)`'s center is at `(i, j)`: OpenCV's and recon's convention.
   Integer,
-  /// Its centre is at `(i + 0.5, j + 0.5)`: Vulkan's and
+  /// Its center is at `(i + 0.5, j + 0.5)`: Vulkan's and
   /// @ref camera::ImageView2D's.
   Half,
 };
@@ -38,7 +38,8 @@ enum class PixelCenters : uint8_t {
 /// coordinates. Every mark is clipped to the view's viewport, and a label
 /// wholly outside it is not drawn; nor is a mark with a non-finite coordinate.
 /// Sizes -- radius, thickness, label offset -- are in display pixels, so marks
-/// keep their size as the image zooms.
+/// keep their size as the image zooms; a radius or thickness is clamped to
+/// [0, 10000], NaN to 0.
 ///
 /// The overlay copies the view and borrows the draw list, so make one per
 /// image per frame.
@@ -46,7 +47,8 @@ enum class PixelCenters : uint8_t {
 /// @code
 /// overlay.new_frame();
 /// ui::ImageOverlay marks(view, ui::PixelCenters::Integer);
-/// marks.grid(8, 6, coverage_fills, IM_COL32(255, 255, 255, 64));
+/// marks.grid(8, 6, coverage_fills.data(), coverage_fills.size(),
+///            IM_COL32(255, 255, 255, 64));
 /// for (const glm::vec2& corner : corners) {
 ///   marks.point(corner, IM_COL32(0, 255, 0, 255));
 /// }
@@ -76,9 +78,9 @@ class VG_UI_API ImageOverlay {
   /// @return Its position in display (window) coordinates.
   glm::vec2 to_display(glm::vec2 image_point) const noexcept;
 
-  /// @brief A filled dot centred on an image point.
-  /// @param image_point  The dot's centre, in image coordinates.
-  /// @param color        Its colour (`IM_COL32`).
+  /// @brief A filled dot centered on an image point.
+  /// @param image_point  The dot's center, in image coordinates.
+  /// @param color        Its color (`IM_COL32`).
   /// @param radius       Its radius, in display pixels.
   void point(glm::vec2 image_point, ImU32 color, float radius = 3.0f) const;
 
@@ -86,7 +88,7 @@ class VG_UI_API ImageOverlay {
   /// @param points     The vertices, in image coordinates; fewer than 2 draw
   ///                   nothing.
   /// @param count      The number of @p points.
-  /// @param color      The line colour (`IM_COL32`).
+  /// @param color      The line color (`IM_COL32`).
   /// @param thickness  The line width, in display pixels.
   /// @param closed     Join the last vertex back to the first.
   void polyline(const glm::vec2* points, size_t count, ImU32 color,
@@ -94,9 +96,13 @@ class VG_UI_API ImageOverlay {
 
   /// @brief Text whose top-left corner is @p offset display pixels from an
   ///        image point.
+  ///
+  /// The corner is truncated to whole display pixels, as ImGui does to text
+  /// unless the list has `ImDrawListFlags_TextNoPixelSnap`, so the background
+  /// box stays even around the text.
   /// @param image_point  The anchor, in image coordinates.
-  /// @param text         The text; null draws nothing.
-  /// @param color        Its colour (`IM_COL32`).
+  /// @param text         The text; null or empty draws nothing.
+  /// @param color        Its color (`IM_COL32`).
   /// @param background   A box filled behind the text; 0 (transparent) for
   ///                     none.
   /// @param offset       From the anchor to the text, in display pixels.
@@ -113,14 +119,15 @@ class VG_UI_API ImageOverlay {
   /// @param columns     The number of cells across; non-positive draws
   ///                    nothing.
   /// @param rows        The number of cells down; non-positive draws nothing.
-  /// @param fills       `columns * rows` fill colours in row-major order, a
+  /// @param fills       The cells' fill colors in row-major order, a
   ///                    transparent one leaving its cell unfilled; null fills
   ///                    none.
-  /// @param line_color  The colour of the cell borders; transparent draws
+  /// @param fill_count  The number of @p fills; cells past it are unfilled.
+  /// @param line_color  The color of the cell borders; transparent draws
   ///                    none.
   /// @param thickness   The border width, in display pixels.
-  void grid(int columns, int rows, const ImU32* fills, ImU32 line_color,
-            float thickness = 1.0f) const;
+  void grid(int columns, int rows, const ImU32* fills, size_t fill_count,
+            ImU32 line_color, float thickness = 1.0f) const;
 
  private:
   /// Display coordinates of a point in Vulkan image coordinates (texel edges
