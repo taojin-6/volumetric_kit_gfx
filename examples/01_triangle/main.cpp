@@ -116,7 +116,7 @@ int run(GLFWwindow* window, int max_frames) {
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
     // after a resize / out-of-date result and skips ticks while the window is
     // minimized, so only hard failures surface here.
-    auto frame = app.begin_frame(glfw::framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());

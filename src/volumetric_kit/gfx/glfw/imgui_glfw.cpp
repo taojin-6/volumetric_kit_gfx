@@ -30,7 +30,7 @@ class CurrentContext {
 }  // namespace
 
 core::Result<std::unique_ptr<ImGuiGlfw>> ImGuiGlfw::create(
-    GLFWwindow* window, ImGuiContext* context, bool install_callbacks) {
+    GLFWwindow* window, ImGuiContext* context) {
   if (window == nullptr) {
     return core::Status::invalid_argument("ImGuiGlfw::create needs a window");
   }
@@ -43,7 +43,7 @@ core::Result<std::unique_ptr<ImGuiGlfw>> ImGuiGlfw::create(
     return core::Status::invalid_argument(
         "ImGuiGlfw::create: the context already has a platform backend");
   }
-  if (!ImGui_ImplGlfw_InitForVulkan(window, install_callbacks)) {
+  if (!ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true)) {
     return core::Status::unsupported("ImGui_ImplGlfw_InitForVulkan failed");
   }
   return std::unique_ptr<ImGuiGlfw>(new ImGuiGlfw(*window, *context));

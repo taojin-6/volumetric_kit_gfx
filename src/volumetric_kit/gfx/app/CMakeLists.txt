@@ -20,7 +20,8 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_app)
 add_library(volumetric_kit::gfx_app ALIAS gfx_app)
 
-target_sources(gfx_app PRIVATE windowed_app.cpp headless_app.cpp)
+target_sources(gfx_app PRIVATE windowed_app.cpp headless_app.cpp
+                               shared_device_config.cpp)
 
 generate_export_header(
   gfx_app

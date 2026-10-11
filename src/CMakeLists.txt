@@ -18,6 +18,8 @@ add_subdirectory(volumetric_kit/gfx/app)
 # The GLFW window glue, when VG_WITH_GLFW found GLFW (CMakeLists.txt).
 if(VG_WITH_GLFW AND TARGET glfw)
   add_subdirectory(volumetric_kit/gfx/glfw)
+elseif(VG_WITH_GLFW)
+  message(STATUS "gfx_glfw: skipped (GLFW 3.3 or newer not found)")
 endif()
 # TODO: add_subdirectory() for passes as that tier lands.
 

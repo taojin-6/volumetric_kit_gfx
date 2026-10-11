@@ -64,7 +64,8 @@ find_package(Vulkan REQUIRED)
 # without it. A `glfw` target the application already made is used as it is. CI
 # provides it through libglfw3-dev (Linux) and brew glfw (macOS).
 if(VG_WITH_GLFW AND NOT TARGET glfw)
-  find_package(glfw3 QUIET)
+  # 3.3: gfx_glfw reads GLFW's errors with glfwGetError.
+  find_package(glfw3 3.3 QUIET)
 endif()
 
 # glm: the matrix/vector types in the camera and assets tiers' public headers.

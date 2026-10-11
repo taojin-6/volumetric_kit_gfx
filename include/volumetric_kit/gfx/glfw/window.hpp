@@ -44,20 +44,37 @@ VG_GLFW_API core::Result<std::vector<const char*>> instance_extensions();
 ///                                     glfw::glfw_surface_factory(window));
 /// @endcode
 /// @param window  The window to present to; it must outlive the surface.
-/// @return The factory. It returns the surface, or GLFW's `VkResult` as a
-///         backend `core::Status` -- e.g. when the instance lacks
-///         @ref instance_extensions.
+/// @return The factory. It returns the surface;
+///         `core::Status::Code::InvalidArgument` for a null @p window; or
+///         GLFW's `VkResult` as a backend `core::Status` -- e.g. when the
+///         instance lacks @ref instance_extensions.
 VG_GLFW_API app::WindowedApp::SurfaceFactory glfw_surface_factory(
     GLFWwindow* window);
 
-/// @brief The window's framebuffer size in pixels, never zero.
+/// @brief The window's framebuffer size in pixels, as GLFW reports it: 0 x 0
+///        while the window is minimized.
 ///
-/// A window may report 0 x 0 while minimized; this reads 1 x 1 then, so the
-/// result is safe as a swapchain extent and as an aspect ratio's divisor.
+/// The extent `begin_frame` takes: on 0 x 0 it skips the tick, with no
+/// swapchain rebuild and no queue drain.
 /// @code
-/// auto frame = app.begin_frame(glfw::framebuffer_extent(window));
+/// auto frame = app.begin_frame(glfw::framebuffer_size(window));
 /// @endcode
 /// @param window  The window.
+/// @pre @p window is non-null.
+/// @return Its framebuffer size; zero while minimized.
+VG_GLFW_API VkExtent2D framebuffer_size(GLFWwindow* window);
+
+/// @brief The window's framebuffer size in pixels, never zero.
+///
+/// A window may report 0 x 0 while minimized; this reads 1 x 1 then, for a
+/// use that cannot take zero: an initial `swapchain.extent`, a viewport or an
+/// aspect ratio. A frame loop takes @ref framebuffer_size instead.
+/// @code
+/// app::WindowedAppConfig config;
+/// config.swapchain.extent = glfw::framebuffer_extent(window);
+/// @endcode
+/// @param window  The window.
+/// @pre @p window is non-null.
 /// @return Its framebuffer extent, at least 1 x 1.
 VG_GLFW_API VkExtent2D framebuffer_extent(GLFWwindow* window);
 
@@ -70,6 +87,7 @@ VG_GLFW_API VkExtent2D framebuffer_extent(GLFWwindow* window);
 /// view.zoom_about(glfw::cursor_in_framebuffer(window), 1.1f);
 /// @endcode
 /// @param window  The window.
+/// @pre @p window is non-null.
 /// @return The cursor position; unscaled while the window has no size.
 VG_GLFW_API glm::vec2 cursor_in_framebuffer(GLFWwindow* window);
 

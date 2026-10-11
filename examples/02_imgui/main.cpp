@@ -136,7 +136,7 @@ int run(GLFWwindow* window, int max_frames) {
     // Begin the Vulkan frame *before* the ImGui frame: the loop skips ticks
     // while minimized / rebuilding, so a skipped tick never opens an ImGui
     // frame that would then need an EndFrame() discard to stay paired.
-    auto frame = app.begin_frame(glfw::framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());

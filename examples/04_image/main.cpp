@@ -140,7 +140,7 @@ int run(GLFWwindow* window, int max_frames) {
     }
     glfwPollEvents();
 
-    auto frame = app.begin_frame(glfw::framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());

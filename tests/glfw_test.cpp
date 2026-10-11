@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Tao Jin
 
 // gfx_glfw: the instance extensions, the surface factory, the framebuffer
-// extent and cursor, the shared-device config and device, and ImGui's GLFW
-// platform backend. Windows are made on GLFW's null platform (GLFW 3.4+), so
-// no display is needed; with an older GLFW those cases skip. The surface and
-// the shared device also need a Vulkan device with VK_EXT_headless_surface,
-// which the null platform presents through.
+// size and cursor, the shared device, and ImGui's GLFW platform backend.
+// Windows are made on GLFW's null platform (GLFW 3.4+), so no display is
+// needed; with an older GLFW those cases skip. The surface and the shared
+// device also need a Vulkan device with VK_EXT_headless_surface, which the
+// null platform presents through.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -24,11 +24,14 @@
 
 #include "gfx_test_support.hpp"
 #include "imgui.h"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
+#include "volumetric_kit/gfx/glfw/impl/framebuffer_pixels.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
 
@@ -157,7 +160,25 @@ TEST_F(GlfwWindowTest, InstanceExtensionsNameTheSurface) {
                             VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
 }
 
-// --- framebuffer_extent / cursor_in_framebuffer -----------------------------
+// --- framebuffer_size / framebuffer_extent / cursor_in_framebuffer ----------
+
+TEST_F(GlfwWindowTest, FramebufferSizeIsTheWindowsAndZeroWhenMinimized) {
+  const VkExtent2D size = glfw::framebuffer_size(window());
+  EXPECT_EQ(size.width, static_cast<uint32_t>(kWidth));
+  EXPECT_EQ(size.height, static_cast<uint32_t>(kHeight));
+
+  // What a minimized window may report, passed on: begin_frame skips the tick
+  // on it, where a 1 x 1 extent would rebuild the swapchain.
+  glfwSetWindowSize(window(), 0, 0);
+  int width = -1;
+  int height = -1;
+  glfwGetFramebufferSize(window(), &width, &height);
+  ASSERT_EQ(width, 0);
+  ASSERT_EQ(height, 0);
+  const VkExtent2D minimized = glfw::framebuffer_size(window());
+  EXPECT_EQ(minimized.width, 0u);
+  EXPECT_EQ(minimized.height, 0u);
+}
 
 TEST_F(GlfwWindowTest, FramebufferExtentIsTheWindowsAndNeverZero) {
   const VkExtent2D extent = glfw::framebuffer_extent(window());
@@ -166,11 +187,6 @@ TEST_F(GlfwWindowTest, FramebufferExtentIsTheWindowsAndNeverZero) {
 
   // What a minimized window may report.
   glfwSetWindowSize(window(), 0, 0);
-  int width = -1;
-  int height = -1;
-  glfwGetFramebufferSize(window(), &width, &height);
-  ASSERT_EQ(width, 0);
-  ASSERT_EQ(height, 0);
   const VkExtent2D clamped = glfw::framebuffer_extent(window());
   EXPECT_EQ(clamped.width, 1u);
   EXPECT_EQ(clamped.height, 1u);
@@ -190,48 +206,52 @@ TEST_F(GlfwWindowTest, CursorIsInFramebufferPixels) {
   EXPECT_EQ(unscaled.y, 7.0f);
 }
 
-// --- shared_device_config ---------------------------------------------------
+// The null platform's scale is always 1, so the high-DPI arithmetic is tested
+// on its own.
+TEST(GlfwFramebufferPixelsTest, ScalesWindowCoordinatesPerAxis) {
+  // A uniform scale of 2, as on a Retina display.
+  const glm::vec2 retina =
+      glfw::detail::to_framebuffer_pixels({10.0, 10.0}, {100, 50}, {200, 100});
+  EXPECT_EQ(retina, glm::vec2(20.0f, 20.0f));
+  // Each axis by its own ratio: 2 across, 3 down.
+  const glm::vec2 uneven =
+      glfw::detail::to_framebuffer_pixels({10.0, 10.0}, {100, 50}, {200, 150});
+  EXPECT_EQ(uneven, glm::vec2(20.0f, 30.0f));
+  // A sub-pixel window position keeps its fraction.
+  const glm::vec2 fraction =
+      glfw::detail::to_framebuffer_pixels({0.25, 1.5}, {100, 50}, {200, 100});
+  EXPECT_EQ(fraction, glm::vec2(0.5f, 3.0f));
+}
 
-TEST(GlfwSharedDeviceConfigTest, IsThePureUnionOfItsInputs) {
-  glfw::SharedDeviceConfig config;
-  config.instance.app_name = "viewer";
-  config.instance.enable_validation = true;
-  config.instance.extensions = {VK_KHR_SURFACE_EXTENSION_NAME};
-  config.graphics.features.fillModeNonSolid = VK_TRUE;
-  vkc::DeviceRequirements compute;
-  compute.scalar_block_layout = true;
-  compute.extensions = {"VK_KHR_external_memory_fd"};
-  const std::vector<const char*> surface = {
-      VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+TEST(GlfwFramebufferPixelsTest, LeavesAnAxisWithNoWindowSizeUnscaled) {
+  EXPECT_EQ(glfw::detail::to_framebuffer_pixels({10.0, 10.0}, {0, 0}, {0, 0}),
+            glm::vec2(10.0f, 10.0f));
+  EXPECT_EQ(
+      glfw::detail::to_framebuffer_pixels({10.0, 10.0}, {0, 50}, {200, 100}),
+      glm::vec2(10.0f, 20.0f));
+}
 
-  const vkc::SharedDeviceConfig shared =
-      glfw::shared_device_config(surface, compute, config);
-
-  EXPECT_EQ(shared.instance.app_name, "viewer");
-  EXPECT_TRUE(shared.instance.enable_validation);
-  // The embedder's extensions first, then GLFW's, each once.
-  ASSERT_EQ(shared.instance.extensions.size(), 2u);
-  EXPECT_STREQ(shared.instance.extensions[0], VK_KHR_SURFACE_EXTENSION_NAME);
-  EXPECT_STREQ(shared.instance.extensions[1],
-               VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-  // The compute library's requirements pass through as given.
-  EXPECT_EQ(shared.compute.queue_flags, compute.queue_flags);
-  EXPECT_TRUE(shared.compute.scalar_block_layout);
-  EXPECT_FALSE(shared.compute.needs_present);
-  EXPECT_EQ(shared.compute.extensions, compute.extensions);
-  // The renderer's, with presentation added.
-  EXPECT_TRUE(shared.graphics.needs_present);
-  EXPECT_EQ(shared.graphics.api_version, VK_API_VERSION_1_3);
-  EXPECT_TRUE(shared.graphics.dynamic_rendering);
-  EXPECT_EQ(shared.graphics.features.fillModeNonSolid, VK_TRUE);
-  // make_shared_device sets the surface maker.
-  EXPECT_FALSE(static_cast<bool>(shared.make_surface));
-
-  // Nothing it was given changed.
-  EXPECT_FALSE(config.graphics.needs_present);
-  ASSERT_EQ(config.instance.extensions.size(), 1u);
-  EXPECT_FALSE(compute.needs_present);
-  EXPECT_EQ(surface.size(), 2u);
+// The window functions check their precondition, a non-null window, rather
+// than hand null to GLFW, which only asserts it in debug builds.
+TEST(GlfwWindowDeathTest, NullWindowIsAProgrammerError) {
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});  // route the abort message to stderr
+        glfw::framebuffer_size(nullptr);
+      },
+      "framebuffer_size needs a window");
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        glfw::framebuffer_extent(nullptr);
+      },
+      "framebuffer_extent needs a window");
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        glfw::cursor_in_framebuffer(nullptr);
+      },
+      "cursor_in_framebuffer needs a window");
 }
 
 // --- glfw_surface_factory / make_shared_device ------------------------------
@@ -240,6 +260,14 @@ TEST(GlfwSharedDeviceTest, NullWindowIsRefused) {
   const auto shared = glfw::make_shared_device(nullptr, {}, {});
   ASSERT_FALSE(shared.ok());
   EXPECT_EQ(shared.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+TEST(GlfwSurfaceFactoryTest, NullWindowIsRefused) {
+  // Refused before GLFW or the instance is touched.
+  const vkc::Result<VkSurfaceKHR> surface =
+      glfw::glfw_surface_factory(nullptr)(VK_NULL_HANDLE);
+  ASSERT_FALSE(surface.ok());
+  EXPECT_EQ(surface.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
 // A Vulkan device under the core fixtures' policy, and a null-platform window
@@ -298,7 +326,7 @@ TEST_F(GlfwDeviceTest, SurfaceFactoryReportsGlfwsVkResult) {
 }
 
 TEST_F(GlfwDeviceTest, MakeSharedDeviceBuildsAPresentingDeviceForTheWindow) {
-  glfw::SharedDeviceConfig config;
+  vg::app::WindowDeviceConfig config;
   config.instance = vkc::test::instance_config(active_validation());
   vkc::DeviceRequirements compute;  // a compute queue, timeline semaphores
 

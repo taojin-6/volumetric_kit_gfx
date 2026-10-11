@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <string>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/gfx/glfw/impl/framebuffer_pixels.hpp"
 
 namespace volumetric_kit::gfx::glfw {
 
@@ -35,39 +37,40 @@ core::Result<std::vector<const char*>> instance_extensions() {
 
 app::WindowedApp::SurfaceFactory glfw_surface_factory(GLFWwindow* window) {
   return [window](VkInstance instance) -> core::Result<VkSurfaceKHR> {
+    if (window == nullptr) {
+      return core::Status::invalid_argument(
+          "glfw_surface_factory needs a window");
+    }
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VKC_VK_TRY(glfwCreateWindowSurface(instance, window, nullptr, &surface));
     return surface;
   };
 }
 
-VkExtent2D framebuffer_extent(GLFWwindow* window) {
+VkExtent2D framebuffer_size(GLFWwindow* window) {
+  VKC_CHECK(window != nullptr, "glfw::framebuffer_size needs a window");
   int width = 0;
   int height = 0;
   glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(1, width)),
-          static_cast<std::uint32_t>(std::max(1, height))};
+  return {static_cast<std::uint32_t>(std::max(0, width)),
+          static_cast<std::uint32_t>(std::max(0, height))};
+}
+
+VkExtent2D framebuffer_extent(GLFWwindow* window) {
+  VKC_CHECK(window != nullptr, "glfw::framebuffer_extent needs a window");
+  const VkExtent2D size = framebuffer_size(window);
+  return {std::max(1u, size.width), std::max(1u, size.height)};
 }
 
 glm::vec2 cursor_in_framebuffer(GLFWwindow* window) {
-  double x = 0.0;
-  double y = 0.0;
-  glfwGetCursorPos(window, &x, &y);
-  int window_width = 0;
-  int window_height = 0;
-  glfwGetWindowSize(window, &window_width, &window_height);
-  int framebuffer_width = 0;
-  int framebuffer_height = 0;
-  glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
-  const float scale_x = window_width > 0
-                            ? static_cast<float>(framebuffer_width) /
-                                  static_cast<float>(window_width)
-                            : 1.0f;
-  const float scale_y = window_height > 0
-                            ? static_cast<float>(framebuffer_height) /
-                                  static_cast<float>(window_height)
-                            : 1.0f;
-  return {static_cast<float>(x) * scale_x, static_cast<float>(y) * scale_y};
+  VKC_CHECK(window != nullptr, "glfw::cursor_in_framebuffer needs a window");
+  glm::dvec2 cursor{0.0, 0.0};
+  glfwGetCursorPos(window, &cursor.x, &cursor.y);
+  glm::ivec2 window_size{0, 0};
+  glfwGetWindowSize(window, &window_size.x, &window_size.y);
+  glm::ivec2 framebuffer{0, 0};
+  glfwGetFramebufferSize(window, &framebuffer.x, &framebuffer.y);
+  return detail::to_framebuffer_pixels(cursor, window_size, framebuffer);
 }
 
 }  // namespace volumetric_kit::gfx::glfw

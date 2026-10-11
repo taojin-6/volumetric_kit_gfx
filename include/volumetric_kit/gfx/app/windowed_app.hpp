@@ -39,9 +39,8 @@ struct WindowedAppConfig {
   /// InstanceConfig::enable_validation).
   bool enable_validation = false;
   /// Surface/platform instance extensions the window system requires — e.g.
-  /// the array returned by `glfwGetRequiredInstanceExtensions`. Like the
-  /// windowing tier, this tier is window-system-agnostic, so the consumer
-  /// supplies them.
+  /// @ref glfw::instance_extensions for a GLFW window. Like the windowing
+  /// tier, this tier is window-system-agnostic, so the consumer supplies them.
   std::vector<const char*> instance_extensions;
   /// Swapchain preferences: extent, color/depth formats, present mode, image
   /// count. With @ref windowing::SwapchainConfig::depth_format set, the app
@@ -74,8 +73,9 @@ struct WindowedAppConfig {
 ///
 /// The consumer keeps its window system: it passes the required instance
 /// extensions in @ref WindowedAppConfig::instance_extensions and a
-/// @ref SurfaceFactory that creates the `VkSurfaceKHR` (e.g. via
-/// `glfwCreateWindowSurface`), so this tier stays GLFW-free like windowing.
+/// @ref SurfaceFactory that creates the `VkSurfaceKHR`, so this tier stays
+/// GLFW-free like windowing. For a GLFW window, the `glfw` tier supplies both
+/// (as below).
 /// Simple consumers never touch the members: @ref begin_frame / @ref end_frame
 /// drive the loop's windowed protocol directly.
 ///
@@ -88,25 +88,17 @@ struct WindowedAppConfig {
 ///       after idling.
 ///
 /// @code
-/// uint32_t ext_count = 0;
-/// const char** exts = glfwGetRequiredInstanceExtensions(&ext_count);
+/// VKC_ASSIGN(std::vector<const char*> extensions,
+///            glfw::instance_extensions());
 /// app::WindowedAppConfig config;
 /// config.app_name = "viewer";
-/// config.instance_extensions.assign(exts, exts + ext_count);
-/// config.swapchain.extent = {1280, 720};
-/// auto app = app::WindowedApp::create(
-///     config, [&](VkInstance instance) -> core::Result<VkSurfaceKHR> {
-///       VkSurfaceKHR surface = VK_NULL_HANDLE;
-///       const VkResult r =
-///           glfwCreateWindowSurface(instance, window, nullptr, &surface);
-///       if (r != VK_SUCCESS) {
-///         return core::vk_error(r, "glfwCreateWindowSurface");
-///       }
-///       return surface;
-///     });
+/// config.instance_extensions = extensions;
+/// config.swapchain.extent = glfw::framebuffer_extent(window);
+/// auto app =
+///     app::WindowedApp::create(config, glfw::glfw_surface_factory(window));
 /// if (!app) return app.status();
 /// while (running) {
-///   auto frame = app.value().begin_frame(window_extent());
+///   auto frame = app.value().begin_frame(glfw::framebuffer_size(window));
 ///   if (!frame) return fail(frame.status());          // hard error only
 ///   if (!frame.value()) { wait_events(); continue; }  // minimized
 ///   const windowing::Frame& f = *frame.value();

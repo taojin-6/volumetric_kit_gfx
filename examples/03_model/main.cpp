@@ -871,7 +871,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
     // (which rebuilds its per-image depth attachments) after a resize, and
     // skips ticks while the window is minimized.
-    auto frame = app.begin_frame(glfw::framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());

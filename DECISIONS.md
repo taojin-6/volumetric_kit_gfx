@@ -128,6 +128,8 @@ library's `DeviceRequirements`, never the library.
   consumer. Now `glfw` reads GLFW, and only it: `windowing`, `app` and `ui`
   still take a `VkSurfaceKHR`, a surface factory and an ImGui context, so a
   window system without GLFW (iOS's `CAMetalLayer`) uses them as before.
+  The requirement union `make_shared_device` builds has no GLFW in it, so it
+  lives in `app` as `shared_device_config`, for such a window system to call.
 - **Optional and build-tree only.** It is built with `VG_WITH_GLFW` where GLFW
   is installed, and is not installed or exported, like `gfx_ui`, until the
   ImGui headers are co-installed; recon and calib fetch gfx, so they can link

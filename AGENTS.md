@@ -46,8 +46,9 @@ sections relevant to the task rather than every document before every edit.
   `volumetric_kit::gfx::`.
 - Headers: `include/volumetric_kit/gfx/<tier>/…` → e.g. `#include "volumetric_kit/gfx/core/context.hpp"`
 - CMake: `find_package(volumetric_kit_gfx)`; component targets `volumetric_kit::gfx_core`,
-  `…_passes`, `…_pipelines`, `…_app`, `…_glfw` (+ `…_windowing`, `…_interop`, `…_assets`,
-  `…_io`, `…_camera`, `…_ui`); umbrella alias `volumetric_kit::gfx`.
+  `…_passes`, `…_pipelines`, `…_app` (+ `…_windowing`, `…_interop`, `…_assets`, `…_io`,
+  `…_camera`); umbrella alias `volumetric_kit::gfx`. `…_ui` and `…_glfw` are build-tree
+  only, for FetchContent / `add_subdirectory` consumers.
 
 ## Architecture
 
