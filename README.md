@@ -56,6 +56,12 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
+The build-tree `volumetric_kit::gfx_ui` target uses 32-bit ImGui indices and
+propagates `ImDrawIdx=unsigned int` to consumers, including any ImGui platform
+backend or demo sources they compile. Rebuild those sources with the target's
+usage requirements; all code sharing its ImGui context must use the same index
+type.
+
 gfx's errors (`Status`, `Result`, `VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`) and
 log sink are
 [volumetric_kit_core](https://github.com/taojin-6/volumetric_kit_core)'s base

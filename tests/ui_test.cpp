@@ -15,14 +15,17 @@
 #include <future>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include "gfx_test_support.hpp"
 #include "imgui.h"
+#include "ui_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
+#include "volumetric_kit/gfx/ui/image_overlay.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 
@@ -190,6 +193,17 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 
   overlay.new_frame();
   ImGui::ShowDemoWindow();  // a non-trivial draw list exercising the font atlas
+  // Put the following rect beyond the 16-bit vertex range. Its readback also
+  // checks that the Vulkan backend binds and reads the 32-bit index buffer.
+  std::vector<glm::vec2> points(33000);
+  for (size_t i = 0; i < points.size(); ++i) {
+    points[i] = {static_cast<float>(i % 32), static_cast<float>((i / 32) % 32)};
+  }
+  const ui::ImageOverlay marks(
+      vg::camera::ImageView2D({64.0f, 64.0f}, {0.0f, 0.0f}, {64.0f, 64.0f}),
+      ui::PixelCenters::Half);
+  marks.polyline(points.data(), points.size(), IM_COL32(255, 0, 0, 255));
+  ASSERT_GT(ImGui::GetBackgroundDrawList()->VtxBuffer.Size, 65536);
   // A deterministic opaque-white rect over the whole 64x64 viewport (on the
   // background draw list, behind the demo window) so the readback below can
   // assert ImGui actually rendered, not merely that recording was clean.
@@ -290,20 +304,10 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
 
 // Builds a headless ImGui frame (no renderer backend) around `build`, returning
 // the total vertex count of the resulting draw data — a proxy for "the panel
-// produced geometry". The font atlas is built on the CPU so NewFrame's
-// atlas-built assert holds without a backend.
+// produced geometry".
 template <class Build>
 int panel_draw_vertices(Build&& build) {
-  ImGuiContext* ctx = ImGui::CreateContext();
-  ImGui::SetCurrentContext(ctx);
-  ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;  // hermetic: no imgui.ini in the CWD
-  io.DisplaySize = ImVec2(320.0f, 240.0f);
-  io.DeltaTime = 1.0f / 60.0f;
-  unsigned char* pixels = nullptr;
-  int width = 0;
-  int height = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);  // forces atlas build
+  const vg_test::HeadlessImGui imgui(ImVec2(320.0f, 240.0f));
 
   // Two frames: a brand-new auto-sizing window is rendered hidden on its first
   // frame while ImGui measures its content, emitting geometry only once
@@ -315,7 +319,6 @@ int panel_draw_vertices(Build&& build) {
     ImGui::Render();
     vertices = ImGui::GetDrawData()->TotalVtxCount;
   }
-  ImGui::DestroyContext(ctx);
   return vertices;
 }
 
