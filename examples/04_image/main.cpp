@@ -9,24 +9,23 @@
 // its average. Resize the window, scroll to zoom about the cursor, drag to
 // pan, press F to fit. The picture is re-converted every frame from a device
 // buffer, as a live camera stream would be, so the per-frame copy -> convert
-// -> mip path runs under the frame loop. Run with `--frames N` to render N
-// frames and exit, as CI does under Xvfb with validation enabled.
+// -> mip path runs under the frame loop. Set `run.frames` in the JSON config to
+// render a fixed frame count and exit, as CI does under Xvfb with validation
+// enabled.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 #include <GLFW/glfw3.h>
 
-#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <vector>
 
 #include <glm/vec2.hpp>
 
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/image_view_2d.hpp"
@@ -70,7 +69,8 @@ std::vector<uint8_t> zone_plate() {
   return grey;
 }
 
-int run(GLFWwindow* window, int max_frames) {
+int run(GLFWwindow* window, const vkc::config::Config& settings) {
+  const int max_frames = settings.run.frames;
   auto extensions = glfw::instance_extensions();
   if (!extensions.ok()) {
     std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
@@ -79,7 +79,7 @@ int run(GLFWwindow* window, int max_frames) {
 
   vg::app::WindowedAppConfig config;
   config.app_name = "04_image";
-  config.enable_validation = true;  // a no-op when the layer is absent
+  config.enable_validation = settings.window.validation;
   config.instance_extensions = extensions.value();
   config.swapchain.extent = glfw::framebuffer_extent(window);
   auto created =
@@ -229,23 +229,22 @@ int run(GLFWwindow* window, int max_frames) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  int max_frames = -1;  // < 0 means run until the window is closed
-  for (int i = 1; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--frames") != 0) {
-      continue;
-    }
-    if (i + 1 >= argc) {
-      std::fprintf(stderr, "--frames needs a non-negative integer value\n");
-      return 2;
-    }
-    char* end = nullptr;
-    const long value = std::strtol(argv[++i], &end, 10);
-    if (*end != '\0' || value < 0 || value > INT_MAX) {
-      std::fprintf(stderr, "--frames: invalid value '%s'\n", argv[i]);
-      return 2;
-    }
-    max_frames = static_cast<int>(value);
+  const auto args = vkc::config::parse_args(argc, argv);
+  if (!args.ok()) {
+    std::fprintf(stderr, "%s\n", args.status().message().c_str());
+    return 2;
   }
+  if (args.value().help) {
+    std::printf("%s", vkc::config::usage());
+    return 0;
+  }
+  const auto loaded = vkc::config::load(args.value().config_path,
+                                        vkc::config::Application::GfxImage);
+  if (!loaded.ok()) {
+    std::fprintf(stderr, "%s\n", loaded.status().message().c_str());
+    return 2;
+  }
+  const vkc::config::Config& settings = loaded.value();
 
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
@@ -258,14 +257,15 @@ int main(int argc, char** argv) {
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
   GLFWwindow* window = glfwCreateWindow(
-      1024, 720, "volumetric_kit_gfx \xE2\x80\x94 04_image", nullptr, nullptr);
+      settings.window.width, settings.window.height,
+      "volumetric_kit_gfx \xE2\x80\x94 04_image", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
     return 1;
   }
 
-  const int rc = run(window, max_frames);
+  const int rc = run(window, settings);
 
   glfwDestroyWindow(window);
   glfwTerminate();

@@ -8,6 +8,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- Examples read a shared JSON run configuration through core's optional
+  `core_config` target. The command line is `--config <file>` or `--help`;
+  defaults and validation belong to core, while renderer APIs remain typed.
 - Build system foundation: top-level CMake (C++17), `volumetric_kit::gfx_core` library
   target + `volumetric_kit::gfx` umbrella alias, and first-class install/export so the
   library is consumable via both FetchContent and `find_package(volumetric_kit_gfx)`.

@@ -98,15 +98,15 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin includes the timeline-value checks, core_test_support and the 0.1.0
-# package helpers, including vkc_require_core's PACKAGE mode.
+# The pin includes the timeline-value checks, core_test_support, the optional
+# JSON configuration component, and vkc_require_core's package helpers.
 #
 # TODO: re-pin to the core's v0.1.0 tag once it is tagged.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ce76978a9b829313e911b7a47b4110e2a02ed69f)
+  GIT_TAG afaa844b41cf21b98d5b412b5e70e3708e1e71ef)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
@@ -117,6 +117,13 @@ endif()
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers find_package(Vulkan) found above.
 set(VKC_WITH_VULKAN ON)
+# Only the example executables read run configuration. Renderer libraries and
+# headless consumers do not acquire the optional JSON configuration dependency.
+if(VG_BUILD_EXAMPLES
+   AND VG_WITH_GLFW
+   AND TARGET glfw)
+  set(VKC_WITH_CONFIG ON)
+endif()
 # gfx's tests build on the core's test fixtures (tests/CMakeLists.txt).
 if(VG_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

@@ -10,6 +10,14 @@ if(NOT TARGET volumetric_kit::gfx_glfw)
   return()
 endif()
 
+configure_file(config/model-screenshot.json config/model-screenshot.json
+               COPYONLY)
+
+if(NOT TARGET volumetric_kit::core_config)
+  message(FATAL_ERROR "gfx examples need volumetric_kit::core_config: enable "
+                      "VKC_WITH_CONFIG before making core available")
+endif()
+
 # 01_triangle: the hello-triangle in a window; the bring-up chain comes from the
 # app tier (WindowedApp), the window glue from gfx_glfw. Links the Vulkan loader
 # directly because it records vkCmd* itself.
@@ -49,7 +57,7 @@ set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
 
 # 03_model: load a glTF model (io tier) and view it depth-tested, with an
 # interactive CameraRig (camera tier) and a reflected per-draw MVP push
-# constant; the windowed and --screenshot bring-up chains come from the app tier
+# constant; the windowed and screenshot bring-up chains come from the app tier
 # (WindowedApp / HeadlessApp). Links the io + camera tiers on top of app, and
 # gfx_glfw for the window and the Dear ImGui profiler-metrics overlay. The
 # Vulkan loader is linked directly (records vkCmd*).
@@ -87,3 +95,15 @@ target_link_libraries(
   example_04_image PRIVATE volumetric_kit::gfx_glfw volumetric_kit::gfx_camera
                            volumetric_kit::gfx_pipelines)
 vg_target_warnings(example_04_image)
+
+foreach(example IN ITEMS 01_triangle 02_imgui 03_model 04_image)
+  target_link_libraries(example_${example} PRIVATE volumetric_kit::core_config)
+  if(VG_BUILD_TESTS)
+    add_test(
+      NAME example_config.${example}
+      COMMAND
+        "${CMAKE_COMMAND}" "-DEXAMPLE_EXE=$<TARGET_FILE:example_${example}>"
+        "-DINVALID_CONFIG=${CMAKE_CURRENT_BINARY_DIR}/${example}-invalid.json"
+        -P "${PROJECT_SOURCE_DIR}/tests/example_config.cmake")
+  endif()
+endforeach()
