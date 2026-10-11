@@ -3,11 +3,11 @@
 
 // examples/01_triangle: open a window and draw the hello-triangle into the
 // swapchain on dynamic rendering. The whole instance -> surface -> device ->
-// swapchain -> frame-loop bring-up is one app::WindowedApp::create call; the
-// example keeps only what is its own — the GLFW window, the shaders/pipeline,
-// and the render loop. Run with `--frames N` to render N frames and exit — CI
-// drives that under Xvfb to validate the real window -> surface -> swapchain ->
-// present path headlessly.
+// swapchain -> frame-loop bring-up is one app::WindowedApp::create call, with
+// the window glue from gfx_glfw; the example keeps only what is its own — the
+// GLFW window, the shaders/pipeline, and the render loop. Run with `--frames N`
+// to render N frames and exit — CI drives that under Xvfb to validate the real
+// window -> surface -> swapchain -> present path headlessly.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -21,15 +21,16 @@
 #include <fstream>
 #include <vector>
 
-#include "common/glfw_surface.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
+#include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
+namespace glfw = volumetric_kit::gfx::glfw;
 
 namespace {
 
@@ -48,28 +49,24 @@ std::vector<uint32_t> load_spirv(const char* path) {
   return file ? code : std::vector<uint32_t>{};
 }
 
-VkExtent2D framebuffer_extent(GLFWwindow* window) {
-  int width = 0;
-  int height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-}
-
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
 // this returns, before main() tears GLFW down.
 int run(GLFWwindow* window, int max_frames) {
-  uint32_t glfw_ext_count = 0;
-  const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
+  auto extensions = glfw::instance_extensions();
+  if (!extensions.ok()) {
+    std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
+    return 1;
+  }
 
-  // The whole bring-up chain in one call; example::glfw_surface_factory
-  // supplies the GLFW surface, keeping the library tier window-system-free.
+  // The whole bring-up chain in one call; glfw::glfw_surface_factory supplies
+  // the GLFW surface.
   vg::app::WindowedAppConfig config;
   config.app_name = "01_triangle";
   config.enable_validation = true;  // a no-op when the layer is absent
-  config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
-  config.swapchain.extent = framebuffer_extent(window);
-  auto created = vg::app::WindowedApp::create(
-      config, example::glfw_surface_factory(window));
+  config.instance_extensions = extensions.value();
+  config.swapchain.extent = glfw::framebuffer_extent(window);
+  auto created =
+      vg::app::WindowedApp::create(config, glfw::glfw_surface_factory(window));
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
@@ -119,7 +116,7 @@ int run(GLFWwindow* window, int max_frames) {
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
     // after a resize / out-of-date result and skips ticks while the window is
     // minimized, so only hard failures surface here.
-    auto frame = app.begin_frame(framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());

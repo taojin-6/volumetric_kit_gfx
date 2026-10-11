@@ -49,8 +49,7 @@ struct ImGuiOverlayConfig {
 /// This is the *renderer* half of an ImGui integration only: it wires
 /// `imgui_impl_vulkan` to a `core::Device` and draws `ImDrawData` into a @ref
 /// RenderTarget's dynamic-rendering scope. The *platform* half — input and
-/// window sizing, e.g. `imgui_impl_glfw` — is the caller's, mirroring how the
-/// windowing tier takes a `VkSurfaceKHR` and leaves GLFW to the consumer. Each
+/// window sizing — is the caller's: `glfw::ImGuiGlfw` for a GLFW window. Each
 /// frame the caller runs its platform backend's new-frame (which sets
 /// `io.DisplaySize`), then @ref new_frame, builds UI with raw `ImGui::` calls,
 /// and inside a @ref RenderTarget::begin / @ref RenderTarget::end scope calls
@@ -77,9 +76,10 @@ struct ImGuiOverlayConfig {
 ///                                 .min_image_count = swapchain.image_count(),
 ///                                 .image_count = swapchain.image_count()});
 /// if (!overlay) return overlay.status();
-/// ImGui_ImplGlfw_InitForVulkan(window, true);  // platform half: the caller's
+/// VKC_ASSIGN(std::unique_ptr<glfw::ImGuiGlfw> platform,  // platform half
+///            glfw::ImGuiGlfw::create(window, overlay.value().context()));
 /// // ... per frame:
-/// ImGui_ImplGlfw_NewFrame();                   // sets io.DisplaySize + input
+/// platform->new_frame();                       // sets io.DisplaySize + input
 /// overlay.value().new_frame();
 /// ImGui::ShowDemoWindow();
 /// frame.target->begin(frame.cmd, {});

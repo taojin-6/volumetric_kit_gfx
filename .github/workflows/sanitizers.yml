@@ -6,14 +6,16 @@ name: sanitizers
 # sanitizers — this is what catches the leak / use-after-free / double-free
 # class the unit tests alone can't detect. It stays on a GitHub-hosted runner
 # with lavapipe rather than the self-hosted GPU runners: under ASan/LSan,
-# NVIDIA's proprietary driver reports its own allocations as leaks. Invoked by
-# ci.yml, which owns the push / pull_request triggers and the concurrency group.
+# NVIDIA's proprietary driver reports its own allocations as leaks. Ubuntu 26.04
+# for GLFW 3.4's null platform, without which gfx_glfw's window tests skip.
+# Invoked by ci.yml, which owns the push / pull_request triggers and the
+# concurrency group.
 on:
   workflow_call:
 
 jobs:
   asan-ubsan-lsan:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
     env:
       # Absolute path: ctest changes cwd per test, so a relative suppressions

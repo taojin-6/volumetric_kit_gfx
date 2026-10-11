@@ -26,13 +26,13 @@ option(VG_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VG_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
-# VG_WITH_GLFW gates the examples: examples/CMakeLists.txt skips the whole
-# directory when it is OFF (or when GLFW is not installed). The library tiers
-# never read it — windowing is GLFW-free by design.
+# VG_WITH_GLFW builds gfx_glfw, the GLFW window glue, and the examples on it;
+# both are skipped when it is OFF or GLFW is not installed. No other tier reads
+# GLFW.
 #
 # TODO: wire VG_WITH_CUDA into the interop tier when it lands; until then no
 # target reads it, so toggling it is a no-op.
-option(VG_WITH_GLFW "Enable GLFW desktop windowing (gates examples/)" ON)
+option(VG_WITH_GLFW "Build gfx_glfw (GLFW window glue) and the examples" ON)
 option(
   VG_WITH_CUDA
   "Enable CUDA <-> Vulkan external-memory interop (reserved; not yet wired)"
@@ -59,6 +59,14 @@ include(vg_sanitizers)
 # (the public-API types) and Vulkan::Vulkan (the loader our implementation links
 # privately).
 find_package(Vulkan REQUIRED)
+
+# GLFW, for gfx_glfw and the examples: optional, so a headless build configures
+# without it. A `glfw` target the application already made is used as it is. CI
+# provides it through libglfw3-dev (Linux) and brew glfw (macOS).
+if(VG_WITH_GLFW AND NOT TARGET glfw)
+  # 3.3: gfx_glfw reads GLFW's errors with glfwGetError.
+  find_package(glfw3 3.3 QUIET)
+endif()
 
 # glm: the matrix/vector types in the camera and assets tiers' public headers.
 # Prefer a system glm (its config defines glm::glm); fall back to the pinned

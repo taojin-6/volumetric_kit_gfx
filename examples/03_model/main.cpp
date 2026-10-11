@@ -47,6 +47,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -61,9 +62,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "common/glfw_surface.hpp"
 #include "imgui.h"
-#include "imgui_impl_glfw.h"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -79,6 +78,8 @@
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
+#include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
+#include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 #include "volumetric_kit/gfx/pipelines/ibl.hpp"
 #include "volumetric_kit/gfx/pipelines/pbr_model.hpp"
@@ -94,16 +95,16 @@ namespace win = volumetric_kit::gfx::windowing;
 namespace assets = volumetric_kit::gfx::assets;
 namespace camera = volumetric_kit::gfx::camera;
 namespace pipelines = volumetric_kit::gfx::pipelines;
+namespace glfw = volumetric_kit::gfx::glfw;
 
 namespace {
 
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr float kFovY = 1.0471976f;  // 60 degrees
 
-// TODO: hoist load_spirv and framebuffer_extent, copied across the examples,
-// and set_full_viewport, a copy of the pipelines' internal
-// set_full_viewport_scissor, into examples/common/ next to the GLFW surface
-// factory.
+// TODO: hoist load_spirv, copied across the examples, and set_full_viewport,
+// a copy of the pipelines' internal set_full_viewport_scissor, into a shared
+// examples/common/ header.
 std::vector<uint32_t> load_spirv(const char* path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -117,13 +118,6 @@ std::vector<uint32_t> load_spirv(const char* path) {
   file.seekg(0);
   file.read(reinterpret_cast<char*>(code.data()), size);
   return file ? code : std::vector<uint32_t>{};
-}
-
-VkExtent2D framebuffer_extent(GLFWwindow* window) {
-  int width = 0;
-  int height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
 }
 
 // A unit cube with per-face normals (24 vertices, 12 triangles), so the example
@@ -729,8 +723,11 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
 // this returns, before main() tears GLFW down. Interactive by default; with
 // max_frames >= 0 it runs a deterministic turntable and exits (for CI).
 int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
-  uint32_t glfw_ext_count = 0;
-  const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
+  auto extensions = glfw::instance_extensions();
+  if (!extensions.ok()) {
+    std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
+    return 1;
+  }
 
   // Two frames in flight: the swapchain keeps depth per image and the scene
   // UBO rings per slot, so nothing is shared across in-flight frames.
@@ -743,12 +740,12 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   vg::app::WindowedAppConfig app_config;
   app_config.app_name = "03_model";
   app_config.enable_validation = true;  // a no-op when the layer is absent
-  app_config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
-  app_config.swapchain.extent = framebuffer_extent(window);
+  app_config.instance_extensions = extensions.value();
+  app_config.swapchain.extent = glfw::framebuffer_extent(window);
   app_config.swapchain.depth_format = kDepthFormat;
   app_config.frames_in_flight = kFramesInFlight;
   auto created = vg::app::WindowedApp::create(
-      app_config, example::glfw_surface_factory(window));
+      app_config, glfw::glfw_surface_factory(window));
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
@@ -845,23 +842,24 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     std::fprintf(stderr, "overlay: %s\n", overlay.status().message().c_str());
     return 1;
   }
-  // Platform backend (this example's half): bind it to the overlay's context,
-  // then let it feed input + io.DisplaySize each frame. Initialized last, after
-  // the fallible setup above, so no earlier error return leaves a live
-  // ImGui_ImplGlfw backend without its paired Shutdown at teardown; it chains
-  // onto the scroll callback registered above (interactive), so the wheel still
-  // reaches the camera.
-  ImGui::SetCurrentContext(overlay.value().context());
-  if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
-    std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
+  // Platform backend: bound to the overlay's context, it feeds input +
+  // io.DisplaySize each frame, and chains onto the scroll callback registered
+  // above (interactive), so the wheel still reaches the camera. Declared after
+  // the overlay, so it shuts down first, while the context it binds is alive.
+  auto created_platform =
+      glfw::ImGuiGlfw::create(window, overlay.value().context());
+  if (!created_platform.ok()) {
+    std::fprintf(stderr, "ImGuiGlfw: %s\n",
+                 created_platform.status().message().c_str());
     return 1;
   }
+  const std::unique_ptr<glfw::ImGuiGlfw> platform =
+      std::move(created_platform).value();
 
   // A hard error inside the loop breaks out to the shared teardown below
-  // (wait_idle + set_profiler(nullptr) + ImGui_ImplGlfw_Shutdown) rather than
-  // returning straight away, so in-flight frames are drained before the
-  // after-app resources (pipeline, model, scene, skybox, profiler, overlay)
-  // destruct.
+  // (wait_idle + set_profiler(nullptr)) rather than returning straight away, so
+  // in-flight frames are drained before the after-app resources (pipeline,
+  // model, scene, skybox, profiler, overlay) destruct.
   int exit_code = 0;
   int rendered = 0;
   while (!glfwWindowShouldClose(window)) {
@@ -873,7 +871,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
     // (which rebuilds its per-image depth attachments) after a resize, and
     // skips ticks while the window is minimized.
-    auto frame = app.begin_frame(framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -895,7 +893,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     // Open the ImGui frame and build the metrics panel before recording:
     // new_frame computes io.WantCaptureMouse/Keyboard, which gate the camera
     // input below so the panel takes the cursor/keys when the user is on it.
-    ImGui_ImplGlfw_NewFrame();
+    platform->new_frame();
     overlay.value().new_frame();
     const ImGuiIO& io = ImGui::GetIO();
     vg::ui::draw_metrics_panel(profiler.value().metrics());
@@ -977,10 +975,6 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     exit_code = 1;
   }
   app.set_profiler(nullptr);
-  // Tear the platform backend down while the ImGui context is still alive; the
-  // overlay's destructor then shuts the renderer backend down and destroys it.
-  ImGui::SetCurrentContext(overlay.value().context());
-  ImGui_ImplGlfw_Shutdown();
   std::printf("03_model: rendered %d frame(s)\n", rendered);
   return exit_code;
 }

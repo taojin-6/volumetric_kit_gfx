@@ -13,8 +13,7 @@
 #include "volumetric_kit/gfx/core/log.hpp"
 
 // Third-party renderer backend. The platform backend (imgui_impl_glfw) is
-// deliberately not pulled in here — it lives in the consumer/example, keeping
-// this tier window-system-agnostic like the windowing tier.
+// gfx_glfw's, keeping this tier window-system-agnostic like the windowing tier.
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 

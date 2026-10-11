@@ -27,17 +27,18 @@
 
 #include <glm/vec2.hpp>
 
-#include "common/glfw_surface.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/image_view_2d.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
+#include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/pipelines/image_pipeline.hpp"
 #include "volumetric_kit/gfx/windowing.hpp"
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 namespace win = volumetric_kit::gfx::windowing;
+namespace glfw = volumetric_kit::gfx::glfw;
 namespace pipelines = volumetric_kit::gfx::pipelines;
 
 namespace {
@@ -49,28 +50,6 @@ double g_scroll = 0.0;
 
 void on_scroll(GLFWwindow* /*window*/, double /*x*/, double y) {
   g_scroll += y;
-}
-
-VkExtent2D framebuffer_extent(GLFWwindow* window) {
-  int width = 0;
-  int height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-}
-
-// The cursor in framebuffer pixels: GLFW reports window coordinates, which a
-// high-DPI display scales down from the framebuffer's.
-glm::vec2 cursor_in_framebuffer(GLFWwindow* window) {
-  double x = 0.0;
-  double y = 0.0;
-  glfwGetCursorPos(window, &x, &y);
-  int window_w = 0;
-  int window_h = 0;
-  glfwGetWindowSize(window, &window_w, &window_h);
-  const VkExtent2D fb = framebuffer_extent(window);
-  const float sx = window_w > 0 ? static_cast<float>(fb.width) / window_w : 1;
-  const float sy = window_h > 0 ? static_cast<float>(fb.height) / window_h : 1;
-  return {static_cast<float>(x) * sx, static_cast<float>(y) * sy};
 }
 
 // A zone plate: cos(pi r^2 / side), whose local frequency r / side reaches
@@ -92,16 +71,19 @@ std::vector<uint8_t> zone_plate() {
 }
 
 int run(GLFWwindow* window, int max_frames) {
-  uint32_t glfw_ext_count = 0;
-  const char** glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
+  auto extensions = glfw::instance_extensions();
+  if (!extensions.ok()) {
+    std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
+    return 1;
+  }
 
   vg::app::WindowedAppConfig config;
   config.app_name = "04_image";
   config.enable_validation = true;  // a no-op when the layer is absent
-  config.instance_extensions.assign(glfw_exts, glfw_exts + glfw_ext_count);
-  config.swapchain.extent = framebuffer_extent(window);
-  auto created = vg::app::WindowedApp::create(
-      config, example::glfw_surface_factory(window));
+  config.instance_extensions = extensions.value();
+  config.swapchain.extent = glfw::framebuffer_extent(window);
+  auto created =
+      vg::app::WindowedApp::create(config, glfw::glfw_surface_factory(window));
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
     return 1;
@@ -142,7 +124,7 @@ int run(GLFWwindow* window, int max_frames) {
   pipelines::ImageUpdate update;
   update.planes[0].buffer = &source.value();
 
-  const VkExtent2D start = framebuffer_extent(window);
+  const VkExtent2D start = glfw::framebuffer_extent(window);
   vg::camera::ImageView2D view(
       {static_cast<float>(kSide), static_cast<float>(kSide)}, {0.0f, 0.0f},
       {static_cast<float>(start.width), static_cast<float>(start.height)});
@@ -158,7 +140,7 @@ int run(GLFWwindow* window, int max_frames) {
     }
     glfwPollEvents();
 
-    auto frame = app.begin_frame(framebuffer_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -177,7 +159,7 @@ int run(GLFWwindow* window, int max_frames) {
     // shrinks and the mip level follows.
     view.set_viewport({0.0f, 0.0f}, {static_cast<float>(extent.width),
                                      static_cast<float>(extent.height)});
-    const glm::vec2 cursor = cursor_in_framebuffer(window);
+    const glm::vec2 cursor = glfw::cursor_in_framebuffer(window);
     if (g_scroll != 0.0) {
       view.zoom_about(cursor, static_cast<float>(std::pow(1.1, g_scroll)));
       g_scroll = 0.0;

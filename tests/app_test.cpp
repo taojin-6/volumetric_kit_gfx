@@ -8,16 +8,18 @@
 // that surface or a present-capable device is unavailable. HeadlessApp needs
 // no surface at all. The facades own their instances, validated as the
 // environment asks, and the fixtures fail a test on any error their layer
-// reports.
+// reports. shared_device_config is pure, so its cases need no device.
 
 #include <gtest/gtest.h>
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
@@ -606,6 +608,53 @@ TEST_F(HeadlessAppTest, SelfMoveAssignIsSafe) {
   app_ = std::move(*alias);  // laundered so -Wself-move stays quiet
   EXPECT_TRUE(app_.valid());
   EXPECT_NE(app_.device().handle(), VK_NULL_HANDLE);
+}
+
+// --- shared_device_config ---------------------------------------------------
+
+TEST(SharedDeviceConfigTest, IsThePureUnionOfItsInputs) {
+  // The embedder's name in its own buffer, as GLFW's names are in GLFW's: the
+  // union compares the strings, not the pointers.
+  const std::string surface_name = VK_KHR_SURFACE_EXTENSION_NAME;
+  vg::app::WindowDeviceConfig config;
+  config.instance.app_name = "viewer";
+  config.instance.enable_validation = true;
+  config.instance.extensions = {surface_name.c_str()};
+  config.graphics.features.fillModeNonSolid = VK_TRUE;
+  vkc::DeviceRequirements compute;
+  compute.scalar_block_layout = true;
+  compute.extensions = {"VK_KHR_external_memory_fd"};
+  const std::vector<const char*> surface = {
+      VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+
+  const vkc::SharedDeviceConfig shared =
+      vg::app::shared_device_config(surface, compute, config);
+
+  EXPECT_EQ(shared.instance.app_name, "viewer");
+  EXPECT_TRUE(shared.instance.enable_validation);
+  // The embedder's extensions first, then the window system's, each once.
+  ASSERT_EQ(shared.instance.extensions.size(), 2u);
+  EXPECT_EQ(shared.instance.extensions[0], surface_name.c_str());
+  EXPECT_STREQ(shared.instance.extensions[1],
+               VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+  // The compute library's requirements pass through as given.
+  EXPECT_EQ(shared.compute.queue_flags, compute.queue_flags);
+  EXPECT_TRUE(shared.compute.scalar_block_layout);
+  EXPECT_FALSE(shared.compute.needs_present);
+  EXPECT_EQ(shared.compute.extensions, compute.extensions);
+  // The renderer's, with presentation added.
+  EXPECT_TRUE(shared.graphics.needs_present);
+  EXPECT_EQ(shared.graphics.api_version, VK_API_VERSION_1_3);
+  EXPECT_TRUE(shared.graphics.dynamic_rendering);
+  EXPECT_EQ(shared.graphics.features.fillModeNonSolid, VK_TRUE);
+  // The caller sets the surface maker.
+  EXPECT_FALSE(static_cast<bool>(shared.make_surface));
+
+  // Nothing it was given changed.
+  EXPECT_FALSE(config.graphics.needs_present);
+  ASSERT_EQ(config.instance.extensions.size(), 1u);
+  EXPECT_FALSE(compute.needs_present);
+  EXPECT_EQ(surface.size(), 2u);
 }
 
 }  // namespace

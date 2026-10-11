@@ -62,10 +62,9 @@ FetchContent_Declare(
 # target. SOURCE_SUBDIR names a nonexistent dir so MakeAvailable only populates
 # the sources (no add_subdirectory), exactly as tinygltf above; the ui tier
 # compiles imgui core + backends/imgui_impl_vulkan into a vendored static lib
-# (see src/.../ui/CMakeLists.txt). The GLFW platform backend (imgui_impl_glfw)
-# is deliberately NOT built here -- it stays in examples, so this tier inherits
-# the windowing tier's GLFW-free rule. Pinned to a tag whose Vulkan backend
-# supports dynamic rendering (the kit's only rendering path).
+# (see src/.../ui/CMakeLists.txt), and gfx_glfw compiles the GLFW platform
+# backend (imgui_impl_glfw) from the same sources. Pinned to a tag whose Vulkan
+# backend supports dynamic rendering (the kit's only rendering path).
 FetchContent_Declare(
   imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git

@@ -6,7 +6,7 @@
 # VkSurfaceKHR into RenderTargets and drives the present loop. Depends only on
 # gfx_core; deliberately GLFW-free (it takes a VkSurfaceKHR), so the swapchain
 # is unit-testable via VK_EXT_headless_surface and a consumer picks its own
-# window system. GLFW lives in the examples, not here.
+# window system. The GLFW glue is gfx_glfw's, not here.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
