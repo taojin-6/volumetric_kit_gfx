@@ -106,7 +106,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 84c2cb4bfff0bc184c70c5754e9dfa63c819e196)
+  GIT_TAG 1ce825dcbfac4f142e694846488bdf4fa5aa13ae)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
