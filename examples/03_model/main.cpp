@@ -13,10 +13,10 @@
 // camera auto-frames the model's bounds, so any model fills the view.
 //
 // Usage:
-//   example_03_model                       # built-in cube, in a window
-//   example_03_model --model Helmet.glb    # any glTF-Sample-Assets model
-//   example_03_model --frames 3            # render N frames, then exit
-//   example_03_model --model m.glb --screenshot out.ppm   # headless still
+//   example_03_model --config examples/config/smoke.json
+//   example_03_model --config build/examples/config/model-screenshot.json
+//   example_03_model --help
+// Model, screenshot, window size and frame limit come from core's JSON config.
 //
 // Controls (windowed, interactive by default): left-drag orbits, right/middle-
 // drag pans, wheel zooms, WASDQE flies (Q/E down/up), Shift moves faster.
@@ -25,11 +25,11 @@
 // its bring-up collapsed into one app-tier call:
 //  * Windowed (default): app::WindowedApp (instance -> surface -> device ->
 //    swapchain -> frame loop), driven by mouse + keyboard (a deterministic
-//    turntable instead under --frames). The swapchain owns a depth attachment
-//    per image (SwapchainConfig::depth_format) and rebuilds it on resize, so
-//    each frame renders straight into the loop's depth-capable target at two
-//    frames in flight.
-//  * --screenshot: app::HeadlessApp (no window, no surface) -- renders one
+//    turntable instead with a frame limit). The swapchain owns a depth
+//    attachment per image (SwapchainConfig::depth_format) and rebuilds it on
+//    resize, so each frame renders straight into the loop's depth-capable
+//    target at two frames in flight.
+//  * output.screenshot: app::HeadlessApp (no window, no surface) -- renders one
 //    frame into an OffscreenTarget (color + depth + readback) and writes a
 //    binary PPM. Headless, so it works where no display / screen-capture is
 //    available.
@@ -39,13 +39,10 @@
 
 #include <GLFW/glfw3.h>
 
-#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -63,6 +60,7 @@
 #include <glm/vec4.hpp>
 
 #include "imgui.h"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -161,7 +159,7 @@ assets::Model make_cube() {
 // Load `model_path` (or the built-in cube when null); null `*ok` on failure.
 assets::Model load_model_or_cube(const char* model_path, bool* ok) {
   if (model_path == nullptr) {
-    std::printf("03_model: no --model given; showing the built-in cube\n");
+    std::printf("03_model: no model configured; showing the built-in cube\n");
     return make_cube();
   }
   std::string error;
@@ -222,8 +220,8 @@ Bounds compute_bounds(const assets::Model& model) {
 // Frame the model's bounds with a three-quarter starting view: the rig looks
 // slightly down at the bounds center from a distance that fits the bounding
 // sphere. Near/far are fit separately by fit_clip (refit per frame while
-// navigating); interactive input (or the --frames turntable) takes over from
-// this pose.
+// navigating); interactive input (or the frame-limited turntable) takes over
+// from this pose.
 void frame_camera(camera::CameraRig& rig, const Bounds& bounds) {
   const float radius = std::fmax(bounds.radius(), 1e-3f);
   const float distance = radius / std::sin(kFovY * 0.5f) * 1.3f;  // fit sphere
@@ -514,13 +512,17 @@ void record_skybox(VkCommandBuffer cmd, VkExtent2D extent, const Skybox& skybox,
 // --- Headless path: render one frame into an OffscreenTarget, write a PPM
 // -----
 
-int run_screenshot(const char* model_path, const char* out_path, uint32_t width,
-                   uint32_t height) {
+int run_screenshot(const vkc::config::Config& settings) {
+  const char* model_path =
+      settings.source.path.empty() ? nullptr : settings.source.path.c_str();
+  const char* out_path = settings.output.screenshot.c_str();
+  const auto width = static_cast<uint32_t>(settings.window.width);
+  const auto height = static_cast<uint32_t>(settings.window.height);
   // The whole headless bring-up (instance -> device -> allocator, no surface,
   // no present queue) in one call.
   vg::app::HeadlessAppConfig app_config;
   app_config.app_name = "03_model";
-  app_config.enable_validation = true;  // a no-op when the layer is absent
+  app_config.enable_validation = settings.window.validation;
   auto created = vg::app::HeadlessApp::create(app_config);
   if (!created.ok()) {
     std::fprintf(stderr, "app: %s\n", created.status().message().c_str());
@@ -722,7 +724,10 @@ void apply_input(GLFWwindow* window, InputState& input, camera::CameraRig& rig,
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
 // this returns, before main() tears GLFW down. Interactive by default; with
 // max_frames >= 0 it runs a deterministic turntable and exits (for CI).
-int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
+int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
+  const int max_frames = settings.run.frames;
+  const char* model_path =
+      settings.source.path.empty() ? nullptr : settings.source.path.c_str();
   auto extensions = glfw::instance_extensions();
   if (!extensions.ok()) {
     std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
@@ -739,7 +744,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   // targets are depth-capable.
   vg::app::WindowedAppConfig app_config;
   app_config.app_name = "03_model";
-  app_config.enable_validation = true;  // a no-op when the layer is absent
+  app_config.enable_validation = settings.window.validation;
   app_config.instance_extensions = extensions.value();
   app_config.swapchain.extent = glfw::framebuffer_extent(window);
   app_config.swapchain.depth_format = kDepthFormat;
@@ -761,7 +766,7 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   const Bounds bounds = compute_bounds(model);
   camera::CameraRig rig;
   frame_camera(rig, bounds);
-  // Interactive by default; a deterministic turntable when --frames is given,
+  // Interactive by default; a deterministic turntable when run.frames is set,
   // so CI renders a reproducible sequence. Fly speed scales to the model size.
   const bool interactive = max_frames < 0;
   const float move_speed = std::fmax(bounds.radius(), 1e-3f) * 1.5f;
@@ -896,19 +901,22 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
     platform->new_frame();
     overlay.value().new_frame();
     const ImGuiIO& io = ImGui::GetIO();
-    vg::ui::draw_metrics_panel(profiler.value().metrics());
+    if (settings.window.overlay) {
+      vg::ui::draw_metrics_panel(profiler.value().metrics());
+    }
 
     // Advance the camera: interactive input, or a deterministic per-frame
-    // turntable step under --frames (reproducible for CI).
+    // turntable step with a frame limit (reproducible for CI).
     if (interactive) {
-      apply_input(window, input, rig, move_speed, io.WantCaptureMouse,
-                  io.WantCaptureKeyboard);
+      apply_input(window, input, rig, move_speed,
+                  settings.window.overlay && io.WantCaptureMouse,
+                  settings.window.overlay && io.WantCaptureKeyboard);
     } else {
       rig.orbit(0.0075f, 0.0f);
     }
     // Refit near/far to the model from the camera's new position, so zoom/fly
     // keep it within the frustum (orbit holds its distance, so this stays
-    // constant under --frames).
+    // constant with a frame limit).
     const std::pair<float, float> clip = fit_clip(bounds, rig.position());
     const float aspect =
         static_cast<float>(extent.width) /
@@ -979,61 +987,29 @@ int run_windowed(GLFWwindow* window, const char* model_path, int max_frames) {
   return exit_code;
 }
 
-bool parse_uint(const char* arg, uint32_t* out) {
-  char* end = nullptr;
-  const long value = std::strtol(arg, &end, 10);
-  if (*end != '\0' || value <= 0 || value > 16384) {
-    return false;
-  }
-  *out = static_cast<uint32_t>(value);
-  return true;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-  int max_frames = -1;  // < 0 means run until the window is closed
-  const char* model_path = nullptr;
-  const char* screenshot_path = nullptr;
-  uint32_t width = 1024;
-  uint32_t height = 720;
-  for (int i = 1; i < argc; ++i) {
-    const bool has_value = i + 1 < argc;
-    if (std::strcmp(argv[i], "--model") == 0 && has_value) {
-      model_path = argv[++i];
-    } else if (std::strcmp(argv[i], "--screenshot") == 0 && has_value) {
-      screenshot_path = argv[++i];
-    } else if (std::strcmp(argv[i], "--width") == 0 && has_value) {
-      if (!parse_uint(argv[++i], &width)) {
-        std::fprintf(stderr, "--width: invalid value '%s'\n", argv[i]);
-        return 2;
-      }
-    } else if (std::strcmp(argv[i], "--height") == 0 && has_value) {
-      if (!parse_uint(argv[++i], &height)) {
-        std::fprintf(stderr, "--height: invalid value '%s'\n", argv[i]);
-        return 2;
-      }
-    } else if (std::strcmp(argv[i], "--frames") == 0 && has_value) {
-      char* end = nullptr;
-      const long value = std::strtol(argv[++i], &end, 10);
-      if (*end != '\0' || value < 0 || value > INT_MAX) {
-        std::fprintf(stderr, "--frames: invalid value '%s'\n", argv[i]);
-        return 2;
-      }
-      max_frames = static_cast<int>(value);
-    } else {
-      std::fprintf(
-          stderr,
-          "usage: %s [--model <file.gltf|.glb>] [--frames N]\n"
-          "          [--screenshot <out.ppm> [--width W] [--height H]]\n",
-          argv[0]);
-      return 2;
-    }
+  const auto args = vkc::config::parse_args(argc, argv);
+  if (!args.ok()) {
+    std::fprintf(stderr, "%s\n", args.status().message().c_str());
+    return 2;
   }
+  if (args.value().help) {
+    std::printf("%s", vkc::config::usage());
+    return 0;
+  }
+  const auto loaded = vkc::config::load(args.value().config_path,
+                                        vkc::config::Application::GfxModel);
+  if (!loaded.ok()) {
+    std::fprintf(stderr, "%s\n", loaded.status().message().c_str());
+    return 2;
+  }
+  const vkc::config::Config& settings = loaded.value();
 
-  // Headless still: no window, no GLFW -- render one frame and write a PPM.
-  if (screenshot_path != nullptr) {
-    return run_screenshot(model_path, screenshot_path, width, height);
+  // The screenshot path needs no window or GLFW initialization.
+  if (!settings.output.screenshot.empty()) {
+    return run_screenshot(settings);
   }
 
   if (glfwInit() != GLFW_TRUE) {
@@ -1047,7 +1023,7 @@ int main(int argc, char** argv) {
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
   GLFWwindow* window = glfwCreateWindow(
-      static_cast<int>(width), static_cast<int>(height),
+      settings.window.width, settings.window.height,
       "volumetric_kit_gfx \xE2\x80\x94 03_model", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -1055,7 +1031,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const int rc = run_windowed(window, model_path, max_frames);
+  const int rc = run_windowed(window, settings);
 
   glfwDestroyWindow(window);
   glfwTerminate();

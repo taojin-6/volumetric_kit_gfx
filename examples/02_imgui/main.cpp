@@ -6,23 +6,21 @@
 // is one app::WindowedApp::create call; the overlay is two halves: the
 // *renderer* backend (imgui_impl_vulkan) in ui::ImGuiOverlay, and the
 // *platform* backend (imgui_impl_glfw — input + window sizing) in
-// glfw::ImGuiGlfw. Run with `--frames N` to render N frames and exit — CI
-// drives that under Xvfb with validation enabled to exercise the path
-// headlessly.
+// glfw::ImGuiGlfw. Set `run.frames` in the JSON config to render a fixed frame
+// count — CI drives that under Xvfb with validation enabled to exercise the
+// path headlessly.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 #include <GLFW/glfw3.h>
 
-#include <climits>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 #include <memory>
 
 #include "imgui.h"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
@@ -50,7 +48,8 @@ void build_ui(int frame_index) {
 
 // Owns all Vulkan/windowing/UI state for one window; everything is destroyed
 // when this returns, before main() tears GLFW down.
-int run(GLFWwindow* window, int max_frames) {
+int run(GLFWwindow* window, const vkc::config::Config& settings) {
+  const int max_frames = settings.run.frames;
   auto extensions = glfw::instance_extensions();
   if (!extensions.ok()) {
     std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
@@ -64,7 +63,7 @@ int run(GLFWwindow* window, int max_frames) {
   // the GLFW surface.
   vg::app::WindowedAppConfig config;
   config.app_name = "02_imgui";
-  config.enable_validation = true;  // a no-op when the layer is absent
+  config.enable_validation = settings.window.validation;
   config.instance_extensions = extensions.value();
   config.swapchain.extent = glfw::framebuffer_extent(window);
   config.frames_in_flight = kFramesInFlight;
@@ -154,10 +153,11 @@ int run(GLFWwindow* window, int max_frames) {
 
     platform->new_frame();        // platform: sets io.DisplaySize + input
     overlay.value().new_frame();  // renderer: begins the ImGui frame
-    build_ui(rendered);
-    // The live profiler view; the resolved metrics lag the in-flight depth, so
-    // it is empty for the first couple of frames, then fills in.
-    vg::ui::draw_metrics_panel(profiler.value().metrics());
+    if (settings.window.overlay) {
+      build_ui(rendered);
+      // Metrics lag the in-flight depth, so the first frames are empty.
+      vg::ui::draw_metrics_panel(profiler.value().metrics());
+    }
 
     vg::RenderTargetBeginInfo begin;
     begin.clear_color.float32[0] = 0.02f;
@@ -201,23 +201,22 @@ int run(GLFWwindow* window, int max_frames) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  int max_frames = -1;  // < 0 means run until the window is closed
-  for (int i = 1; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--frames") != 0) {
-      continue;
-    }
-    if (i + 1 >= argc) {
-      std::fprintf(stderr, "--frames needs a non-negative integer value\n");
-      return 2;
-    }
-    char* end = nullptr;
-    const long value = std::strtol(argv[++i], &end, 10);
-    if (*end != '\0' || value < 0 || value > INT_MAX) {
-      std::fprintf(stderr, "--frames: invalid value '%s'\n", argv[i]);
-      return 2;
-    }
-    max_frames = static_cast<int>(value);
+  const auto args = vkc::config::parse_args(argc, argv);
+  if (!args.ok()) {
+    std::fprintf(stderr, "%s\n", args.status().message().c_str());
+    return 2;
   }
+  if (args.value().help) {
+    std::printf("%s", vkc::config::usage());
+    return 0;
+  }
+  const auto loaded = vkc::config::load(args.value().config_path,
+                                        vkc::config::Application::GfxImGui);
+  if (!loaded.ok()) {
+    std::fprintf(stderr, "%s\n", loaded.status().message().c_str());
+    return 2;
+  }
+  const vkc::config::Config& settings = loaded.value();
 
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
@@ -230,14 +229,15 @@ int main(int argc, char** argv) {
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
   GLFWwindow* window = glfwCreateWindow(
-      1024, 720, "volumetric_kit_gfx \xE2\x80\x94 02_imgui", nullptr, nullptr);
+      settings.window.width, settings.window.height,
+      "volumetric_kit_gfx \xE2\x80\x94 02_imgui", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
     return 1;
   }
 
-  const int rc = run(window, max_frames);
+  const int rc = run(window, settings);
 
   glfwDestroyWindow(window);
   glfwTerminate();

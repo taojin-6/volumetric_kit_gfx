@@ -16,6 +16,9 @@ using MoltenVK on Apple and one GLSL → SPIR-V shader set across platforms.
   contracts. See the [recorded decisions](DECISIONS.md#locked-decisions).
 - Descriptor layouts come from spirv-cross reflection. Use per-pipeline
   submission structs; there is no library scene graph or global frame type.
+- Core's optional `core_config` owns run configuration, defaults and static
+  validation. Examples adapt its typed settings; renderer tiers do not parse JSON
+  or register flags. Keep driver capability checks in the runtime APIs.
 - Reach Vulkan through the core's umbrella,
   `volumetric_kit/core/vulkan/vulkan.hpp`, and the link-time loader. Keep VMA
   and backend details out of public headers.

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "operation": "view",
+  "run": {
+    "frames": 30
+  },
+  "window": {
+    "validation": true
+  }
+}

@@ -79,8 +79,8 @@ vulkan tier on (`VKC_WITH_VULKAN`), which gfx checks at configure with the
 core's `vkc_require_core`. Build against a local core checkout with
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
-gfx compiles against the system's Vulkan headers -- 1.3.204 or newer, 1.3.208
-on Apple, the core's floor -- and vendors none. To build against a pinned copy,
+gfx compiles against the system's Vulkan headers -- 1.3.275 or newer with the
+pinned core -- and vendors none. To build against a pinned copy,
 point `Vulkan_INCLUDE_DIR` at it; the loader still comes from the system.
 
 Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL` and
@@ -99,6 +99,45 @@ sudo apt-get install -y cmake libvulkan-dev glslang-tools \
 ```
 
 ## Development
+
+The examples use core's versioned JSON run configuration:
+
+```bash
+build/examples/example_03_model --config examples/config/smoke.json
+build/examples/example_03_model --help
+# No display or GLFW initialization is needed for a screenshot:
+build/examples/example_03_model --config build/examples/config/model-screenshot.json
+```
+
+The smoke configuration runs 30 frames. A minimal
+`{"version": 1, "operation": "view"}` file opens the example with its usual
+defaults; omit `run.frames` for an interactive run.
+The model example shows a cube unless `source` selects a model:
+
+```json
+{
+  "version": 1,
+  "operation": "view",
+  "source": {"kind": "model", "path": "models/Helmet.glb"},
+  "window": {"width": 1024, "height": 720, "validation": true},
+  "output": {"screenshot": "helmet.ppm"}
+}
+```
+
+Paths are relative to the configuration file. A screenshot uses `window.width`
+and `window.height` as output pixels and runs without opening a window; without
+`output.screenshot`, they set the initial window size. The copied screenshot
+example writes `build/examples/config/model.ppm`. `window.overlay` controls the
+panels in the ImGui and model examples. Core owns the schema, defaults, strict
+key/type/range checks and application compatibility checks. The command line
+accepts only `--config <file>` and `--help`; the former individual flags are
+replaced by file fields.
+
+Only the example executables need `volumetric_kit::core_config`. Gfx enables
+`VKC_WITH_CONFIG` when those executables build; a consuming application that
+makes core available first must enable it there if it also enables gfx's
+examples. Renderer libraries and their installed APIs remain independent of
+the JSON configuration component.
 
 ```bash
 pre-commit install   # clang-format + cmake-format + hygiene hooks

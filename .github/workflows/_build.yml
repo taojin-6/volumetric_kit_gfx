@@ -302,6 +302,16 @@ jobs:
           DYLD_LIBRARY_PATH="${VKC_LAYER_LIBRARY_PATH:-}" \
             ctest --test-dir build --output-on-failure
 
+      - name: Run the configured headless example
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          DYLD_LIBRARY_PATH="${VKC_LAYER_LIBRARY_PATH:-}" \
+            cmake -DEXAMPLE_EXE="$PWD/build/examples/example_03_model" \
+              -DSCREENSHOT_CONFIG="$PWD/build/examples/config/model-screenshot.json" \
+              -DEXPECTED_SCREENSHOT="$PWD/build/examples/config/model.ppm" \
+              -DWORK_DIR="$PWD/build/screenshot-working-directory" \
+              -P tests/example_screenshot.cmake
+
       # Nothing above compiles the *installed* tree, so an install-list mistake
       # -- shipping a header whose own #include was excluded -- reaches
       # consumers with CI green. Two cheap checks close that:
@@ -445,14 +455,20 @@ jobs:
           # asset needed); 04_image converts and mip-maps a picture every frame
           # through ImagePipeline. All run with validation on, through the same
           # surface → swapchain → present path.
-          xvfb-run -a build/examples/example_01_triangle --frames 30 2>&1 \
+          xvfb-run -a build/examples/example_01_triangle --config examples/config/smoke.json 2>&1 \
             | tee example.log
-          xvfb-run -a build/examples/example_02_imgui --frames 30 2>&1 \
+          xvfb-run -a build/examples/example_02_imgui --config examples/config/smoke.json 2>&1 \
             | tee -a example.log
-          xvfb-run -a build/examples/example_03_model --frames 30 2>&1 \
+          xvfb-run -a build/examples/example_03_model --config examples/config/smoke.json 2>&1 \
             | tee -a example.log
-          xvfb-run -a build/examples/example_04_image --frames 30 2>&1 \
+          xvfb-run -a build/examples/example_04_image --config examples/config/smoke.json 2>&1 \
             | tee -a example.log
+          for example in 01_triangle 02_imgui 03_model 04_image; do
+            if ! grep -qF "$example: rendered 30 frame(s)" example.log; then
+              echo "::error::$example did not honor run.frames"
+              exit 1
+            fi
+          done
           if grep -qE 'VUID-' example.log; then
             echo "::error::Vulkan validation errors from the windowed examples"
             exit 1

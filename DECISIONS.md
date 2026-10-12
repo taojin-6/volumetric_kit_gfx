@@ -113,6 +113,19 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-11 — The GLFW window glue is a library tier, `glfw`.** It reverses "library
   tiers never read GLFW": `gfx_glfw` does, and no other tier. See the dated entry below.
 
+## 2026-10-11 — Core owns application run configuration
+
+The examples use core's optional `core_config` target for the JSON format,
+typed settings, defaults, validation and the `--config` / `--help` entry point.
+Gfx does not register individual flags or own a second configuration parser.
+The examples translate validated settings into the existing renderer structs;
+driver capability checks and actual framebuffer sizes remain runtime concerns.
+
+Only example executables link `core_config`. The renderer's public API,
+headless applications and non-GLFW consumers keep their existing typed APIs
+and do not acquire a JSON or GLFW dependency from configuration. The GLFW
+glue remains independent of the choice of application configuration format.
+
 ## 2026-10-11 — The GLFW window glue is a library tier
 
 `gfx_glfw` holds what each GLFW application of the renderer wrote for itself:

@@ -5,9 +5,9 @@
 // swapchain on dynamic rendering. The whole instance -> surface -> device ->
 // swapchain -> frame-loop bring-up is one app::WindowedApp::create call, with
 // the window glue from gfx_glfw; the example keeps only what is its own — the
-// GLFW window, the shaders/pipeline, and the render loop. Run with `--frames N`
-// to render N frames and exit — CI drives that under Xvfb to validate the real
-// window -> surface -> swapchain -> present path headlessly.
+// GLFW window, the shaders/pipeline, and the render loop. Set `run.frames` in
+// the JSON config to exit after a fixed count — CI drives that under Xvfb to
+// validate the real window -> surface -> swapchain -> present path headlessly.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -16,11 +16,10 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <vector>
 
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
@@ -51,7 +50,8 @@ std::vector<uint32_t> load_spirv(const char* path) {
 
 // Owns all Vulkan/windowing state for one window; everything is destroyed when
 // this returns, before main() tears GLFW down.
-int run(GLFWwindow* window, int max_frames) {
+int run(GLFWwindow* window, const vkc::config::Config& settings) {
+  const int max_frames = settings.run.frames;
   auto extensions = glfw::instance_extensions();
   if (!extensions.ok()) {
     std::fprintf(stderr, "%s\n", extensions.status().message().c_str());
@@ -62,7 +62,7 @@ int run(GLFWwindow* window, int max_frames) {
   // the GLFW surface.
   vg::app::WindowedAppConfig config;
   config.app_name = "01_triangle";
-  config.enable_validation = true;  // a no-op when the layer is absent
+  config.enable_validation = settings.window.validation;
   config.instance_extensions = extensions.value();
   config.swapchain.extent = glfw::framebuffer_extent(window);
   auto created =
@@ -179,12 +179,22 @@ int run(GLFWwindow* window, int max_frames) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  int max_frames = -1;
-  for (int i = 1; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--frames") == 0) {
-      max_frames = std::atoi(argv[i + 1]);
-    }
+  const auto args = vkc::config::parse_args(argc, argv);
+  if (!args.ok()) {
+    std::fprintf(stderr, "%s\n", args.status().message().c_str());
+    return 2;
   }
+  if (args.value().help) {
+    std::printf("%s", vkc::config::usage());
+    return 0;
+  }
+  const auto loaded = vkc::config::load(args.value().config_path,
+                                        vkc::config::Application::GfxTriangle);
+  if (!loaded.ok()) {
+    std::fprintf(stderr, "%s\n", loaded.status().message().c_str());
+    return 2;
+  }
+  const vkc::config::Config& settings = loaded.value();
 
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
@@ -196,16 +206,16 @@ int main(int argc, char** argv) {
     return 1;
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
-  GLFWwindow* window =
-      glfwCreateWindow(800, 600, "volumetric_kit_gfx \xE2\x80\x94 01_triangle",
-                       nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(
+      settings.window.width, settings.window.height,
+      "volumetric_kit_gfx \xE2\x80\x94 01_triangle", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
     return 1;
   }
 
-  const int rc = run(window, max_frames);
+  const int rc = run(window, settings);
 
   glfwDestroyWindow(window);
   glfwTerminate();
