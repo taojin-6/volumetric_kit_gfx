@@ -130,6 +130,12 @@ glm::dmat4 project(const camera::PinholeCamera& cam) {
   return m;
 }
 
+// The pixels along an axis of `size` (at least 1) at `stride`: 0, stride,
+// 2 stride, ... below `size`. Written so a stride near 2^32 cannot wrap.
+uint32_t steps(uint32_t size, uint32_t stride) {
+  return (size - 1) / stride + 1;
+}
+
 // Checks `draw` and, when it passes, fills `params` for it. Matrices fold in
 // double, so a large pose loses nothing before the one rounding to float.
 core::Status prepare(uint32_t index, const DepthCloudDraw& draw,
@@ -205,7 +211,7 @@ core::Status prepare(uint32_t index, const DepthCloudDraw& draw,
   params.depth_to_clip = glm::mat4(view_proj * depth_cam);
   params.depth_to_color = glm::mat4(to_color);
   params.grid[0] = d.width;
-  params.grid[1] = (d.width + draw.stride - 1) / draw.stride;
+  params.grid[1] = steps(d.width, draw.stride);
   params.grid[2] = draw.stride;
   params.grid[3] = has_color ? color.camera.width : 0;
   params.style[0] = static_cast<uint32_t>(draw.mode);
@@ -223,14 +229,12 @@ core::Status prepare(uint32_t index, const DepthCloudDraw& draw,
   return core::Status{};
 }
 
-// The vertex count of `draw`: its columns times its rows.
+// The vertex count of `draw`, which prepare() passed: its columns times its
+// rows.
 uint32_t vertex_count(const DepthCloudDraw& draw) {
-  const uint32_t columns =
-      (draw.depth.camera.width + draw.stride - 1) / draw.stride;
-  const uint32_t rows =
-      (draw.depth.camera.height + draw.stride - 1) / draw.stride;
   // prepare() bounded width * height by maxStorageBufferRange / 4.
-  return columns * rows;
+  return steps(draw.depth.camera.width, draw.stride) *
+         steps(draw.depth.camera.height, draw.stride);
 }
 
 }  // namespace
@@ -348,14 +352,14 @@ DepthCloudPipeline::make_block(const core::Device& device,
 }
 
 core::Result<DepthCloudPipeline::Block*> DepthCloudPipeline::block_for(
-    uint64_t frame, uint32_t draws) {
+    uint64_t frame) {
   if (current_ != nullptr) {
-    if (frame == current_frame_ && current_used_ + draws <= max_draws_) {
+    if (frame == current_frame_ && current_used_ < max_draws_) {
       return current_;
     }
-    // Its frame -- or, for a full block, this frame -- holds it until the
-    // timeline reaches that frame. free_ has room for every block, so the
-    // deleter cannot throw from a noexcept teardown.
+    // Its frame -- this one, when it is full -- holds it until the timeline
+    // reaches that frame. free_ has room for every block, so the deleter
+    // cannot throw from a noexcept teardown.
     Block* held = current_;
     frames_.retire().push(current_frame_,
                           [this, held]() { free_.push_back(held); });
@@ -385,13 +389,6 @@ core::Status DepthCloudPipeline::submit(VkCommandBuffer cmd,
     return core::Status::invalid_argument(
         std::string(kSubmit) + ": draws is null with a non-zero draw_count");
   }
-  if (frame.draw_count > max_draws_) {
-    return core::Status::invalid_argument(
-        std::string(kSubmit) + ": " + std::to_string(frame.draw_count) +
-        " draws exceed max_draws (" + std::to_string(max_draws_) +
-        "); submit them in several calls or raise "
-        "DepthCloudPipelineDesc::max_draws");
-  }
 
   // Check every draw first, so an error records nothing.
   const VkPhysicalDeviceLimits& limits = device_.caps().limits();
@@ -409,21 +406,38 @@ core::Status DepthCloudPipeline::submit(VkCommandBuffer cmd,
     frames_.advance(frame.number);
     return core::Status{};
   }
-  VKC_ASSIGN(Block* const block, block_for(frame.number, count));
+  // Then take a set for each draw: the rest of the frame's block, then as
+  // many more blocks as the draws need, so a failure making one records
+  // nothing either.
+  struct Slot {
+    Block* block;
+    uint32_t set;
+  };
+  std::vector<Slot> slots;
+  slots.reserve(count);
+  while (slots.size() < count) {
+    VKC_ASSIGN(Block* const block, block_for(frame.number));
+    for (; current_used_ < max_draws_ && slots.size() < count;
+         ++current_used_) {
+      slots.push_back({block, current_used_});
+    }
+  }
   frames_.advance(frame.number);
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-  auto* mapped = static_cast<std::byte*>(block->params.mapped());
+  const Slot* slot = slots.data();
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
     if (!drawn[i]) {
       continue;
     }
     const DepthCloudDraw& draw = frame.draws[i];
-    const uint32_t slot = current_used_++;
     // Coherent memory the GPU reads once this frame runs; a block is not
     // reused before then.
-    std::memcpy(mapped + params_stride_ * slot, &params[i], sizeof(Params));
-    const core::DescriptorSet& set = block->sets[slot];
+    auto* mapped = static_cast<std::byte*>(slot->block->params.mapped());
+    std::memcpy(mapped + params_stride_ * slot->set, &params[i],
+                sizeof(Params));
+    const core::DescriptorSet& set = slot->block->sets[slot->set];
+    ++slot;
     const camera::PinholeCamera& d = draw.depth.camera;
     const VkDeviceSize depth_bytes = VkDeviceSize{d.width} * d.height * 4;
     set.write_storage_buffer(kDepthBinding, draw.depth.buffer->handle(),

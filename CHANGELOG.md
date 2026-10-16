@@ -114,7 +114,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   optional R'G'B'A8 colour buffer with its own -- as a point per depth pixel
   (every `stride`-th), read in place in the vertex stage. `CloudColor` is
   `Solid`, `TintedLuma` or `True`; a point with no colour takes the tint. A
-  submit takes up to `max_draws` draws, and a frame any number of submits;
+  submit takes any number of draws, and a frame any number of submits;
   `submit` checks every draw before recording any. `camera::PinholeCamera`
   (`camera/pinhole_camera.hpp`) is a pinhole's intrinsics and image size.
 - `glfw`: `gfx_glfw`, the GLFW window glue as a library tier, built with

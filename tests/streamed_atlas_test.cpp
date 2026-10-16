@@ -14,8 +14,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -25,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "frame_gate.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -96,47 +95,9 @@ assets::Mesh make_quad() {
   return mesh;
 }
 
-// Sets the gate, letting every frame held at it run, unless it is set.
-void open_gate(vkc::TimelineSemaphore& gate) {
-  const vkc::Result<uint64_t> value = gate.value();
-  if (value.ok() && value.value() < 1) {
-    EXPECT_TRUE(gate.signal(1).ok());
-  }
-}
-
-// Opens the gate when it goes out of scope, so a test that stops early never
-// leaves frames held: declare it after whatever waits for those frames.
-class OpenGateAtExit {
- public:
-  explicit OpenGateAtExit(vkc::TimelineSemaphore& gate) : gate_(gate) {}
-  ~OpenGateAtExit() { open_gate(gate_); }
-  OpenGateAtExit(const OpenGateAtExit&) = delete;
-  OpenGateAtExit& operator=(const OpenGateAtExit&) = delete;
-
- private:
-  vkc::TimelineSemaphore& gate_;
-};
-
-// Opens the gate from another thread after a pause, so this one can block on
-// a frame held at it.
-class OpenGateLater {
- public:
-  explicit OpenGateLater(vkc::TimelineSemaphore& gate)
-      : thread_([&gate, this] {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-          opened_ = true;
-          open_gate(gate);
-        }) {}
-  ~OpenGateLater() { thread_.join(); }
-  OpenGateLater(const OpenGateLater&) = delete;
-  OpenGateLater& operator=(const OpenGateLater&) = delete;
-
-  bool opened() const { return opened_; }
-
- private:
-  std::atomic<bool> opened_{false};
-  std::thread thread_;
-};
+using vg_test::open_gate;
+using vg_test::OpenGateAtExit;
+using vg_test::OpenGateLater;
 
 // --- No device -------------------------------------------------------------
 

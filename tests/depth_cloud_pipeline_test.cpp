@@ -5,12 +5,13 @@
 // drawn offscreen and read back under the validation layer, with
 // synchronization validation tracking the buffers the vertex stage reads.
 // Each depth pixel lands where the host projection puts it, once; stride,
-// gating, colour by recon's rule through another camera, the tint where there
-// is no colour, exact bytes on every target, wide points, depth against
-// PrimitivePipeline's lines, any number of cameras in one frame (also at 4K
-// colour), frames through a real timeline reusing blocks, teardown after a
-// frame that never ran, buffers another queue family wrote, and every refusal
-// recording nothing.
+// gating, images read at their offsets and no further, colour by recon's rule
+// through another camera, the tint where there is no colour, exact bytes on
+// every target, wide points, depth against PrimitivePipeline's lines, any
+// number of cameras in one frame (also at 4K colour) in one submit or many,
+// frames through a real timeline reusing blocks, teardown waiting for the
+// newest frame or after one that never ran, buffers another queue family
+// wrote, and every refusal recording nothing.
 
 #include <gtest/gtest.h>
 
@@ -36,6 +37,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "frame_gate.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -61,6 +63,9 @@ using pipelines::DepthCloudFrame;
 using pipelines::DepthCloudPipeline;
 using pipelines::DepthCloudPipelineDesc;
 using pipelines::pack_rgba8;
+using vg_test::open_gate;
+using vg_test::OpenGateAtExit;
+using vg_test::OpenGateLater;
 
 constexpr VkFormat kUnorm = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kSrgb = VK_FORMAT_R8G8B8A8_SRGB;
@@ -389,6 +394,24 @@ class CloudHelpers {
     return std::move(px);
   }
 
+  // render_status for `draws` in the next frame, one submit each, expecting
+  // every submit to succeed.
+  Pixels render_each(DepthCloudPipeline& pipeline,
+                     const std::vector<DepthCloudDraw>& draws,
+                     VkExtent2D extent) {
+    const uint64_t number = next_frame();
+    auto [status, px] =
+        render_status(extent, kUnorm, number, [&](VkCommandBuffer cmd) {
+          for (const DepthCloudDraw& draw : draws) {
+            VKC_TRY(pipeline.submit(cmd, {extent, number, &draw, 1}));
+          }
+          return vkc::Status{};
+        });
+    EXPECT_TRUE(status.ok()) << status.message();
+    EXPECT_FALSE(px.bytes.empty());
+    return std::move(px);
+  }
+
   // A draw of `depth` through camera `k` posed `to_world`, viewed by the same
   // camera into the whole of a k-sized target, so depth pixel (u, v) lands
   // on target pixel (u, v).
@@ -689,6 +712,90 @@ TEST_F(DepthCloudTest, GatesNoReturnNaNAndOutOfRangeDepths) {
   }
 }
 
+// --- Where a draw reads
+// -------------------------------------------------------
+
+// Each image is read from its offset in a larger buffer, and no further: the
+// words before and after it are valid depths and colours, any of which, read,
+// would light a pixel or change its colour. The view frames the image with a
+// border, so a point from past its last row or column lands in view. Holes on
+// each stride's grid and depths off it pin which pixel each vertex reads, and
+// a stride past the image's size draws pixel (0, 0) alone.
+TEST_F(DepthCloudTest, ReadsEachImageAtItsOffsetAndNoFurther) {
+  auto pipeline = make_pipeline();
+  ASSERT_NE(pipeline, nullptr);
+  const uint32_t w = kDepthCam.width;
+  const uint32_t h = kDepthCam.height;
+  const size_t pixels = size_t{w} * h;
+  // At least 64 words before each image and after it.
+  const VkDeviceSize align =
+      device().caps().limits().minStorageBufferOffsetAlignment;
+  const VkDeviceSize offset = (256 + align - 1) / align * align;
+  const size_t pad = static_cast<size_t>(offset / 4);
+  const auto hole = [](uint32_t u, uint32_t v) { return (u + 2 * v) % 3 == 1; };
+  std::vector<float> depth_words(pad + pixels + pad, 1.0f);
+  for (uint32_t v = 0; v < h; ++v) {
+    for (uint32_t u = 0; u < w; ++u) {
+      depth_words[pad + size_t{v} * w + u] =
+          hole(u, v) ? 0.0f : 1.5f + 0.01f * u;
+    }
+  }
+  // Colour pixel (u, v) for depth pixel (u, v).
+  const PinholeCamera color_cam = shifted(kDepthCam, 0.25f, 0.25f);
+  const std::vector<uint32_t> words = coded_colors(color_cam);
+  std::vector<uint32_t> color_words(pad + pixels + pad, pack_rgba8(1, 2, 3));
+  std::copy(words.begin(), words.end(), color_words.begin() + pad);
+  const vkc::Buffer depth = upload(depth_words);
+  const vkc::Buffer color = upload(color_words);
+
+  // Depth pixel (u, v) lands on target pixel (u + kBorder, v + kBorder).
+  constexpr uint32_t kBorder = 8;
+  const PinholeCamera framed =
+      shifted(kDepthCam, static_cast<float>(kBorder),
+              static_cast<float>(kBorder), w + 2 * kBorder, h + 2 * kBorder);
+  const VkExtent2D extent{framed.width, framed.height};
+  const glm::mat4 to_world = depth_pose();
+  DepthCloudDraw draw = self_view(depth, kDepthCam, to_world);
+  draw.depth.offset = offset;
+  draw.mode = CloudColor::True;
+  draw.color = {&color, offset, color_cam, to_world, false};
+  draw.viewport = full(extent);
+  draw.view_proj = pinhole_view_proj(framed, to_world);
+
+  for (const uint32_t stride : {1u, 2u, 5u, 7u}) {
+    SCOPED_TRACE("stride " + std::to_string(stride));
+    draw.stride = stride;
+    const Pixels px = render(*pipeline, {draw}, extent);
+    ASSERT_FALSE(px.bytes.empty());
+    int holes = 0;
+    for (uint32_t y = 0; y < extent.height; ++y) {
+      for (uint32_t x = 0; x < extent.width; ++x) {
+        const bool inside =
+            x >= kBorder && x < kBorder + w && y >= kBorder && y < kBorder + h;
+        const uint32_t u = x - kBorder;
+        const uint32_t v = y - kBorder;
+        const bool on_grid = inside && u % stride == 0 && v % stride == 0;
+        if (on_grid && !hole(u, v)) {
+          EXPECT_EQ(px.rgb(x, y), rgb_of(words[size_t{v} * w + u]))
+              << "(" << x << ", " << y << ")";
+        } else {
+          EXPECT_FALSE(px.lit(x, y)) << "(" << x << ", " << y << ")";
+        }
+        holes += on_grid && hole(u, v) ? 1 : 0;
+      }
+    }
+    EXPECT_GT(holes, 0) << "the grid has holes";
+  }
+  for (const uint32_t stride : {16u, 1000u, 0x80000000u, 0xFFFFFFFFu}) {
+    SCOPED_TRACE("stride " + std::to_string(stride));
+    draw.stride = stride;
+    const Pixels px = render(*pipeline, {draw}, extent);
+    ASSERT_FALSE(px.bytes.empty());
+    EXPECT_EQ(px.lit_count(), 1);
+    EXPECT_EQ(px.rgb(kBorder, kBorder), rgb_of(words[0]));
+  }
+}
+
 // --- Colour ------------------------------------------------------------------
 
 // Test 3: through a colour camera with its own intrinsics, size and pose,
@@ -949,8 +1056,10 @@ TEST_F(DepthCloudTest, CloudsAndLinesOccludeEachOtherByDepth) {
 // -----------------------------------------------------
 
 // N cameras of mixed sizes, each with its own depth (holes at a pattern of
-// its own), pose, tint and viewport cell, in one submit; and the same split
-// over submits of at most two draws in one frame.
+// its own), pose, tint and viewport cell, in one frame: in one submit, and in
+// a submit each, which share the frame's block; with blocks of two, in one
+// submit that spans ceil(N / 2) blocks, and in a submit each, which fill the
+// same blocks two by two.
 class DepthCloudCamerasTest : public DepthCloudTest,
                               public ::testing::WithParamInterface<uint32_t> {};
 
@@ -1021,35 +1130,16 @@ TEST_P(DepthCloudCamerasTest, AnyNumberOfCamerasInOneFrame) {
   auto pipeline = make_pipeline();
   ASSERT_NE(pipeline, nullptr);
   check(render(*pipeline, draws, extent));
+  check(render_each(*pipeline, draws, extent));
+  EXPECT_EQ(pipeline->block_count(), 1u) << "a frame's submits share a block";
 
-  // At most two draws a submit: n draws take ceil(n / 2) submits, and as many
-  // blocks, in one frame.
   auto pairs = make_pipeline(kUnorm, 2);
   ASSERT_NE(pairs, nullptr);
-  const uint64_t number = next_frame();
-  auto [status, px] =
-      render_status(extent, kUnorm, number, [&](VkCommandBuffer cmd) {
-        for (uint32_t first = 0; first < n; first += 2) {
-          const uint32_t count = std::min(2u, n - first);
-          VKC_TRY(pairs->submit(cmd, {extent, number, &draws[first], count}));
-        }
-        return vkc::Status{};
-      });
-  ASSERT_TRUE(status.ok()) << status.message();
-  check(px);
-  EXPECT_EQ(pairs->block_count(), (n + 1) / 2);
-  // More draws than max_draws in one submit is refused.
-  if (n > 2) {
-    const uint64_t next = next_frame();
-    auto [refused, blank] =
-        render_status(extent, kUnorm, next, [&](VkCommandBuffer cmd) {
-          return pairs->submit(cmd, {extent, next, draws.data(), n});
-        });
-    EXPECT_EQ(refused.domain(), vkc::Status::Code::InvalidArgument);
-    EXPECT_NE(refused.message().find("max_draws"), std::string::npos)
-        << refused.message();
-    EXPECT_EQ(blank.lit_count(), 0);
-  }
+  check(render(*pairs, draws, extent));
+  EXPECT_EQ(pairs->block_count(), (n + 1) / 2) << "one submit spans blocks";
+  check(render_each(*pairs, draws, extent));
+  EXPECT_EQ(pairs->block_count(), (n + 1) / 2)
+      << "submits fill the frame's block before taking another";
 }
 
 INSTANTIATE_TEST_SUITE_P(Cameras, DepthCloudCamerasTest,
@@ -1272,11 +1362,15 @@ TEST_F(DepthCloudTest, RefusalsRecordNothing) {
   auto [null_list, null_px] = attempt(nullptr, 1, next_frame());
   EXPECT_EQ(null_list.domain(), vkc::Status::Code::InvalidArgument);
   EXPECT_EQ(null_px.lit_count(), 0);
-  const std::vector<DepthCloudDraw> five(5, good);
-  auto [too_many, many_px] = attempt(five.data(), 5, next_frame());
-  EXPECT_EQ(too_many.domain(), vkc::Status::Code::InvalidArgument);
-  EXPECT_NE(too_many.message().find("max_draws"), std::string::npos);
-  EXPECT_EQ(many_px.lit_count(), 0);
+  // A bad draw beyond the first block's max_draws is checked before any draw
+  // is recorded too.
+  std::vector<DepthCloudDraw> five(5, good);
+  five[4].stride = 0;
+  auto [late, late_px] = attempt(five.data(), 5, next_frame());
+  EXPECT_EQ(late.domain(), vkc::Status::Code::InvalidArgument);
+  EXPECT_NE(late.message().find("draw 4 has a zero stride"), std::string::npos)
+      << late.message();
+  EXPECT_EQ(late_px.lit_count(), 0);
 
   // Not errors: no colour buffer with a colour mode (every point takes the
   // tint), a viewport outside the target or empty (skipped), and no draws.
@@ -1362,27 +1456,6 @@ TEST_F(DepthCloudTest, TeardownAfterAFrameThatNeverRanReturns) {
 
 // --- Frames through a timeline
 // -------------------------------------------------
-
-// Sets the gate, letting every frame held at it run, unless it is set.
-void open_gate(vkc::TimelineSemaphore& gate) {
-  const vkc::Result<uint64_t> value = gate.value();
-  if (value.ok() && value.value() < 1) {
-    EXPECT_TRUE(gate.signal(1).ok());
-  }
-}
-
-// Opens the gate when it goes out of scope, so a test that stops early never
-// leaves frames held: declare it after whatever waits for those frames.
-class OpenGateAtExit {
- public:
-  explicit OpenGateAtExit(vkc::TimelineSemaphore& gate) : gate_(gate) {}
-  ~OpenGateAtExit() { open_gate(gate_); }
-  OpenGateAtExit(const OpenGateAtExit&) = delete;
-  OpenGateAtExit& operator=(const OpenGateAtExit&) = delete;
-
- private:
-  vkc::TimelineSemaphore& gate_;
-};
 
 // Frames submitted as windowing::FrameLoop submits them: each sets its number
 // on the timeline when it completes, recorded with core::note_timeline_signals,
@@ -1541,6 +1614,37 @@ TEST_F(DepthCloudFrameTest, EachFrameDrawsItsOwnBufferAndBlocksAreReused) {
         EXPECT_EQ(lit, (u < w / 2) == left_half)
             << "frame " << frame->number << " (" << u << ", " << v << ")";
       }
+    }
+  }
+}
+
+// Destroying the pipeline waits for the newest frame -- held at the gate
+// here -- before it frees the blocks that frame reads, and the frame draws
+// what it was given.
+TEST_F(DepthCloudFrameTest, DestructionWaitsForTheNewestFrame) {
+  auto pipeline = make_pipeline();
+  ASSERT_NE(pipeline, nullptr);
+  const vkc::Buffer depth = upload(plane_depths(kDepthCam));
+  const DepthCloudDraw draw = self_view(depth, kDepthCam, depth_pose());
+  OpenGateAtExit open_at_exit(*gate_);
+  Frame* frame = record(1, *pipeline, draw);
+  ASSERT_NE(frame, nullptr);
+  queue(*frame, true);
+  {
+    OpenGateLater open_later(*gate_);
+    pipeline.reset();
+    EXPECT_TRUE(open_later.opened()) << "destruction waited for frame 1";
+  }
+  const vkc::Result<uint64_t> reached = timeline_->value();
+  ASSERT_TRUE(reached.ok()) << reached.status().message();
+  EXPECT_GE(reached.value(), 1u);
+  const auto* bytes = static_cast<const uint8_t*>(frame->target.pixels());
+  ASSERT_NE(bytes, nullptr);
+  for (uint32_t v = 0; v < kDepthCam.height; ++v) {
+    for (uint32_t u = 0; u < kDepthCam.width; ++u) {
+      const uint8_t* p = &bytes[(size_t{v} * kDepthCam.width + u) * 4];
+      EXPECT_EQ((std::array<uint8_t, 3>{p[0], p[1], p[2]}), rgb_of(kTint))
+          << "(" << u << ", " << v << ")";
     }
   }
 }

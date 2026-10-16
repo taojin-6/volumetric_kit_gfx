@@ -145,9 +145,9 @@ struct DepthCloudFrame {
 
 /// @brief What @ref DepthCloudPipeline::create builds.
 struct DepthCloudPipelineDesc {
-  /// The most draws one @ref DepthCloudPipeline::submit takes; at least 1.
-  /// A frame may call `submit` any number of times. Each block of per-draw
-  /// state holds this many draws.
+  /// The draws one block of per-draw state holds; at least 1. It sets only
+  /// the block's size: a submit takes any number of draws, and a frame any
+  /// number of submits.
   uint32_t max_draws = 16;
 };
 
@@ -165,19 +165,18 @@ struct DepthCloudPipelineDesc {
 /// @ref PrimitivePipeline stores them.
 ///
 /// Each draw's parameters go into host-mapped memory and its buffers into a
-/// descriptor set. Sets and parameters come in blocks of `max_draws`, which
-/// return to the pipeline once the timeline reaches the frame that used them:
-/// with one submit a frame, the frame loop's frames in flight plus one
-/// blocks.
+/// descriptor set. Sets and parameters come in blocks of `max_draws`: a
+/// frame's draws fill as many blocks as they need, and a block returns to
+/// the pipeline once the timeline reaches the frame that used it.
 ///
 /// **What the caller guarantees.** Every buffer a draw reads is either
 /// `CONCURRENT` across the producer's queue family and the renderer's, or
 /// written on the renderer's family. The producer's writes are complete
 /// before the frame is submitted: a fence the host waited for, or a
 /// timeline value the frame waits for (`windowing::Frame::waits`) that is
-/// already reached. The buffers' owners keep them alive until the timeline
-/// reaches the frame's number (a `RetireQueue` on the frame loop's
-/// timeline).
+/// already reached. The buffers' owners keep them alive, and do not write
+/// them, until the timeline reaches the frame's number (a `RetireQueue` on
+/// the frame loop's timeline).
 ///
 /// @warning The @p device, @p allocator and @p timeline passed to @ref create
 ///          must outlive the pipeline. Destroying it waits until the timeline
@@ -199,7 +198,8 @@ struct DepthCloudPipelineDesc {
 ///   draws[i].mode = pipelines::CloudColor::TintedLuma;
 ///   draws[i].tint = tints[i];
 ///   draws[i].viewport = {{0, 0}, extent};
-///   draws[i].view_proj = orbit.view_proj();
+///   draws[i].view_proj = orbit.to_camera(fovy, aspect, 0.05f, 50.0f)
+///                            .view_proj();
 /// }
 /// // inside the rendering scope:
 /// VKC_TRY(clouds->submit(f.cmd, {extent, f.number, draws.data(),
@@ -242,11 +242,15 @@ class VG_PIPELINES_API DepthCloudPipeline {
   ///         `largePoints`, else the top of its `pointSizeRange`.
   float max_point_size() const noexcept { return limits_.max_point_size(); }
 
-  /// @return The most draws one @ref submit takes.
+  /// @return The draws one block of per-draw state holds.
   uint32_t max_draws() const noexcept { return max_draws_; }
 
   /// @return The blocks of per-draw state the pipeline holds, in use or
-  ///         free: each `max_draws` descriptor sets and their parameters.
+  ///         free, as a measure of its memory: each is `max_draws`
+  ///         descriptor sets and as many parameter ranges, at most 256 bytes
+  ///         each, of host-mapped device memory. A frame holds
+  ///         `ceil(draws drawn / max_draws)` blocks until the timeline
+  ///         reaches it.
   uint32_t block_count() const noexcept {
     return static_cast<uint32_t>(blocks_.size());
   }
@@ -255,29 +259,30 @@ class VG_PIPELINES_API DepthCloudPipeline {
   ///
   /// Checks every draw before recording any, so on an error nothing is
   /// recorded. A draw whose viewport is empty or lies wholly outside the
-  /// target is checked, then skipped. The draws take per-draw state from a
-  /// block that frame @p frame.number then holds until the timeline reaches
-  /// it; a free block is reused, and a new one made when none is free.
+  /// target is checked, then skipped. The draws take per-draw state from the
+  /// block the frame's earlier submits used, while it has room, and then
+  /// from free blocks, or new ones when none is free; frame @p frame.number
+  /// holds each until the timeline reaches it.
   /// @param cmd    A command buffer in the recording state, inside a
   ///               rendering scope whose target matches the layout
   ///               @ref create was given.
   /// @param frame  The target's size, the frame's number and the draws.
   /// @return OK once recorded; or `core::Status::Code::InvalidArgument` for
   ///         a frame number of 0 or below one already given, a null draw list
-  ///         with a non-zero count, more than `max_draws` draws, or a draw
-  ///         with: a null or empty depth buffer, or a non-null colour buffer
-  ///         that is empty; a buffer without `STORAGE_BUFFER` usage; a
-  ///         camera of zero size, or with a focal length that is not
-  ///         positive and finite or a principal point that is not finite; an
-  ///         image beyond its buffer, an offset that is not a multiple of
-  ///         `minStorageBufferOffsetAlignment`, or an image larger than
-  ///         `maxStorageBufferRange`; a depth bound that is negative or not
-  ///         finite, or a `min_depth` above a non-zero `max_depth`; an
-  ///         unknown mode; a zero stride; a point size that is not positive
-  ///         and finite; a view or pose that is not finite, or a colour pose
-  ///         that cannot be inverted; or a viewport beyond the device's
-  ///         `maxViewportDimensions` or `viewportBoundsRange`. Or the
-  ///         allocator's failure making a block, before anything is recorded.
+  ///         with a non-zero count, or a draw with: a null or empty depth
+  ///         buffer, or a non-null colour buffer that is empty; a buffer
+  ///         without `STORAGE_BUFFER` usage; a camera of zero size, or with a
+  ///         focal length that is not positive and finite or a principal
+  ///         point that is not finite; an image beyond its buffer, an offset
+  ///         that is not a multiple of `minStorageBufferOffsetAlignment`, or
+  ///         an image larger than `maxStorageBufferRange`; a depth bound that
+  ///         is negative or not finite, or a `min_depth` above a non-zero
+  ///         `max_depth`; an unknown mode; a zero stride; a point size that
+  ///         is not positive and finite; a view or pose that is not finite,
+  ///         or a colour pose that cannot be inverted; or a viewport beyond
+  ///         the device's `maxViewportDimensions` or `viewportBoundsRange`.
+  ///         Or the allocator's failure making a block, before anything is
+  ///         recorded.
   core::Status submit(VkCommandBuffer cmd, const DepthCloudFrame& frame);
 
  private:
@@ -299,9 +304,10 @@ class VG_PIPELINES_API DepthCloudPipeline {
   static core::Result<std::unique_ptr<Block>> make_block(
       const core::Device& device, core::Allocator& allocator,
       VkDescriptorSetLayout layout, uint32_t max_draws, VkDeviceSize stride);
-  // A block with room for `draws` more draws in frame `frame`: the current
-  // one, or a free or new one, retiring the current one at its frame.
-  core::Result<Block*> block_for(uint64_t frame, uint32_t draws);
+  // A block with a free set for frame `frame`: the current one while that
+  // frame holds it and it has room, else a free or new one, retiring the
+  // current one at its frame.
+  core::Result<Block*> block_for(uint64_t frame);
 
   const core::Device& device_;
   core::Allocator& allocator_;
