@@ -7,7 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <ostream>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -457,5 +459,377 @@ TEST_F(ImageOverlayTest, DrawsIntoTheGivenList) {
       .point({1.0f, 1.0f}, kRed);
   EXPECT_GT(back.VtxBuffer.Size, back_first);
 }
+
+// A mark given in a region's coordinates lands at the region's origin plus its
+// point (+ 0.5 for integer centers), however the view pans and zooms; with no
+// region, the coordinates are the whole image's.
+TEST_F(ImageOverlayTest, MarksLandInTheirRegion) {
+  const glm::vec2 fb(2.0f, 1.5f);
+  begin_frame(fb);
+  camera::ImageView2D view = make_view();
+  view.zoom_about({900.0f, 700.0f}, 2.5f);
+  view.pan({-40.0f, 25.0f});
+  const ui::OverlayRegion region{{336.0f, 256.0f}, {304.0f, 224.0f}};
+  const ui::ImageOverlay integer(view, ui::PixelCenters::Integer, region);
+  const ui::ImageOverlay half(view, ui::PixelCenters::Half, region);
+  const ui::ImageOverlay whole(view, ui::PixelCenters::Integer);
+  for (const glm::vec2 p : {glm::vec2{0.0f, 0.0f}, glm::vec2{17.25f, 3.5f},
+                            glm::vec2{303.0f, 223.0f}}) {
+    expect_near(integer.to_display(p),
+                view.image_to_target(region.origin + p + 0.5f) / fb, 1e-3f);
+    expect_near(half.to_display(p),
+                view.image_to_target(region.origin + p) / fb, 1e-3f);
+    expect_near(whole.to_display(region.origin + p), integer.to_display(p),
+                1e-3f);
+  }
+
+  // The dot is drawn there.
+  const int first = background().VtxBuffer.Size;
+  integer.point({10.0f, 20.0f}, kRed, 3.0f);
+  const Added dot = added(background(), first, kRed);
+  ASSERT_GT(dot.count, 0);
+  expect_near(
+      dot.sum / static_cast<float>(dot.count),
+      view.image_to_target(region.origin + glm::vec2(10.5f, 20.5f)) / fb,
+      1e-2f);
+}
+
+// edge_to_display takes the region's points in Vulkan's coordinates, texel
+// edges on integers: half a texel before OpenCV's centers, at Vulkan's.
+TEST_F(ImageOverlayTest, EdgesSitHalfATexelBeforeIntegerCenters) {
+  const glm::vec2 fb(2.0f, 1.5f);
+  begin_frame(fb);
+  camera::ImageView2D view = make_view();
+  view.zoom_about({300.0f, 200.0f}, 3.7f);
+  view.pan({-55.0f, 31.0f});
+  const ui::OverlayRegion region{{100.0f, 50.0f}, {200.0f, 150.0f}};
+  const ui::ImageOverlay integer(view, ui::PixelCenters::Integer, region);
+  const ui::ImageOverlay half(view, ui::PixelCenters::Half, region);
+  for (const glm::vec2 p : {glm::vec2{0.0f, 0.0f}, glm::vec2{17.25f, 3.5f},
+                            glm::vec2{199.0f, 149.0f}}) {
+    expect_near(integer.edge_to_display(p), integer.to_display(p - 0.5f),
+                1e-3f);
+    expect_near(half.edge_to_display(p), half.to_display(p), 1e-3f);
+  }
+  // The region's corner is its origin, whatever the convention.
+  expect_near(integer.edge_to_display({0.0f, 0.0f}),
+              view.image_to_target(region.origin) / fb, 1e-3f);
+  expect_near(half.edge_to_display({0.0f, 0.0f}),
+              integer.edge_to_display({0.0f, 0.0f}), 1e-3f);
+}
+
+// Marks are clipped to the region within the viewport, clip_min to clip_max
+// in display coordinates, which every mark's draw command takes: a region in
+// view, and the same one panned so the viewport's edge cuts it. Marks past
+// the region's edges are cut there.
+TEST_F(ImageOverlayTest, MarksAreClippedToTheRegionInTheViewport) {
+  begin_frame({2.0f, 2.0f});
+  ImDrawList& list = background();
+  // 2 target pixels per texel from (40, 20), halved: display = (20, 10) +
+  // texel; the viewport is x 20 to 660, y 10 to 490.
+  const ui::OverlayRegion region{{100.0f, 60.0f}, {200.0f, 150.0f}};
+  struct Case {
+    glm::vec2 pan;
+    glm::vec2 min;
+    glm::vec2 max;
+  };
+  const Case cases[] = {
+      {{0.0f, 0.0f}, {120.0f, 70.0f}, {320.0f, 220.0f}},
+      // 150 texels left: the region starts off the viewport's left edge.
+      {{-300.0f, 0.0f}, {20.0f, 70.0f}, {170.0f, 220.0f}},
+  };
+  const glm::vec2 line[] = {{-20.0f, 10.0f}, {250.0f, 10.0f}};
+  for (const Case& c : cases) {
+    camera::ImageView2D view = make_view();
+    view.pan(c.pan);
+    const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
+    expect_near(overlay.clip_min(), c.min, 1e-3f);
+    expect_near(overlay.clip_max(), c.max, 1e-3f);
+
+    const auto first = static_cast<unsigned int>(list.IdxBuffer.Size);
+    overlay.point({-10.0f, -10.0f}, kRed);  // outside the region
+    overlay.point({50.0f, 50.0f}, kRed);
+    overlay.polyline(line, 2, kRed);                     // past both sides
+    overlay.label({190.0f, 140.0f}, "id", kRed, kBlue);  // past the corner
+    overlay.grid(2, 2, nullptr, 0, kBlue);
+    overlay.caption("cam", kRed, kBlue);
+    int drawn = 0;
+    for (const ImDrawCmd& cmd : list.CmdBuffer) {
+      if (cmd.ElemCount == 0 || cmd.IdxOffset < first) continue;
+      ++drawn;
+      EXPECT_FLOAT_EQ(cmd.ClipRect.x, c.min.x);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.y, c.min.y);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.z, c.max.x);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.w, c.max.y);
+    }
+    EXPECT_GT(drawn, 0);
+  }
+}
+
+// A region out of view, with no width, a negative height or a non-finite
+// component, or a view with an empty viewport, leaves a finite, empty clip
+// rectangle, and no mark adds anything.
+TEST_F(ImageOverlayTest, AnEmptyClipAddsNothing) {
+  begin_frame({1.0f, 1.0f});
+  ImDrawList& list = background();
+  const camera::ImageView2D view = make_view();  // fills its viewport
+  const camera::ImageView2D shut({640.0f, 480.0f}, {40.0f, 20.0f},
+                                 {0.0f, 0.0f});
+  const ui::ImageOverlay overlays[] = {
+      {view, ui::PixelCenters::Integer, {{700.0f, 0.0f}, {100.0f, 100.0f}}},
+      {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {0.0f, 50.0f}}},
+      {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {50.0f, -5.0f}}},
+      {view, ui::PixelCenters::Integer, {{kNaN, 10.0f}, {50.0f, 50.0f}}},
+      {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {kInf, 50.0f}}},
+      {shut, ui::PixelCenters::Integer},
+  };
+  const glm::vec2 leg[] = {{10.0f, 10.0f}, {20.0f, 10.0f}};
+  const ImU32 fills[] = {kGreen};
+
+  const int first = list.VtxBuffer.Size;
+  for (const ui::ImageOverlay& overlay : overlays) {
+    const glm::vec2 min = overlay.clip_min();
+    const glm::vec2 max = overlay.clip_max();
+    EXPECT_TRUE(std::isfinite(min.x) && std::isfinite(min.y) &&
+                std::isfinite(max.x) && std::isfinite(max.y));
+    EXPECT_GE(max.x, min.x);
+    EXPECT_GE(max.y, min.y);
+    EXPECT_TRUE(max.x == min.x || max.y == min.y);
+    overlay.point({1.0f, 1.0f}, kRed);
+    overlay.polyline(leg, 2, kRed);
+    overlay.label({1.0f, 1.0f}, "x", kRed, kBlue);
+    overlay.caption("x", kRed, kBlue);
+    overlay.grid(1, 1, fills, 1, kBlue);
+  }
+  EXPECT_EQ(list.VtxBuffer.Size, first);
+
+  // Nor does text reaching past an empty clip into the list's own clip.
+  list.PushClipRect(ImVec2(100.0f, 0.0f), ImVec2(800.0f, 600.0f));
+  const ui::ImageOverlay beside(
+      camera::ImageView2D({640.0f, 480.0f}, {0.0f, 0.0f}, {640.0f, 480.0f}),
+      ui::PixelCenters::Half, {{50.0f, 0.0f}, {0.0f, 100.0f}});
+  beside.label({0.0f, 10.0f}, "long id", kRed, kBlue, {40.0f, 0.0f});
+  beside.caption("a caption", kRed, kBlue);
+  list.PopClipRect();
+  EXPECT_EQ(list.VtxBuffer.Size, first);
+}
+
+// The cells span the region's edges whatever the pixel-center convention:
+// cell (2, 0) of 3 x 2 over a 300 x 200 region covers its texels
+// [200, 300) x [0, 100).
+TEST_F(ImageOverlayTest, GridSpansTheRegion) {
+  begin_frame({2.0f, 2.0f});
+  ImDrawList& list = background();
+  const camera::ImageView2D view = make_view();
+  const ui::OverlayRegion region{{64.0f, 48.0f}, {300.0f, 200.0f}};
+  const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
+  const auto display = [&](glm::vec2 p) {
+    return view.image_to_target(region.origin + p) / 2.0f;
+  };
+
+  const ImU32 fills[] = {0, 0, kGreen};
+  const int first = list.VtxBuffer.Size;
+  overlay.grid(3, 2, fills, 3, kBlue, 1.0f);
+
+  const Added cell = added(list, first, kGreen);
+  ASSERT_EQ(cell.count, 4);
+  expect_near(cell.min, display({200.0f, 0.0f}), 1e-3f);
+  expect_near(cell.max, display({300.0f, 100.0f}), 1e-3f);
+  const Added borders = added(list, first, kBlue);
+  EXPECT_EQ(borders.count, 7 * 4);  // 4 + 3 lines, a quad each
+  expect_near(borders.min, display({0.0f, 0.0f}) - 0.5f, 1e-2f);
+  expect_near(borders.max, display({300.0f, 200.0f}) + 0.5f, 1e-2f);
+}
+
+// A caption's text starts 4 display pixels inside the clip rectangle's
+// top-left corner, snapped as ImGui snaps text, so its box keeps inside: at
+// the region's corner while it is in view, at the viewport's once the view
+// pans past it. Text too large for the region starts there too, clipped.
+TEST_F(ImageOverlayTest, CaptionIsPinnedInsideTheClip) {
+  const glm::vec2 fb(1.5f, 1.5f);
+  begin_frame(fb);
+  ImDrawList& list = background();
+  struct Case {
+    ui::OverlayRegion region;
+    glm::vec2 pan;
+    ImDrawListFlags flags;
+    bool fits;
+  };
+  const Case cases[] = {
+      // The corner at display (67.33, 20.67): the box at (69, 22).
+      {{{101.0f, 31.0f}, {200.0f, 120.0f}}, {0.0f, 0.0f}, 0, true},
+      {{{101.0f, 31.0f}, {200.0f, 120.0f}},
+       {0.0f, 0.0f},
+       ImDrawListFlags_TextNoPixelSnap,
+       true},
+      // Panned past it: the viewport's corner, (0, 0).
+      {{{101.0f, 31.0f}, {200.0f, 120.0f}}, {-150.0f, -50.0f}, 0, true},
+      {{{101.0f, 31.0f}, {10.0f, 8.0f}}, {0.0f, 0.0f}, 0, false},
+  };
+  const ImDrawListFlags flags = list.Flags;
+  for (const Case& c : cases) {
+    list.Flags = flags | c.flags;
+    camera::ImageView2D view({640.0f, 480.0f}, {0.0f, 0.0f}, {640.0f, 480.0f});
+    view.pan(c.pan);
+    const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, c.region);
+    const glm::vec2 corner =
+        glm::max(view.image_to_target(c.region.origin), glm::vec2(0.0f)) / fb;
+    expect_near(overlay.clip_min(), corner, 1e-3f);
+    const glm::vec2 text_at =
+        c.flags != 0 ? corner + 4.0f : glm::trunc(corner + 4.0f);
+
+    const int first = list.VtxBuffer.Size;
+    const auto first_index = static_cast<unsigned int>(list.IdxBuffer.Size);
+    overlay.caption("camera 1", kRed, kBlue);
+    const Added box = added(list, first, kBlue);
+    const Added text = added(list, first, kRed);
+    ASSERT_EQ(box.count, 4);
+    ASSERT_GT(text.count, 0);
+    expect_near(box.min, text_at - 2.0f, 1e-3f);
+    EXPECT_GE(box.min.x, overlay.clip_min().x);
+    EXPECT_GE(box.min.y, overlay.clip_min().y);
+    EXPECT_EQ(
+        box.max.x <= overlay.clip_max().x && box.max.y <= overlay.clip_max().y,
+        c.fits);
+    EXPECT_GE(text.min.x, box.min.x);
+    EXPECT_GE(text.min.y, box.min.y);
+    EXPECT_LE(text.max.x, box.max.x);
+    EXPECT_LE(text.max.y, box.max.y);
+    for (const ImDrawCmd& cmd : list.CmdBuffer) {
+      if (cmd.ElemCount == 0 || cmd.IdxOffset < first_index) continue;
+      EXPECT_FLOAT_EQ(cmd.ClipRect.x, overlay.clip_min().x);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.y, overlay.clip_min().y);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.z, overlay.clip_max().x);
+      EXPECT_FLOAT_EQ(cmd.ClipRect.w, overlay.clip_max().y);
+    }
+  }
+  list.Flags = flags;
+}
+
+// A mosaic: `count` regions of `sizes` in turn, row-major, `columns` cells
+// across, each cell the size of the largest region and `gutter` texels from
+// the next.
+struct Mosaic {
+  const char* name;
+  int count;
+  int columns;
+  std::vector<glm::vec2> sizes;
+  float gutter;
+};
+
+void PrintTo(const Mosaic& mosaic, std::ostream* os) { *os << mosaic.name; }
+
+std::vector<ui::OverlayRegion> layout(const Mosaic& mosaic, glm::vec2& extent) {
+  glm::vec2 cell(0.0f);
+  for (const glm::vec2 size : mosaic.sizes) cell = glm::max(cell, size);
+  const glm::vec2 pitch = cell + mosaic.gutter;
+  std::vector<ui::OverlayRegion> regions;
+  for (int i = 0; i < mosaic.count; ++i) {
+    const glm::vec2 at(static_cast<float>(i % mosaic.columns),
+                       static_cast<float>(i / mosaic.columns));
+    regions.push_back(
+        {pitch * at,
+         mosaic.sizes[static_cast<size_t>(i) % mosaic.sizes.size()]});
+  }
+  const int rows = (mosaic.count + mosaic.columns - 1) / mosaic.columns;
+  extent = pitch * glm::vec2(static_cast<float>(mosaic.columns),
+                             static_cast<float>(rows)) -
+           mosaic.gutter;
+  return regions;
+}
+
+class MosaicOverlayTest : public ImageOverlayTest,
+                          public ::testing::WithParamInterface<Mosaic> {};
+
+// However many cameras, of whatever sizes: each camera's marks, given in its
+// own pixels, land on its region, are clipped to the region within the
+// viewport, and its caption keeps inside that at every pan and zoom.
+TEST_P(MosaicOverlayTest, EachRegionKeepsItsMarks) {
+  const glm::vec2 fb(2.0f, 2.0f);
+  begin_frame(fb);
+  ImDrawList& list = background();
+  glm::vec2 extent(0.0f);
+  const std::vector<ui::OverlayRegion> regions = layout(GetParam(), extent);
+  struct Move {
+    glm::vec2 about;
+    float zoom;
+    glm::vec2 pan;
+  };
+  const Move moves[] = {
+      {{800.0f, 600.0f}, 1.0f, {0.0f, 0.0f}},
+      {{300.0f, 900.0f}, 2.5f, {-210.3f, 95.7f}},
+      {{1500.0f, 100.0f}, 9.0f, {640.5f, -333.25f}},
+      {{800.0f, 600.0f}, 0.5f, {37.0f, 12.0f}},
+      {{1100.0f, 700.0f}, 40.0f, {0.0f, 0.0f}},
+  };
+  const char* text = "camera 4: good";
+  const ImVec2 text_size = ImGui::CalcTextSize(text);
+  int fitted = 0;
+  for (const Move& move : moves) {
+    // The viewport is the whole 800 x 600 display.
+    camera::ImageView2D view(extent, {0.0f, 0.0f}, {1600.0f, 1200.0f});
+    view.zoom_about(move.about, move.zoom);
+    view.pan(move.pan);
+    for (size_t i = 0; i < regions.size(); ++i) {
+      SCOPED_TRACE(::testing::Message()
+                   << "zoom " << move.zoom << ", region " << i);
+      const ui::OverlayRegion& region = regions[i];
+      const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
+      const glm::vec2 last = region.size - 1.0f;
+      expect_near(overlay.to_display({0.0f, 0.0f}),
+                  view.image_to_target(region.origin + 0.5f) / fb, 1e-2f);
+      expect_near(overlay.to_display(last),
+                  view.image_to_target(region.origin + last + 0.5f) / fb,
+                  1e-2f);
+      const glm::vec2 lo =
+          glm::max(view.image_to_target(region.origin) / fb, glm::vec2(0.0f));
+      const glm::vec2 hi = glm::max(
+          lo, glm::min(view.image_to_target(region.origin + region.size) / fb,
+                       glm::vec2(800.0f, 600.0f)));
+      expect_near(overlay.clip_min(), lo, 1e-2f);
+      expect_near(overlay.clip_max(), hi, 1e-2f);
+
+      // A clip too narrow to reach the box -- or empty -- shows none of it.
+      const glm::vec2 box_min = glm::trunc(lo + 4.0f) - 2.0f;
+      const int first = list.VtxBuffer.Size;
+      overlay.caption(text, kRed, kBlue);
+      if (!(hi.x > box_min.x && hi.y > box_min.y)) {
+        EXPECT_EQ(list.VtxBuffer.Size, first);
+        continue;
+      }
+      const Added box = added(list, first, kBlue);
+      ASSERT_EQ(box.count, 4);
+      expect_near(box.min, box_min, 1e-3f);
+      EXPECT_GE(box.min.x, lo.x);
+      EXPECT_GE(box.min.y, lo.y);
+      if (hi.x - lo.x >= text_size.x + 6.0f &&
+          hi.y - lo.y >= text_size.y + 6.0f) {
+        ++fitted;
+        const Added glyphs = added(list, first, kRed);
+        EXPECT_LE(box.max.x, hi.x);
+        EXPECT_LE(box.max.y, hi.y);
+        EXPECT_LE(glyphs.max.x, box.max.x);
+        EXPECT_LE(glyphs.max.y, box.max.y);
+      }
+    }
+  }
+  EXPECT_GT(fitted, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Cameras, MosaicOverlayTest,
+    ::testing::Values(
+        Mosaic{"One", 1, 1, {{640.0f, 576.0f}}, 16.0f},
+        Mosaic{"Three", 3, 2, {{1280.0f, 720.0f}}, 16.0f},
+        Mosaic{"FiveOfMixedSizes",
+               5,
+               3,
+               {{1280.0f, 720.0f}, {640.0f, 576.0f}},
+               16.0f},
+        // 7696 x 4336, origins (0, 0), (3856, 0), (0, 2176), (3856, 2176).
+        Mosaic{"TwoByTwo4K", 4, 2, {{3840.0f, 2160.0f}}, 16.0f}),
+    [](const ::testing::TestParamInfo<Mosaic>& info) {
+      return std::string(info.param.name);
+    });
 
 }  // namespace

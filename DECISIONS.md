@@ -149,6 +149,12 @@ device's `maxImageDimension2D` bounded by its framebuffer and viewport
 limits, as the convert renders the whole picture; `ImageTexture::create`'s
 refusal names it, so a caller pages its regions over several textures.
 
+**Marks over a region.** One view shows the whole picture, so
+`ui::ImageOverlay` takes an `OverlayRegion`: a camera's marks, in its own
+pixels, land on its region and are clipped to it, and its caption stays in
+the region's visible corner. The half-texel rule and the clip stay in the
+overlay, so a caller adds no offsets of its own.
+
 ## 2026-10-11 — Core owns application run configuration
 
 The examples use core's optional `core_config` target for the JSON format,
