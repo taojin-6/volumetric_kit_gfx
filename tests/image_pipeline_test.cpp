@@ -26,6 +26,7 @@
 #include <glm/vec2.hpp>
 
 #include "gfx_test_support.hpp"
+#include "image_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -45,35 +46,11 @@ namespace {
 
 namespace pipelines = volumetric_kit::gfx::pipelines;
 
-constexpr VkFormat kUnorm = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kSrgb = VK_FORMAT_R8G8B8A8_SRGB;
-
-vg::RenderTargetLayout color_layout(VkFormat format) {
-  vg::RenderTargetLayout layout;
-  layout.color_formats[0] = format;
-  layout.color_count = 1;
-  return layout;
-}
-
-// A readback: the texels, row-major, of a `width`-wide target whose texels
-// are `texel` bytes -- RGBA8 unless the test asked for another format.
-struct Pixels {
-  std::vector<uint8_t> bytes;
-  uint32_t width = 0;
-  uint32_t texel = 4;
-
-  const uint8_t* at(uint32_t x, uint32_t y) const {
-    return &bytes[(static_cast<size_t>(y) * width + x) * texel];
-  }
-};
-
-// The expected byte for a channel, within `tolerance`.
-void expect_rgb(const uint8_t* px, int r, int g, int b, int tolerance,
-                const char* what) {
-  EXPECT_NEAR(px[0], r, tolerance) << what << " (red)";
-  EXPECT_NEAR(px[1], g, tolerance) << what << " (green)";
-  EXPECT_NEAR(px[2], b, tolerance) << what << " (blue)";
-}
+using vg_test::color_layout;
+using vg_test::expect_rgb;
+using vg_test::kSrgb;
+using vg_test::kUnorm;
+using vg_test::Pixels;
 
 // --- No device needed --------------------------------------------------------
 
@@ -102,7 +79,8 @@ TEST(MipChainTest, CountsLevelsDownToOneByOne) {
 
 // --- On a device -------------------------------------------------------------
 
-class ImagePipelineDeviceTest : public vg_test::RendererDeviceTest {
+class ImagePipelineDeviceTest : public vg_test::RendererDeviceTest,
+                                protected vg_test::ImageHelpers {
  protected:
   // The update's barriers -- plane copies, the convert pass, the chain, the
   // draws -- are what these tests exercise, so missing ones must be reported,
@@ -111,179 +89,8 @@ class ImagePipelineDeviceTest : public vg_test::RendererDeviceTest {
   vkc::test::Validation validation() const override {
     return vkc::test::Validation::ShaderAccesses;
   }
-
-  pipelines::ImagePipeline make_pipeline(VkFormat target = kUnorm) {
-    auto pipeline =
-        pipelines::ImagePipeline::create(device(), color_layout(target));
-    EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
-    return pipeline.ok() ? std::move(pipeline).value()
-                         : pipelines::ImagePipeline{};
-  }
-
-  pipelines::ImageTexture make_texture(const pipelines::ImagePipeline& pipeline,
-                                       VkExtent2D extent,
-                                       pipelines::ImageMapping mapping,
-                                       VkFormat format) {
-    pipelines::ImageTextureDesc desc;
-    desc.extent = extent;
-    desc.mapping = mapping;
-    desc.format = format;
-    auto texture = pipelines::ImageTexture::create(pipeline, allocator(), desc);
-    EXPECT_TRUE(texture.ok()) << texture.status().message();
-    return texture.ok() ? std::move(texture).value()
-                        : pipelines::ImageTexture{};
-  }
-
-  // A device-only buffer holding `bytes`, readable by a transfer (and usable
-  // as `usage` says).
-  vkc::Buffer source_buffer(
-      const std::vector<uint8_t>& bytes,
-      VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT) {
-    vg::BufferUploadDesc desc;
-    desc.data = bytes.data();
-    desc.size = bytes.size();
-    desc.usage = usage;
-    auto buffer = vg::upload_buffer(device(), allocator(), desc);
-    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
-    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
-  }
-
-  // A device image holding `bytes`, left SHADER_READ_ONLY_OPTIMAL by the
-  // upload; ready_for_copy moves it to TRANSFER_SRC_OPTIMAL in a command
-  // buffer, as a producer would leave a picture for a copy to read.
-  vkc::Image source_image(VkFormat format, VkExtent2D extent,
-                          const std::vector<uint8_t>& bytes) {
-    vg::ImageUploadDesc desc;
-    desc.extent = extent;
-    desc.format = format;
-    desc.pixels = bytes.data();
-    desc.size = bytes.size();
-    auto image = vg::upload_texture(device(), allocator(), desc);
-    EXPECT_TRUE(image.ok()) << image.status().message();
-    if (!image.ok()) {
-      return vkc::Image{};
-    }
-    image.value().set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    return std::move(image).value();
-  }
-
-  static void ready_for_copy(VkCommandBuffer cmd, vkc::Image& image) {
-    vg::ImageBarrierDesc b;
-    b.image = image.handle();
-    b.src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    b.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    b.dst_access = VK_ACCESS_TRANSFER_READ_BIT;
-    b.old_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b.new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    vg::cmd_image_barrier(cmd, b);
-    image.set_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-  }
-
-  // One step of a recorded command buffer: work before the render (updates),
-  // then the draws into a fresh `extent` target of `format`, read back.
-  struct Pass {
-    std::function<void(VkCommandBuffer)> before;
-    std::vector<pipelines::ImageDraw> draws;
-  };
-
-  // Records every pass into one command buffer -- each into its own target --
-  // submits it, and returns each target's pixels.
-  std::vector<Pixels> render_passes(const pipelines::ImagePipeline& pipeline,
-                                    const std::vector<Pass>& passes,
-                                    VkExtent2D extent,
-                                    VkFormat format = kUnorm) {
-    std::vector<vg::OffscreenTarget> targets;
-    for (size_t i = 0; i < passes.size(); ++i) {
-      vg::OffscreenTargetDesc desc;
-      desc.extent = extent;
-      desc.color_format = format;
-      auto target = vg::OffscreenTarget::create(allocator(), desc);
-      EXPECT_TRUE(target.ok()) << target.status().message();
-      if (!target.ok()) {
-        return {};
-      }
-      targets.push_back(std::move(target).value());
-    }
-
-    auto pool =
-        vkc::CommandPool::create(device().handle(), device().queue_family());
-    EXPECT_TRUE(pool.ok()) << pool.status().message();
-    if (!pool.ok()) {
-      return {};
-    }
-    auto cmd = pool.value().allocate_primary();
-    EXPECT_TRUE(cmd.ok()) << cmd.status().message();
-    if (!cmd.ok()) {
-      return {};
-    }
-    EXPECT_TRUE(
-        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
-    const VkCommandBuffer raw = cmd.value().handle();
-
-    for (size_t i = 0; i < passes.size(); ++i) {
-      if (passes[i].before) {
-        passes[i].before(raw);
-      }
-      targets[i].prepare(raw);
-      vg::RenderTargetBeginInfo begin;
-      begin.clear_color.float32[2] = 1.0f;  // opaque blue: "nothing drawn"
-      begin.clear_color.float32[3] = 1.0f;
-      const vg::RenderTarget rt = targets[i].target();
-      rt.begin(raw, begin);
-      pipeline.submit(raw, {extent, passes[i].draws.data(),
-                            static_cast<uint32_t>(passes[i].draws.size())});
-      rt.end(raw);
-      targets[i].record_readback(raw);
-    }
-    EXPECT_TRUE(cmd.value().end().ok());
-    const vkc::Status submitted = device().submit_and_wait(raw);
-    if (!submitted.ok()) {
-      ADD_FAILURE() << submitted.message();
-      return {};
-    }
-
-    const uint32_t texel = vkc::texel_bytes(format);
-    std::vector<Pixels> out;
-    for (const vg::OffscreenTarget& target : targets) {
-      const auto* px = static_cast<const uint8_t*>(target.pixels());
-      out.push_back(
-          {std::vector<uint8_t>(px, px + static_cast<size_t>(extent.width) *
-                                             extent.height * texel),
-           extent.width, texel});
-    }
-    return out;
-  }
-
-  // The single-pass case: update `texture` from `update`, then draw `draws`.
-  Pixels update_and_draw(
-      const pipelines::ImagePipeline& pipeline,
-      pipelines::ImageTexture& texture, const pipelines::ImageUpdate& update,
-      const std::vector<pipelines::ImageDraw>& draws, VkExtent2D extent,
-      VkFormat format = kUnorm,
-      const std::function<void(VkCommandBuffer)>& prepare = nullptr) {
-    Pass pass;
-    pass.before = [&](VkCommandBuffer cmd) {
-      if (prepare) {
-        prepare(cmd);
-      }
-      const vkc::Status s = pipeline.record_update(cmd, texture, update);
-      EXPECT_TRUE(s.ok()) << s.message();
-    };
-    pass.draws = draws;
-    std::vector<Pixels> out = render_passes(pipeline, {pass}, extent, format);
-    return out.empty() ? Pixels{} : std::move(out.front());
-  }
-
-  static pipelines::ImageDraw draw_of(const pipelines::ImageTexture& texture,
-                                      VkExtent2D target, float scale,
-                                      glm::vec2 origin = {0.0f, 0.0f}) {
-    pipelines::ImageDraw draw;
-    draw.texture = &texture;
-    draw.viewport = {{0, 0}, target};
-    draw.origin = origin;
-    draw.scale = scale;
-    return draw;
-  }
+  vkc::Device& image_device() override { return device(); }
+  vkc::Allocator& image_allocator() override { return allocator(); }
 };
 
 TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithoutColor) {
@@ -875,49 +682,24 @@ TEST_F(ImagePipelineDeviceTest,
 // Synchronization validation reports either hazard, and the picture is the
 // first write's.
 TEST_F(ImagePipelineDeviceTest, UpdatesOrderAProducerOnTheSameQueue) {
-  const std::vector<uint32_t> spv =
-      vg_test::load_spirv(vg_test::spirv_path("write_words.comp.spv"));
-  ASSERT_FALSE(spv.empty());
-  vkc::ComputeKernel write_words;
-  vkc::KernelSetBuilder builder(device());
-  const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                 sizeof(uint32_t)};
-  const vkc::Status added =
-      builder.add(write_words, "write_words",
-                  reinterpret_cast<const unsigned char*>(spv.data()),
-                  spv.size() * sizeof(uint32_t), 1, &push);
-  ASSERT_TRUE(added.ok()) << added.message();
-  auto kernel_pool = builder.build();
-  ASSERT_TRUE(kernel_pool.ok()) << kernel_pool.status().message();
-
   const pipelines::ImagePipeline pipeline = make_pipeline();
   pipelines::ImageTexture texture = make_texture(
       pipeline, {4, 4}, pipelines::ImageMapping::Grey, VK_FORMAT_R8_UNORM);
   const vkc::Buffer buffer = source_buffer(
       std::vector<uint8_t>(16, 0),
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-  write_words.set.write_storage_buffer(0, buffer.handle(), 0, VK_WHOLE_SIZE);
+  const auto producer = vg_test::make_word_writer(device(), buffer);
+  ASSERT_NE(producer, nullptr);
   pipelines::ImageUpdate update;
   update.planes[0].buffer = &buffer;
 
   // Four invocations, one per 32-bit word of the 4 x 4 R8 plane.
-  const auto produce = [&](VkCommandBuffer cmd, uint32_t value) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                      write_words.pipeline.handle());
-    const VkDescriptorSet set = write_words.set.handle();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            write_words.pipeline.layout(), 0, 1, &set, 0,
-                            nullptr);
-    vkCmdPushConstants(cmd, write_words.pipeline.layout(),
-                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(value), &value);
-    vkCmdDispatch(cmd, 4, 1, 1);
-  };
   Pass pass;
   pass.before = [&](VkCommandBuffer cmd) {
-    produce(cmd, 0x80808080u);
+    producer->record(cmd, 0x80808080u, 4);
     const vkc::Status s = pipeline.record_update(cmd, texture, update);
     EXPECT_TRUE(s.ok()) << s.message();
-    produce(cmd, 0xFFFFFFFFu);
+    producer->record(cmd, 0xFFFFFFFFu, 4);
   };
   pass.draws = {draw_of(texture, {4, 4}, 1.0f)};
   const std::vector<Pixels> px = render_passes(pipeline, {pass}, {4, 4});

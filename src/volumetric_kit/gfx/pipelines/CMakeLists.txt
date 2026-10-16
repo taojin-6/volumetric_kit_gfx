@@ -5,8 +5,8 @@
 # Ready-to-use rendering building blocks composed on core (GPU resources) and
 # the assets data model. The first module is GPU mesh upload (assets::Mesh ->
 # vertex/index buffers + an indexed draw). Per the tier rule it depends only on
-# tiers to its left -- core + assets -- plus the Vulkan loader (privately, for
-# the vkCmd* calls in record_draw).
+# tiers to its left and the roots -- core, assets and camera -- plus the Vulkan
+# loader (privately, for the vkCmd* calls in record_draw).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -58,15 +58,17 @@ target_include_directories(
          "$<BUILD_INTERFACE:${_vg_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
-# core (Allocator/Buffer/Result) and assets (the Mesh data model) appear in this
-# tier's public API, so both are PUBLIC. The Vulkan loader is PRIVATE:
-# record_draw records vkCmd*, but no loader type crosses the public API. Threads
-# is PRIVATE too: the IBL bake convolves faces via std::async, but no thread
-# type crosses the public API.
+# core (Allocator/Buffer/Result), assets (the Mesh data model) and camera
+# (image_draw takes a camera::ImageView2D) appear in this tier's public API, so
+# all three are PUBLIC. The Vulkan loader is PRIVATE: record_draw records
+# vkCmd*, but no loader type crosses the public API. Threads is PRIVATE too: the
+# IBL bake convolves faces via std::async, but no thread type crosses the public
+# API.
 find_package(Threads REQUIRED)
 target_link_libraries(
   gfx_pipelines
   PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_assets
+         volumetric_kit::gfx_camera
   PRIVATE Vulkan::Vulkan Threads::Threads)
 
 # --- Embedded PBR shaders ---------------------------------------------------

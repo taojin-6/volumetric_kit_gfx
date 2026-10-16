@@ -17,7 +17,7 @@ landed. The detailed `DESIGN.md` is intentionally local and gitignored.
 `camera`, `ui`).
 Simple consumers link `volumetric_kit::gfx_app`; advanced consumers compose passes on
 `volumetric_kit::gfx_core`. The dependency rule is strict: a tier may only depend on tiers
-to its left, with `core` and `assets` as foundational roots. See
+to its left, with `core`, `assets` and `camera` as foundational roots. See
 [AGENTS.md](AGENTS.md#architecture) for the dependency boundaries.
 
 ## Prerequisites (macOS / Apple Silicon)

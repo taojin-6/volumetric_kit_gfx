@@ -34,6 +34,17 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   linear light; draws minify trilinearly and magnify nearest or linear.
   Buffer updates reject overflowing source ranges and row pitches above
   Vulkan's limit before recording, using the same validation as image updates.
+- `pipelines`: **a picture written in regions and converted once.**
+  `ImagePipeline::record_write` copies any number of sources into
+  non-overlapping regions of one `ImageTexture` (`ImageWrite`: planes, an
+  offset and an extent), keeping what earlier writes left and clearing to
+  black on the first write; `record_convert` (`ImageConversion`) converts the
+  whole picture and rebuilds its mips; `ImageTexture::discard` recovers from
+  a command buffer that never ran; `image_draw` fills an `ImageDraw` from a
+  `camera::ImageView2D`; `max_texture_extent` is the largest picture, which
+  `ImageTexture::create`'s refusal names. `record_update` is a whole-picture
+  write and its convert, and `ImageUpdate` derives from `ImageConversion`, so
+  its callers are unchanged. `gfx_pipelines` links `gfx_camera` PUBLIC.
 - `camera`: `ImageView2D` (`camera/image_view_2d.hpp`), a pan-and-zoom view of
   a 2D image in a viewport, mapping image coordinates to target pixels and
   back.

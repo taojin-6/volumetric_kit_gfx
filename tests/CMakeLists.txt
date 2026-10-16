@@ -168,6 +168,7 @@ add_executable(
   hybrid_mesh_pipeline_test.cpp
   ibl_test.cpp
   image_pipeline_test.cpp
+  image_write_test.cpp
   live_mesh_test.cpp
   pbr_material_test.cpp
   pbr_model_test.cpp

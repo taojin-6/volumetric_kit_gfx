@@ -189,11 +189,8 @@ int run(GLFWwindow* window, const vkc::config::Config& settings) {
     begin.clear_color.float32[2] = 0.05f;
     begin.clear_color.float32[3] = 1.0f;
     f.target->begin(f.cmd, begin);
-    pipelines::ImageDraw draw;
-    draw.texture = &texture.value();
-    draw.viewport = {{0, 0}, extent};
-    draw.origin = view.origin();
-    draw.scale = view.scale();
+    const pipelines::ImageDraw draw =
+        pipelines::image_draw(texture.value(), view);
     images.value().submit(f.cmd, {extent, &draw, 1});
     f.target->end(f.cmd);
 

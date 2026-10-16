@@ -99,7 +99,8 @@ what has landed since then. Record amendments when a contract changes.
   display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
   a color ramp), rebuilds its mip chain with halving blits that average in linear light, and draws
   it trilinearly into rectangles of any target; `camera::ImageView2D` holds the pan-and-zoom
-  mapping. See the dated entry below.
+  mapping. See the dated entry below. *Amended 2026-10-16:* a picture is written in regions,
+  from any number of sources, and converted once ("Pictures written in regions", below).
 - **2026-08-03 — `pipelines::LiveMesh`, the indirect-draw half of the live zero-copy path.**
   A borrowed vertex/index/indirect buffer triple drawn with `vkCmdDrawIndexedIndirect`, so a mesh
   whose index count changes per frame draws with no CPU round trip. `HybridMeshDraw::geometry` is a
@@ -112,6 +113,41 @@ what has landed since then. Record amendments when a contract changes.
   2026-10-08).
 - **2026-10-11 — The GLFW window glue is a library tier, `glfw`.** It reverses "library
   tiers never read GLFW": `gfx_glfw` does, and no other tier. See the dated entry below.
+
+## 2026-10-16 — Pictures written in regions
+
+**The contract.** `ImagePipeline::record_write` copies any number of sources
+into regions of one `ImageTexture`'s planes, and `record_convert` converts the
+whole picture and rebuilds its chain; `record_update` is the two for one
+region the picture's size. A rig's cameras share one texture: one convert, one
+chain and one draw per frame, however many cameras, and a camera with no new
+picture keeps its last. The first write after `create` or `discard` clears
+the planes to black, so texels no write covers -- a gutter -- are black;
+after that they keep what was written.
+
+**Why gfx records the copies.** The application picks the regions -- calib's
+rig mosaic -- and gfx keeps the planes private and records the copies, so
+`check_plane` and the barriers stay in one place. The copy is the one a
+texture per camera made already: a decoder's picture allows transfer only.
+
+**Why one picture, not regions clamped apart.** Convert-then-mip is
+unchanged (2026-10-05, below), and its chain is of the whole picture, so
+regions meet in its coarse levels and in NV12's chroma upsampling. Clamping
+each region in the shader would cost a region table per texture; instead a
+layout leaves a gutter, and `ImageWrite`'s comment states what it buys: the
+edge chroma's share, and the levels a gutter of 2^k texels keeps apart. One
+conversion serves the picture, so its regions share one coding.
+
+**Why discard.** A texture records the layouts its commands leave, so a
+command buffer that never runs (a failed `end_frame`, the swapchain not
+stale) leaves them wrong. `ImageTexture::discard` forgets them: the next
+write clears from `UNDEFINED`, and nothing draws until the next convert: the
+picture is blank until the next one, never wrong.
+
+**Limits.** A texture is at most `ImagePipeline::max_texture_extent`, the
+device's `maxImageDimension2D` bounded by its framebuffer and viewport
+limits, as the convert renders the whole picture; `ImageTexture::create`'s
+refusal names it, so a caller pages its regions over several textures.
 
 ## 2026-10-11 — Core owns application run configuration
 
