@@ -113,6 +113,50 @@ what has landed since then. Record amendments when a contract changes.
   2026-10-08).
 - **2026-10-11 — The GLFW window glue is a library tier, `glfw`.** It reverses "library
   tiers never read GLFW": `gfx_glfw` does, and no other tier. See the dated entry below.
+- **2026-10-16 — Points come straight from depth buffers.** `pipelines::DepthCloudPipeline`
+  reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
+  the host folds into matrices. See the dated entry below.
+
+## 2026-10-16 — Points from depth buffers
+
+**The contract.** `pipelines::DepthCloudPipeline` draws a depth image as
+points: one vertex per depth pixel, read in the vertex stage from the
+producer's Float32 storage buffer, with no vertex buffer and no copy. An
+optional buffer of R'G'B'A8 words colours each point by recon's projection
+rule, and a point with no colour takes the draw's tint. A draw is one depth
+source; a frame has any number. gfx knows no rig or calibration: a draw is
+buffers, `camera::PinholeCamera`s and poses. The `PinholeCamera` is gfx's
+own, not recon's camera model, because gfx cannot link recon, whose viewers
+link gfx; it is float, carries the image size, and the caller converts to it.
+
+**Why the host folds the cameras.** Each draw's intrinsics, poses and view
+fold on the host, in double, into two matrices: depth pixel to clip space,
+and to the colour camera's pixels. The vertex stage keeps only recon's pixel
+rule -- in front of the camera, inside [0, w) x [0, h), and
+min(floor(q + 0.5), size - 1) -- copied from recon's `nearest_pixel`, as gfx
+cannot include recon's GLSL. A change to recon's rule must change this copy.
+gfx's tests pin it against a host model of the rule; only a test that draws
+recon's prepared frames through it, in calib, can check the two together.
+Equal poses cancel exactly on the host, with intrinsics composed directly:
+registered depth and colour keep an identity pixel mapping, including the
+first row and column at the image boundary.
+
+**Why vertex-stage storage buffers.** They read the producer's buffers where
+they are, `CONCURRENT` across the families when the producer names both (for
+recon's prepared depth, `GpuFramePrepConfig::depth_queue_families`, which
+recon's #246 adds); the two-family test draws such buffers with a
+producer-signalled semaphore wait covering the vertex shader. Sharing mode
+alone supplies no memory visibility, and a host fence wait does not replace
+that GPU dependency. The public header owns the caller's synchronization
+contract; `submit` records draws inside rendering, where it cannot insert the
+buffer dependency. There is no image path and no u16 depth, which no producer
+needs (raw sensor depth is distorted, so it is prepared first), and no quad
+fallback for wide points: without `largePoints` a point is one pixel.
+
+**Why host-mapped parameters.** `submit` records inside a rendering scope,
+where `vkCmdUpdateBuffer` cannot be, so each draw's parameters go into
+`DeviceMapped` memory. Push descriptors would need an extension and a core
+wrapper, and a record-before-rendering call would split each draw in two.
 
 ## 2026-10-16 — Pictures written in regions
 

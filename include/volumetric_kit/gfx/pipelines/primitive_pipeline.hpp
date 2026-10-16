@@ -19,6 +19,7 @@
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/point_draw.hpp"
 
 namespace volumetric_kit::core {
 class Buffer;
@@ -164,7 +165,7 @@ class VG_PIPELINES_API PrimitivePipeline {
 
   /// @return The widest point the device draws, in pixels: 1 without
   ///         `largePoints`, else the top of its `pointSizeRange`.
-  float max_point_size() const noexcept { return max_point_size_; }
+  float max_point_size() const noexcept { return limits_.max_point_size(); }
 
   /// @brief Record @p frame's draws into @p cmd.
   ///
@@ -188,14 +189,11 @@ class VG_PIPELINES_API PrimitivePipeline {
 
  private:
   PrimitivePipeline(GraphicsPipeline points, GraphicsPipeline lines,
-                    const VkPhysicalDeviceLimits& limits,
-                    bool large_points) noexcept;
+                    detail::PointDrawLimits limits) noexcept;
 
   GraphicsPipeline points_;
   GraphicsPipeline lines_;
-  float max_point_size_ = 1.0f;
-  float max_viewport_[2] = {0.0f, 0.0f};     // maxViewportDimensions
-  float viewport_bounds_[2] = {0.0f, 0.0f};  // viewportBoundsRange
+  detail::PointDrawLimits limits_;
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/gfx/pipelines/primitive_pipeline.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -48,38 +47,16 @@ core::Status draw_error(uint32_t index, const char* what) {
 
 PrimitivePipeline::PrimitivePipeline(GraphicsPipeline points,
                                      GraphicsPipeline lines,
-                                     const VkPhysicalDeviceLimits& limits,
-                                     bool large_points) noexcept
-    : points_(std::move(points)),
-      lines_(std::move(lines)),
-      max_point_size_(large_points ? std::max(limits.pointSizeRange[1], 1.0f)
-                                   : 1.0f),
-      max_viewport_{static_cast<float>(limits.maxViewportDimensions[0]),
-                    static_cast<float>(limits.maxViewportDimensions[1])},
-      viewport_bounds_{limits.viewportBoundsRange[0],
-                       limits.viewportBoundsRange[1]} {}
+                                     detail::PointDrawLimits limits) noexcept
+    : points_(std::move(points)), lines_(std::move(lines)), limits_(limits) {}
 
 PrimitivePipeline::~PrimitivePipeline() = default;
 
 core::Result<std::unique_ptr<PrimitivePipeline>> PrimitivePipeline::create(
     const core::Device& device, const RenderTargetLayout& layout) {
-  if (layout.color_count != 1 ||
-      layout.color_formats[0] == VK_FORMAT_UNDEFINED) {
-    return core::Status::invalid_argument(
-        "PrimitivePipeline::create: the layout must have exactly one color "
-        "attachment, of a defined format");
-  }
-  if (layout.depth_format == VK_FORMAT_UNDEFINED) {
-    return core::Status::invalid_argument(
-        "PrimitivePipeline::create: the layout must carry a depth format "
-        "(primitives are depth-tested)");
-  }
+  VKC_TRY(detail::check_point_target(layout, "PrimitivePipeline::create"));
   VKC_TRY(device.check_enabled(device_requirements())
               .with_context("PrimitivePipeline::create"));
-  // Points wider than a pixel need largePoints enabled, not merely supported.
-  core::DeviceRequirements wide = device_requirements();
-  wide.features.largePoints = VK_TRUE;
-  const bool large_points = device.check_enabled(wide).ok();
 
   const VkDevice vk = device.handle();
   VKC_ASSIGN(ShaderModule vert,
@@ -124,7 +101,7 @@ core::Result<std::unique_ptr<PrimitivePipeline>> PrimitivePipeline::create(
   // The constructor is private, so no std::make_unique.
   return std::unique_ptr<PrimitivePipeline>(
       new PrimitivePipeline(std::move(points), std::move(lines),
-                            device.caps().limits(), large_points));
+                            detail::PointDrawLimits::of(device)));
 }
 
 core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
@@ -168,13 +145,7 @@ core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
     if (rect.extent.width == 0 || rect.extent.height == 0) {
       continue;
     }
-    const double x = rect.offset.x;
-    const double y = rect.offset.y;
-    const double width = rect.extent.width;
-    const double height = rect.extent.height;
-    if (width > max_viewport_[0] || height > max_viewport_[1] ||
-        x < viewport_bounds_[0] || y < viewport_bounds_[0] ||
-        x + width > viewport_bounds_[1] || y + height > viewport_bounds_[1]) {
+    if (!limits_.viewport_fits(rect)) {
       return draw_error(i,
                         "has a viewport beyond the device's "
                         "maxViewportDimensions or viewportBoundsRange");
@@ -204,7 +175,7 @@ core::Status PrimitivePipeline::submit(VkCommandBuffer cmd,
     PushConstants push;
     push.view_proj = draw.view_proj;
     push.point_size = draw.topology == PrimitiveTopology::Points
-                          ? std::clamp(draw.point_size, 1.0f, max_point_size_)
+                          ? limits_.clamp(draw.point_size)
                           : 1.0f;
     vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                        sizeof(push), &push);

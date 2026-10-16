@@ -12,7 +12,6 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/image_update.hpp"
-#include "volumetric_kit/gfx/core/log.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -93,61 +92,45 @@ core::Result<StreamedAtlas> StreamedAtlas::create(
   }
 
   StreamedAtlas atlas;
-  atlas.device_ = &device;
   atlas.allocator_ = &allocator;
   atlas.desc_ = desc;
   atlas.pool_ = std::move(pool);
   atlas.slots_ = std::move(slots);
-  atlas.retire_.emplace(timeline);
-  atlas.timeline_ = &timeline;
+  atlas.frames_ = detail::FrameRetirement(device, timeline, "StreamedAtlas");
   return atlas;
 }
 
 StreamedAtlas::~StreamedAtlas() { destroy(); }
 
 StreamedAtlas::StreamedAtlas(StreamedAtlas&& other) noexcept
-    : device_(other.device_),
-      timeline_(other.timeline_),
-      allocator_(other.allocator_),
+    : allocator_(other.allocator_),
       desc_(other.desc_),
       pool_(std::move(other.pool_)),
       slots_(std::move(other.slots_)),
-      retire_(std::move(other.retire_)),
+      frames_(std::move(other.frames_)),
       current_(other.current_),
-      newest_(other.newest_),
       undo_(std::move(other.undo_)) {
-  other.device_ = nullptr;
-  other.timeline_ = nullptr;
   other.allocator_ = nullptr;
   other.desc_ = kNoDesc;
   other.slots_.clear();
-  other.retire_.reset();
   other.current_ = kNoPicture;
-  other.newest_ = 0;
   other.undo_.clear();
 }
 
 StreamedAtlas& StreamedAtlas::operator=(StreamedAtlas&& other) noexcept {
   if (this != &other) {
     destroy();
-    device_ = other.device_;
-    timeline_ = other.timeline_;
     allocator_ = other.allocator_;
     desc_ = other.desc_;
     pool_ = std::move(other.pool_);
     slots_ = std::move(other.slots_);
-    retire_ = std::move(other.retire_);
+    frames_ = std::move(other.frames_);
     current_ = other.current_;
-    newest_ = other.newest_;
     undo_ = std::move(other.undo_);
-    other.device_ = nullptr;
-    other.timeline_ = nullptr;
     other.allocator_ = nullptr;
     other.desc_ = kNoDesc;
     other.slots_.clear();
-    other.retire_.reset();
     other.current_ = kNoPicture;
-    other.newest_ = 0;
     other.undo_.clear();
   }
   return *this;
@@ -190,8 +173,8 @@ core::Status StreamedAtlas::record_upload(VkCommandBuffer cmd,
   constexpr const char* kCall = "StreamedAtlas::record_upload";
   VKC_ASSIGN(const std::uint32_t slot, take_slot(kCall, frame));
   const Undo undo = before_update(slot);
-  retire_->poll();
-  VKC_TRY(record_image_upload(cmd, *allocator_, *retire_, frame,
+  frames_.retire().poll();
+  VKC_TRY(record_image_upload(cmd, *allocator_, frames_.retire(), frame,
                               slots_[slot].image, pixels, size, kUpdateScope)
               .with_context(kCall));
   publish(slot, frame, undo);
@@ -204,10 +187,10 @@ VkDescriptorSet StreamedAtlas::use(std::uint64_t frame) {
     return VK_NULL_HANDLE;
   }
   // Called once a frame, so the last frames' staging buffers go promptly.
-  retire_->poll();
+  frames_.retire().poll();
   Slot& slot = slots_[current_];
   if (slot.last_use < frame) {
-    if (frame >= newest_) {
+    if (frame >= frames_.newest()) {
       enter(frame);
       Undo undo;
       undo.slot = current_;
@@ -221,16 +204,17 @@ VkDescriptorSet StreamedAtlas::use(std::uint64_t frame) {
 
 void StreamedAtlas::discard(std::uint64_t frame) {
   VKC_CHECK(frame != 0, "StreamedAtlas::discard: frame numbers start at 1");
-  VKC_CHECK(frame >= newest_,
+  VKC_CHECK(frame >= frames_.newest(),
             "StreamedAtlas::discard: a later frame has been given to the "
             "atlas; discard a frame before giving it the next");
-  if (frame != newest_ || undo_.empty()) {
+  if (frame != frames_.newest() || undo_.empty()) {
     return;  // the frame gave the atlas nothing
   }
   // A frame that reached a queue -- or a submission in its place -- sets its
   // number, and its commands may have run, so the images it used stay its
   // until the timeline reaches it. One that did not never runs.
-  const bool reached = check_submitted(frame, "StreamedAtlas::discard").ok();
+  const bool reached =
+      frames_.check_submitted(frame, "StreamedAtlas::discard").ok();
   for (auto undo = undo_.rbegin(); undo != undo_.rend(); ++undo) {
     Slot& slot = slots_[undo->slot];
     if (!reached) {
@@ -254,21 +238,14 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
   if (!valid()) {
     return core::Status::invalid_argument(name + ": empty atlas");
   }
-  if (frame == 0) {
-    return core::Status::invalid_argument(name + ": frame numbers start at 1");
-  }
-  if (frame < newest_) {
-    return core::Status::invalid_argument(
-        name + ": frame " + std::to_string(frame) + " is below frame " +
-        std::to_string(newest_) + ", already given");
-  }
+  VKC_TRY(frames_.check(frame, name));
 
   // Keep the picture from before this frame intact, even if the frame's
   // copies run before its present fails. Restoring an index in discard()
   // cannot restore overwritten texels. Uses before the first update also
   // have undo entries, so find the first update rather than the first entry.
   std::uint32_t preserved = current_;
-  if (frame == newest_) {
+  if (frame == frames_.newest()) {
     for (const Undo& undo : undo_) {
       if (undo.update) {
         preserved = undo.current;
@@ -299,7 +276,7 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
   if (last == 0) {
     return pick;  // never written or drawn
   }
-  VKC_ASSIGN(const std::uint64_t completed, timeline_->value());
+  VKC_ASSIGN(const std::uint64_t completed, frames_.timeline().value());
   if (last <= completed) {
     return pick;
   }
@@ -311,27 +288,9 @@ core::Result<std::uint32_t> StreamedAtlas::take_slot(const char* call,
   // An earlier frame still uses it: wait for it, as the frame loop waits for
   // a slot's last frame -- once it is known to be submitted, so that the wait
   // returns.
-  VKC_TRY(check_submitted(last, call));
-  VKC_TRY(timeline_->wait(last));
+  VKC_TRY(frames_.check_submitted(last, call));
+  VKC_TRY(frames_.timeline().wait(last));
   return pick;
-}
-
-core::Status StreamedAtlas::check_submitted(std::uint64_t frame,
-                                            const char* call) const {
-  const std::vector<core::TimelinePoint> point{{timeline_, frame}};
-  // Validate the device and semaphore first. Reached is a presentation rule:
-  // it cannot distinguish an unfinished submitted frame from a dropped one.
-  VKC_TRY(core::check_timeline_points(*device_, point, {}, call));
-  // For one valid signal with no waits, InvalidArgument means only that its
-  // value is at or below the counter or a recorded signal. This queries the
-  // core's submitted-value bound without submitting or recording anything.
-  const core::Status signal =
-      core::check_timeline_points(*device_, {}, point, call);
-  if (signal.domain() == core::Status::Code::InvalidArgument) return {};
-  VKC_TRY(signal);
-  return core::Status::invalid_argument(std::string(call) + ": frame " +
-                                        std::to_string(frame) +
-                                        " has not been submitted");
 }
 
 StreamedAtlas::Undo StreamedAtlas::before_update(std::uint32_t slot) const {
@@ -353,42 +312,20 @@ void StreamedAtlas::publish(std::uint32_t slot, std::uint64_t frame,
 }
 
 void StreamedAtlas::enter(std::uint64_t frame) {
-  if (frame > newest_) {
-    newest_ = frame;
+  if (frames_.advance(frame)) {
     undo_.clear();
   }
 }
 
 void StreamedAtlas::destroy() noexcept {
-  if (timeline_ != nullptr && newest_ != 0) {
-    // Wait for the newest frame that used the atlas. One that never reached
-    // the queue -- it failed before its submit -- will never set its number,
-    // so wait for the renderer's queues instead: every frame that did reach
-    // them then has completed, and the one that did not never runs.
-    const core::Status waited = check_submitted(newest_, "StreamedAtlas").ok()
-                                    ? timeline_->wait(newest_)
-                                    : device_->wait_idle();
-    if (!waited.ok()) {
-      // Device loss: nothing will run again, so free regardless, but say so.
-      log_message(core::LogLevel::Warning,
-                  "StreamedAtlas: waiting for frame " +
-                      std::to_string(newest_) + " failed (" + waited.message() +
-                      "); freeing the images regardless");
-    }
-  }
-  // The frames that read the staging buffers have completed, or never run.
-  if (retire_) {
-    retire_->reclaim();
-  }
-  retire_.reset();
+  // Waits for the newest frame that used the atlas, or for the queues when
+  // it never reached one, and frees the staging buffers; then the images.
+  frames_.reset();
   slots_.clear();
   pool_ = {};
-  device_ = nullptr;
-  timeline_ = nullptr;
   allocator_ = nullptr;
   desc_ = kNoDesc;
   current_ = kNoPicture;
-  newest_ = 0;
   undo_.clear();
 }
 

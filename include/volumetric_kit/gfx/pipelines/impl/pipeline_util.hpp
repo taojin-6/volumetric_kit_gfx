@@ -14,6 +14,30 @@
 
 namespace volumetric_kit::gfx::pipelines {
 
+/// @brief The part of @p viewport inside @p target: the scissor
+///        @ref set_viewport_scissor sets.
+/// @param viewport  A rectangle in target pixels; it may extend past the
+///                  target.
+/// @param target    The target's pixel dimensions.
+/// @return The overlap, with a zero extent when there is none.
+inline VkRect2D clip_to_target(const VkRect2D& viewport, VkExtent2D target) {
+  // 64-bit, so an offset plus an extent cannot wrap.
+  const int64_t x0 = std::max<int64_t>(viewport.offset.x, 0);
+  const int64_t y0 = std::max<int64_t>(viewport.offset.y, 0);
+  const int64_t x1 = std::min<int64_t>(
+      int64_t{viewport.offset.x} + viewport.extent.width, target.width);
+  const int64_t y1 = std::min<int64_t>(
+      int64_t{viewport.offset.y} + viewport.extent.height, target.height);
+  if (x1 <= x0 || y1 <= y0) {
+    return VkRect2D{};
+  }
+  VkRect2D clipped{};
+  clipped.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
+  clipped.extent = {static_cast<uint32_t>(x1 - x0),
+                    static_cast<uint32_t>(y1 - y0)};
+  return clipped;
+}
+
 /// @brief Record a dynamic viewport of @p viewport and a scissor of
 ///        @p viewport clipped to @p target.
 ///
@@ -33,14 +57,8 @@ namespace volumetric_kit::gfx::pipelines {
 [[nodiscard]] inline bool set_viewport_scissor(VkCommandBuffer cmd,
                                                const VkRect2D& viewport,
                                                VkExtent2D target) {
-  // 64-bit, so an offset plus an extent cannot wrap.
-  const int64_t x0 = std::max<int64_t>(viewport.offset.x, 0);
-  const int64_t y0 = std::max<int64_t>(viewport.offset.y, 0);
-  const int64_t x1 = std::min<int64_t>(
-      int64_t{viewport.offset.x} + viewport.extent.width, target.width);
-  const int64_t y1 = std::min<int64_t>(
-      int64_t{viewport.offset.y} + viewport.extent.height, target.height);
-  if (x1 <= x0 || y1 <= y0) {
+  const VkRect2D scissor = clip_to_target(viewport, target);
+  if (scissor.extent.width == 0) {
     return false;
   }
 
@@ -52,11 +70,6 @@ namespace volumetric_kit::gfx::pipelines {
   vp.minDepth = 0.0f;
   vp.maxDepth = 1.0f;
   vkCmdSetViewport(cmd, 0, 1, &vp);
-
-  VkRect2D scissor{};
-  scissor.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
-  scissor.extent = {static_cast<uint32_t>(x1 - x0),
-                    static_cast<uint32_t>(y1 - y0)};
   vkCmdSetScissor(cmd, 0, 1, &scissor);
   return true;
 }
