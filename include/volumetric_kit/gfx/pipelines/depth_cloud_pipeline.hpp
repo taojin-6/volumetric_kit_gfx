@@ -171,12 +171,19 @@ struct DepthCloudPipelineDesc {
 ///
 /// **What the caller guarantees.** Every buffer a draw reads is either
 /// `CONCURRENT` across the producer's queue family and the renderer's, or
-/// written on the renderer's family. The producer's writes are complete
-/// before the frame is submitted: a fence the host waited for, or a
-/// timeline value the frame waits for (`windowing::Frame::waits`) that is
-/// already reached. The buffers' owners keep them alive, and do not write
-/// them, until the timeline reaches the frame's number (a `RetireQueue` on
-/// the frame loop's timeline).
+/// owned by the renderer's family. The caller makes the producer's writes
+/// visible to `VERTEX_SHADER` / `SHADER_READ`; @ref submit records no buffer
+/// memory dependency. For GPU writes on another queue, the frame's queue
+/// submission must wait on a semaphore signalled by the producer after its
+/// writes, at `VK_PIPELINE_STAGE_VERTEX_SHADER_BIT` (or `ALL_COMMANDS`). With
+/// `windowing::Frame::waits`, use that stage and a producer-signalled timeline
+/// value that is already reached, as the frame loop requires. A host fence
+/// wait alone is insufficient. For writes on the same queue, a memory barrier
+/// from the producer's write stage/access to `VERTEX_SHADER` / `SHADER_READ`
+/// before the rendering scope also suffices. Host writes must be complete,
+/// with non-coherent memory flushed, before queue submission. The buffers'
+/// owners keep them alive, and do not write them, until the timeline reaches
+/// the frame's number (a `RetireQueue` on the frame loop's timeline).
 ///
 /// @warning The @p device, @p allocator and @p timeline passed to @ref create
 ///          must outlive the pipeline. Destroying it waits until the timeline
@@ -201,6 +208,10 @@ struct DepthCloudPipelineDesc {
 ///   draws[i].view_proj = orbit.to_camera(fovy, aspect, 0.05f, 50.0f)
 ///                            .view_proj();
 /// }
+/// // The producer's queue signalled producer_done after writing the buffers.
+/// // FrameLoop requires producer_value to have been reached already.
+/// f.waits.push_back({{&producer_done, producer_value},
+///                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT});
 /// // inside the rendering scope:
 /// VKC_TRY(clouds->submit(f.cmd, {extent, f.number, draws.data(),
 ///                                static_cast<uint32_t>(draws.size())}));

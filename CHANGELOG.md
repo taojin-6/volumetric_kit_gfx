@@ -6,6 +6,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- `DepthCloudPipeline` preserves border colours for coincident depth and
+  colour cameras and rejects oversized images before byte-count overflow.
+  Its cross-queue contract now requires a producer-signalled GPU semaphore
+  wait covering the vertex shader; a host fence wait alone is insufficient.
+
 ### Added
 
 - Examples read a shared JSON run configuration through core's optional

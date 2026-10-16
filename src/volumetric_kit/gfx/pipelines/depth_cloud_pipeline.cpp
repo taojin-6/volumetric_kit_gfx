@@ -92,11 +92,13 @@ std::string check_image(const core::Buffer& buffer, VkDeviceSize offset,
            " camera whose focal lengths are not positive and finite or "
            "whose principal point is not finite";
   }
-  // 64-bit: a 32-bit size squared cannot wrap.
-  const uint64_t bytes = uint64_t{cam.width} * cam.height * 4;
-  if (bytes > limits.maxStorageBufferRange) {
+  // The pixel count fits in 64 bits; its byte count may not. Bound it
+  // before multiplying by the four bytes in either a depth or colour pixel.
+  const uint64_t pixels = uint64_t{cam.width} * cam.height;
+  if (pixels > limits.maxStorageBufferRange / 4) {
     return "has a " + name + " image larger than maxStorageBufferRange";
   }
+  const uint64_t bytes = pixels * 4;
   if (offset % limits.minStorageBufferOffsetAlignment != 0) {
     return "has a " + name +
            " offset that is not a multiple of "
@@ -201,7 +203,19 @@ core::Status prepare(uint32_t index, const DepthCloudDraw& draw,
     if (!finite(color_to_world) || glm::determinant(color_to_world) == 0.0) {
       return draw_error(index, "has a colour pose that cannot be inverted");
     }
-    to_color = project(color.camera) * glm::inverse(color_to_world) * depth_cam;
+    if (color.to_world == depth.to_world) {
+      // Cancel equal poses exactly, and compose K_color * inverse(K_depth)
+      // analytically. Equal intrinsics then give an exact identity, keeping
+      // the first row and column inside the colour image despite roundoff.
+      to_color = glm::dmat4(1.0);
+      to_color[0][0] = double{color.camera.fx} / depth.camera.fx;
+      to_color[1][1] = double{color.camera.fy} / depth.camera.fy;
+      to_color[2][0] = color.camera.cx - to_color[0][0] * depth.camera.cx;
+      to_color[2][1] = color.camera.cy - to_color[1][1] * depth.camera.cy;
+    } else {
+      to_color =
+          project(color.camera) * glm::inverse(color_to_world) * depth_cam;
+    }
     if (!finite(to_color)) {
       return draw_error(index, "has a colour pose that cannot be inverted");
     }

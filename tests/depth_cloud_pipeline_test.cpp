@@ -44,6 +44,7 @@
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/camera/pinhole_camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -322,10 +323,12 @@ class CloudHelpers {
   // Records `record` inside a rendering scope over an `extent` target of
   // `color`, cleared to opaque black and depth 1, runs it, sets frame
   // `number` on the timeline from the host, and returns `record`'s status and
-  // the target.
+  // the target. An optional producer timeline is waited on by the GPU at
+  // VERTEX_SHADER; there is no host wait before the render submission.
   std::pair<vkc::Status, Pixels> render_status(
       VkExtent2D extent, VkFormat color, uint64_t number,
-      const std::function<vkc::Status(VkCommandBuffer)>& record) {
+      const std::function<vkc::Status(VkCommandBuffer)>& record,
+      vkc::TimelinePoint ready = {}) {
     const vkc::Status failed = vkc::Status::invalid_argument("setup failed");
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
@@ -356,7 +359,28 @@ class CloudHelpers {
     rt.end(raw);
     target.value().record_readback(raw);
     EXPECT_TRUE(cmd.value().end().ok());
-    const vkc::Status ran = cloud_device().submit_and_wait(raw);
+    const vkc::Status ran = [&]() -> vkc::Status {
+      if (ready.semaphore == nullptr) {
+        return cloud_device().submit_and_wait(raw);
+      }
+      VKC_ASSIGN(vkc::Fence done, vkc::Fence::create(cloud_device().handle()));
+      const VkSemaphore wait = ready.semaphore->handle();
+      const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+      VkTimelineSemaphoreSubmitInfo values{};
+      values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+      values.waitSemaphoreValueCount = 1;
+      values.pWaitSemaphoreValues = &ready.value;
+      VkSubmitInfo submit{};
+      submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      submit.pNext = &values;
+      submit.waitSemaphoreCount = 1;
+      submit.pWaitSemaphores = &wait;
+      submit.pWaitDstStageMask = &stage;
+      submit.commandBufferCount = 1;
+      submit.pCommandBuffers = &raw;
+      VKC_VK_TRY(cloud_device().queue_submit(1, &submit, done.handle()));
+      return done.wait();
+    }();
     if (!ran.ok()) {
       ADD_FAILURE() << ran.message();
       return {recorded, {}};
@@ -382,13 +406,15 @@ class CloudHelpers {
   // to succeed.
   Pixels render(DepthCloudPipeline& pipeline,
                 const std::vector<DepthCloudDraw>& draws, VkExtent2D extent,
-                VkFormat color = kUnorm) {
+                VkFormat color = kUnorm, vkc::TimelinePoint ready = {}) {
     const uint64_t number = next_frame();
-    auto [status, px] =
-        render_status(extent, color, number, [&](VkCommandBuffer cmd) {
+    auto [status, px] = render_status(
+        extent, color, number,
+        [&](VkCommandBuffer cmd) {
           return pipeline.submit(cmd, {extent, number, draws.data(),
                                        static_cast<uint32_t>(draws.size())});
-        });
+        },
+        ready);
     EXPECT_TRUE(status.ok()) << status.message();
     EXPECT_FALSE(px.bytes.empty());
     return std::move(px);
@@ -550,6 +576,29 @@ TEST_F(DepthCloudTest, EachPixelLandsOnItsProjectedPixelOnce) {
   // Stride 5 on a 16 x 12 image: columns 0, 5, 10, 15 and rows 0, 5, 10.
   draw.stride = 5;
   EXPECT_EQ(render(*pipeline, {draw}, kDepthExtent).lit_count(), 4 * 3);
+}
+
+TEST_F(DepthCloudTest, CoincidentCamerasKeepEveryBorderColor) {
+  auto pipeline = make_pipeline();
+  ASSERT_NE(pipeline, nullptr);
+  const vkc::Buffer depth = upload(plane_depths(kDepthCam));
+  const std::vector<uint32_t> words = coded_colors(kDepthCam);
+  const vkc::Buffer color = upload(words);
+  for (const glm::mat4& to_world : {glm::mat4(1.0f), depth_pose()}) {
+    DepthCloudDraw draw = self_view(depth, kDepthCam, to_world);
+    draw.mode = CloudColor::True;
+    // Registered RGB-D: no principal-point offset to move the first row
+    // and column away from the shader's exact image-boundary checks.
+    draw.color = {&color, 0, kDepthCam, to_world, true};
+    const Pixels px = render(*pipeline, {draw}, kDepthExtent);
+    ASSERT_FALSE(px.bytes.empty());
+    for (uint32_t v = 0; v < kDepthCam.height; ++v) {
+      for (uint32_t u = 0; u < kDepthCam.width; ++u) {
+        EXPECT_EQ(px.rgb(u, v), rgb_of(words[v * kDepthCam.width + u]))
+            << "pixel (" << u << ", " << v << ")";
+      }
+    }
+  }
 }
 
 // Test 1: through a view moved and with its own intrinsics and size, each
@@ -1391,6 +1440,47 @@ TEST_F(DepthCloudTest, RefusalsRecordNothing) {
   EXPECT_EQ(nothing_px.lit_count(), 0);
 }
 
+TEST_F(DepthCloudTest, RejectsImagesWhoseByteCountWouldOverflow) {
+  auto pipeline = make_pipeline();
+  ASSERT_NE(pipeline, nullptr);
+  const vkc::Buffer depth = upload(std::vector<float>{1.0f});
+  const vkc::Buffer color = upload(std::vector<uint32_t>{kTint});
+  const PinholeCamera cam{1.0f, 1.0f, 0.0f, 0.0f, 1, 1};
+  vg::OffscreenTargetDesc desc;
+  desc.extent = {1, 1};
+  desc.color_format = kUnorm;
+  desc.depth_format = kDepthFormat;
+  auto target = vg::OffscreenTarget::create(allocator(), desc);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  for (const bool oversized_color : {false, true}) {
+    SCOPED_TRACE(oversized_color ? "colour" : "depth");
+    DepthCloudDraw draw = self_view(depth, cam, glm::mat4(1.0f));
+    draw.color = {&color, 0, cam, glm::mat4(1.0f), false};
+    draw.mode = CloudColor::True;
+    auto& oversized = oversized_color ? draw.color.camera : draw.depth.camera;
+    oversized.width = 0x80000000u;
+    oversized.height = 0x80000000u;
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(cmd.value().begin().ok());
+    target.value().prepare(cmd.value().handle());
+    const vg::RenderTarget rt = target.value().target();
+    rt.begin(cmd.value().handle(), {});
+    const vkc::Status status = pipeline->submit(
+        cmd.value().handle(), {{1, 1}, next_frame(), &draw, 1});
+    EXPECT_EQ(status.domain(), vkc::Status::Code::InvalidArgument);
+    EXPECT_NE(status.message().find("image larger than maxStorageBufferRange"),
+              std::string::npos)
+        << status.message();
+    rt.end(cmd.value().handle());
+    ASSERT_TRUE(cmd.value().end().ok());
+    // Do not execute an invalid descriptor if this refusal regresses.
+  }
+}
+
 // Test 7: frame numbers start at 1 and never go back; a refused number
 // records nothing.
 TEST_F(DepthCloudTest, RefusesZeroAndDecreasingFrameNumbers) {
@@ -1715,7 +1805,8 @@ TEST_F(DepthCloudLargePointsTest, SizeThreeCoversThreeByThreeAndClamps) {
 
 // Test 8: depth and colour the compute library's queue family wrote, in
 // CONCURRENT buffers, are drawn on the renderer's family in place, exactly,
-// with no validation error.
+// with a producer-signalled semaphore wait at VERTEX_SHADER. No host fence
+// wait retires synchronization validation's producer history before the draw.
 class DepthCloudCrossFamilyTest : public vkc::test::SharedDeviceTest,
                                   protected CloudHelpers {
  protected:
@@ -1738,13 +1829,12 @@ class DepthCloudCrossFamilyTest : public vkc::test::SharedDeviceTest,
     make_timeline();
   }
 
-  // `bytes` in a storage buffer the compute family wrote, CONCURRENT across
-  // both families.
-  template <class T>
-  vkc::Buffer compute_buffer(const std::vector<T>& values) {
+  // A storage buffer allocated by the compute library, CONCURRENT across
+  // both families. The test submits the writes asynchronously.
+  vkc::Buffer compute_buffer(VkDeviceSize bytes) {
     vkc::test::TwoFamilyDevice& two = two_family();
     vkc::BufferDesc desc;
-    desc.size = values.size() * sizeof(T);
+    desc.size = bytes;
     desc.usage =
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     desc.queue_families = two.families().data();
@@ -1755,14 +1845,12 @@ class DepthCloudCrossFamilyTest : public vkc::test::SharedDeviceTest,
       return vkc::Buffer{};
     }
     EXPECT_EQ(buffer.value().sharing_mode(), VK_SHARING_MODE_CONCURRENT);
-    const vkc::Status s =
-        two.write_buffer(buffer.value(), 0, values.data(), desc.size);
-    EXPECT_TRUE(s.ok()) << s.message();
     return std::move(buffer).value();
   }
 };
 
-TEST_F(DepthCloudCrossFamilyTest, DrawsBuffersTheComputeFamilyWroteInPlace) {
+TEST_F(DepthCloudCrossFamilyTest,
+       SemaphoreMakesComputeWritesVisibleToVertices) {
   ASSERT_TRUE(two_family().crosses_families());
   auto pipeline = make_pipeline();
   ASSERT_NE(pipeline, nullptr);
@@ -1771,13 +1859,26 @@ TEST_F(DepthCloudCrossFamilyTest, DrawsBuffersTheComputeFamilyWroteInPlace) {
   depths[3 * kDepthCam.width + 4] = 0.0f;  // a hole
   const PinholeCamera color_cam = shifted(kDepthCam, 0.25f, 0.25f);
   const std::vector<uint32_t> words = coded_colors(color_cam, 2);
-  const vkc::Buffer depth = compute_buffer(depths);
-  const vkc::Buffer color = compute_buffer(words);
+  const vkc::Buffer depth = compute_buffer(depths.size() * sizeof(float));
+  const vkc::Buffer color = compute_buffer(words.size() * sizeof(uint32_t));
+  ASSERT_TRUE(depth.valid());
+  ASSERT_TRUE(color.valid());
+  auto ready = vkc::TimelineSemaphore::create(two_family().compute(), 0);
+  ASSERT_TRUE(ready.ok()) << ready.status().message();
+  auto producer = two_family().compute().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        vkCmdUpdateBuffer(cmd, depth.handle(), 0, depth.size(), depths.data());
+        vkCmdUpdateBuffer(cmd, color.handle(), 0, color.size(), words.data());
+      },
+      {}, {{&ready.value(), 1}});
+  ASSERT_TRUE(producer.ok()) << producer.status().message();
 
   DepthCloudDraw draw = self_view(depth, kDepthCam, to_world);
   draw.mode = CloudColor::True;
   draw.color = {&color, 0, color_cam, to_world, true};
-  const Pixels px = render(*pipeline, {draw}, kDepthExtent);
+  const Pixels px =
+      render(*pipeline, {draw}, kDepthExtent, kUnorm, {&ready.value(), 1});
+  ASSERT_TRUE(producer.value().wait().ok());
   ASSERT_FALSE(px.bytes.empty());
   for (uint32_t v = 0; v < kDepthCam.height; ++v) {
     for (uint32_t u = 0; u < kDepthCam.width; ++u) {

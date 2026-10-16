@@ -137,14 +137,21 @@ min(floor(q + 0.5), size - 1) -- copied from recon's `nearest_pixel`, as gfx
 cannot include recon's GLSL. A change to recon's rule must change this copy.
 gfx's tests pin it against a host model of the rule; only a test that draws
 recon's prepared frames through it, in calib, can check the two together.
+Equal poses cancel exactly on the host, with intrinsics composed directly:
+registered depth and colour keep an identity pixel mapping, including the
+first row and column at the image boundary.
 
 **Why vertex-stage storage buffers.** They read the producer's buffers where
 they are, `CONCURRENT` across the families when the producer names both (for
 recon's prepared depth, `GpuFramePrepConfig::depth_queue_families`, which
-recon's #246 adds); the two-family test draws such buffers. There is no image
-path and no u16 depth, which no producer needs (raw sensor depth is
-distorted, so it is prepared first), and no quad fallback for wide points:
-without `largePoints` a point is one pixel.
+recon's #246 adds); the two-family test draws such buffers with a
+producer-signalled semaphore wait covering the vertex shader. Sharing mode
+alone supplies no memory visibility, and a host fence wait does not replace
+that GPU dependency. The public header owns the caller's synchronization
+contract; `submit` records draws inside rendering, where it cannot insert the
+buffer dependency. There is no image path and no u16 depth, which no producer
+needs (raw sensor depth is distorted, so it is prepared first), and no quad
+fallback for wide points: without `largePoints` a point is one pixel.
 
 **Why host-mapped parameters.** `submit` records inside a rendering scope,
 where `vkCmdUpdateBuffer` cannot be, so each draw's parameters go into
