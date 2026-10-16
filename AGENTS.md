@@ -58,11 +58,12 @@ sections relevant to the task rather than every document before every edit.
 `core` → `passes` → `pipelines` → `app` → `glfw` (+ `windowing`, `interop`, `assets`, `io`,
 `camera`, `ui`). Simple consumers link `…_app`; advanced consumers compose their own passes on
 `…_core`.
-The dependency rule is strict: a tier may only depend on tiers to its left — with `core`
-and `assets` as foundational roots (no tier dependencies of their own) that any tier may
-build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets`). `assets` is the
-format-neutral CPU data model (header-only, glm); `io` holds the file loaders that
-produce it (glTF now; OBJ/PLY/assimp later) and so depends on `assets`. `ui` is a Dear
+The dependency rule is strict: a tier may only depend on tiers to its left — with `core`,
+`assets` and `camera` as foundational roots (no tier dependencies of their own) that any
+tier may build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets` + `camera`).
+`assets` is the format-neutral CPU data model (header-only, glm), and `io` holds the file
+loaders that produce it (glTF now; OBJ/PLY/assimp later). `camera` is the view and
+image-view math (glm only). `ui` is a Dear
 ImGui debug overlay (on `core`, and `camera` for `ImageOverlay`): it wraps ImGui's
 *renderer* backend (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic
 rendering. `glfw` (on `app` + `ui`) is the GLFW window glue, ImGui's *platform* backend
@@ -171,6 +172,9 @@ git -C "$gfx_root" diff --check
 - GPU tests can skip when no Vulkan device is present. Run them as CI does
   (CONTRIBUTING.md, "Build and test"), and report actual GPU coverage
   separately from host-only success. Sanitizer CI requires lavapipe.
+- A test of a resource another queue family wrote derives from the core's
+  `SharedDeviceTest`, which skips on a device with one family, and takes its
+  devices from `two_family()` (`image_write_test.cpp`).
 - `VG_WITH_GLFW` gates `gfx_glfw` and the examples on it. `VG_WITH_CUDA` is
   reserved until its interop implementation is wired; verify current CMake.
 

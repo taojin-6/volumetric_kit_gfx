@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file core/impl/image_copy_layout.hpp
-/// Shared source-layout validation for uncompressed buffer-to-image copies.
-/// Not a public header.
+/// Shared validation for uncompressed copies into images: where a region
+/// lies, and its buffer source's layout. Not a public header.
 
 #include <cstdint>
 #include <limits>
@@ -15,6 +15,23 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 
 namespace volumetric_kit::gfx::detail {
+
+// Whether the texels [offset, offset + extent) of one axis lie in [0, size).
+inline bool span_inside(std::int32_t offset, std::uint32_t extent,
+                        std::uint32_t size) {
+  return offset >= 0 && extent <= size &&
+         static_cast<std::uint32_t>(offset) <= size - extent;
+}
+
+// Whether the texels [a_offset, a_offset + a_extent) and
+// [b_offset, b_offset + b_extent) of one axis have one in common; spans that
+// only touch do not. Two regions write a texel in common when they overlap on
+// every axis.
+inline bool spans_overlap(std::int32_t a_offset, std::uint32_t a_extent,
+                          std::int32_t b_offset, std::uint32_t b_extent) {
+  return std::int64_t{a_offset} + a_extent > b_offset &&
+         std::int64_t{b_offset} + b_extent > a_offset;
+}
 
 // Check the copy's last texel against the source capacity by subtracting and
 // dividing that capacity. Multiplying caller-provided strides first can wrap

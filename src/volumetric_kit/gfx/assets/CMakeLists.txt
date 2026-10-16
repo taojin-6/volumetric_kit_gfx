@@ -27,8 +27,8 @@ target_link_libraries(gfx_assets INTERFACE glm::glm)
 # This tier is where glm reaches most consumers -- gfx_pipelines re-exports it
 # PUBLIC, and its frame structs hand the consumer a clip-space glm::mat4 to fill
 # -- so the depth convention has to ride along with the include path. A consumer
-# linking gfx_pipelines without gfx_camera would otherwise build a [-1, 1]
-# projection against a [0, 1] depth attachment; see cmake/vg_glm.cmake.
+# of gfx_assets or gfx_io that does not link gfx_camera would otherwise build a
+# [-1, 1] projection; see cmake/vg_glm.cmake.
 vg_glm_conventions(gfx_assets INTERFACE)
 
 # Header-only: nothing is compiled here, so there is no export header, no

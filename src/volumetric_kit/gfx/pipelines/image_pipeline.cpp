@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -154,44 +155,40 @@ VkExtent2D plane_extent(VkExtent2D extent, uint32_t p) {
   return {(extent.width + 1) / 2, (extent.height + 1) / 2};
 }
 
-// Checks that `plane` can be copied into a plane of `format` and `extent`.
-core::Status check_plane(const ImagePlane& plane, uint32_t p, VkFormat format,
-                         VkExtent2D extent) {
+// Checks that `plane` can be copied into a region of `extent` texels of a
+// plane of `format`; `where` names the call, and the write for record_write.
+core::Status check_plane(const std::string& where, const ImagePlane& plane,
+                         uint32_t p, VkFormat format, VkExtent2D extent) {
+  const std::string which = where + ": plane " + std::to_string(p);
   const bool has_image = plane.image != nullptr;
   const bool has_buffer = plane.buffer != nullptr;
   if (has_image == has_buffer) {
     return core::Status::invalid_argument(
-        "ImagePipeline::record_update: plane " + std::to_string(p) +
-        " must name exactly one of an image and a buffer");
+        which + " must name exactly one of an image and a buffer");
   }
   if (has_image) {
     const core::Image& image = *plane.image;
     if (!image.valid() || image.type() != VK_IMAGE_TYPE_2D ||
         image.samples() != VK_SAMPLE_COUNT_1_BIT) {
       return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane " + std::to_string(p) +
-          "'s image is not a single-sample 2D image");
+          which + "'s image is not a single-sample 2D image");
     }
     if ((image.usage() & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
       return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane " + std::to_string(p) +
-          "'s image lacks TRANSFER_SRC usage");
+          which + "'s image lacks TRANSFER_SRC usage");
     }
     if (image.layout() != VK_IMAGE_LAYOUT_GENERAL &&
         image.layout() != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
       return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane " + std::to_string(p) +
-          "'s image is not in GENERAL or TRANSFER_SRC_OPTIMAL");
+          which + "'s image is not in GENERAL or TRANSFER_SRC_OPTIMAL");
     }
     if (unorm_twin(image.format()) != format) {
-      return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane " + std::to_string(p) +
-          "'s image has the wrong format");
+      return core::Status::invalid_argument(which +
+                                            "'s image has the wrong format");
     }
     if (image.width() < extent.width || image.height() < extent.height) {
       return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane " + std::to_string(p) +
-          "'s image is smaller than the picture");
+          which + "'s image is smaller than its region");
     }
     return core::Status{};
   }
@@ -200,9 +197,139 @@ core::Status check_plane(const ImagePlane& plane, uint32_t p, VkFormat format,
   region.bufferRowLength = plane.row_length;
   region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   region.imageExtent = {extent.width, extent.height, 1};
-  return gfx::detail::check_buffer_image_copy(
-      "ImagePipeline::record_update: plane " + std::to_string(p), plane.buffer,
-      region, core::texel_bytes(format));
+  return gfx::detail::check_buffer_image_copy(which, plane.buffer, region,
+                                              core::texel_bytes(format));
+}
+
+// Checks `writes` against a texture of `desc` with planes `formats`: each
+// region inside the picture, at even NV12 offsets and with even NV12 extents
+// short of the edge, each plane copyable into it, and no two overlapping.
+// Returns whether they cover the whole picture, which non-overlapping regions
+// do exactly when their areas add up to its own.
+core::Result<bool> check_writes(const char* call, const ImageTextureDesc& desc,
+                                const PlaneFormats& formats,
+                                const ImageWrite* writes, uint32_t count,
+                                bool name_writes) {
+  if (writes == nullptr || count == 0) {
+    return core::Status::invalid_argument(std::string(call) + ": no writes");
+  }
+  const int64_t width = desc.extent.width;
+  const int64_t height = desc.extent.height;
+  const bool nv12 = desc.mapping == ImageMapping::Nv12;
+  uint64_t area = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const ImageWrite& write = writes[i];
+    const std::string where =
+        name_writes ? std::string(call) + ": write " + std::to_string(i)
+                    : std::string(call);
+    const int64_t x = write.offset.x;
+    const int64_t y = write.offset.y;
+    const int64_t w = write.extent.width;
+    const int64_t h = write.extent.height;
+    if (w == 0 || h == 0) {
+      return core::Status::invalid_argument(where + ": a region of zero size");
+    }
+    if (!gfx::detail::span_inside(write.offset.x, write.extent.width,
+                                  desc.extent.width) ||
+        !gfx::detail::span_inside(write.offset.y, write.extent.height,
+                                  desc.extent.height)) {
+      return core::Status::invalid_argument(
+          where + ": the region (" + std::to_string(x) + ", " +
+          std::to_string(y) + ") + " + std::to_string(w) + " x " +
+          std::to_string(h) + " is outside the " + std::to_string(width) +
+          " x " + std::to_string(height) + " picture");
+    }
+    // NV12's chroma is at half the size: a region whose luma starts on an odd
+    // texel, or ends on one short of the edge, would share a chroma texel
+    // with its neighbour.
+    if (nv12 && (x % 2 != 0 || y % 2 != 0)) {
+      return core::Status::invalid_argument(
+          where + ": an NV12 region must start at an even texel");
+    }
+    if (nv12 &&
+        ((w % 2 != 0 && x + w != width) || (h % 2 != 0 && y + h != height))) {
+      return core::Status::invalid_argument(
+          where +
+          ": an NV12 region's extent must be even unless it reaches "
+          "the picture's edge");
+    }
+    for (uint32_t p = 0; p < 2; ++p) {
+      const ImagePlane& plane = write.planes[p];
+      if (p < formats.count) {
+        VKC_TRY(check_plane(where, plane, p, formats.format[p],
+                            plane_extent(write.extent, p)));
+      } else if (plane.image != nullptr || plane.buffer != nullptr) {
+        return core::Status::invalid_argument(where +
+                                              ": plane 1 is for NV12 only");
+      }
+    }
+    area += static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+  }
+  // Every pair, so the copies never write a texel twice. A write is a
+  // camera's, so the quadratic loop stays cheap for any rig.
+  for (uint32_t i = 0; i < count; ++i) {
+    const ImageWrite& a = writes[i];
+    for (uint32_t j = i + 1; j < count; ++j) {
+      const ImageWrite& b = writes[j];
+      if (gfx::detail::spans_overlap(a.offset.x, a.extent.width, b.offset.x,
+                                     b.extent.width) &&
+          gfx::detail::spans_overlap(a.offset.y, a.extent.height, b.offset.y,
+                                     b.extent.height)) {
+        return core::Status::invalid_argument(std::string(call) + ": writes " +
+                                              std::to_string(i) + " and " +
+                                              std::to_string(j) + " overlap");
+      }
+    }
+  }
+  return area == static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+}
+
+// Checks `conversion` for a texture of `mapping` with planes `formats`.
+core::Status check_conversion(const char* call, ImageMapping mapping,
+                              const PlaneFormats& formats,
+                              const ImageConversion& conversion) {
+  if (formats.srgb_source && conversion.encoding != ImageEncoding::Srgb) {
+    return core::Status::invalid_argument(std::string(call) +
+                                          ": an _SRGB source is sRGB-encoded");
+  }
+  if (mapping == ImageMapping::Ramp &&
+      (!std::isfinite(conversion.ramp_min) ||
+       !std::isfinite(conversion.ramp_max) ||
+       conversion.ramp_min == conversion.ramp_max)) {
+    return core::Status::invalid_argument(
+        std::string(call) + ": the ramp bounds must be finite and differ");
+  }
+  if (mapping == ImageMapping::Nv12 &&
+      !(conversion.kr > 0.0f && conversion.kb > 0.0f &&
+        conversion.kr + conversion.kb < 1.0f)) {
+    return core::Status::invalid_argument(
+        std::string(call) +
+        ": the matrix weights need kr > 0, kb > 0 and kr + kb < 1");
+  }
+  return core::Status{};
+}
+
+// The planes of `desc`'s texture, for `call` on a pipeline and texture
+// either of which may be empty.
+core::Result<PlaneFormats> texture_formats(const char* call,
+                                           bool pipeline_valid,
+                                           bool texture_valid,
+                                           const ImageTextureDesc& desc) {
+  if (!pipeline_valid) {
+    return core::Status::invalid_argument(std::string(call) +
+                                          ": empty pipeline");
+  }
+  if (!texture_valid) {
+    return core::Status::invalid_argument(std::string(call) +
+                                          ": empty texture");
+  }
+  // The texture was made from it, so it cannot fail here.
+  return plane_formats(desc);
+}
+
+// `value` held in [lo, hi]; NaN goes to lo.
+double hold(double value, double lo, double hi) noexcept {
+  return value >= lo ? std::min(value, hi) : lo;
 }
 
 core::Result<ShaderModule> embedded_module(VkDevice device,
@@ -356,56 +483,73 @@ ImagePipeline& ImagePipeline::operator=(ImagePipeline&& other) noexcept {
   return *this;
 }
 
+VkExtent2D ImagePipeline::max_texture_extent() const noexcept {
+  if (!valid()) {
+    return {0, 0};
+  }
+  // The convert pass renders level 0 whole, so the extent must fit a
+  // framebuffer and a viewport as well as an image.
+  const VkPhysicalDeviceLimits& limits = device_->caps().limits();
+  return {std::min({limits.maxImageDimension2D, limits.maxFramebufferWidth,
+                    limits.maxViewportDimensions[0]}),
+          std::min({limits.maxImageDimension2D, limits.maxFramebufferHeight,
+                    limits.maxViewportDimensions[1]})};
+}
+
+core::Status ImagePipeline::record_write(VkCommandBuffer cmd,
+                                         ImageTexture& texture,
+                                         const ImageWrite* writes,
+                                         uint32_t write_count) const {
+  constexpr const char* kCall = "ImagePipeline::record_write";
+  VKC_ASSIGN(const PlaneFormats formats,
+             texture_formats(kCall, valid(), texture.valid(), texture.desc_));
+  VKC_ASSIGN(const bool covers, check_writes(kCall, texture.desc_, formats,
+                                             writes, write_count, true));
+  write_checked(cmd, texture, writes, write_count, covers);
+  return core::Status{};
+}
+
+core::Status ImagePipeline::record_convert(
+    VkCommandBuffer cmd, ImageTexture& texture,
+    const ImageConversion& conversion) const {
+  constexpr const char* kCall = "ImagePipeline::record_convert";
+  VKC_ASSIGN(const PlaneFormats formats,
+             texture_formats(kCall, valid(), texture.valid(), texture.desc_));
+  if (!texture.written_) {
+    return core::Status::invalid_argument(
+        std::string(kCall) +
+        ": the texture has not been written since it was made or discarded");
+  }
+  VKC_TRY(check_conversion(kCall, texture.desc_.mapping, formats, conversion));
+  convert_checked(cmd, texture, conversion);
+  return core::Status{};
+}
+
 core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
                                           ImageTexture& texture,
                                           const ImageUpdate& update) const {
-  if (!valid()) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: empty pipeline");
-  }
-  if (!texture.valid()) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: empty texture");
-  }
-  // The texture was made from these, so they cannot fail here.
-  VKC_ASSIGN(const PlaneFormats formats, plane_formats(texture.desc_));
-  const VkExtent2D extent = texture.desc_.extent;
-  const ImageMapping mapping = texture.desc_.mapping;
+  constexpr const char* kCall = "ImagePipeline::record_update";
+  VKC_ASSIGN(const PlaneFormats formats,
+             texture_formats(kCall, valid(), texture.valid(), texture.desc_));
+  ImageWrite whole;
+  whole.planes = update.planes;
+  whole.extent = texture.desc_.extent;
+  VKC_ASSIGN(const bool covers,
+             check_writes(kCall, texture.desc_, formats, &whole, 1, false));
+  VKC_TRY(check_conversion(kCall, texture.desc_.mapping, formats, update));
+  write_checked(cmd, texture, &whole, 1, covers);
+  convert_checked(cmd, texture, update);
+  return core::Status{};
+}
 
-  // Validate everything before recording anything, so an error leaves the
-  // command buffer and the texture's last picture untouched.
-  for (uint32_t p = 0; p < 2; ++p) {
-    const ImagePlane& plane = update.planes[p];
-    if (p < formats.count) {
-      VKC_TRY(
-          check_plane(plane, p, formats.format[p], plane_extent(extent, p)));
-    } else if (plane.image != nullptr || plane.buffer != nullptr) {
-      return core::Status::invalid_argument(
-          "ImagePipeline::record_update: plane 1 is for NV12 only");
-    }
-  }
-  if (formats.srgb_source && update.encoding != ImageEncoding::Srgb) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: an _SRGB source is sRGB-encoded");
-  }
-  if (mapping == ImageMapping::Ramp &&
-      (!std::isfinite(update.ramp_min) || !std::isfinite(update.ramp_max) ||
-       update.ramp_min == update.ramp_max)) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: the ramp bounds must be finite and "
-        "differ");
-  }
-  if (mapping == ImageMapping::Nv12 &&
-      !(update.kr > 0.0f && update.kb > 0.0f && update.kr + update.kb < 1.0f)) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::record_update: the matrix weights need kr > 0, "
-        "kb > 0 and kr + kb < 1");
-  }
+void ImagePipeline::write_checked(VkCommandBuffer cmd, ImageTexture& texture,
+                                  const ImageWrite* writes,
+                                  uint32_t write_count, bool covers) const {
+  const uint32_t plane_count = plane_formats(texture.desc_).value().count;
 
-  // 1. Copy each source plane into the texture's copy of it. The sources may
-  //    have been written by anything earlier on this queue -- a producer's
-  //    pass in this or an earlier submission -- so the copies wait for every
-  //    earlier write and see its results.
+  // 1. The sources may have been written by anything earlier on this queue --
+  //    a producer's pass in this or an earlier submission -- so the copies
+  //    wait for every earlier write and see its results.
   // TODO: let a plane name its writer's stage and access, to wait for less
   // than all earlier work.
   VkMemoryBarrier written{};
@@ -416,62 +560,124 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &written, 0,
                        nullptr, 0, nullptr);
 
-  // The plane copies' previous contents are discarded, but the previous
-  // update's convert pass may still be reading them: wait for its fragment
-  // stage.
+  // 2. The planes become copy destinations. They keep what earlier writes
+  //    left -- moved from the layout the texture recorded -- unless these
+  //    writes replace all of it, or nothing has been written since the
+  //    texture was made or discarded, when their contents are undefined. The
+  //    previous convert may still be reading them, and an earlier write still
+  //    copying into them.
+  const bool keep = texture.written_ && !covers;
   std::array<ImageBarrierDesc, 2> to_copy{};
-  std::array<ImageBarrierDesc, 2> to_read{};
-  for (uint32_t p = 0; p < formats.count; ++p) {
+  for (uint32_t p = 0; p < plane_count; ++p) {
     to_copy[p].image = texture.planes_[p].handle();
-    to_copy[p].src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    to_copy[p].src_stage =
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
     to_copy[p].dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    to_copy[p].src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
     to_copy[p].dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-    to_copy[p].old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_copy[p].old_layout =
+        keep ? texture.planes_[p].layout() : VK_IMAGE_LAYOUT_UNDEFINED;
     to_copy[p].new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
-    to_read[p].image = texture.planes_[p].handle();
-    to_read[p].src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    to_read[p].dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    to_read[p].src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-    to_read[p].dst_access = VK_ACCESS_SHADER_READ_BIT;
-    to_read[p].old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_read[p].new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   }
-  cmd_image_barriers(cmd, to_copy.data(), formats.count);
+  cmd_image_barriers(cmd, to_copy.data(), plane_count);
 
-  for (uint32_t p = 0; p < formats.count; ++p) {
-    const ImagePlane& plane = update.planes[p];
-    const VkImage dst = texture.planes_[p].handle();
-    const VkExtent2D size = plane_extent(extent, p);
-    if (plane.image != nullptr) {
-      VkImageCopy region{};
-      region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      region.extent = {size.width, size.height, 1};
-      vkCmdCopyImage(cmd, plane.image->handle(), plane.image->layout(), dst,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    } else {
-      VkBufferImageCopy region{};
-      region.bufferOffset = plane.offset;
-      region.bufferRowLength = plane.row_length;
-      region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      region.imageExtent = {size.width, size.height, 1};
-      vkCmdCopyBufferToImage(cmd, plane.buffer->handle(), dst,
-                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  // 3. Undefined planes the writes leave partly uncovered are cleared to
+  //    black first, so the texels between regions show black, not garbage.
+  if (!texture.written_ && !covers) {
+    // The copies then wait for the clears: the same barriers, from the
+    // clears' layout and stage.
+    const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    for (uint32_t p = 0; p < plane_count; ++p) {
+      VkClearColorValue black{};
+      if (texture.desc_.mapping == ImageMapping::Nv12 && p == 1) {
+        black.float32[0] = 128.0f / 255.0f;  // neutral Cb and Cr
+        black.float32[1] = 128.0f / 255.0f;
+      }
+      vkCmdClearColorImage(cmd, texture.planes_[p].handle(),
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
+                           &all);
+      to_copy[p].src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      to_copy[p].old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
+    cmd_image_barriers(cmd, to_copy.data(), plane_count);
+  }
+
+  // 4. Each region's planes: the luma at its offset, NV12's chroma at half
+  //    of it. The regions do not overlap, so no copy waits for another.
+  for (uint32_t i = 0; i < write_count; ++i) {
+    const ImageWrite& write = writes[i];
+    for (uint32_t p = 0; p < plane_count; ++p) {
+      const ImagePlane& plane = write.planes[p];
+      const VkImage dst = texture.planes_[p].handle();
+      const VkExtent2D size = plane_extent(write.extent, p);
+      const VkOffset3D at =
+          p == 0 ? VkOffset3D{write.offset.x, write.offset.y, 0}
+                 : VkOffset3D{write.offset.x / 2, write.offset.y / 2, 0};
+      if (plane.image != nullptr) {
+        VkImageCopy region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstOffset = at;
+        region.extent = {size.width, size.height, 1};
+        vkCmdCopyImage(cmd, plane.image->handle(), plane.image->layout(), dst,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+      } else {
+        VkBufferImageCopy region{};
+        region.bufferOffset = plane.offset;
+        region.bufferRowLength = plane.row_length;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = at;
+        region.imageExtent = {size.width, size.height, 1};
+        vkCmdCopyBufferToImage(cmd, plane.buffer->handle(), dst,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &region);
+      }
     }
   }
-  cmd_image_barriers(cmd, to_read.data(), formats.count);
 
-  // And every later command on the queue waits for the copies, so a producer
-  // may write the next picture into a source without a barrier of its own: an
-  // execution dependency settles write-after-read.
-  // MoltenVK 1.4.2 drops an execution-only dependency with no barrier entries.
-  // A zero-access memory barrier preserves the dependency on that backend.
+  // 5. And every later command on the queue waits for the copies, so a
+  //    producer may write the next picture into a source without a barrier
+  //    of its own: an execution dependency settles write-after-read.
+  //    MoltenVK 1.4.2 drops an execution-only dependency with no barrier
+  //    entries. A zero-access memory barrier preserves the dependency on that
+  //    backend.
   const VkMemoryBarrier copies_complete{VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                                         nullptr, 0, 0};
   vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
                        &copies_complete, 0, nullptr, 0, nullptr);
+
+  for (uint32_t p = 0; p < plane_count; ++p) {
+    texture.planes_[p].set_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  }
+  texture.written_ = true;
+}
+
+void ImagePipeline::convert_checked(VkCommandBuffer cmd, ImageTexture& texture,
+                                    const ImageConversion& conversion) const {
+  const PlaneFormats formats = plane_formats(texture.desc_).value();
+  const VkExtent2D extent = texture.desc_.extent;
+  const ImageMapping mapping = texture.desc_.mapping;
+
+  // 1. The planes become shader-readable once the writes' copies are done.
+  //    Planes a convert already reads, with no write since, need nothing.
+  std::array<ImageBarrierDesc, 2> to_read{};
+  uint32_t moved = 0;
+  for (uint32_t p = 0; p < formats.count; ++p) {
+    if (texture.planes_[p].layout() ==
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+      continue;
+    }
+    ImageBarrierDesc& b = to_read[moved++];
+    b.image = texture.planes_[p].handle();
+    b.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    b.dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    b.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dst_access = VK_ACCESS_SHADER_READ_BIT;
+    b.old_layout = texture.planes_[p].layout();
+    b.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  }
+  cmd_image_barriers(cmd, to_read.data(), moved);
 
   // 2. Convert into level 0 of the display image. Its old contents are
   //    discarded; earlier draws sampling it and the earlier chain's blits
@@ -504,16 +710,16 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
   const VkExtent2D chroma = plane_extent(extent, 1);
   ConvertPush push{};
   push.mapping = static_cast<uint32_t>(mapping);
-  push.srgb_encoded = update.encoding == ImageEncoding::Srgb ? 1u : 0u;
+  push.srgb_encoded = conversion.encoding == ImageEncoding::Srgb ? 1u : 0u;
   push.value_scale = formats.value_scale;
-  push.ramp_min = update.ramp_min;
-  push.ramp_max = update.ramp_max;
-  push.zero_is_empty = update.zero_is_empty ? 1u : 0u;
-  push.kr = update.kr;
-  push.kb = update.kb;
-  push.full_range = update.full_range ? 1u : 0u;
+  push.ramp_min = conversion.ramp_min;
+  push.ramp_max = conversion.ramp_max;
+  push.zero_is_empty = conversion.zero_is_empty ? 1u : 0u;
+  push.kr = conversion.kr;
+  push.kb = conversion.kb;
+  push.full_range = conversion.full_range ? 1u : 0u;
   push.chroma_shift_x =
-      update.chroma_siting == ChromaSiting::Left ? 0.25f : 0.0f;
+      conversion.chroma_siting == ChromaSiting::Left ? 0.25f : 0.0f;
   push.chroma_size[0] = static_cast<float>(chroma.width);
   push.chroma_size[1] = static_cast<float>(chroma.height);
   vkCmdPushConstants(cmd, convert_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -540,7 +746,6 @@ core::Status ImagePipeline::record_update(VkCommandBuffer cmd,
   }
   texture.display_.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   texture.has_picture_ = true;
-  return core::Status{};
 }
 
 void ImagePipeline::submit(VkCommandBuffer cmd, const ImageFrame& frame) const {
@@ -615,19 +820,14 @@ core::Result<ImageTexture> ImageTexture::create(const ImagePipeline& pipeline,
   if (desc.extent.width == 0 || desc.extent.height == 0) {
     return core::Status::invalid_argument("ImageTexture::create: zero extent");
   }
-  // The convert pass renders level 0 whole, so the extent must fit a
-  // framebuffer and a viewport as well as an image.
-  const VkPhysicalDeviceLimits& limits = device.caps().limits();
-  const uint32_t max_width =
-      std::min({limits.maxImageDimension2D, limits.maxFramebufferWidth,
-                limits.maxViewportDimensions[0]});
-  const uint32_t max_height =
-      std::min({limits.maxImageDimension2D, limits.maxFramebufferHeight,
-                limits.maxViewportDimensions[1]});
-  if (desc.extent.width > max_width || desc.extent.height > max_height) {
+  const VkExtent2D max = pipeline.max_texture_extent();
+  if (desc.extent.width > max.width || desc.extent.height > max.height) {
     return core::Status::invalid_argument(
-        "ImageTexture::create: extent beyond the device's image, framebuffer "
-        "or viewport limits");
+        "ImageTexture::create: a " + std::to_string(desc.extent.width) + " x " +
+        std::to_string(desc.extent.height) +
+        " picture is beyond the device's largest, " +
+        std::to_string(max.width) + " x " + std::to_string(max.height) +
+        " (its image, framebuffer and viewport limits)");
   }
   VKC_ASSIGN(const PlaneFormats formats, plane_formats(desc));
 
@@ -716,11 +916,13 @@ ImageTexture::ImageTexture(ImageTexture&& other) noexcept
       pool_(std::move(other.pool_)),
       convert_set_(other.convert_set_),
       draw_sets_(other.draw_sets_),
-      has_picture_(other.has_picture_) {
+      has_picture_(other.has_picture_),
+      written_(other.written_) {
   other.desc_ = {};
   other.convert_set_ = {};
   other.draw_sets_ = {};
   other.has_picture_ = false;
+  other.written_ = false;
 }
 
 ImageTexture& ImageTexture::operator=(ImageTexture&& other) noexcept {
@@ -742,13 +944,56 @@ ImageTexture& ImageTexture::operator=(ImageTexture&& other) noexcept {
     convert_set_ = other.convert_set_;
     draw_sets_ = other.draw_sets_;
     has_picture_ = other.has_picture_;
+    written_ = other.written_;
 
     other.desc_ = {};
     other.convert_set_ = {};
     other.draw_sets_ = {};
     other.has_picture_ = false;
+    other.written_ = false;
   }
   return *this;
+}
+
+void ImageTexture::discard() noexcept {
+  if (!valid()) {
+    return;
+  }
+  // Whatever the dropped commands left -- or found, had they run -- is
+  // undefined from here: the next write clears from UNDEFINED, and the next
+  // convert discards the display image's levels as every convert does.
+  for (core::Image& plane : planes_) {
+    plane.set_layout(VK_IMAGE_LAYOUT_UNDEFINED);
+  }
+  display_.set_layout(VK_IMAGE_LAYOUT_UNDEFINED);
+  has_picture_ = false;
+  written_ = false;
+}
+
+ImageDraw image_draw(const ImageTexture& texture,
+                     const camera::ImageView2D& view,
+                     ImageFilter magnify) noexcept {
+  // In double, which holds 2^31 - 1 exactly, so the casts below are in range
+  // whatever the view's floats are.
+  constexpr double kMax = std::numeric_limits<int32_t>::max();
+  const glm::vec2 origin = view.viewport_origin();
+  const glm::vec2 size = view.viewport_size();
+  const double x0 = hold(std::round(double{origin.x}), 0.0, kMax);
+  const double y0 = hold(std::round(double{origin.y}), 0.0, kMax);
+  const double x1 =
+      hold(std::round(double{origin.x} + double{size.x}), x0, kMax);
+  const double y1 =
+      hold(std::round(double{origin.y} + double{size.y}), y0, kMax);
+
+  ImageDraw draw;
+  draw.texture = &texture;
+  draw.viewport.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
+  draw.viewport.extent = {static_cast<uint32_t>(x1 - x0),
+                          static_cast<uint32_t>(y1 - y0)};
+  draw.origin = view.origin();
+  draw.scale = view.scale();
+  draw.magnify = magnify;
+  return draw;
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

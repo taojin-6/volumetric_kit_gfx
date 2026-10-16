@@ -39,8 +39,7 @@ namespace volumetric_kit::gfx::camera {
 /// view.zoom_about(cursor, 1.25f);  // scroll: zoom in about the cursor
 /// view.pan(drag_delta);            // drag
 /// view.set_viewport({0.0f, 0.0f}, framebuffer_size);  // window resized
-/// draw.origin = view.origin();
-/// draw.scale = view.scale();
+/// // A draw of it: pipelines::image_draw(texture, view).
 /// @endcode
 class VG_CAMERA_API ImageView2D {
  public:
