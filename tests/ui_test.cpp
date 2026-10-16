@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <future>
@@ -74,6 +75,47 @@ class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
                                             make_config(layout));
     EXPECT_TRUE(overlay.ok()) << overlay.status().message();
     return std::move(overlay).value();
+  }
+
+  // Renders the frame built since overlay.new_frame() over opaque black into
+  // `target` and reads it back to target.pixels().
+  void render(const vg::OffscreenTarget& target, ui::ImGuiOverlay& overlay) {
+    auto pool =
+        vkc::CommandPool::create(device().handle(), device().queue_family());
+    ASSERT_TRUE(pool.ok()) << pool.status().message();
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(
+        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+    const VkCommandBuffer raw = cmd.value().handle();
+
+    // Dynamic rendering does not transition the image; move it to the
+    // attachment layout before begin() (as the offscreen-target test does).
+    VkImageMemoryBarrier to_color{};
+    to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_color.srcAccessMask = 0;
+    to_color.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to_color.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    to_color.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_color.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_color.image = target.color_image();
+    to_color.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(raw, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &to_color);
+
+    vg::RenderTargetBeginInfo begin_info;
+    begin_info.clear_color.float32[3] = 1.0f;  // opaque black
+    const vg::RenderTarget rt = target.target();
+    rt.begin(raw, begin_info);
+    overlay.render(raw);  // records ImGui draws inside the rendering scope
+    rt.end(raw);
+    target.record_readback(raw);  // copy the rendered image to the host buffer
+
+    ASSERT_TRUE(cmd.value().end().ok());
+    const vkc::Status submitted = device().submit_and_wait(raw);
+    ASSERT_TRUE(submitted.ok()) << submitted.message();
   }
 };
 
@@ -209,43 +251,7 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // assert ImGui actually rendered, not merely that recording was clean.
   ImGui::GetBackgroundDrawList()->AddRectFilled(
       ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
-
-  auto pool =
-      vkc::CommandPool::create(device().handle(), device().queue_family());
-  ASSERT_TRUE(pool.ok()) << pool.status().message();
-  auto cmd = pool.value().allocate_primary();
-  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
-  ASSERT_TRUE(
-      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
-  const VkCommandBuffer raw = cmd.value().handle();
-
-  // Dynamic rendering does not transition the image; move it to the attachment
-  // layout before begin() (as the offscreen-target test does).
-  VkImageMemoryBarrier to_color{};
-  to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  to_color.srcAccessMask = 0;
-  to_color.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  to_color.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  to_color.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_color.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  to_color.image = target.color_image();
-  to_color.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-  vkCmdPipelineBarrier(raw, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
-                       nullptr, 0, nullptr, 1, &to_color);
-
-  vg::RenderTargetBeginInfo begin_info;
-  begin_info.clear_color.float32[3] = 1.0f;  // opaque black
-  const vg::RenderTarget rt = target.target();
-  rt.begin(raw, begin_info);
-  overlay.render(raw);  // records ImGui draws inside the rendering scope
-  rt.end(raw);
-  target.record_readback(raw);  // copy the rendered image into the host buffer
-
-  ASSERT_TRUE(cmd.value().end().ok());
-  const vkc::Status submitted = device().submit_and_wait(raw);
-  ASSERT_TRUE(submitted.ok()) << submitted.message();
+  ASSERT_NO_FATAL_FAILURE(render(target, overlay));
 
   // The white background rect fills the viewport, so the center texel must be
   // opaque white -- proof ImGui drew (validation-clean recording alone would
@@ -261,6 +267,168 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device().handle());
+}
+
+// A region's grid, rendered: at any sub-pixel phase, with or without
+// anti-aliasing, each outer border is drawn as strongly as an inner line --
+// its whole width lies inside the region -- and nothing lands outside the
+// region's pixels, those whose centers lie in it.
+TEST_F(ImGuiOverlayDeviceTest, RegionGridKeepsEveryBorder) {
+  constexpr int kSize = 256;
+  vg::OffscreenTarget target = make_target({kSize, kSize});
+  ui::ImGuiOverlay overlay = make_overlay(target.layout());
+  ImGui::SetCurrentContext(overlay.context());
+  ImGui::GetIO().IniFilename = nullptr;
+  ImGui::GetIO().DisplaySize = ImVec2(kSize, kSize);
+  overlay.new_frame();
+
+  struct Style {
+    ImDrawListFlags flags;
+    float thickness;
+  };
+  constexpr ImDrawListFlags kAntiAliased = ImDrawListFlags_AntiAliasedLines;
+  const Style styles[] = {
+      {0, 1.0f},
+      {0, 2.0f},
+      {kAntiAliased, 1.0f},
+      {kAntiAliased | ImDrawListFlags_AntiAliasedLinesUseTex, 1.0f},
+  };
+  const float phases[] = {0.0f, 0.3f, 0.5f, 0.7f};
+  // 1 target pixel per texel. A 32 x 32 region per style (row) and phase
+  // (column), 64 texels apart, with a 2 x 2 grid: inner lines through its
+  // middle.
+  const vg::camera::ImageView2D view({kSize, kSize}, {0.0f, 0.0f},
+                                     {kSize, kSize});
+  const auto region = [&](int row, int column) {
+    const float phase = phases[column];
+    return ui::OverlayRegion{
+        {64.0f * static_cast<float>(column) + 16.0f + phase,
+         64.0f * static_cast<float>(row) + 16.0f + phase},
+        {32.0f, 32.0f}};
+  };
+  ImDrawList& list = *ImGui::GetBackgroundDrawList();
+  const ImDrawListFlags flags = list.Flags;
+  for (int row = 0; row < 4; ++row) {
+    list.Flags =
+        (flags & ~(kAntiAliased | ImDrawListFlags_AntiAliasedLinesUseTex)) |
+        styles[row].flags;
+    for (int column = 0; column < 4; ++column) {
+      ui::ImageOverlay(view, ui::PixelCenters::Half, region(row, column))
+          .grid(2, 2, nullptr, 0, IM_COL32_WHITE, styles[row].thickness);
+    }
+  }
+  list.Flags = flags;
+  ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+  const auto* px = static_cast<const uint8_t*>(target.pixels());
+  ASSERT_NE(px, nullptr);
+  // The red channel at `i` along the scan line `at`, across x or down y, and
+  // its sum over [from, to].
+  const auto red = [&](bool across, int at, int i) {
+    const size_t x = static_cast<size_t>(across ? i : at);
+    const size_t y = static_cast<size_t>(across ? at : i);
+    return static_cast<int>(px[(y * kSize + x) * 4]);
+  };
+  const auto sum = [&](bool across, int at, int from, int to) {
+    int total = 0;
+    for (int i = from; i <= to; ++i) total += red(across, at, i);
+    return total;
+  };
+  for (int row = 0; row < 4; ++row) {
+    for (int column = 0; column < 4; ++column) {
+      SCOPED_TRACE(::testing::Message()
+                   << "style " << row << ", phase " << phases[column]);
+      const ui::OverlayRegion r = region(row, column);
+      for (const bool across : {true, false}) {
+        // The region's 32 pixels on this axis, from the first whose center
+        // is in it, and a scan line between its inner lines.
+        const float origin = across ? r.origin.x : r.origin.y;
+        const int first = static_cast<int>(std::ceil(origin - 0.5f));
+        const int last = first + 31;
+        const int at = static_cast<int>(std::ceil(
+                           (across ? r.origin.y : r.origin.x) - 0.5f)) +
+                       8;
+        const int inner = static_cast<int>(origin + 16.0f);
+        const int line = sum(across, at, inner - 2, inner + 2);
+        EXPECT_GE(4 * sum(across, at, first, first + 2), 3 * line);
+        EXPECT_GE(4 * sum(across, at, last - 2, last), 3 * line);
+        EXPECT_EQ(red(across, at, first - 1), 0);
+        EXPECT_EQ(red(across, at, last + 1), 0);
+      }
+    }
+  }
+  vkDeviceWaitIdle(device().handle());
+}
+
+// Intersecting the overlay with a draw-list clip or the framebuffer must keep
+// the last row and column, including after panning the whole-image overload.
+// An oversized mark also exposes any pixels leaking beyond the intended clip.
+TEST_F(ImGuiOverlayDeviceTest, ImageMarksKeepPixelsAtClipEdges) {
+  constexpr int kSize = 256;
+  const ImVec2 scales[] = {
+      {1.0f, 1.0f}, {1.1f, 1.1f}, {1.75f, 1.75f}, {1.1f, 1.75f}, {1.75f, 1.1f}};
+  for (const ImVec2 scale : scales) {
+    for (const bool whole_image : {false, true}) {
+      for (const bool nested_clip : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "scale " << scale.x << ", " << scale.y
+                     << ", whole image " << whole_image << ", nested clip "
+                     << nested_clip);
+        vg::OffscreenTarget target = make_target({kSize, kSize});
+        ui::ImGuiOverlay overlay = make_overlay(target.layout());
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(kSize / scale.x, kSize / scale.y);
+        io.DisplayFramebufferScale = scale;
+        overlay.new_frame();
+        ImDrawList& list = *ImGui::GetBackgroundDrawList();
+        list.Flags &= ~ImDrawListFlags_AntiAliasedFill;
+
+        // These origins round upward when converted back to target pixels
+        // at 1.1 and 1.75 respectively. Clamping the far edge used to lose
+        // a pixel when the backend truncated the width or height.
+        const glm::vec2 origin{scale.x == 1.75f ? 227.0f : 147.0f,
+                               scale.y == 1.75f ? 227.0f : 147.0f};
+        vg::camera::ImageView2D view({kSize, kSize}, {0.0f, 0.0f},
+                                     {kSize, kSize});
+        if (whole_image) view.pan(origin);
+        const ui::ImageOverlay marks =
+            whole_image
+                ? ui::ImageOverlay(view, ui::PixelCenters::Half)
+                : ui::ImageOverlay(
+                      view, ui::PixelCenters::Half,
+                      ui::OverlayRegion{origin, glm::vec2(kSize) - origin});
+        // Change the caller's clip after constructing the overlay: it is
+        // the final intersection at each mark that matters.
+        // 240 projects back exactly at both fractional scales, so this
+        // isolates subtracting the nudged start from a clipped integer end.
+        const int end = nested_clip ? 240 : kSize;
+        if (nested_clip) {
+          list.PushClipRect(ImVec2(0.0f, 0.0f),
+                            ImVec2(end / scale.x, end / scale.y), true);
+        }
+        marks.point({0.0f, 0.0f}, IM_COL32_WHITE, 512.0f);
+        if (nested_clip) list.PopClipRect();
+        ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+        const auto* px = static_cast<const uint8_t*>(target.pixels());
+        ASSERT_NE(px, nullptr);
+        int missing = 0;
+        int outside = 0;
+        for (int y = 0; y < kSize; ++y) {
+          for (int x = 0; x < kSize; ++x) {
+            const bool inside =
+                x >= origin.x && x < end && y >= origin.y && y < end;
+            const uint8_t red = px[(y * kSize + x) * 4];
+            missing += inside && red != 255;
+            outside += !inside && red != 0;
+          }
+        }
+        EXPECT_EQ(missing, 0);
+        EXPECT_EQ(outside, 0);
+        vkDeviceWaitIdle(device().handle());
+      }
+    }
+  }
 }
 
 // render() may submit on the device's queue itself (the font atlas, on the
