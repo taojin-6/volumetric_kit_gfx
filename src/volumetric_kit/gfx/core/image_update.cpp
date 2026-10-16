@@ -83,13 +83,10 @@ core::Status check_region(const std::string& name, const core::Image& image,
       std::max<std::uint32_t>(1, image.depth() >> sub.mipLevel);
   const VkOffset3D& o = r.imageOffset;
   const VkExtent3D& e = r.imageExtent;
-  if (o.x < 0 || o.y < 0 || o.z < 0 || e.width == 0 || e.height == 0 ||
-      e.depth == 0 || e.width > level_width ||
-      static_cast<std::uint32_t>(o.x) > level_width - e.width ||
-      e.height > level_height ||
-      static_cast<std::uint32_t>(o.y) > level_height - e.height ||
-      e.depth > level_depth ||
-      static_cast<std::uint32_t>(o.z) > level_depth - e.depth) {
+  if (e.width == 0 || e.height == 0 || e.depth == 0 ||
+      !detail::span_inside(o.x, e.width, level_width) ||
+      !detail::span_inside(o.y, e.height, level_height) ||
+      !detail::span_inside(o.z, e.depth, level_depth)) {
     return core::Status::invalid_argument(
         which + " is empty or outside the image level");
   }
@@ -106,17 +103,12 @@ bool overlap(const VkBufferImageCopy& a, const VkBufferImageCopy& b) {
       sb.baseArrayLayer >= sa.baseArrayLayer + sa.layerCount) {
     return false;
   }
-  const auto apart = [](std::int32_t a_offset, std::uint32_t a_extent,
-                        std::int32_t b_offset, std::uint32_t b_extent) {
-    return std::int64_t{a_offset} + a_extent <= b_offset ||
-           std::int64_t{b_offset} + b_extent <= a_offset;
-  };
-  return !apart(a.imageOffset.x, a.imageExtent.width, b.imageOffset.x,
-                b.imageExtent.width) &&
-         !apart(a.imageOffset.y, a.imageExtent.height, b.imageOffset.y,
-                b.imageExtent.height) &&
-         !apart(a.imageOffset.z, a.imageExtent.depth, b.imageOffset.z,
-                b.imageExtent.depth);
+  return detail::spans_overlap(a.imageOffset.x, a.imageExtent.width,
+                               b.imageOffset.x, b.imageExtent.width) &&
+         detail::spans_overlap(a.imageOffset.y, a.imageExtent.height,
+                               b.imageOffset.y, b.imageExtent.height) &&
+         detail::spans_overlap(a.imageOffset.z, a.imageExtent.depth,
+                               b.imageOffset.z, b.imageExtent.depth);
 }
 
 }  // namespace

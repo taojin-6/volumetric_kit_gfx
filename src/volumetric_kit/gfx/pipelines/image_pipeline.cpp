@@ -229,7 +229,10 @@ core::Result<bool> check_writes(const char* call, const ImageTextureDesc& desc,
     if (w == 0 || h == 0) {
       return core::Status::invalid_argument(where + ": a region of zero size");
     }
-    if (x < 0 || y < 0 || x + w > width || y + h > height) {
+    if (!gfx::detail::span_inside(write.offset.x, write.extent.width,
+                                  desc.extent.width) ||
+        !gfx::detail::span_inside(write.offset.y, write.extent.height,
+                                  desc.extent.height)) {
       return core::Status::invalid_argument(
           where + ": the region (" + std::to_string(x) + ", " +
           std::to_string(y) + ") + " + std::to_string(w) + " x " +
@@ -268,11 +271,10 @@ core::Result<bool> check_writes(const char* call, const ImageTextureDesc& desc,
     const ImageWrite& a = writes[i];
     for (uint32_t j = i + 1; j < count; ++j) {
       const ImageWrite& b = writes[j];
-      const bool apart = int64_t{a.offset.x} + a.extent.width <= b.offset.x ||
-                         int64_t{b.offset.x} + b.extent.width <= a.offset.x ||
-                         int64_t{a.offset.y} + a.extent.height <= b.offset.y ||
-                         int64_t{b.offset.y} + b.extent.height <= a.offset.y;
-      if (!apart) {
+      if (gfx::detail::spans_overlap(a.offset.x, a.extent.width, b.offset.x,
+                                     b.extent.width) &&
+          gfx::detail::spans_overlap(a.offset.y, a.extent.height, b.offset.y,
+                                     b.extent.height)) {
         return core::Status::invalid_argument(std::string(call) + ": writes " +
                                               std::to_string(i) + " and " +
                                               std::to_string(j) + " overlap");
