@@ -36,9 +36,9 @@ jobs:
       # makes the toolkit mount the Vulkan ICD + graphics libs for those.
       # The build and test fan-out is set in the container env, too: a runner's
       # .env reaches jobs run directly on it (the Mac) but not a job container,
-      # where ctest would otherwise run the suite one test at a time.
-      # TODO: 4 shares a box's cores among gfx's 6 runners only; match the
-      # .env core's setup-runners.sh writes, which counts recon's runners too.
+      # where ctest would otherwise run the suite one test at a time. 4 is a
+      # 24-core host over gfx's 6 runners, the split core's setup-runners.sh
+      # writes into a runner's .env.
       # Release runs on every OS; Debug only on macOS, where it is cheap. Every
       # Ubuntu Debug leg added another full suite's worth of GPU device creation
       # to boxes that can only do so many at a time, and sanitizers already
