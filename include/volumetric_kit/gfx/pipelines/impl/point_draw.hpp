@@ -24,7 +24,7 @@ namespace volumetric_kit::gfx::pipelines::detail {
 /// @param layout  The target's signature.
 /// @param call    Names the caller in the message.
 /// @return OK for exactly one color attachment, of a defined format, and a
-///         depth format, as depth-tested points need; else
+///         depth format, as depth-tested draws need; else
 ///         `core::Status::Code::InvalidArgument`.
 inline core::Status check_point_target(const RenderTargetLayout& layout,
                                        const char* call) {
@@ -38,7 +38,8 @@ inline core::Status check_point_target(const RenderTargetLayout& layout,
   if (layout.depth_format == VK_FORMAT_UNDEFINED) {
     return core::Status::invalid_argument(
         std::string(call) +
-        ": the layout must carry a depth format (points are depth-tested)");
+        ": the layout must carry a depth format (its draws are "
+        "depth-tested)");
   }
   return core::Status{};
 }
