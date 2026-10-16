@@ -17,7 +17,8 @@ add_library(volumetric_kit::gfx_pipelines ALIAS gfx_pipelines)
 
 target_sources(
   gfx_pipelines
-  PRIVATE gpu_mesh.cpp
+  PRIVATE depth_cloud_pipeline.cpp
+          gpu_mesh.cpp
           hybrid_mesh_pipeline.cpp
           ibl.cpp
           image_pipeline.cpp
@@ -140,6 +141,22 @@ vkc_embed_shaders(
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/primitive.vert"
   "${PROJECT_SOURCE_DIR}/shaders/primitive.frag")
+
+# --- Embedded depth-cloud shader --------------------------------------------
+# DepthCloudPipeline embeds depth_cloud.vert, which reads depth and colour
+# buffers in place, and shades with PrimitivePipeline's primitive.frag
+# (depth_cloud_pipeline.cpp #includes depth_cloud_vert.spv.hpp and
+# primitive_frag.spv.hpp).
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/depth_cloud.vert")
 
 vg_target_warnings(gfx_pipelines)
 

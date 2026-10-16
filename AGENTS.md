@@ -63,7 +63,7 @@ The dependency rule is strict: a tier may only depend on tiers to its left — w
 tier may build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets` + `camera`).
 `assets` is the format-neutral CPU data model (header-only, glm), and `io` holds the file
 loaders that produce it (glTF now; OBJ/PLY/assimp later). `camera` is the view and
-image-view math (glm only). `ui` is a Dear
+image-view math and the pinhole camera (glm only). `ui` is a Dear
 ImGui debug overlay (on `core`, and `camera` for `ImageOverlay`): it wraps ImGui's
 *renderer* backend (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic
 rendering. `glfw` (on `app` + `ui`) is the GLFW window glue, ImGui's *platform* backend
@@ -77,6 +77,8 @@ and `ui` serve any window system.
 - ⚠️ MoltenVK's external-semaphore export to `MTLSharedEvent` is buggy/incomplete. Do NOT build
   compute↔render sync on it. **Double-buffer the shared resource + release via a
   CPU completion token** (`RetireQueue` on the frame loop's timeline) instead.
+- A vertex stage's storage buffers are `readonly` (`depth_cloud.vert`): gfx does not
+  enable `vertexPipelineStoresAndAtomics` (VUID-RuntimeSpirv-NonWritable-06341).
 
 ## RAII resource types
 
