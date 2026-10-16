@@ -124,8 +124,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at `ce76978`, which includes the
-  timeline-value checks and the 0.1.0 package helpers.
+- build: gfx pins volumetric_kit_core at `1315d80` (core 0.10.0, the head of
+  core #36), which adds the two-family test fixture the cross-family tests
+  use.
 - `windowing`: a `Frame::waits` value must be reached before `end_frame`,
   as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
   host first; a submitted producer can still depend on an unresolved host

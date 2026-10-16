@@ -99,14 +99,16 @@ endif()
 # tests and -Werror stay off in a subproject.
 #
 # The pin includes the timeline-value checks, core_test_support, the optional
-# JSON configuration component, and vkc_require_core's package helpers.
+# JSON configuration component, vkc_require_core's package helpers, and the
+# two-family test fixture (SharedDeviceTest) the cross-family tests use.
 #
-# TODO: re-pin to the core's v0.1.0 tag once it is tagged.
+# TODO: re-pin to core #36's merge commit once it merges (1315d80 is the PR's
+# head), then to the core's v0.1.0 tag once it is tagged.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7857a6d4b9973b32461af09062d0bb894c86c751)
+  GIT_TAG 1315d800d4137cf50641a3b52047b9fda2307240)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
