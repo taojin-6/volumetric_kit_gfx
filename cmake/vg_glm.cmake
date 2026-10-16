@@ -10,12 +10,12 @@
 # unit that instantiates them -- the library's own and every consumer's.
 #
 # Call this from EVERY tier that puts glm on a consumer's include path, not just
-# the tier that calls glm::perspective itself. gfx_pipelines, for instance,
-# exposes a caller-built `glm::mat4 view_proj` on HybridMeshFrame / PbrFrame: a
-# consumer that links gfx_pipelines WITHOUT gfx_camera builds that matrix in its
-# own TUs, and without the define it produces a [-1, 1] projection for a [0, 1]
-# depth attachment. Vulkan clips at 0 <= z <= w, so the near half of the frustum
-# silently disappears -- no compile error, no VUID, nothing to grep for.
+# the tier that calls glm::perspective itself. gfx_assets, for instance, holds
+# only glm data, yet a consumer that links it without gfx_camera may build a
+# projection in its own TUs, and without the define it produces a [-1, 1]
+# projection for a [0, 1] depth attachment. Vulkan clips at 0 <= z <= w, so the
+# near half of the frustum silently disappears -- no compile error, no VUID,
+# nothing to grep for.
 #
 # The definition is attached to *our* targets rather than to glm::glm so it
 # survives install/export: a consumer resolving glm through find_dependency(glm)

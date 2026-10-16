@@ -140,9 +140,9 @@ conversion serves the picture, so its regions share one coding.
 
 **Why discard.** A texture records the layouts its commands leave, so a
 command buffer that never runs (a failed `end_frame`, the swapchain not
-stale) leaves them wrong. `ImageTexture::discard` forgets them: the next
-write clears from `UNDEFINED`, and nothing draws until the next convert: the
-picture is blank until the next one, never wrong.
+stale) leaves them wrong. `ImageTexture::discard` forgets them, so the next
+write clears from `UNDEFINED` and nothing draws until the next convert: the
+picture is blank, never wrong.
 
 **Limits.** A texture is at most `ImagePipeline::max_texture_extent`, the
 device's `maxImageDimension2D` bounded by its framebuffer and viewport
