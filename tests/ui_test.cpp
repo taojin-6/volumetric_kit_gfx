@@ -360,6 +360,77 @@ TEST_F(ImGuiOverlayDeviceTest, RegionGridKeepsEveryBorder) {
   vkDeviceWaitIdle(device().handle());
 }
 
+// Intersecting the overlay with a draw-list clip or the framebuffer must keep
+// the last row and column, including after panning the whole-image overload.
+// An oversized mark also exposes any pixels leaking beyond the intended clip.
+TEST_F(ImGuiOverlayDeviceTest, ImageMarksKeepPixelsAtClipEdges) {
+  constexpr int kSize = 256;
+  const ImVec2 scales[] = {
+      {1.0f, 1.0f}, {1.1f, 1.1f}, {1.75f, 1.75f}, {1.1f, 1.75f}, {1.75f, 1.1f}};
+  for (const ImVec2 scale : scales) {
+    for (const bool whole_image : {false, true}) {
+      for (const bool nested_clip : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "scale " << scale.x << ", " << scale.y
+                     << ", whole image " << whole_image << ", nested clip "
+                     << nested_clip);
+        vg::OffscreenTarget target = make_target({kSize, kSize});
+        ui::ImGuiOverlay overlay = make_overlay(target.layout());
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(kSize / scale.x, kSize / scale.y);
+        io.DisplayFramebufferScale = scale;
+        overlay.new_frame();
+        ImDrawList& list = *ImGui::GetBackgroundDrawList();
+        list.Flags &= ~ImDrawListFlags_AntiAliasedFill;
+
+        // These origins round upward when converted back to target pixels
+        // at 1.1 and 1.75 respectively. Clamping the far edge used to lose
+        // a pixel when the backend truncated the width or height.
+        const glm::vec2 origin{scale.x == 1.75f ? 227.0f : 147.0f,
+                               scale.y == 1.75f ? 227.0f : 147.0f};
+        vg::camera::ImageView2D view({kSize, kSize}, {0.0f, 0.0f},
+                                     {kSize, kSize});
+        if (whole_image) view.pan(origin);
+        const ui::ImageOverlay marks =
+            whole_image
+                ? ui::ImageOverlay(view, ui::PixelCenters::Half)
+                : ui::ImageOverlay(
+                      view, ui::PixelCenters::Half,
+                      ui::OverlayRegion{origin, glm::vec2(kSize) - origin});
+        // Change the caller's clip after constructing the overlay: it is
+        // the final intersection at each mark that matters.
+        // 240 projects back exactly at both fractional scales, so this
+        // isolates subtracting the nudged start from a clipped integer end.
+        const int end = nested_clip ? 240 : kSize;
+        if (nested_clip) {
+          list.PushClipRect(ImVec2(0.0f, 0.0f),
+                            ImVec2(end / scale.x, end / scale.y), true);
+        }
+        marks.point({0.0f, 0.0f}, IM_COL32_WHITE, 512.0f);
+        if (nested_clip) list.PopClipRect();
+        ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+        const auto* px = static_cast<const uint8_t*>(target.pixels());
+        ASSERT_NE(px, nullptr);
+        int missing = 0;
+        int outside = 0;
+        for (int y = 0; y < kSize; ++y) {
+          for (int x = 0; x < kSize; ++x) {
+            const bool inside =
+                x >= origin.x && x < end && y >= origin.y && y < end;
+            const uint8_t red = px[(y * kSize + x) * 4];
+            missing += inside && red != 255;
+            outside += !inside && red != 0;
+          }
+        }
+        EXPECT_EQ(missing, 0);
+        EXPECT_EQ(outside, 0);
+        vkDeviceWaitIdle(device().handle());
+      }
+    }
+  }
+}
+
 // render() may submit on the device's queue itself (the font atlas, on the
 // first frame), so it holds the device's submit mutex -- the one every other
 // submit on that queue holds -- whether or not the queue is shared.

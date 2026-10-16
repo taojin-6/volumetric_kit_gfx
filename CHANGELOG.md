@@ -57,6 +57,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   viewport (`clip_min`, `clip_max`); without one it is the whole image. The
   grid's outer borders run along those pixels. `edge_to_display` maps texel
   edges, and `caption` pins a title inside the region's visible corner.
+  Fractional framebuffer scales keep the last row and column when the
+  framebuffer or a draw-list clip cuts the region, including a panned whole
+  image.
 - `ui`: ImGui uses 32-bit indices, so a single large polyline can exceed 64K
   vertices without wrapping its indices or corrupting later marks. `gfx_ui`
   propagates the index type to consumers; rebuild any ImGui platform backend

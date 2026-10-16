@@ -158,6 +158,16 @@ truncates a clip rectangle to its scissor, so the clip is put on whole
 pixels, those that show the region, and the grid's outer borders run along
 them: at any pan, a tile keeps all four, and none spills into the next.
 
+At fractional framebuffer scales, an integer edge may project back just
+above itself. After intersecting the clip, the scissor must subtract its
+integer endpoints; truncating their floating-point difference instead loses
+the last row or column when the far edge is clamped. The ui build applies
+this two-expression correction to a generated copy of ImGui's Vulkan backend,
+leaving fetched sources untouched and refusing a changed upstream expression
+so dependency updates revisit it. TODO: remove the correction once the pinned
+upstream backend preserves the integer span itself. GPU readback covers
+framebuffer and nested draw-list edges for regions and panned whole images.
+
 ## 2026-10-11 — Core owns application run configuration
 
 The examples use core's optional `core_config` target for the JSON format,
