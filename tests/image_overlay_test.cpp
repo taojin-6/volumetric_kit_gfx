@@ -572,7 +572,8 @@ TEST_F(ImageOverlayTest, MarksAreClippedToTheRegionInTheViewport) {
 
 // The clip is on whole target pixels, those whose centers lie in the region,
 // so ImGui's Vulkan backend -- which multiplies it by the framebuffer scale
-// and truncates its corner and size -- scissors exactly those, at any scale.
+// and truncates its endpoints before subtracting -- scissors exactly those,
+// at any scale.
 TEST_F(ImageOverlayTest, ClipScissorsTheRegionsPixelsAtAnyScale) {
   begin_frame({1.0f, 1.0f});
   // 1 target pixel per texel.
@@ -596,7 +597,8 @@ TEST_F(ImageOverlayTest, ClipScissorsTheRegionsPixelsAtAnyScale) {
         const float start = overlay.clip_min()[axis] * scale;
         const float end = overlay.clip_max()[axis] * scale;
         const auto offset = static_cast<int32_t>(start);
-        const auto extent = static_cast<uint32_t>(end - start);
+        const auto extent =
+            static_cast<uint32_t>(end) - static_cast<uint32_t>(offset);
         if (offset != static_cast<int32_t>(lo) ||
             static_cast<int64_t>(offset) + extent != static_cast<int64_t>(hi)) {
           ++wrong;

@@ -51,31 +51,17 @@ OverlayRegion usable_region(const OverlayRegion& region) noexcept {
 /// on its top or left edge included, as Vulkan rasterizes.
 glm::vec2 pixel_edge(glm::vec2 x) noexcept { return glm::ceil(x - 0.5f); }
 
-/// Display coordinates for target pixel edges `min` to `max` on an axis --
-/// whole numbers, `max >= min` -- at `scale` target pixels per display pixel.
-/// ImGui's Vulkan backend multiplies a clip rectangle by the scale and
-/// truncates its corner and its size, so each edge is nudged up until those
-/// give back exactly `min` and `max - min`, at any scale.
-glm::vec2 display_edges(float min, float max, float scale) noexcept {
+/// Display coordinate for a whole target pixel edge, at `scale` target
+/// pixels per display pixel. The Vulkan backend converts the final clipped
+/// endpoints to integers before subtracting, so nudge each edge up until it
+/// projects back to at least that integer.
+float display_edge(float edge, float scale) noexcept {
   constexpr float kInf = std::numeric_limits<float>::infinity();
-  float lo = min / scale;
-  for (int nudge = 0; nudge < 8 && lo * scale < min; ++nudge) {
-    lo = std::nextafter(lo, kInf);
+  float display = edge / scale;
+  for (int nudge = 0; nudge < 8 && display * scale < edge; ++nudge) {
+    display = std::nextafter(display, kInf);
   }
-  if (!(max > min)) {
-    return {lo, lo};
-  }
-  float hi = max / scale;
-  for (int nudge = 0; nudge < 8; ++nudge) {
-    // Separate statements, as the backend's, so no product is fused.
-    const float start = lo * scale;
-    const float end = hi * scale;
-    if (end - start >= max - min) {
-      break;
-    }
-    hi = std::nextafter(hi, kInf);
-  }
-  return {lo, hi};
+  return display;
 }
 
 /// Clips a draw list to a rectangle (within its current clip) while in scope.
@@ -126,10 +112,8 @@ ImageOverlay::ImageOverlay(const camera::ImageView2D& view,
     max = min;
   }
   for (int axis = 0; axis < 2; ++axis) {
-    const glm::vec2 edges =
-        display_edges(min[axis], max[axis], framebuffer_scale_[axis]);
-    clip_min_[axis] = edges[0];
-    clip_max_[axis] = edges[1];
+    clip_min_[axis] = display_edge(min[axis], framebuffer_scale_[axis]);
+    clip_max_[axis] = display_edge(max[axis], framebuffer_scale_[axis]);
   }
 }
 

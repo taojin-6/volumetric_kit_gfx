@@ -10,6 +10,35 @@
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
+# Convert both scissor endpoints to integers before subtracting. Truncating
+# their floating-point difference drops the last pixel when the framebuffer or a
+# parent clip cuts off ImageOverlay's upper-edge nudge. Keep the fetched source
+# untouched; fail on upstream changes so this workaround is reviewed when ImGui
+# is updated.
+set(_vg_imgui_backend "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS "${_vg_imgui_backend}")
+file(READ "${_vg_imgui_backend}" _vg_imgui_backend_code)
+foreach(_vg_axis x y)
+  set(_vg_old "(uint32_t)(clip_max.${_vg_axis} - clip_min.${_vg_axis})")
+  set(_vg_new
+      "(uint32_t)(clip_max.${_vg_axis}) - (uint32_t)scissor.offset.${_vg_axis}")
+  string(FIND "${_vg_imgui_backend_code}" "${_vg_old}" _vg_match)
+  if(_vg_match EQUAL -1)
+    message(
+      FATAL_ERROR "ImGui scissor conversion changed; review the edge-pixel fix")
+  endif()
+  string(REPLACE "${_vg_old}" "${_vg_new}" _vg_imgui_backend_code
+                 "${_vg_imgui_backend_code}")
+endforeach()
+set(_vg_imgui_backend "${CMAKE_CURRENT_BINARY_DIR}/imgui_impl_vulkan.cpp")
+file(
+  GENERATE
+  OUTPUT "${_vg_imgui_backend}"
+  CONTENT "${_vg_imgui_backend_code}")
+
 # ImGui's own translation units carry their own warning posture and would trip
 # this project's -Werror, so they compile in a separate vendored static lib that
 # does NOT get vg_target_warnings -- gfx_ui below builds only first-party code
@@ -22,11 +51,9 @@ include(GNUInstallDirs)
 # TU themselves (see examples/ and tests/ CMakeLists).
 add_library(
   vg_imgui STATIC
-  "${VG_IMGUI_SOURCE_DIR}/imgui.cpp"
-  "${VG_IMGUI_SOURCE_DIR}/imgui_draw.cpp"
+  "${VG_IMGUI_SOURCE_DIR}/imgui.cpp" "${VG_IMGUI_SOURCE_DIR}/imgui_draw.cpp"
   "${VG_IMGUI_SOURCE_DIR}/imgui_tables.cpp"
-  "${VG_IMGUI_SOURCE_DIR}/imgui_widgets.cpp"
-  "${VG_IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
+  "${VG_IMGUI_SOURCE_DIR}/imgui_widgets.cpp" "${_vg_imgui_backend}")
 # imgui.h lives at the root, imgui_impl_vulkan.h under backends/. SYSTEM so the
 # strict -Werror first-party flags never apply to ImGui's headers where they are
 # pulled into gfx_ui's own TU (e.g. GCC -Wpedantic differs from AppleClang).
