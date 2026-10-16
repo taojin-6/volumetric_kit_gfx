@@ -2,16 +2,17 @@
 // Copyright (c) 2026 Tao Jin
 
 // ImagePipeline's region writes: several sources written into one picture
-// and converted once. Each tile equals its own texture; edge chroma takes at
-// most its documented share; the gutter is black; a later write keeps the
+// and converted once. Each tile equals its own texture; edge chroma takes
+// exactly its documented share; the gutter is black; a later write keeps the
 // other tiles; mips keep tiles apart across a gutter; draws between a write
 // and its convert show the previous picture; a producer may refill a source
 // right after the write; discard() recovers from a dropped command buffer;
 // sources written on another queue family are read in place; any number of
-// regions of mixed sizes, up to a 2 x 2 4K mosaic; every refusal records
-// nothing; and image_draw bounds what any view gives it. Runs under the
-// validation layer with synchronization validation; skips without a device,
-// and the cross-family case without two queue families.
+// regions of mixed sizes, up to a 2 x 2 4K mosaic; abutting regions,
+// odd NV12 edges among them, make the picture one update would; every
+// refusal records nothing; and image_draw bounds what any view gives it. Runs
+// under the validation layer with synchronization validation; skips without a
+// device, and the cross-family case without two queue families.
 
 #include <gtest/gtest.h>
 
@@ -105,6 +106,28 @@ Nv12 flat(uint32_t width, uint32_t height, uint8_t y, uint8_t cb, uint8_t cr) {
   return p;
 }
 
+// The `size` texels of `p` at `at`, an even offset: their luma, and the
+// chroma texels that cover them.
+Nv12 crop(const Nv12& p, VkOffset2D at, VkExtent2D size) {
+  const uint32_t x0 = static_cast<uint32_t>(at.x);
+  const uint32_t y0 = static_cast<uint32_t>(at.y);
+  Nv12 c;
+  c.width = size.width;
+  c.height = size.height;
+  for (uint32_t y = 0; y < size.height; ++y) {
+    const uint8_t* row = &p.luma[static_cast<size_t>(y0 + y) * p.width + x0];
+    c.luma.insert(c.luma.end(), row, row + size.width);
+  }
+  const uint32_t pitch = p.chroma_extent().width;
+  const VkExtent2D ce = c.chroma_extent();
+  for (uint32_t y = 0; y < ce.height; ++y) {
+    const uint8_t* row =
+        &p.chroma[(static_cast<size_t>(y0 / 2 + y) * pitch + x0 / 2) * 2];
+    c.chroma.insert(c.chroma.end(), row, row + ce.width * 2);
+  }
+  return c;
+}
+
 // `rows` of `width` texels of `texel` bytes, laid out from byte `offset`
 // with `row_length` texels a row, padding filled with 0xEE.
 std::vector<uint8_t> padded(const std::vector<uint8_t>& rows, uint32_t width,
@@ -162,8 +185,8 @@ std::vector<uint8_t> padded(const std::vector<uint8_t>& rows, uint32_t width,
 }
 
 // A grid of `count` cells, `columns` = ceil(sqrt(count)) wide, each `cell`
-// texels plus `gutter`, as calib lays out a rig: the picture's extent and
-// each cell's top-left.
+// texels plus `gutter`, unaligned: the picture's extent and each cell's
+// top-left.
 struct Grid {
   VkExtent2D extent{};
   std::vector<VkOffset2D> origins;
@@ -339,7 +362,8 @@ TEST_F(ImageWriteTest, EachTileEqualsItsOwnUpdate) {
 // exact; each outermost texel takes the documented share of the gutter's
 // neutral chroma -- 1/4 in the top and bottom rows, 1/4 in the side columns
 // when centered and 0 left / 1/2 right when left-sited, both at a corner --
-// and none where the tile meets the picture's edge.
+// and none where the tile meets the picture's edge; and the gutter texel
+// beside each edge takes the mirrored share of the tile's.
 TEST_F(ImageWriteTest, EdgeChromaTakesItsDocumentedShare) {
   const pipelines::ImagePipeline pipeline = make_pipeline();
   // Tile A on the picture's left edge, tile B with gutter on every side.
@@ -384,6 +408,17 @@ TEST_F(ImageWriteTest, EdgeChromaTakesItsDocumentedShare) {
     // Tile A's left column is on the picture's edge: it takes none.
     expect_share(0, 12, 0.0, "A's left column");
     expect_share(15, 12, right, "A's right column");
+    // The gutter's luma is 0, so R' is the tile's share alone: 101 s.
+    const auto expect_tint = [&](uint32_t x, uint32_t y, double share,
+                                 const char* what) {
+      EXPECT_NEAR(px.at(x, y)[0], share * (own - 128), 1.5)
+          << what << " at (" << x << ", " << y << ")";
+    };
+    // Mirrored: the texel left of B takes what B's right column does.
+    expect_tint(23, 12, right, "the gutter left of B");
+    expect_tint(40, 12, side, "the gutter right of B");
+    expect_tint(30, 7, 0.25, "the gutter above B");
+    expect_tint(30, 16, 0.25, "the gutter below B");
   }
 }
 
@@ -847,6 +882,80 @@ TEST_F(ImageWriteTest, UpdateEqualsWriteThenConvert) {
   }
 }
 
+// Regions that abut, with no gutter, and together cover the picture --
+// NV12 regions whose odd extents reach the right and bottom edges among them
+// -- make the picture one update of it would, level for level: on the first
+// write, which clears nothing, and on a second over the converted picture.
+TEST_F(ImageWriteTest, AbuttingRegionsMakeThePictureOneUpdateWould) {
+  const pipelines::ImagePipeline pipeline = make_pipeline();
+  struct Region {
+    VkOffset2D at;
+    VkExtent2D size;
+  };
+  struct Case {
+    const char* what;
+    VkExtent2D extent;
+    std::vector<Region> regions;
+  };
+  const std::vector<Case> cases = {
+      {"a 2 x 2 of 64 x 48 tiles",
+       {128, 96},
+       {{{0, 0}, {64, 48}},
+        {{64, 0}, {64, 48}},
+        {{0, 48}, {64, 48}},
+        {{64, 48}, {64, 48}}}},
+      {"7 x 5 as 4 x 5 and 3 x 5",
+       {7, 5},
+       {{{0, 0}, {4, 5}}, {{4, 0}, {3, 5}}}},
+      {"7 x 5 as 7 x 2 and 7 x 3",
+       {7, 5},
+       {{{0, 0}, {7, 2}}, {{0, 2}, {7, 3}}}},
+      {"9 x 7 as a 2 x 2",
+       {9, 7},
+       {{{0, 0}, {4, 4}},
+        {{4, 0}, {5, 4}},
+        {{0, 4}, {4, 3}},
+        {{4, 4}, {5, 3}}}},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.what);
+    pipelines::ImageTexture written =
+        make_texture(pipeline, c.extent, M::Nv12, VK_FORMAT_UNDEFINED);
+    pipelines::ImageTexture updated =
+        make_texture(pipeline, c.extent, M::Nv12, VK_FORMAT_UNDEFINED);
+    ASSERT_TRUE(written.valid());
+    ASSERT_TRUE(updated.valid());
+    for (uint32_t pass = 0; pass < 2; ++pass) {
+      SCOPED_TRACE(pass == 0 ? "the first write" : "a second write");
+      const Nv12 whole = pattern(c.extent.width, c.extent.height, 3 + pass);
+      const BufferPlanes all = buffers_of(whole);
+      std::vector<BufferPlanes> parts;
+      parts.reserve(c.regions.size());
+      std::vector<pipelines::ImageWrite> writes;
+      for (const Region& r : c.regions) {
+        parts.push_back(buffers_of(crop(whole, r.at, r.size)));
+        writes.push_back(write_of(parts.back(), r.at, r.size));
+      }
+      pipelines::ImageUpdate update;
+      update.planes[0].buffer = &all.luma;
+      update.planes[1].buffer = &all.chroma;
+      const Pixels level0 = read_level(written, 0, [&](VkCommandBuffer cmd) {
+        write_and_convert(cmd, pipeline, written, writes);
+        const vkc::Status s = pipeline.record_update(cmd, updated, update);
+        EXPECT_TRUE(s.ok()) << s.message();
+      });
+      ASSERT_FALSE(level0.bytes.empty());
+      for (uint32_t level = 0; level < written.mip_levels(); ++level) {
+        SCOPED_TRACE("level " + std::to_string(level));
+        const Pixels w = level == 0 ? level0 : read_level(written, level);
+        const Pixels u = read_level(updated, level);
+        ASSERT_EQ(w.bytes.size(), u.bytes.size());
+        EXPECT_EQ(w.bytes, u.bytes);
+      }
+    }
+  }
+}
+
 // Test 10: every refusal names its reason, records nothing and leaves the
 // texture as it was: its picture, and the layouts a later write and convert
 // start from.
@@ -893,6 +1002,10 @@ TEST_F(ImageWriteTest, RefusalsRecordNothingAndKeepThePicture) {
     };
     refused({write_of(tile, {100, 0}, kTile)}, "a region past the right edge",
             "outside");
+    refused({write_of(tile, {80, 0}, {65, 48})},
+            "one texel past the right edge", "outside");
+    refused({write_of(tile, {0, 64}, {64, 49})},
+            "one texel past the bottom edge", "outside");
     refused({write_of(tile, {-2, 0}, kTile)}, "a negative offset", "outside");
     refused({write_of(tile, {0, 0}, {0, 48})}, "a zero width", "zero size");
     refused({write_of(tile, {1, 0}, kTile)}, "an odd NV12 offset", "even");

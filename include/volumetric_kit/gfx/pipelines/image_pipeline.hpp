@@ -210,8 +210,11 @@ struct ImageUpdate : ImageConversion {
 ///   in the left and half in the right. A corner takes both shares (7/16
 ///   centered; 5/8 at a left-sited right corner). An edge on the picture's
 ///   edge takes none. Across a gutter no write covers, whose chroma is
-///   neutral, the region's edge only desaturates, and the gutter's texels
-///   beside it take the same share of its chroma: a tint at zero luma.
+///   neutral, the region's edge only desaturates, and the gutter texel beside
+///   each edge takes the mirrored share of the region's chroma, a tint at
+///   zero luma: a quarter beside its rows and, with centered siting, its
+///   columns; with left siting half beside its left column and none beside
+///   its right.
 /// - **Mips.** When the picture's extent is a multiple of 2^k, each texel of
 ///   a level up to k is the average of a 2^k-texel square of level 0. So a
 ///   gutter of at least 2^k texels keeps two regions from mixing at any level
@@ -509,6 +512,10 @@ class VG_PIPELINES_API ImagePipeline {
   /// CbCr 128, otherwise 0, which a ramp shows black only with
   /// @ref ImageConversion::zero_is_empty), unless the writes together cover
   /// the picture.
+  ///
+  /// The texture takes the write as recorded, so @p cmd must run before the
+  /// texture's next write or convert does: if it is reset or dropped instead,
+  /// call @ref ImageTexture::discard.
   ///
   /// The copies wait for every earlier write on the queue (see
   /// @ref ImagePlane) and for the previous convert's reads of the planes, and
