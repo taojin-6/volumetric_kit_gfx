@@ -125,33 +125,31 @@ producer's Float32 storage buffer, with no vertex buffer and no copy. An
 optional buffer of R'G'B'A8 words colours each point by recon's projection
 rule, and a point with no colour takes the draw's tint. A draw is one depth
 source; a frame has any number. gfx knows no rig or calibration: a draw is
-buffers, `camera::PinholeCamera`s and poses.
+buffers, `camera::PinholeCamera`s and poses. The `PinholeCamera` is gfx's
+own, not recon's camera model, because gfx cannot link recon, whose viewers
+link gfx; it is float, carries the image size, and the caller converts to it.
 
 **Why the host folds the cameras.** Each draw's intrinsics, poses and view
 fold on the host, in double, into two matrices: depth pixel to clip space,
-and to the colour camera's pixels. The vertex stage holds no camera code, so
-gfx has no pinhole GLSL to keep in step with recon's.
+and to the colour camera's pixels. The vertex stage keeps only recon's pixel
+rule -- in front of the camera, inside [0, w) x [0, h), and
+min(floor(q + 0.5), size - 1) -- copied from recon's `nearest_pixel`, as gfx
+cannot include recon's GLSL. A change to recon's rule must change this copy.
+gfx's tests pin it against a host model of the rule; only a test that draws
+recon's prepared frames through it, in calib, can check the two together.
 
 **Why vertex-stage storage buffers.** They read the producer's buffers where
-they are, as recon's `DeviceFrame` leaves them, `CONCURRENT` across the
-families when they differ (the two-family test). There is no image path and
-no u16 depth, which no producer needs (raw sensor depth is distorted, so it
-is prepared first), and no quad fallback for wide points: without
-`largePoints` a point is one pixel.
+they are, `CONCURRENT` across the families when the producer names both (for
+recon's prepared depth, `GpuFramePrepConfig::depth_queue_families`, which
+recon's #246 adds); the two-family test draws such buffers. There is no image
+path and no u16 depth, which no producer needs (raw sensor depth is
+distorted, so it is prepared first), and no quad fallback for wide points:
+without `largePoints` a point is one pixel.
 
 **Why host-mapped parameters.** `submit` records inside a rendering scope,
-where `vkCmdUpdateBuffer` cannot be. Each draw's parameters go into
-`DeviceMapped` memory and its buffers into a descriptor set, in blocks of
-`max_draws` that come back through a `RetireQueue` at the frame's number;
-`create` is Unsupported on a device without that memory. Push descriptors
-would need an extension and a core wrapper, and a record-before-rendering
-call would split each draw in two.
-
-**Shared.** `impl/frame_retirement.hpp` refuses frame number 0 and numbers
-below the newest given, and at teardown waits for the newest frame, or for the
-queues when it never reached one; `StreamedAtlas` uses it too.
-`impl/point_draw.hpp` holds the `largePoints` probe, the viewport check and
-the clamp, which `PrimitivePipeline` uses too.
+where `vkCmdUpdateBuffer` cannot be, so each draw's parameters go into
+`DeviceMapped` memory. Push descriptors would need an extension and a core
+wrapper, and a record-before-rendering call would split each draw in two.
 
 ## 2026-10-16 — Pictures written in regions
 

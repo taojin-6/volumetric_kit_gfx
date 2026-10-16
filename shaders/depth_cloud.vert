@@ -6,9 +6,11 @@
 // DepthCloudPipeline, vertex stage: one point per depth pixel -- every
 // stride-th along each axis -- read where the producer left it. There is no
 // vertex input: vertex i is pixel (i % columns, i / columns) * stride. The
-// host folds the pinhole intrinsics into the two matrices, so this stage knows
-// no camera: one moves (u z, v z, z, 1) into clip space, the other into a
-// colour camera's pixels. primitive.frag shades the point.
+// host folds the cameras' intrinsics and poses into the two matrices: one
+// moves (u z, v z, z, 1) into clip space, the other into a colour camera's
+// pixels. This stage keeps only recon's pixel rule, copied from its
+// nearest_pixel (tsdf_common.glsl), which gfx cannot include: a change to
+// recon's rule must change this copy. primitive.frag shades the point.
 
 // Read-only: gfx does not enable vertexPipelineStoresAndAtomics, without which
 // a vertex stage's storage buffers must not be writable
