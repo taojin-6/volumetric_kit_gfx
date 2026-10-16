@@ -582,8 +582,9 @@ void ImagePipeline::write_checked(VkCommandBuffer cmd, ImageTexture& texture,
   // 3. Undefined planes the writes leave partly uncovered are cleared to
   //    black first, so the texels between regions show black, not garbage.
   if (!texture.written_ && !covers) {
+    // The copies then wait for the clears: the same barriers, from the
+    // clears' layout and stage.
     const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    std::array<ImageBarrierDesc, 2> cleared{};
     for (uint32_t p = 0; p < plane_count; ++p) {
       VkClearColorValue black{};
       if (texture.desc_.mapping == ImageMapping::Nv12 && p == 1) {
@@ -593,11 +594,10 @@ void ImagePipeline::write_checked(VkCommandBuffer cmd, ImageTexture& texture,
       vkCmdClearColorImage(cmd, texture.planes_[p].handle(),
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                            &all);
-      cleared[p] = to_copy[p];
-      cleared[p].src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      cleared[p].old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      to_copy[p].src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      to_copy[p].old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     }
-    cmd_image_barriers(cmd, cleared.data(), plane_count);
+    cmd_image_barriers(cmd, to_copy.data(), plane_count);
   }
 
   // 4. Each region's planes: the luma at its offset, NV12's chroma at half
