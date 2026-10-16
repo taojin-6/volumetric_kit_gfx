@@ -153,7 +153,10 @@ refusal names it, so a caller pages its regions over several textures.
 `ui::ImageOverlay` takes an `OverlayRegion`: a camera's marks, in its own
 pixels, land on its region and are clipped to it, and its caption stays in
 the region's visible corner. The half-texel rule and the clip stay in the
-overlay, so a caller adds no offsets of its own.
+overlay, so a caller adds no offsets of its own. ImGui's Vulkan backend
+truncates a clip rectangle to its scissor, so the clip is put on whole
+pixels, those that show the region, and the grid's outer borders run along
+them: at any pan, a tile keeps all four, and none spills into the next.
 
 ## 2026-10-11 — Core owns application run configuration
 

@@ -128,7 +128,9 @@ class VG_UI_API ImageOverlay {
   glm::vec2 edge_to_display(glm::vec2 edge_point) const noexcept;
 
   /// @return The top-left corner of the rectangle marks are clipped to -- the
-  ///         region within the view's viewport -- in display coordinates.
+  ///         region within the view's viewport, on whole target pixels: those
+  ///         whose centers it covers, which show its texels -- in display
+  ///         coordinates. Finite, whatever the region.
   glm::vec2 clip_min() const noexcept { return clip_min_; }
   /// @return Its bottom-right corner, in display coordinates: no lower than
   ///         @ref clip_min, and equal to it on an axis the rectangle is empty
@@ -186,7 +188,9 @@ class VG_UI_API ImageOverlay {
   ///
   /// The cells span the region's edges whatever its @ref PixelCenters: cell
   /// `(c, r)` covers texel columns `[c * w / columns, (c + 1) * w / columns)`
-  /// of a `w`-texel-wide region, and rows likewise.
+  /// of a `w`-texel-wide region, and rows likewise. Inner borders are
+  /// centered on the cell edges; the outer ones run along the region's
+  /// outermost pixels, inside the clip, so each keeps its whole width.
   /// @param columns     The number of cells across; non-positive draws
   ///                    nothing.
   /// @param rows        The number of cells down; non-positive draws nothing.

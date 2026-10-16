@@ -53,10 +53,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `ImageView2D` on an ImGui draw list. `PixelCenters::Integer` takes OpenCV's
   texel centers, `Half` Vulkan's; the framebuffer scale is divided out. An
   `OverlayRegion` -- one camera's region of a mosaic -- gives the marks its
-  own coordinates and clips them to it within the viewport (`clip_min`,
-  `clip_max`); without one it is the whole image. `edge_to_display` maps
-  texel edges, and `caption` pins a title inside the region's visible
-  corner.
+  own coordinates and clips them to the pixels that show it within the
+  viewport (`clip_min`, `clip_max`); without one it is the whole image. The
+  grid's outer borders run along those pixels. `edge_to_display` maps texel
+  edges, and `caption` pins a title inside the region's visible corner.
 - `ui`: ImGui uses 32-bit indices, so a single large polyline can exceed 64K
   vertices without wrapping its indices or corrupting later marks. `gfx_ui`
   propagates the index type to consumers; rebuild any ImGui platform backend

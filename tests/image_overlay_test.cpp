@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <ostream>
 #include <string>
@@ -347,8 +349,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 // The cells span the image's edges whatever the pixel-center convention, each
 // filled with its own color in row-major order (a transparent one, or one past
-// the fills given, left empty), with borders centered on the edges across the
-// whole image.
+// the fills given, left empty), with borders across the whole image: the outer
+// ones just inside its edges.
 TEST_F(ImageOverlayTest, GridSpansTheImageEdges) {
   begin_frame({2.0f, 2.0f});
   ImDrawList& list = background();
@@ -371,8 +373,8 @@ TEST_F(ImageOverlayTest, GridSpansTheImageEdges) {
 
   const Added borders = added(list, first, kBlue);
   EXPECT_EQ(borders.count, 7 * 4);  // 4 + 3 lines, a quad each
-  expect_near(borders.min, display({0.0f, 0.0f}) - 0.5f, 1e-2f);
-  expect_near(borders.max, display({640.0f, 480.0f}) + 0.5f, 1e-2f);
+  expect_near(borders.min, display({0.0f, 0.0f}), 1e-2f);
+  expect_near(borders.max, display({640.0f, 480.0f}), 1e-2f);
 }
 
 // A non-finite coordinate on either axis, a NaN radius, too few points, null
@@ -435,11 +437,13 @@ TEST_F(ImageOverlayTest, SizesAreClamped) {
   ASSERT_GT(line.count, 0);
   EXPECT_NEAR(line.max.y - line.min.y, 1e4f, 10.0f);
 
+  // The outer borders, 1e4 wide inside the image's edges: from 320 - 1e4 to
+  // 1e4.
   first = list.VtxBuffer.Size;
   overlay.grid(1, 1, nullptr, 0, kBlue, 3e9f);
   const Added borders = added(list, first, kBlue);
   ASSERT_GT(borders.count, 0);
-  EXPECT_NEAR(borders.max.x - borders.min.x, 320.0f + 1e4f, 10.0f);
+  EXPECT_NEAR(borders.max.x - borders.min.x, 2e4f - 320.0f, 20.0f);
 }
 
 // A given draw list is drawn into; the background list is the default.
@@ -566,23 +570,67 @@ TEST_F(ImageOverlayTest, MarksAreClippedToTheRegionInTheViewport) {
   }
 }
 
+// The clip is on whole target pixels, those whose centers lie in the region,
+// so ImGui's Vulkan backend -- which multiplies it by the framebuffer scale
+// and truncates its corner and size -- scissors exactly those, at any scale.
+TEST_F(ImageOverlayTest, ClipScissorsTheRegionsPixelsAtAnyScale) {
+  begin_frame({1.0f, 1.0f});
+  // 1 target pixel per texel.
+  const camera::ImageView2D view({4096.0f, 4096.0f}, {0.0f, 0.0f},
+                                 {4096.0f, 4096.0f});
+  for (const float scale :
+       {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 1.1f, 4.0f / 3.0f}) {
+    set_framebuffer_scale({scale, scale});
+    int wrong = 0;
+    for (int k = 0; k < 2000; ++k) {
+      const float step = static_cast<float>(k);
+      const ui::OverlayRegion region{{0.37f * step, 1.13f * step},
+                                     {17.0f + 0.29f * (step / 7.0f), 23.5f}};
+      const ui::ImageOverlay overlay(view, ui::PixelCenters::Half, region);
+      for (int axis = 0; axis < 2; ++axis) {
+        const float lo = std::ceil(region.origin[axis] - 0.5f);
+        const float hi =
+            std::ceil(region.origin[axis] + region.size[axis] - 0.5f);
+        EXPECT_NEAR(overlay.clip_min()[axis], lo / scale, 1e-3f);
+        // As the backend projects it, a statement at a time.
+        const float start = overlay.clip_min()[axis] * scale;
+        const float end = overlay.clip_max()[axis] * scale;
+        const auto offset = static_cast<int32_t>(start);
+        const auto extent = static_cast<uint32_t>(end - start);
+        if (offset != static_cast<int32_t>(lo) ||
+            static_cast<int64_t>(offset) + extent != static_cast<int64_t>(hi)) {
+          ++wrong;
+        }
+      }
+    }
+    EXPECT_EQ(wrong, 0) << "scale " << scale;
+  }
+}
+
 // A region out of view, with no width, a negative height or a non-finite
-// component, or a view with an empty viewport, leaves a finite, empty clip
-// rectangle, and no mark adds anything.
+// component, one whose mapping overflows, or a view with an empty viewport,
+// leaves a finite, empty clip rectangle, and no mark adds anything. A
+// non-finite region still maps through as given.
 TEST_F(ImageOverlayTest, AnEmptyClipAddsNothing) {
   begin_frame({1.0f, 1.0f});
   ImDrawList& list = background();
   const camera::ImageView2D view = make_view();  // fills its viewport
   const camera::ImageView2D shut({640.0f, 480.0f}, {40.0f, 20.0f},
                                  {0.0f, 0.0f});
+  camera::ImageView2D zoomed = make_view();  // 64 target pixels per texel
+  zoomed.zoom_about({0.0f, 0.0f}, 1e9f);
   const ui::ImageOverlay overlays[] = {
       {view, ui::PixelCenters::Integer, {{700.0f, 0.0f}, {100.0f, 100.0f}}},
       {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {0.0f, 50.0f}}},
       {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {50.0f, -5.0f}}},
       {view, ui::PixelCenters::Integer, {{kNaN, 10.0f}, {50.0f, 50.0f}}},
       {view, ui::PixelCenters::Integer, {{10.0f, 10.0f}, {kInf, 50.0f}}},
+      {view, ui::PixelCenters::Integer, {{3e38f, 0.0f}, {100.0f, 100.0f}}},
+      {zoomed, ui::PixelCenters::Integer, {{1e37f, 1e37f}, {10.0f, 10.0f}}},
       {shut, ui::PixelCenters::Integer},
   };
+  const glm::vec2 nan_mapped = overlays[3].to_display({1.0f, 1.0f});
+  EXPECT_TRUE(std::isnan(nan_mapped.x));
   const glm::vec2 leg[] = {{10.0f, 10.0f}, {20.0f, 10.0f}};
   const ImU32 fills[] = {kGreen};
 
@@ -616,29 +664,75 @@ TEST_F(ImageOverlayTest, AnEmptyClipAddsNothing) {
 
 // The cells span the region's edges whatever the pixel-center convention:
 // cell (2, 0) of 3 x 2 over a 300 x 200 region covers its texels
-// [200, 300) x [0, 100).
+// [200, 300) x [0, 100). The borders span the region's pixels, its clip: the
+// inner ones centered on the cell edges, the outer ones, whole, along its
+// outermost pixels -- at a fractional origin too, and when thick.
 TEST_F(ImageOverlayTest, GridSpansTheRegion) {
-  begin_frame({2.0f, 2.0f});
+  const glm::vec2 fb(2.0f, 2.0f);
+  begin_frame(fb);
   ImDrawList& list = background();
   const camera::ImageView2D view = make_view();
-  const ui::OverlayRegion region{{64.0f, 48.0f}, {300.0f, 200.0f}};
-  const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
-  const auto display = [&](glm::vec2 p) {
-    return view.image_to_target(region.origin + p) / 2.0f;
+  struct Case {
+    glm::vec2 origin;
+    float thickness;
   };
+  const Case cases[] = {
+      {{64.0f, 48.0f}, 1.0f},
+      // Target (168.6, 117.4): the region's pixels start at (169, 117).
+      {{64.3f, 48.7f}, 1.0f},
+      {{64.3f, 48.7f}, 3.0f},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(::testing::Message()
+                 << "origin " << c.origin.x << ", " << c.origin.y
+                 << ", thickness " << c.thickness);
+    const ui::OverlayRegion region{c.origin, {300.0f, 200.0f}};
+    const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
+    const auto display = [&](glm::vec2 p) {
+      return view.image_to_target(region.origin + p) / fb;
+    };
+    const glm::vec2 lo =
+        glm::ceil(view.image_to_target(region.origin) - 0.5f) / fb;
+    const glm::vec2 hi =
+        glm::ceil(view.image_to_target(region.origin + region.size) - 0.5f) /
+        fb;
+    expect_near(overlay.clip_min(), lo, 1e-3f);
+    expect_near(overlay.clip_max(), hi, 1e-3f);
 
-  const ImU32 fills[] = {0, 0, kGreen};
-  const int first = list.VtxBuffer.Size;
-  overlay.grid(3, 2, fills, 3, kBlue, 1.0f);
+    const ImU32 fills[] = {0, 0, kGreen};
+    const int first = list.VtxBuffer.Size;
+    overlay.grid(3, 2, fills, 3, kBlue, c.thickness);
 
-  const Added cell = added(list, first, kGreen);
-  ASSERT_EQ(cell.count, 4);
-  expect_near(cell.min, display({200.0f, 0.0f}), 1e-3f);
-  expect_near(cell.max, display({300.0f, 100.0f}), 1e-3f);
-  const Added borders = added(list, first, kBlue);
-  EXPECT_EQ(borders.count, 7 * 4);  // 4 + 3 lines, a quad each
-  expect_near(borders.min, display({0.0f, 0.0f}) - 0.5f, 1e-2f);
-  expect_near(borders.max, display({300.0f, 200.0f}) + 0.5f, 1e-2f);
+    const Added cell = added(list, first, kGreen);
+    ASSERT_EQ(cell.count, 4);
+    expect_near(cell.min, display({200.0f, 0.0f}), 1e-3f);
+    expect_near(cell.max, display({300.0f, 100.0f}), 1e-3f);
+    const Added borders = added(list, first, kBlue);
+    EXPECT_EQ(borders.count, 7 * 4);  // 4 + 3 lines, a quad each
+    expect_near(borders.min, lo, 1e-3f);
+    expect_near(borders.max, hi, 1e-3f);
+    // Each vertex is on a border's side: an outer one's, from the clip's
+    // edge in, or an inner one's, half the width either side of its edge.
+    const float w = c.thickness;
+    const auto on = [&](float v, std::initializer_list<float> sides) {
+      return std::any_of(sides.begin(), sides.end(), [&](float side) {
+        return std::abs(v - side) < 1e-3f;
+      });
+    };
+    const float x1 = display({100.0f, 0.0f}).x;
+    const float x2 = display({200.0f, 0.0f}).x;
+    const float y1 = display({0.0f, 100.0f}).y;
+    for (int k = first; k < list.VtxBuffer.Size; ++k) {
+      const ImDrawVert& v = list.VtxBuffer[k];
+      if (v.col != kBlue) continue;
+      EXPECT_TRUE(on(v.pos.x, {lo.x, lo.x + w, hi.x - w, hi.x, x1 - w / 2,
+                               x1 + w / 2, x2 - w / 2, x2 + w / 2}))
+          << v.pos.x;
+      EXPECT_TRUE(
+          on(v.pos.y, {lo.y, lo.y + w, hi.y - w, hi.y, y1 - w / 2, y1 + w / 2}))
+          << v.pos.y;
+    }
+  }
 }
 
 // A caption's text starts 4 display pixels inside the clip rectangle's
@@ -742,10 +836,13 @@ class MosaicOverlayTest : public ImageOverlayTest,
                           public ::testing::WithParamInterface<Mosaic> {};
 
 // However many cameras, of whatever sizes: each camera's marks, given in its
-// own pixels, land on its region, are clipped to the region within the
-// viewport, and its caption keeps inside that at every pan and zoom.
+// own pixels, land on its region and are clipped to the region within the
+// viewport, and its caption keeps inside that, at every pan and zoom. The
+// moves give, for every count, regions that fit their caption, regions the
+// viewport's corner cuts, and regions out of view.
 TEST_P(MosaicOverlayTest, EachRegionKeepsItsMarks) {
   const glm::vec2 fb(2.0f, 2.0f);
+  const glm::vec2 viewport(1600.0f, 1200.0f);  // the whole 800 x 600 display
   begin_frame(fb);
   ImDrawList& list = background();
   glm::vec2 extent(0.0f);
@@ -755,24 +852,28 @@ TEST_P(MosaicOverlayTest, EachRegionKeepsItsMarks) {
     float zoom;
     glm::vec2 pan;
   };
+  // Zooms of x0.5 to x40, which the zoom limit (64 target pixels per texel)
+  // reduces for a small mosaic; the last move pans it all out of view.
   const Move moves[] = {
       {{800.0f, 600.0f}, 1.0f, {0.0f, 0.0f}},
       {{300.0f, 900.0f}, 2.5f, {-210.3f, 95.7f}},
       {{1500.0f, 100.0f}, 9.0f, {640.5f, -333.25f}},
       {{800.0f, 600.0f}, 0.5f, {37.0f, 12.0f}},
       {{1100.0f, 700.0f}, 40.0f, {0.0f, 0.0f}},
+      {{800.0f, 600.0f}, 1.0f, {2.0f * viewport.x, 0.0f}},
   };
   const char* text = "camera 4: good";
   const ImVec2 text_size = ImGui::CalcTextSize(text);
   int fitted = 0;
+  int pinned = 0;
+  int out_of_view = 0;
   for (const Move& move : moves) {
-    // The viewport is the whole 800 x 600 display.
-    camera::ImageView2D view(extent, {0.0f, 0.0f}, {1600.0f, 1200.0f});
+    camera::ImageView2D view(extent, {0.0f, 0.0f}, viewport);
     view.zoom_about(move.about, move.zoom);
     view.pan(move.pan);
     for (size_t i = 0; i < regions.size(); ++i) {
-      SCOPED_TRACE(::testing::Message()
-                   << "zoom " << move.zoom << ", region " << i);
+      SCOPED_TRACE(::testing::Message() << "zoom " << move.zoom << ", pan "
+                                        << move.pan.x << ", region " << i);
       const ui::OverlayRegion& region = regions[i];
       const ui::ImageOverlay overlay(view, ui::PixelCenters::Integer, region);
       const glm::vec2 last = region.size - 1.0f;
@@ -781,17 +882,56 @@ TEST_P(MosaicOverlayTest, EachRegionKeepsItsMarks) {
       expect_near(overlay.to_display(last),
                   view.image_to_target(region.origin + last + 0.5f) / fb,
                   1e-2f);
-      const glm::vec2 lo =
-          glm::max(view.image_to_target(region.origin) / fb, glm::vec2(0.0f));
+      // The target pixels whose centers lie in the region and the viewport.
+      const glm::vec2 corner =
+          glm::ceil(view.image_to_target(region.origin) - 0.5f);
+      const glm::vec2 lo = glm::max(corner, glm::vec2(0.0f)) / fb;
       const glm::vec2 hi = glm::max(
-          lo, glm::min(view.image_to_target(region.origin + region.size) / fb,
-                       glm::vec2(800.0f, 600.0f)));
+          lo,
+          glm::ceil(glm::min(view.image_to_target(region.origin + region.size),
+                             viewport) -
+                    0.5f) /
+              fb);
       expect_near(overlay.clip_min(), lo, 1e-2f);
       expect_near(overlay.clip_max(), hi, 1e-2f);
 
-      // A clip too narrow to reach the box -- or empty -- shows none of it.
+      // Every mark is clipped to it, or adds nothing when it is empty.
+      const bool empty = !(hi.x > lo.x && hi.y > lo.y);
+      if (empty) {
+        ++out_of_view;
+      } else if (lo != corner / fb) {
+        ++pinned;
+      }
+      const glm::vec2 diagonal[] = {{0.0f, 0.0f}, last};
+      int first = list.VtxBuffer.Size;
+      const auto first_index = static_cast<unsigned int>(list.IdxBuffer.Size);
+      overlay.point(region.size * 0.5f, kRed);
+      overlay.polyline(diagonal, 2, kRed);
+      overlay.grid(2, 2, nullptr, 0, kGreen);
+      // A command whose indices reach past first_index drew some (ImGui
+      // merges one into an earlier command of the same clip).
+      int drawn = 0;
+      for (const ImDrawCmd& cmd : list.CmdBuffer) {
+        if (cmd.ElemCount == 0 ||
+            cmd.IdxOffset + cmd.ElemCount <= first_index) {
+          continue;
+        }
+        ++drawn;
+        EXPECT_FLOAT_EQ(cmd.ClipRect.x, overlay.clip_min().x);
+        EXPECT_FLOAT_EQ(cmd.ClipRect.y, overlay.clip_min().y);
+        EXPECT_FLOAT_EQ(cmd.ClipRect.z, overlay.clip_max().x);
+        EXPECT_FLOAT_EQ(cmd.ClipRect.w, overlay.clip_max().y);
+      }
+      if (empty) {
+        EXPECT_EQ(list.VtxBuffer.Size, first);
+      } else {
+        EXPECT_GT(drawn, 0);
+      }
+
+      // A clip too narrow to reach the caption's box -- or empty -- shows
+      // none of it.
       const glm::vec2 box_min = glm::trunc(lo + 4.0f) - 2.0f;
-      const int first = list.VtxBuffer.Size;
+      first = list.VtxBuffer.Size;
       overlay.caption(text, kRed, kBlue);
       if (!(hi.x > box_min.x && hi.y > box_min.y)) {
         EXPECT_EQ(list.VtxBuffer.Size, first);
@@ -814,6 +954,8 @@ TEST_P(MosaicOverlayTest, EachRegionKeepsItsMarks) {
     }
   }
   EXPECT_GT(fitted, 0);
+  EXPECT_GT(pinned, 0);
+  EXPECT_GT(out_of_view, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
