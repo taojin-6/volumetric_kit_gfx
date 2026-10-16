@@ -9,7 +9,6 @@
 ///        completed, updated by copies recorded into the frame.
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -17,8 +16,8 @@
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/gfx/core/retire_queue.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/frame_retirement.hpp"
 
 namespace volumetric_kit::core {
 class Allocator;
@@ -245,7 +244,7 @@ class VG_PIPELINES_API StreamedAtlas {
     return static_cast<std::uint32_t>(slots_.size());
   }
   /// @return `true` if this owns an atlas.
-  bool valid() const noexcept { return timeline_ != nullptr; }
+  bool valid() const noexcept { return frames_.valid(); }
 
  private:
   static constexpr std::uint32_t kNoPicture = UINT32_MAX;
@@ -274,32 +273,26 @@ class VG_PIPELINES_API StreamedAtlas {
   // least recently used, excluding the picture discard would restore, once
   // its last frame has completed -- waiting for an earlier frame if needed.
   core::Result<std::uint32_t> take_slot(const char* call, std::uint64_t frame);
-  // OK when the timeline has reached `frame` or a submission that sets it
-  // has reached a queue, so that a wait for it returns.
-  core::Status check_submitted(std::uint64_t frame, const char* call) const;
   // Makes `slot` the current picture, written by frame `frame`; `undo` holds
   // the slot's state from before the update.
   void publish(std::uint32_t slot, std::uint64_t frame, Undo undo);
   // The state an update of `slot` changes, as it is now.
   Undo before_update(std::uint32_t slot) const;
   // Makes `frame` the newest frame given, starting its undo log when it is
-  // newer than the last. `frame` is at least newest_.
+  // newer than the last. `frame` is at least the newest given.
   void enter(std::uint64_t frame);
   // Waits for the newest frame given, then frees everything.
   void destroy() noexcept;
 
-  const core::Device* device_ = nullptr;               // borrowed
-  const core::TimelineSemaphore* timeline_ = nullptr;  // borrowed
-  core::Allocator* allocator_ = nullptr;               // borrowed
+  core::Allocator* allocator_ = nullptr;  // borrowed
   StreamedAtlasDesc desc_ = kNoDesc;
   core::DescriptorPool pool_;
   std::vector<Slot> slots_;
-  // Host uploads' staging buffers, each freed once its frame completes.
-  std::optional<RetireQueue> retire_;
+  // The frame numbers given, and host uploads' staging buffers, each freed
+  // once its frame completes.
+  detail::FrameRetirement frames_;
   std::uint32_t current_ = kNoPicture;
-  // The newest frame number given to the atlas (0 for none).
-  std::uint64_t newest_ = 0;
-  // What frame newest_ changed, oldest first.
+  // What the newest frame given changed, oldest first.
   std::vector<Undo> undo_;
 };
 
