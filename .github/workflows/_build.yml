@@ -135,6 +135,8 @@ jobs:
       # naming any formula missing; a hosted runner installs what its image
       # lacks (volumetric_kit_core's tools/runners/README.md, "Upgrading
       # Homebrew").
+      # TODO: take this check-or-install from a core action once the core has
+      # one; recon and calib copy it too.
       - name: Install dependencies (macOS)
         id: formulae
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
@@ -215,35 +217,16 @@ jobs:
           echo "workspace ${GITHUB_WORKSPACE} -> ${h}"
 
       # The installed versions of the leg's formulae and of all they depend
-      # on, hashed, for the cache key and the build tree's stamp below.
+      # on, hashed, for the deps cache key below.
       # TODO: re-pin to the full SHA of gfx's core pin (CMakeLists.txt) once
       # core #39 merges and that pin includes it; 3badac2 is the PR's head.
+      # A pre-commit hook then holds the two pins equal.
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
         uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@3badac2e9bca719cf1d86fb9363d2f829d69451e
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
-
-      # A build tree is compiled against Homebrew's headers, and Homebrew
-      # keeps each file's source mtime, so after brew upgrade make can find
-      # the new headers older than the objects and keep them; a path into the
-      # Cellar, should the tree hold one, goes with the old version. So a
-      # build/ that outlived checkout's clean is dropped unless its stamp
-      # holds this run's Homebrew key, before the cache restores into it; the
-      # cache key carries the same key.
-      - name: Discard a build tree built on other Homebrew versions
-        if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        env:
-          BREW_KEY: ${{ steps.brew.outputs.key }}
-        run: |
-          stamp=build/homebrew-key
-          if [ -d build ] && [ "$(cat "${stamp}" 2>/dev/null)" != "${BREW_KEY}" ]; then
-            echo "::warning::discarding a build tree built on other Homebrew versions (stamp: $(cat "${stamp}" 2>/dev/null || echo missing), now: ${BREW_KEY})"
-            rm -rf build
-          fi
-          mkdir -p build
-          echo "${BREW_KEY}" > "${stamp}"
 
       # Cache the FetchContent dependency tree (VMA / spirv-cross / googletest
       # sources + builds) so they are not re-cloned and recompiled every run.
@@ -263,20 +246,21 @@ jobs:
       # special case: containerised legs all see the same /__w/… path, so they
       # hash alike and share one key exactly as before.
       #
-      # On macOS the key carries the Homebrew key too, so the first run after
-      # a brew upgrade misses once and rebuilds on the new versions; it is
-      # "none" on Linux.
+      # The key also hashes the files holding the pins, third_party/CMakeLists.txt
+      # and CMakeLists.txt (the core's), and carries the Homebrew key ("none"
+      # on Linux), so the first macOS run after a brew upgrade misses once and
+      # rebuilds on the new versions.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-brew${{ steps.brew.outputs.key || 'none' }}-${{ hashFiles('third_party/CMakeLists.txt') }}
-          # No restore-keys: a prefix fallback drops the third_party/CMakeLists.txt
-          # hash, so flipping a dependency's version or build options would restore
-          # and relink the archives built from the *previous* pin — a stale-object
-          # failure that looks like a source bug. A pin change should be a clean
-          # cache miss (a full dependency rebuild) rather than a silent reuse.
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          # No restore-keys: a prefix fallback drops the pins' hash, so flipping
+          # a dependency's version or build options would restore and relink
+          # the archives built from the *previous* pin — a stale-object failure
+          # that looks like a source bug. A pin change should be a clean cache
+          # miss (a full dependency rebuild) rather than a silent reuse.
 
       # A self-hosted runner keeps its _work tree between jobs, so a build/ left
       # by a previous checkout survives a runner relocation with the old absolute
