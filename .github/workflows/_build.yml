@@ -130,7 +130,15 @@ jobs:
             echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           fi
 
+      # The leg's formulae, named once: the Homebrew key below hashes their
+      # versions. On the self-hosted Mac a job installs nothing and fails
+      # naming any formula missing; a hosted runner installs what its image
+      # lacks (volumetric_kit_core's tools/runners/README.md, "Upgrading
+      # Homebrew").
+      # TODO: take this check-or-install from a core action once the core has
+      # one; recon and calib copy it too.
       - name: Install dependencies (macOS)
+        id: formulae
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
         env:
           # The formulae we need are bottled, so skip the slow, network-heavy
@@ -139,25 +147,38 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
-          # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
-          ok=0
-          for attempt in 1 2 3; do
-            # spirv-tools provides spirv-val: vkc_compile_shaders runs it only
-            # when present, so without it this leg compiles SPIR-V it never
-            # validates and the check exists on Linux alone.
-            if brew install cmake molten-vk glfw glm \
-                vulkan-headers vulkan-loader vulkan-tools shaderc spirv-cross \
-                spirv-tools vulkan-validationlayers; then
-              ok=1
-              break
-            fi
-            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
-            sleep 15
+          # spirv-tools provides spirv-val: vkc_compile_shaders runs it only
+          # when present, so without it this leg compiles SPIR-V it never
+          # validates and the check exists on Linux alone.
+          pkgs="cmake molten-vk glfw glm vulkan-headers vulkan-loader"
+          pkgs="$pkgs vulkan-tools shaderc spirv-cross spirv-tools"
+          pkgs="$pkgs vulkan-validationlayers"
+          echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
+          missing=""
+          for pkg in $pkgs; do
+            brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
-          [ "${ok}" = 1 ] || {
-            echo "::error::brew install failed after 3 attempts"
+          if [ -n "$missing" ] && [ "${{ runner.environment }}" = self-hosted ]; then
+            echo "::error::install by hand on this self-hosted runner's host, while CI is idle:${missing}"
             exit 1
-          }
+          fi
+          if [ -n "$missing" ]; then
+            # Retry to ride out transient Homebrew fetch/DNS blips.
+            ok=0
+            for attempt in 1 2 3; do
+              # shellcheck disable=SC2086  # intentional: split $missing
+              if brew install $missing; then
+                ok=1
+                break
+              fi
+              echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
+              sleep 15
+            done
+            [ "${ok}" = 1 ] || {
+              echo "::error::brew install failed after 3 attempts"
+              exit 1
+            }
+          fi
           # The layer's manifest names its library without a path; the Test
           # step alone searches Homebrew's lib for it, as job-wide its
           # libraries would shadow those of every later tool.
@@ -195,6 +216,18 @@ jobs:
           echo "hash=${h}" >> "${GITHUB_OUTPUT}"
           echo "workspace ${GITHUB_WORKSPACE} -> ${h}"
 
+      # The installed versions of the leg's formulae and of all they depend
+      # on, hashed, for the deps cache key below.
+      # TODO: re-pin to the full SHA of gfx's core pin (CMakeLists.txt) once
+      # core #39 merges and that pin includes it; 3badac2 is the PR's head.
+      # A pre-commit hook then holds the two pins equal.
+      - name: Homebrew key
+        id: brew
+        if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@3badac2e9bca719cf1d86fb9363d2f829d69451e
+        with:
+          formulae: ${{ steps.formulae.outputs.formulae }}
+
       # Cache the FetchContent dependency tree (VMA / spirv-cross / googletest
       # sources + builds) so they are not re-cloned and recompiled every run.
       # FetchContent bakes the absolute build path into its sub-build CMakeCache,
@@ -212,17 +245,22 @@ jobs:
       # relocation a natural cache miss instead. It also subsumes the `ctr`
       # special case: containerised legs all see the same /__w/… path, so they
       # hash alike and share one key exactly as before.
+      #
+      # The key also hashes the files holding the pins, third_party/CMakeLists.txt
+      # and CMakeLists.txt (the core's), and carries the Homebrew key ("none"
+      # on Linux), so the first macOS run after a brew upgrade misses once and
+      # rebuilds on the new versions.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt') }}
-          # No restore-keys: a prefix fallback drops the third_party/CMakeLists.txt
-          # hash, so flipping a dependency's version or build options would restore
-          # and relink the archives built from the *previous* pin — a stale-object
-          # failure that looks like a source bug. A pin change should be a clean
-          # cache miss (a full dependency rebuild) rather than a silent reuse.
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          # No restore-keys: a prefix fallback drops the pins' hash, so flipping
+          # a dependency's version or build options would restore and relink
+          # the archives built from the *previous* pin — a stale-object failure
+          # that looks like a source bug. A pin change should be a clean cache
+          # miss (a full dependency rebuild) rather than a silent reuse.
 
       # A self-hosted runner keeps its _work tree between jobs, so a build/ left
       # by a previous checkout survives a runner relocation with the old absolute

@@ -41,6 +41,23 @@ repos:
         language: pygrep
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
         exclude: ^examples/
+      # _build.yml takes the core's homebrew-key action at gfx's core pin
+      # (CMakeLists.txt), so gfx keeps one core pin (the core's
+      # tools/runners/README.md, "Upgrading Homebrew"). A "TODO: re-pin" in
+      # _build.yml lets them differ until that pin includes the action.
+      - id: homebrew-key-at-core-pin
+        name: the Homebrew key action runs at gfx's core pin
+        language: system
+        pass_filenames: false
+        files: ^(CMakeLists\.txt|\.github/workflows/_build\.yml)$
+        entry: >-
+          sh -c 'wf=.github/workflows/_build.yml;
+          pin=$(sed -n "/volumetric_kit_core\.git/{n;s/^ *GIT_TAG \([^ )]*\).*/\1/p;}" CMakeLists.txt);
+          act=$(sed -n "s/.*\/actions\/homebrew-key@\([^ ]*\).*/\1/p" "$wf");
+          [ -n "$pin" ] && [ "$act" = "$pin" ] && exit 0;
+          grep -q "TODO: re-pin" "$wf" && exit 0;
+          echo "$wf: homebrew-key@$act, but the core pin in CMakeLists.txt is $pin";
+          exit 1'
 
 # pre-commit.ci (https://pre-commit.ci) runs these same hooks on every PR and
 # pushes the auto-fixes back to the branch, so formatting lands even when a
