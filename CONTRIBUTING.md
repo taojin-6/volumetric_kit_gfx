@@ -70,7 +70,10 @@ has the policy and why.
 
 The build legs' `vk-linux-gpu` and `mac` runners are set up and removed with volumetric_kit_core's
 [tools/runners](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md),
-with `gfx` as the repository.
+with `gfx` as the repository. A job on the Mac installs no Homebrew formula,
+so a formula the macOS leg newly needs is installed by hand, like an upgrade,
+while CI is idle
+([Upgrading Homebrew](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md#upgrading-homebrew)).
 
 ## Commits
 
