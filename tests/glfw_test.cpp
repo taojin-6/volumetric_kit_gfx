@@ -330,9 +330,15 @@ TEST(GlfwNativeWindowTest, FramebufferSizeIsZeroWhileIconified) {
   glfwRestoreWindow(window.get());
   ASSERT_TRUE(settles_iconified(window.get(), false))
       << "iconified, but not restored within 5 s";
+  // GLFW's size now, not `shown`: a window manager may have resized it since.
+  int width = 0;
+  int height = 0;
+  glfwGetFramebufferSize(window.get(), &width, &height);
+  ASSERT_GT(width, 0);
+  ASSERT_GT(height, 0);
   const VkExtent2D restored = glfw::framebuffer_size(window.get());
-  EXPECT_EQ(restored.width, shown.width);
-  EXPECT_EQ(restored.height, shown.height);
+  EXPECT_EQ(restored.width, static_cast<uint32_t>(width));
+  EXPECT_EQ(restored.height, static_cast<uint32_t>(height));
 }
 
 TEST_F(GlfwWindowTest, FramebufferExtentIsTheWindowsAndNeverZero) {
