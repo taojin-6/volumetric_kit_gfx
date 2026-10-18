@@ -171,8 +171,18 @@ TEST(CategoricalColorTest, IsOpaque) {
 }
 
 TEST(CategoricalColorTest, LaterColorsKeepTheirLightnessAndChromaOnTheRing) {
-  // An item clipped out of sRGB would leave its lightness or chroma; the
-  // tolerances are 8-bit rounding's, with margin.
+  // The ring's geometry; the tolerances are 8-bit rounding's, with margin.
+  // sRGB holding the chroma at every hue is checked on the bytes instead: a
+  // channel the encode clamps lands on 0 or 255, while the ring spans 21 to
+  // 253.
+  const auto expect_unclamped = [](std::size_t index) {
+    const uint32_t word = categorical_rgba8(index);
+    for (int i = 0; i < 3; ++i) {
+      const uint32_t byte = (word >> (8 * i)) & 0xFFu;
+      EXPECT_GE(byte, 1u) << "item " << index << ", channel " << i;
+      EXPECT_LE(byte, 254u) << "item " << index << ", channel " << i;
+    }
+  };
   const double golden = 180.0 * (3.0 - std::sqrt(5.0));  // 360 / phi^2
   for (std::size_t n = 0; n < 2000; ++n) {
     const Oklab lab = oklab(kCategoricalPaletteSize + n);
@@ -183,11 +193,13 @@ TEST(CategoricalColorTest, LaterColorsKeepTheirLightnessAndChromaOnTheRing) {
     const double off =
         std::remainder(hue - 12.5 - golden * static_cast<double>(n), 360.0);
     EXPECT_LT(std::abs(off), 2.0) << "item " << kCategoricalPaletteSize + n;
+    expect_unclamped(kCategoricalPaletteSize + n);
   }
   for (const std::size_t index : {std::size_t{1000007}, kLast}) {
     const Oklab lab = oklab(index);
     EXPECT_NEAR(lab.L, 0.75, 0.005) << "item " << index;
     EXPECT_NEAR(std::hypot(lab.a, lab.b), 0.125, 0.005) << "item " << index;
+    expect_unclamped(index);
   }
 }
 
