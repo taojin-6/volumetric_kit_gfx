@@ -117,6 +117,37 @@ what has landed since then. Record amendments when a contract changes.
   reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
   the host folds into matrices. See the dated entry below.
 
+## 2026-10-18 — Categorical colours
+
+**The contract.** `pipelines::categorical_rgba8(i)` colours item i of a set
+of any size: Okabe and Ito's palette, then a hue ring. A view that shows
+several sources -- calib's rig cameras, as frusta and as `DepthCloudDraw`
+tints -- takes its colours here rather than keeping a palette of its own.
+
+**Why Okabe and Ito's palette.** It is the established palette for colour
+vision deficiency (Okabe and Ito, https://jfly.uni-koeln.de/color/, 2008;
+Wong, Nature Methods 8:441, 2011). Under Machado, Oliveira and Fernandes'
+severity-1 simulation (IEEE TVCG 15(6), 2009), its seven colours stay at
+least 0.076 apart in OKLab for protan, deutan and tritan vision, where Paul
+Tol's bright and light schemes fall to 0.033 and 0.037 (tritan). Its black is
+left out: it vanishes on the views' dark backgrounds, and as a `TintedLuma`
+tint it turns points black. The darkest colour kept, blue `#0072B2`, is
+OKLab lightness 0.53.
+
+**Why the hue ring.** Later items share OKLCH lightness 0.75, the palette's
+orange, and chroma 0.125: at that lightness sRGB holds chroma up to 0.1275 at
+every hue, so no item needs gamut mapping. Golden-angle steps keep any 8
+consecutive items at least 32.5 degrees apart, 0.07 in OKLab, where CSS
+Color 4 takes 0.02 as just noticeable; starting item 7 at hue 0 keeps the
+first 14 colours 0.068 apart. The hue is n / phi^2 modulo 1 in 64-bit fixed
+point, exact at any index. A ring holds only so many distinct colours, so in
+a large set items far apart can come close.
+
+**Why pipelines.** The colour is the pipelines' word, which `ColorVertex` and
+`DepthCloudDraw::tint` take and `IM_COL32` shares; `ui` is ImGui's, and
+build-tree only. `pack_rgba8` moved to `pipelines/color.hpp` with it, so the
+palette needs no pipeline header.
+
 ## 2026-10-16 — Points from depth buffers
 
 **The contract.** `pipelines::DepthCloudPipeline` draws a depth image as

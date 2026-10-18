@@ -131,6 +131,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   submit takes any number of draws, and a frame any number of submits;
   `submit` checks every draw before recording any. `camera::PinholeCamera`
   (`camera/pinhole_camera.hpp`) is a pinhole's intrinsics and image size.
+- `pipelines`: `categorical_rgba8` (`pipelines/color.hpp`) gives item i of a
+  set of any size -- a rig's cameras, say -- an opaque `pack_rgba8` colour:
+  Okabe and Ito's palette without its black for the first seven, then
+  golden-angle hues at one OKLCH lightness and chroma. `pack_rgba8` moves to
+  the same header, which `primitive_pipeline.hpp` includes.
 - `glfw`: `gfx_glfw`, the GLFW window glue as a library tier, built with
   `VG_WITH_GLFW` where GLFW 3.3 or newer is installed: `instance_extensions`,
   `glfw_surface_factory`, `framebuffer_size` (0 x 0 while minimized, for

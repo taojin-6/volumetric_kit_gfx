@@ -18,6 +18,7 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/pipelines/color.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/point_draw.hpp"
 
@@ -44,21 +45,6 @@ struct ColorVertex {
   uint32_t rgba = 0;
 };
 static_assert(sizeof(ColorVertex) == 16, "ColorVertex is 16 bytes");
-
-/// @brief Pack a color's bytes into @ref ColorVertex::rgba.
-///
-/// R lands in the lowest byte, which is the first in memory on the
-/// little-endian hosts gfx runs on.
-/// @param r  Red, sRGB-encoded.
-/// @param g  Green, sRGB-encoded.
-/// @param b  Blue, sRGB-encoded.
-/// @param a  Alpha; ignored by the pipeline.
-/// @return The packed color.
-constexpr uint32_t pack_rgba8(uint8_t r, uint8_t g, uint8_t b,
-                              uint8_t a = 255) noexcept {
-  return uint32_t{r} | (uint32_t{g} << 8) | (uint32_t{b} << 16) |
-         (uint32_t{a} << 24);
-}
 
 /// @brief What a @ref PrimitiveDraw's vertices make.
 enum class PrimitiveTopology : uint32_t {
