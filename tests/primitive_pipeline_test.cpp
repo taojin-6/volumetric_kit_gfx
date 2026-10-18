@@ -26,6 +26,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -588,13 +589,9 @@ TEST_F(PrimitiveRenderTest, ColorsKeepTheirEncodingOnEveryTarget) {
   ASSERT_EQ(bytes.size(), size_t{kSize} * kSize * 16);
   float texel[4];
   std::memcpy(texel, &bytes[(size_t{20} * kSize + 20) * 16], sizeof(texel));
-  const auto linear = [](uint8_t encoded) {
-    const double c = encoded / 255.0;
-    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-  };
-  EXPECT_NEAR(texel[0], linear(kR), 2e-3);
-  EXPECT_NEAR(texel[1], linear(kG), 2e-3);
-  EXPECT_NEAR(texel[2], linear(kB), 2e-3);
+  EXPECT_NEAR(texel[0], vg_test::srgb_to_linear(kR / 255.0), 2e-3);
+  EXPECT_NEAR(texel[1], vg_test::srgb_to_linear(kG / 255.0), 2e-3);
+  EXPECT_NEAR(texel[2], vg_test::srgb_to_linear(kB / 255.0), 2e-3);
   EXPECT_EQ(texel[3], 1.0f);
 }
 

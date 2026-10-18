@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "spirv_test_util.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -29,17 +30,8 @@
 
 namespace {
 
-// The reference curves, in double precision.
-
-// IEC 61966-2-1's decode.
-double srgb_decode(double e) {
-  return e <= 0.04045 ? e / 12.92 : std::pow((e + 0.055) / 1.055, 2.4);
-}
-
-// IEC 61966-2-1's encode.
-double srgb_encode(double l) {
-  return l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1.0 / 2.4) - 0.055;
-}
+// The reference curves, in double precision: the sRGB ones are
+// color_test_support.hpp's.
 
 // Narkowicz's ACES fit.
 double tonemap_aces(double x) {
@@ -211,12 +203,12 @@ TEST_F(ShaderCommonTest, SrgbCurvesRoundTripsAndFullscreenTriangle) {
   const std::vector<Sample> samples = run(values, &corners);
   ASSERT_EQ(samples.size(), values.size() * 3);
   for (const Sample& s : samples) {
-    EXPECT_TRUE(near(s.decoded, srgb_decode(s.input), kTolerance))
+    EXPECT_TRUE(near(s.decoded, vg_test::srgb_to_linear(s.input), kTolerance))
         << "srgb_to_linear(" << s.input << ") = " << s.decoded << ", want "
-        << srgb_decode(s.input);
-    EXPECT_TRUE(near(s.encoded, srgb_encode(s.input), kTolerance))
+        << vg_test::srgb_to_linear(s.input);
+    EXPECT_TRUE(near(s.encoded, vg_test::linear_to_srgb(s.input), kTolerance))
         << "linear_to_srgb(" << s.input << ") = " << s.encoded << ", want "
-        << srgb_encode(s.input);
+        << vg_test::linear_to_srgb(s.input);
   }
   // The standard's own numbers independently anchor the reference curves:
   // the ends, each branch's threshold, and mid-grey both ways.

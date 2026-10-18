@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // categorical_rgba8: Okabe and Ito's palette, then the OKLCH hue ring, and
-// how far apart they are in OKLab, where 0.02 is about one just-noticeable
-// difference (the JND of CSS Color 4's gamut mapping). Pure CPU.
+// how far apart they are in OKLab. Pure CPU.
 
 #include <gtest/gtest.h>
 
@@ -16,6 +15,7 @@
 #include <limits>
 #include <utility>
 
+#include "color_test_support.hpp"
 #include "volumetric_kit/gfx/pipelines/color.hpp"
 
 namespace {
@@ -27,42 +27,22 @@ using volumetric_kit::gfx::pipelines::pack_rgba8;
 constexpr std::size_t kLast = std::numeric_limits<std::size_t>::max();
 constexpr double kPi = 3.14159265358979323846;
 
+using vg_test::distance;
+using vg_test::Oklab;
+using vg_test::oklab_of;
 using Rgb = std::array<double, 3>;  // linear sRGB
-
-struct Lab {
-  double L = 0.0;
-  double a = 0.0;
-  double b = 0.0;
-};
 
 Rgb linear_of(uint32_t rgba) {
   Rgb rgb{};
   for (int i = 0; i < 3; ++i) {
-    const double c = static_cast<double>((rgba >> (8 * i)) & 0xFFu) / 255.0;
-    rgb[i] = c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+    rgb[i] = vg_test::srgb_to_linear(
+        static_cast<double>((rgba >> (8 * i)) & 0xFFu) / 255.0);
   }
   return rgb;
 }
 
-// Linear sRGB to OKLab (Ottosson, https://bottosson.github.io/posts/oklab/).
-Lab oklab_of(const Rgb& c) {
-  const double l = std::cbrt(0.4122214708 * c[0] + 0.5363325363 * c[1] +
-                             0.0514459929 * c[2]);
-  const double m = std::cbrt(0.2119034982 * c[0] + 0.6806995451 * c[1] +
-                             0.1073969566 * c[2]);
-  const double s = std::cbrt(0.0883024619 * c[0] + 0.2817188376 * c[1] +
-                             0.6299787005 * c[2]);
-  return {0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-          1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-          0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s};
-}
-
-Lab oklab(std::size_t index) {
+Oklab oklab(std::size_t index) {
   return oklab_of(linear_of(categorical_rgba8(index)));
-}
-
-double distance(const Lab& p, const Lab& q) {
-  return std::hypot(p.L - q.L, p.a - q.a, p.b - q.b);
 }
 
 // The smallest distance between two of items [first, first + count) fewer
@@ -146,7 +126,7 @@ TEST(CategoricalColorTest, LaterColorsKeepTheirLightnessAndChromaOnTheRing) {
   // tolerances are 8-bit rounding's, with margin.
   const double golden = 180.0 * (3.0 - std::sqrt(5.0));  // 360 / phi^2
   for (std::size_t n = 0; n < 2000; ++n) {
-    const Lab lab = oklab(kCategoricalPaletteSize + n);
+    const Oklab lab = oklab(kCategoricalPaletteSize + n);
     EXPECT_NEAR(lab.L, 0.75, 0.005) << "item " << kCategoricalPaletteSize + n;
     EXPECT_NEAR(std::hypot(lab.a, lab.b), 0.125, 0.005)
         << "item " << kCategoricalPaletteSize + n;
@@ -156,7 +136,7 @@ TEST(CategoricalColorTest, LaterColorsKeepTheirLightnessAndChromaOnTheRing) {
     EXPECT_LT(std::abs(off), 2.0) << "item " << kCategoricalPaletteSize + n;
   }
   for (const std::size_t index : {std::size_t{1000007}, kLast}) {
-    const Lab lab = oklab(index);
+    const Oklab lab = oklab(index);
     EXPECT_NEAR(lab.L, 0.75, 0.005) << "item " << index;
     EXPECT_NEAR(std::hypot(lab.a, lab.b), 0.125, 0.005) << "item " << index;
   }
@@ -181,9 +161,9 @@ TEST(CategoricalColorTest, PaletteColorsStayApartInColorBlindVision) {
     double smallest = std::numeric_limits<double>::infinity();
     for (std::size_t i = 0; i < kCategoricalPaletteSize; ++i) {
       for (std::size_t j = i + 1; j < kCategoricalPaletteSize; ++j) {
-        const Lab p =
+        const Oklab p =
             oklab_of(seen_with(*matrix, linear_of(categorical_rgba8(i))));
-        const Lab q =
+        const Oklab q =
             oklab_of(seen_with(*matrix, linear_of(categorical_rgba8(j))));
         smallest = std::min(smallest, distance(p, q));
       }
