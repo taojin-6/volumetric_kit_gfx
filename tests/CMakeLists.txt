@@ -166,6 +166,7 @@ vg_discover_tests(vg_camera_test)
 # fixture download).
 add_executable(
   vg_pipelines_test
+  color_test.cpp
   depth_cloud_pipeline_test.cpp
   gpu_mesh_test.cpp
   hybrid_mesh_pipeline_test.cpp

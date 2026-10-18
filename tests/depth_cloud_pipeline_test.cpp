@@ -37,6 +37,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "color_test_support.hpp"
 #include "frame_gate.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -249,11 +250,6 @@ struct Pixels {
 std::array<uint8_t, 3> rgb_of(uint32_t word) {
   return {static_cast<uint8_t>(word), static_cast<uint8_t>(word >> 8),
           static_cast<uint8_t>(word >> 16)};
-}
-
-double srgb_to_linear(double encoded) {
-  return encoded <= 0.04045 ? encoded / 12.92
-                            : std::pow((encoded + 0.055) / 1.055, 2.4);
 }
 
 // --- No device ---------------------------------------------------------------
@@ -1013,7 +1009,7 @@ TEST_F(DepthCloudTest, SolidAndTintedLumaStoreExactBytesOnEveryTarget) {
     float texel[4];
     std::memcpy(texel, px.at(5, 7), sizeof(texel));
     for (int c = 0; c < 3; ++c) {
-      EXPECT_NEAR(texel[c], srgb_to_linear(encoded[c]), 1e-4)
+      EXPECT_NEAR(texel[c], vg_test::srgb_to_linear(encoded[c]), 1e-4)
           << "float channel " << c;
     }
     EXPECT_EQ(texel[3], 1.0f);

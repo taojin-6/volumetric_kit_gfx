@@ -117,6 +117,50 @@ what has landed since then. Record amendments when a contract changes.
   reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
   the host folds into matrices. See the dated entry below.
 
+## 2026-10-18 — Categorical colours
+
+**The contract.** `pipelines::categorical_rgba8(i)` colours item i of a set
+of any size: Okabe and Ito's palette, then a hue ring. A view that shows
+several sources -- calib's rig cameras, as frusta and as `DepthCloudDraw`
+tints -- takes its colours here rather than keeping a palette of its own.
+`color.hpp` states how far apart the colours are, and the tests hold it.
+
+**Why Okabe and Ito's palette.** It is the established palette for colour
+vision deficiency (Okabe and Ito, https://jfly.uni-koeln.de/color/, 2008;
+Wong, Nature Methods 8:441, 2011). As frusta and `Solid` points, under
+Machado, Oliveira and Fernandes' severity-1 simulation (IEEE TVCG 15(6),
+2009), its seven colours stay at least 0.076 apart in OKLab for protan,
+deutan and tritan vision, where Paul Tol's bright and light schemes fall to
+0.033 and 0.037 (tritan). Its black is left out: it vanishes on the views' dark
+backgrounds, and as a `TintedLuma` tint it turns points black. The darkest
+colour kept, blue `#0072B2`, is OKLab lightness 0.53.
+
+**Why yellow and blue swap.** A `TintedLuma` point takes its lightness from
+the scene, so only its tint's chromaticity names its camera, and Okabe and
+Ito tell several colours apart mainly by lightness. At equal luma a
+dichromat keeps one chromatic axis: for protan vision orange, yellow and
+vermillion come within 0.008 of each other in OKLab, and no five of the
+seven stay 0.05 apart. In the published order a 4-camera rig gets both
+orange and yellow; with blue fourth, the first four are among the 4-sets of
+the seven that stay furthest apart there for normal, protan and deutan
+vision alike. The cost is that a 4-camera rig gets the darkest colour kept.
+
+**Why the hue ring.** Later items share OKLCH lightness 0.75, the palette's
+orange, and chroma 0.125: at that lightness sRGB holds chroma up to 0.1275 at
+every hue, so no item needs gamut mapping. Golden-angle steps spread
+consecutive hues. Item 7's hue, 12.5 degrees, is about the start that keeps
+the first 16 colours furthest apart, so separation falls off gradually as a
+set grows rather than holding for one size and then dropping. Hue 0 served
+14 items best, but made item 7 a lighter reddish purple and put the 15th
+item within one JND of sky blue; one golden step later serves 8 items best
+but puts the 14th on sky blue. The ring keeps no colour-blind margin: its
+one lightness takes away the cue dichromats rely on.
+
+**Why pipelines.** The colour is the pipelines' word, which `ColorVertex` and
+`DepthCloudDraw::tint` take; `ui` is ImGui's, and build-tree only.
+`pack_rgba8` moved to `pipelines/color.hpp` with it, so the palette needs no
+pipeline header.
+
 ## 2026-10-16 — Points from depth buffers
 
 **The contract.** `pipelines::DepthCloudPipeline` draws a depth image as
