@@ -313,9 +313,13 @@ jobs:
             exit 1
           }
 
+      # Builds CMAKE_BUILD_PARALLEL_LEVEL jobs at once (set alongside the Test
+      # step's CTEST_PARALLEL_LEVEL), or one per CPU without it. Passed
+      # explicitly: a bare --parallel runs an unlimited `make -j` and ignores
+      # the variable.
       - name: Build
         if: steps.detect.outputs.present == 'true'
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # Runs CTEST_PARALLEL_LEVEL shards at once: from the runner's .env on the
       # Mac, from the container env ci.yml sets on the Ubuntu legs.
@@ -404,7 +408,7 @@ jobs:
           cmake -S "$consumer" -B "$consumer/build" \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_PREFIX_PATH="$prefix"
-          cmake --build "$consumer/build" --parallel
+          cmake --build "$consumer/build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # gfx must stay generatable with -G Xcode -- that is the generator an iOS
       # or macOS app bundle consumes. What regresses is the *generate*, not the
