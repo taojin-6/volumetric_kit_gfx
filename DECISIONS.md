@@ -145,12 +145,16 @@ furthest apart there for normal, protan and deutan vision alike.
 
 **Why the hue ring.** Later items share OKLCH lightness 0.75, the palette's
 orange, and chroma 0.125: at that lightness sRGB holds chroma up to 0.1275 at
-every hue, so no item needs gamut mapping. Golden-angle steps keep any 8
-consecutive items at least 32.5 degrees apart, 0.07 in OKLab, where CSS
-Color 4 takes 0.02 as just noticeable; starting item 7 at hue 0 keeps the
-first 14 colours 0.068 apart. The hue is n / phi^2 modulo 1 in 64-bit fixed
-point, exact at any index. A ring holds only so many distinct colours, so in
-a large set items far apart can come close.
+every hue, so no item needs gamut mapping. Golden-angle steps spread
+consecutive hues. Item 7's hue balances set sizes rather than serving one.
+From hue 0 the first 14 were furthest apart, but an 8-camera rig got two
+pinks, item 7 within one JND of reddish purple in `TintedLuma`, and the
+15th item fell within one JND of sky blue. Starting one golden step later
+serves 8 items best but puts the 14th on sky blue. 12.5 degrees comes
+within 0.001 of the best start for 16 items, and of the starts that keep 16
+items 0.04 and 24 items 0.025 apart, it serves sets of 8 to 12, in `Solid`
+and `TintedLuma`, within 3% of the best. The ring keeps no colour-blind
+margin: its one lightness takes away the cue dichromats rely on.
 
 **Why pipelines.** The colour is the pipelines' word, which `ColorVertex` and
 `DepthCloudDraw::tint` take and `IM_COL32` shares; `ui` is ImGui's, and

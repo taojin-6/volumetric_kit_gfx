@@ -41,17 +41,20 @@ inline constexpr std::size_t kCategoricalPaletteSize = 7;
 /// chromaticity: orange `#E69F00`, sky blue `#56B4E9`, bluish green
 /// `#009E73`, blue `#0072B2`, yellow `#F0E442`, vermillion `#D55E00` and
 /// reddish purple `#CC79A7`. Each later item is OKLCH lightness 0.75 and
-/// chroma 0.125, which sRGB holds at every hue, at hue 0 for item 7 and a
-/// golden angle (360 / phi^2 = 137.5 degrees) further for each item after it.
+/// chroma 0.125, which sRGB holds at every hue, at hue 12.5 degrees for item 7
+/// and a golden angle (360 / phi^2 = 137.5 degrees) further for each item
+/// after it.
 ///
 /// How far apart the colours are in OKLab, where 0.02 is about one
-/// just-noticeable difference:
-/// - Drawn as they are, as frusta and `Solid` points: the first 14 at least
-///   0.06, and so are any 8 consecutive ones; in a larger set, items far
-///   apart can come close. Under simulated protan, deutan and tritan vision,
-///   the first 7 stay at least 0.07 apart.
-/// - At equal luma, as `TintedLuma` points show a camera: the first 4 at
-///   least 0.05, for protan and deutan vision as well.
+/// just-noticeable difference (CSS Color 4):
+/// - Drawn as they are, as frusta and `Solid` points: the first 10 at least
+///   0.08, the first 16 at least 0.04, the first 24 at least 0.025, and any 8
+///   consecutive ones at least 0.06; by 29 colours, two are within 0.02.
+///   Under simulated protan, deutan and tritan vision, only the first 7 are
+///   held apart, at least 0.07.
+/// - As `TintedLuma` points, which take their lightness from the scene, so
+///   at equal luma: the first 12 at least 0.03, but by 13 two are within
+///   0.02; for protan and deutan vision only the first 4, at least 0.05.
 ///
 /// @code
 /// for (size_t i = 0; i < cameras.size(); ++i) {
@@ -72,11 +75,12 @@ inline uint32_t categorical_rgba8(std::size_t index) noexcept {
   }
   constexpr double kLightness = 0.75;
   constexpr double kChroma = 0.125;
-  // The hue in turns, n / phi^2 modulo 1, in 64-bit fixed point
-  // (2^64 / phi^2), exact for every n.
+  // The hue in turns, 5/144 + n / phi^2 modulo 1, in 64-bit fixed point
+  // (2^64 * 5/144 and 2^64 / phi^2), exact for every n.
   const auto n = static_cast<uint64_t>(index - kCategoricalPaletteSize);
-  const double turns =
-      static_cast<double>(n * uint64_t{0x61C8864680B583EA}) * 0x1p-64;
+  const double turns = static_cast<double>(uint64_t{0x08E38E38E38E38E4} +
+                                           n * uint64_t{0x61C8864680B583EA}) *
+                       0x1p-64;
   const double hue = 6.283185307179586 * turns;
   const double a = kChroma * std::cos(hue);
   const double b = kChroma * std::sin(hue);

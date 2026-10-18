@@ -148,14 +148,15 @@ TEST(CategoricalColorTest, FirstColorsAreOkabeAndItosWithoutBlack) {
 TEST(CategoricalColorTest, IsTheSameForTheSameIndex) {
   // The ring's words, pinned: a changed rule or its arithmetic changes them.
   const std::pair<std::size_t, uint32_t> pinned[] = {
-      {7, 0xFFAB8BEEu},  {8, 0xFF71C087u},    {9, 0xFFFDA797u},
-      {10, 0xFF5F96ECu}, {1007, 0xFFBC8CE8u}, {1000007, 0xFFA58BEFu},
+      {7, 0xFF988BF2u},    {8, 0xFF83C46Fu},       {9, 0xFFF9A1AAu},
+      {10, 0xFF519CE4u},   {11, 0xFFD0C516u},      {12, 0xFFC78EE2u},
+      {1007, 0xFFAA8BEEu}, {1000007, 0xFF928CF2u},
   };
   for (const auto& [index, word] : pinned) {
     EXPECT_EQ(categorical_rgba8(index), word) << "item " << index;
   }
   if (sizeof(std::size_t) == 8) {
-    EXPECT_EQ(categorical_rgba8(kLast), 0xFFC78EE2u);
+    EXPECT_EQ(categorical_rgba8(kLast), 0xFFB68CEAu);
   }
   for (std::size_t i = 0; i < 1000; ++i) {
     EXPECT_EQ(categorical_rgba8(i), categorical_rgba8(i)) << "item " << i;
@@ -180,7 +181,7 @@ TEST(CategoricalColorTest, LaterColorsKeepTheirLightnessAndChromaOnTheRing) {
         << "item " << kCategoricalPaletteSize + n;
     const double hue = std::atan2(lab.b, lab.a) * 180.0 / kPi;
     const double off =
-        std::remainder(hue - golden * static_cast<double>(n), 360.0);
+        std::remainder(hue - 12.5 - golden * static_cast<double>(n), 360.0);
     EXPECT_LT(std::abs(off), 2.0) << "item " << kCategoricalPaletteSize + n;
   }
   for (const std::size_t index : {std::size_t{1000007}, kLast}) {
@@ -213,18 +214,26 @@ TEST(CategoricalColorTest, PaletteColorsStayApartInColorBlindVision) {
 }
 
 TEST(CategoricalColorTest, ColorsStayApartAtEqualLuma) {
-  // A rig of 4 keeps its cameras apart in TintedLuma, colour-blind or not.
-  for (const Vision& vision : {kNormal, kProtanVision, kDeutanVision}) {
-    const double smallest = min_distance_of(4, [&](std::size_t i) {
+  const auto smallest = [](std::size_t count, const Vision& vision) {
+    return min_distance_of(count, [&](std::size_t i) {
       return oklab_of(seen_with(vision, linear_at_equal_luma(i)));
     });
-    EXPECT_GE(smallest, 0.05) << vision.name;
+  };
+  EXPECT_GE(smallest(12, kNormal), 0.03);
+  // The limit the header states: by 13, two are within 0.02.
+  EXPECT_LT(smallest(13, kNormal), 0.02);
+  // A rig of 4 keeps its cameras apart in TintedLuma, colour-blind or not.
+  for (const Vision& vision : {kNormal, kProtanVision, kDeutanVision}) {
+    EXPECT_GE(smallest(4, vision), 0.05) << vision.name;
   }
 }
 
-TEST(CategoricalColorTest, FirstFourteenAreApart) {
-  const std::size_t count = 2 * kCategoricalPaletteSize;
-  EXPECT_GE(min_distance(0, count, count), 0.06);
+TEST(CategoricalColorTest, FirstColorsAreApart) {
+  EXPECT_GE(min_distance(0, 10, 10), 0.08);
+  EXPECT_GE(min_distance(0, 16, 16), 0.04);
+  EXPECT_GE(min_distance(0, 24, 24), 0.025);
+  // The limit the header states: by 29 colours, two are within 0.02.
+  EXPECT_LT(min_distance(0, 29, 29), 0.02);
 }
 
 TEST(CategoricalColorTest, AnyEightConsecutiveAreApart) {
