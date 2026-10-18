@@ -49,11 +49,10 @@ app::WindowedApp::SurfaceFactory glfw_surface_factory(GLFWwindow* window) {
 
 VkExtent2D framebuffer_size(GLFWwindow* window) {
   VKC_CHECK(window != nullptr, "glfw::framebuffer_size needs a window");
-  int width = 0;
-  int height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(0, width)),
-          static_cast<std::uint32_t>(std::max(0, height))};
+  glm::ivec2 framebuffer{0, 0};
+  glfwGetFramebufferSize(window, &framebuffer.x, &framebuffer.y);
+  return detail::to_framebuffer_size(
+      framebuffer, glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE);
 }
 
 VkExtent2D framebuffer_extent(GLFWwindow* window) {

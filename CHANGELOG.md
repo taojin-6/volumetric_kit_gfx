@@ -12,6 +12,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   colour cameras and rejects oversized images before byte-count overflow.
   Its cross-queue contract now requires a producer-signalled GPU semaphore
   wait covering the vertex shader; a host fence wait alone is insufficient.
+- `glfw::framebuffer_size` is 0 x 0 while the window is iconified, as
+  documented, so `begin_frame` skips its ticks: macOS and X11 keep an
+  iconified window's size, which it passed on. `framebuffer_extent` is 1 x 1
+  then.
 
 ### Added
 

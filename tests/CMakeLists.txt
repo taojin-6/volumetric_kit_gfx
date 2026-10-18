@@ -35,7 +35,8 @@ include(GoogleTest)
 # mark the whole shard skipped, failures included. It passes or fails on its
 # exit code alone. Skips stay visible where it matters through
 # VKC_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
-# Vulkan device fails rather than skips.
+# Vulkan device fails rather than skips. Test PROPERTIES given to
+# vg_discover_tests reach each shard, so a TIMEOUT there bounds a shard.
 set(VG_TEST_SHARDS
     0
     CACHE STRING
@@ -58,7 +59,7 @@ function(vg_discover_tests target)
     gtest_discover_tests(${target} ${ARGN})
     return()
   endif()
-  cmake_parse_arguments(arg "" "TEST_PREFIX" "" ${ARGN})
+  cmake_parse_arguments(arg "" "TEST_PREFIX" "PROPERTIES" ${ARGN})
   math(EXPR last "${VG_TEST_SHARDS} - 1")
   foreach(index RANGE ${last})
     set(name "${arg_TEST_PREFIX}${target}.shard${index}")
@@ -67,7 +68,8 @@ function(vg_discover_tests target)
       "${name}"
       PROPERTIES
         ENVIRONMENT
-        "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}")
+        "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}"
+        ${arg_PROPERTIES})
   endforeach()
 endfunction()
 
@@ -300,7 +302,15 @@ if(TARGET volumetric_kit::gfx_glfw)
     PRIVATE volumetric_kit::gfx_glfw volumetric_kit::core_test_support
             GTest::gtest_main Vulkan::Vulkan)
   vg_target_warnings(vg_glfw_test)
-  vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw.")
+  # The native-window case asks CoreGraphics for a GUI session before glfwInit,
+  # which outside one waits for the window server forever.
+  if(APPLE)
+    target_link_libraries(vg_glfw_test PRIVATE "-framework CoreGraphics"
+                                               "-framework CoreFoundation")
+  endif()
+  # A hung case, as when a window system never answers, fails after a minute
+  # rather than holding the runner until the job's time limit.
+  vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw." PROPERTIES TIMEOUT 60)
 endif()
 
 # gfx as its consumers take it (consumer/), configure only, with the dependency
