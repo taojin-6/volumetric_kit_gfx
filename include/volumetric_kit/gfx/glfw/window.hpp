@@ -51,19 +51,19 @@ VG_GLFW_API core::Result<std::vector<const char*>> instance_extensions();
 VG_GLFW_API app::WindowedApp::SurfaceFactory glfw_surface_factory(
     GLFWwindow* window);
 
-/// @brief The window's framebuffer size in pixels: 0 x 0 while the window is
-///        minimized.
+/// @brief The window's framebuffer size in pixels: 0 x 0 while GLFW reports
+///        it iconified.
 ///
-/// GLFW keeps an iconified window's size on macOS and X11, so this reads
-/// `GLFW_ICONIFIED` as well. On Wayland, which reports no minimized state, a
-/// minimized window reads its size. The extent `begin_frame` takes: on 0 x 0
-/// it skips the tick, with no swapchain rebuild and no queue drain.
+/// macOS and X11 keep an iconified window's size, so this reads
+/// `GLFW_ICONIFIED` too; Wayland reports no iconified state, so a minimized
+/// window there reads its size. The extent `begin_frame` takes: on 0 x 0 it
+/// skips the tick, with no swapchain rebuild and no queue drain.
 /// @code
 /// auto frame = app.begin_frame(glfw::framebuffer_size(window));
 /// @endcode
 /// @param window  The window.
 /// @pre @p window is non-null.
-/// @return Its framebuffer size; zero while minimized.
+/// @return Its framebuffer size.
 VG_GLFW_API VkExtent2D framebuffer_size(GLFWwindow* window);
 
 /// @brief The window's framebuffer size in pixels, never zero.
