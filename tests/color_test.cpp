@@ -72,7 +72,22 @@ constexpr Matrix kTritan = {{{1.255528, -0.076749, -0.178779},
                              {-0.078411, 0.930809, 0.147602},
                              {0.004733, 0.691367, 0.303900}}};
 
-Rgb seen_with(const Matrix& m, const Rgb& c) {
+// A vision to see colours with: a simulation's matrix, or none for normal
+// vision.
+struct Vision {
+  const char* name;
+  const Matrix* matrix;
+};
+constexpr Vision kNormal = {"normal", nullptr};
+constexpr Vision kProtanVision = {"protan", &kProtan};
+constexpr Vision kDeutanVision = {"deutan", &kDeutan};
+constexpr Vision kTritanVision = {"tritan", &kTritan};
+
+Rgb seen_with(const Vision& vision, const Rgb& c) {
+  if (vision.matrix == nullptr) {
+    return c;
+  }
+  const Matrix& m = *vision.matrix;
   Rgb seen{};
   for (int i = 0; i < 3; ++i) {
     const double v = m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2];
@@ -81,13 +96,46 @@ Rgb seen_with(const Matrix& m, const Rgb& c) {
   return seen;
 }
 
+// Item `index` as a TintedLuma point shows it, where the scene sets the
+// lightness: its tint scaled to encoded luma 0.3, so that only the tint's
+// chromaticity tells it from another. The luma is depth_cloud.vert's, Rec.
+// 709's Y' on the encoded values.
+Rgb linear_at_equal_luma(std::size_t index) {
+  const uint32_t word = categorical_rgba8(index);
+  Rgb encoded{};
+  for (int i = 0; i < 3; ++i) {
+    encoded[i] = static_cast<double>((word >> (8 * i)) & 0xFFu) / 255.0;
+  }
+  const double luma =
+      0.2126 * encoded[0] + 0.7152 * encoded[1] + 0.0722 * encoded[2];
+  Rgb rgb{};
+  for (int i = 0; i < 3; ++i) {
+    rgb[i] = vg_test::srgb_to_linear(encoded[i] * 0.3 / luma);
+  }
+  return rgb;
+}
+
+// The smallest distance between two of the first `count` items, each as
+// `lab_of(index)` gives it.
+template <typename LabOf>
+double min_distance_of(std::size_t count, LabOf lab_of) {
+  double smallest = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < count; ++i) {
+    for (std::size_t j = i + 1; j < count; ++j) {
+      smallest = std::min(smallest, distance(lab_of(i), lab_of(j)));
+    }
+  }
+  return smallest;
+}
+
 TEST(CategoricalColorTest, FirstColorsAreOkabeAndItosWithoutBlack) {
+  // In Okabe and Ito's order, but with yellow and blue swapped.
   constexpr uint32_t kOkabeIto[] = {
       pack_rgba8(0xE6, 0x9F, 0x00),  // orange
       pack_rgba8(0x56, 0xB4, 0xE9),  // sky blue
       pack_rgba8(0x00, 0x9E, 0x73),  // bluish green
-      pack_rgba8(0xF0, 0xE4, 0x42),  // yellow
       pack_rgba8(0x00, 0x72, 0xB2),  // blue
+      pack_rgba8(0xF0, 0xE4, 0x42),  // yellow
       pack_rgba8(0xD5, 0x5E, 0x00),  // vermillion
       pack_rgba8(0xCC, 0x79, 0xA7),  // reddish purple
   };
@@ -155,20 +203,22 @@ TEST(CategoricalColorTest, PaletteColorsAreFarApart) {
 }
 
 TEST(CategoricalColorTest, PaletteColorsStayApartInColorBlindVision) {
-  const std::pair<const char*, const Matrix*> visions[] = {
-      {"protan", &kProtan}, {"deutan", &kDeutan}, {"tritan", &kTritan}};
-  for (const auto& [name, matrix] : visions) {
-    double smallest = std::numeric_limits<double>::infinity();
-    for (std::size_t i = 0; i < kCategoricalPaletteSize; ++i) {
-      for (std::size_t j = i + 1; j < kCategoricalPaletteSize; ++j) {
-        const Oklab p =
-            oklab_of(seen_with(*matrix, linear_of(categorical_rgba8(i))));
-        const Oklab q =
-            oklab_of(seen_with(*matrix, linear_of(categorical_rgba8(j))));
-        smallest = std::min(smallest, distance(p, q));
-      }
-    }
-    EXPECT_GE(smallest, 0.07) << name;
+  for (const Vision& vision : {kProtanVision, kDeutanVision, kTritanVision}) {
+    const double smallest =
+        min_distance_of(kCategoricalPaletteSize, [&](std::size_t i) {
+          return oklab_of(seen_with(vision, linear_of(categorical_rgba8(i))));
+        });
+    EXPECT_GE(smallest, 0.07) << vision.name;
+  }
+}
+
+TEST(CategoricalColorTest, ColorsStayApartAtEqualLuma) {
+  // A rig of 4 keeps its cameras apart in TintedLuma, colour-blind or not.
+  for (const Vision& vision : {kNormal, kProtanVision, kDeutanVision}) {
+    const double smallest = min_distance_of(4, [&](std::size_t i) {
+      return oklab_of(seen_with(vision, linear_at_equal_luma(i)));
+    });
+    EXPECT_GE(smallest, 0.05) << vision.name;
   }
 }
 

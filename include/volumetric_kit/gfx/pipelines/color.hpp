@@ -36,16 +36,22 @@ inline constexpr std::size_t kCategoricalPaletteSize = 7;
 ///        that tells the items apart, however many there are.
 ///
 /// Items 0 to 6 take Okabe and Ito's Color Universal Design palette
-/// (https://jfly.uni-koeln.de/color/, 2008) in its order, without its black:
-/// orange `#E69F00`, sky blue `#56B4E9`, bluish green `#009E73`, yellow
-/// `#F0E442`, blue `#0072B2`, vermillion `#D55E00` and reddish purple
-/// `#CC79A7`. Each later item is OKLCH lightness 0.75 and chroma 0.125, which
-/// sRGB holds at every hue, at hue 0 for item 7 and a golden angle
-/// (360 / phi^2 = 137.5 degrees) further for each item after it.
+/// (https://jfly.uni-koeln.de/color/, 2008) without its black, in its order
+/// but with yellow and blue swapped, so that the first four differ in
+/// chromaticity: orange `#E69F00`, sky blue `#56B4E9`, bluish green
+/// `#009E73`, blue `#0072B2`, yellow `#F0E442`, vermillion `#D55E00` and
+/// reddish purple `#CC79A7`. Each later item is OKLCH lightness 0.75 and
+/// chroma 0.125, which sRGB holds at every hue, at hue 0 for item 7 and a
+/// golden angle (360 / phi^2 = 137.5 degrees) further for each item after it.
 ///
-/// The first 14 colours are pairwise at least 0.06 apart in OKLab, and so
-/// are any 8 consecutive ones; in a larger set, items far apart can come
-/// close.
+/// How far apart the colours are in OKLab, where 0.02 is about one
+/// just-noticeable difference:
+/// - Drawn as they are, as frusta and `Solid` points: the first 14 at least
+///   0.06, and so are any 8 consecutive ones; in a larger set, items far
+///   apart can come close. Under simulated protan, deutan and tritan vision,
+///   the first 7 stay at least 0.07 apart.
+/// - At equal luma, as `TintedLuma` points show a camera: the first 4 at
+///   least 0.05, for protan and deutan vision as well.
 ///
 /// @code
 /// for (size_t i = 0; i < cameras.size(); ++i) {
@@ -58,8 +64,8 @@ inline constexpr std::size_t kCategoricalPaletteSize = 7;
 inline uint32_t categorical_rgba8(std::size_t index) noexcept {
   constexpr uint32_t kOkabeIto[kCategoricalPaletteSize] = {
       pack_rgba8(230, 159, 0),  pack_rgba8(86, 180, 233),
-      pack_rgba8(0, 158, 115),  pack_rgba8(240, 228, 66),
-      pack_rgba8(0, 114, 178),  pack_rgba8(213, 94, 0),
+      pack_rgba8(0, 158, 115),  pack_rgba8(0, 114, 178),
+      pack_rgba8(240, 228, 66), pack_rgba8(213, 94, 0),
       pack_rgba8(204, 121, 167)};
   if (index < kCategoricalPaletteSize) {
     return kOkabeIto[index];
