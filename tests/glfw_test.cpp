@@ -15,6 +15,11 @@
 
 #include <GLFW/glfw3.h>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CFBase.h>
+#include <CoreGraphics/CGSession.h>
+#endif
+
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -54,6 +59,26 @@ std::string glfw_failure(const char* call) {
          (description != nullptr ? description : "failed");
 }
 
+// Why this process has no native window system to reach, or empty if it has
+// one. Asked before glfwInit, which on macOS outside a GUI session, as in the
+// CI Mac's runner daemons, waits for the window server forever.
+std::string native_display_unavailable() {
+#ifdef __APPLE__
+  const CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+  if (session == nullptr) {
+    return "no display: the process is in no window-server (Quartz GUI) "
+           "session";
+  }
+  CFRelease(session);
+#else
+  if (std::getenv("DISPLAY") == nullptr &&
+      std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    return "no display: neither DISPLAY nor WAYLAND_DISPLAY is set";
+  }
+#endif
+  return {};
+}
+
 // GLFW with one window, for this object's lifetime: on the null platform,
 // which needs no display, or on the native window system, which does. `ready()`
 // is false, with `reason()`, where the platform is unavailable.
@@ -71,15 +96,12 @@ class TestWindow {
       return;
 #endif
     } else {
-#ifdef GLFW_ANY_PLATFORM
-      glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
-#endif
-#ifndef __APPLE__
-      if (std::getenv("DISPLAY") == nullptr &&
-          std::getenv("WAYLAND_DISPLAY") == nullptr) {
-        reason_ = "no display: neither DISPLAY nor WAYLAND_DISPLAY is set";
+      reason_ = native_display_unavailable();
+      if (!reason_.empty()) {
         return;
       }
+#ifdef GLFW_ANY_PLATFORM
+      glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
 #endif
     }
 #ifdef GLFW_PLATFORM_NULL  // GLFW 3.4+
