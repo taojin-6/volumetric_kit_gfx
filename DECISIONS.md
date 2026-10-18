@@ -148,19 +148,18 @@ vision alike. The cost is that a 4-camera rig gets the darkest colour kept.
 **Why the hue ring.** Later items share OKLCH lightness 0.75, the palette's
 orange, and chroma 0.125: at that lightness sRGB holds chroma up to 0.1275 at
 every hue, so no item needs gamut mapping. Golden-angle steps spread
-consecutive hues. Item 7's hue balances set sizes rather than serving one.
-From hue 0 the first 14 were furthest apart, but an 8-camera rig got two
-pinks, item 7 within one JND of reddish purple in `TintedLuma`, and the
-15th item fell within one JND of sky blue. Starting one golden step later
-serves 8 items best but puts the 14th on sky blue. 12.5 degrees comes
-within 0.001 of the best start for 16 items, and of the starts that keep 16
-items 0.04 and 24 items 0.025 apart, it serves sets of 8 to 12, in `Solid`
-and `TintedLuma`, within 3% of the best. The ring keeps no colour-blind
-margin: its one lightness takes away the cue dichromats rely on.
+consecutive hues. Item 7's hue, 12.5 degrees, is about the start that keeps
+the first 16 colours furthest apart, so separation falls off gradually as a
+set grows rather than holding for one size and then dropping. Hue 0 served
+14 items best, but made item 7 a lighter reddish purple and put the 15th
+item within one JND of sky blue; one golden step later serves 8 items best
+but puts the 14th on sky blue. The ring keeps no colour-blind margin: its
+one lightness takes away the cue dichromats rely on.
 
 **Why pipelines.** The colour is the pipelines' word, which `ColorVertex` and
-`DepthCloudDraw::tint` take; `ui` is ImGui's, and build-tree only. `pack_rgba8` moved to `pipelines/color.hpp` with it, so the
-palette needs no pipeline header.
+`DepthCloudDraw::tint` take; `ui` is ImGui's, and build-tree only.
+`pack_rgba8` moved to `pipelines/color.hpp` with it, so the palette needs no
+pipeline header.
 
 ## 2026-10-16 — Points from depth buffers
 
