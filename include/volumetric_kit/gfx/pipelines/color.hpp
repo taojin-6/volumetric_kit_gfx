@@ -33,7 +33,7 @@ constexpr uint32_t pack_rgba8(uint8_t r, uint8_t g, uint8_t b,
 inline constexpr std::size_t kCategoricalPaletteSize = 7;
 
 /// @brief A colour for each item of a set -- each camera of a rig, say --
-///        that tells the items apart, however many there are.
+///        for any index.
 ///
 /// Items 0 to 6 take Okabe and Ito's Color Universal Design palette
 /// (https://jfly.uni-koeln.de/color/, 2008) without its black, in its order
@@ -62,8 +62,10 @@ inline constexpr std::size_t kCategoricalPaletteSize = 7;
 /// }
 /// @endcode
 /// @param index  The item's index in its set; any value.
-/// @return The item's colour as @ref pack_rgba8 packs it, opaque.
-///         `IM_COL32` packs the same layout, so ImGui draws it as it is.
+/// @return The item's colour as @ref pack_rgba8 packs it, opaque. `IM_COL32`
+///         packs the same layout, but ImGui writes its bytes unconverted, so
+///         it shows this colour on a `_UNORM` target only; on an `_SRGB`
+///         one, such as the default swapchain's, decode them to linear first.
 inline uint32_t categorical_rgba8(std::size_t index) noexcept {
   constexpr uint32_t kOkabeIto[kCategoricalPaletteSize] = {
       pack_rgba8(230, 159, 0),  pack_rgba8(86, 180, 233),

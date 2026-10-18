@@ -75,6 +75,10 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   // The ImGui pipeline is created (during Init) for dynamic rendering, so it
   // bakes the target's color/depth formats + sample count. The backend deep-
   // copies pColorAttachmentFormats, so the layout need not outlive this call.
+  // TODO: ImGui's colours are sRGB-encoded bytes that the backend writes
+  // unconverted, so an _SRGB target -- the default swapchain's -- encodes them
+  // twice: the theme and IM_COL32 marks (categorical_rgba8 swatches, say)
+  // wash out. Decode them to linear for such a target.
   VkPipelineRenderingCreateInfo rendering{};
   rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
   rendering.colorAttachmentCount = config.layout.color_count;

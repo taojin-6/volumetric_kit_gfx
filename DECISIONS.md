@@ -123,14 +123,15 @@ what has landed since then. Record amendments when a contract changes.
 of any size: Okabe and Ito's palette, then a hue ring. A view that shows
 several sources -- calib's rig cameras, as frusta and as `DepthCloudDraw`
 tints -- takes its colours here rather than keeping a palette of its own.
+`color.hpp` states how far apart the colours are, and the tests hold it.
 
 **Why Okabe and Ito's palette.** It is the established palette for colour
 vision deficiency (Okabe and Ito, https://jfly.uni-koeln.de/color/, 2008;
-Wong, Nature Methods 8:441, 2011). Drawn as they are, under Machado,
-Oliveira and Fernandes' severity-1 simulation (IEEE TVCG 15(6), 2009), its
-seven colours stay at least 0.076 apart in OKLab for protan, deutan and
-tritan vision, where Paul Tol's bright and light schemes fall to 0.033 and
-0.037 (tritan). Its black is left out: it vanishes on the views' dark
+Wong, Nature Methods 8:441, 2011). As frusta and `Solid` points, under
+Machado, Oliveira and Fernandes' severity-1 simulation (IEEE TVCG 15(6),
+2009), its seven colours stay at least 0.076 apart in OKLab for protan,
+deutan and tritan vision, where Paul Tol's bright and light schemes fall to
+0.033 and 0.037 (tritan). Its black is left out: it vanishes on the views' dark
 backgrounds, and as a `TintedLuma` tint it turns points black. The darkest
 colour kept, blue `#0072B2`, is OKLab lightness 0.53.
 
@@ -138,10 +139,11 @@ colour kept, blue `#0072B2`, is OKLab lightness 0.53.
 the scene, so only its tint's chromaticity names its camera, and Okabe and
 Ito tell several colours apart mainly by lightness. At equal luma a
 dichromat keeps one chromatic axis: for protan vision orange, yellow and
-vermillion merge, to 0.000 in OKLab, and no five of the seven stay 0.05
-apart. In the published order a 4-camera rig gets both orange and yellow;
-with blue fourth, the first four are the four of the seven that stay
-furthest apart there for normal, protan and deutan vision alike.
+vermillion come within 0.008 of each other in OKLab, and no five of the
+seven stay 0.05 apart. In the published order a 4-camera rig gets both
+orange and yellow; with blue fourth, the first four are among the 4-sets of
+the seven that stay furthest apart there for normal, protan and deutan
+vision alike. The cost is that a 4-camera rig gets the darkest colour kept.
 
 **Why the hue ring.** Later items share OKLCH lightness 0.75, the palette's
 orange, and chroma 0.125: at that lightness sRGB holds chroma up to 0.1275 at
@@ -157,8 +159,7 @@ and `TintedLuma`, within 3% of the best. The ring keeps no colour-blind
 margin: its one lightness takes away the cue dichromats rely on.
 
 **Why pipelines.** The colour is the pipelines' word, which `ColorVertex` and
-`DepthCloudDraw::tint` take and `IM_COL32` shares; `ui` is ImGui's, and
-build-tree only. `pack_rgba8` moved to `pipelines/color.hpp` with it, so the
+`DepthCloudDraw::tint` take; `ui` is ImGui's, and build-tree only. `pack_rgba8` moved to `pipelines/color.hpp` with it, so the
 palette needs no pipeline header.
 
 ## 2026-10-16 — Points from depth buffers
