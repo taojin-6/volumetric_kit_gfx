@@ -51,11 +51,13 @@ VG_GLFW_API core::Result<std::vector<const char*>> instance_extensions();
 VG_GLFW_API app::WindowedApp::SurfaceFactory glfw_surface_factory(
     GLFWwindow* window);
 
-/// @brief The window's framebuffer size in pixels, as GLFW reports it: 0 x 0
-///        while the window is minimized.
+/// @brief The window's framebuffer size in pixels: 0 x 0 while the window is
+///        minimized.
 ///
-/// The extent `begin_frame` takes: on 0 x 0 it skips the tick, with no
-/// swapchain rebuild and no queue drain.
+/// GLFW keeps an iconified window's size on macOS and X11, so this reads
+/// `GLFW_ICONIFIED` as well. On Wayland, which reports no minimized state, a
+/// minimized window reads its size. The extent `begin_frame` takes: on 0 x 0
+/// it skips the tick, with no swapchain rebuild and no queue drain.
 /// @code
 /// auto frame = app.begin_frame(glfw::framebuffer_size(window));
 /// @endcode
@@ -66,9 +68,9 @@ VG_GLFW_API VkExtent2D framebuffer_size(GLFWwindow* window);
 
 /// @brief The window's framebuffer size in pixels, never zero.
 ///
-/// A window may report 0 x 0 while minimized; this reads 1 x 1 then, for a
-/// use that cannot take zero: an initial `swapchain.extent`, a viewport or an
-/// aspect ratio. A frame loop takes @ref framebuffer_size instead.
+/// @ref framebuffer_size, but 1 x 1 where that reads 0 x 0, for a use that
+/// cannot take zero: an initial `swapchain.extent`, a viewport or an aspect
+/// ratio. A frame loop takes @ref framebuffer_size instead.
 /// @code
 /// app::WindowedAppConfig config;
 /// config.swapchain.extent = glfw::framebuffer_extent(window);

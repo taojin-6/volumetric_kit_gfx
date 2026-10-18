@@ -4,12 +4,30 @@
 #pragma once
 
 /// @file glfw/impl/framebuffer_pixels.hpp
-/// The arithmetic of `glfw::cursor_in_framebuffer`, apart from GLFW so that
-/// a high-DPI scale can be tested. Not a public header.
+/// The arithmetic of `glfw::framebuffer_size` and
+/// `glfw::cursor_in_framebuffer`, apart from GLFW so that it can be tested
+/// without a window: the minimized decision and a high-DPI scale. Not a public
+/// header.
+
+#include <algorithm>
+#include <cstdint>
 
 #include <glm/vec2.hpp>
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+
 namespace volumetric_kit::gfx::glfw::detail {
+
+// The framebuffer size GLFW reports, or none while the window is iconified,
+// which macOS and X11 report with the size kept.
+inline VkExtent2D to_framebuffer_size(glm::ivec2 framebuffer_dims,
+                                      bool iconified) {
+  if (iconified) {
+    return {0, 0};
+  }
+  return {static_cast<std::uint32_t>(std::max(0, framebuffer_dims.x)),
+          static_cast<std::uint32_t>(std::max(0, framebuffer_dims.y))};
+}
 
 // A position in window coordinates, scaled per axis by the framebuffer's size
 // over the window's. An axis the window has no size on is left unscaled.

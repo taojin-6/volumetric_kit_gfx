@@ -145,8 +145,8 @@ class VG_WINDOWING_API FrameLoop {
   ///        result), a frame failed after its acquire (@ref end_frame), or
   ///        @p current_extent changed, re-runs the @ref set_recreate_callback
   ///        hook after each rebuild, and retries the acquire once.
-  /// @param current_extent  The window's current framebuffer extent (e.g. from
-  ///                        `glfwGetFramebufferSize`).
+  /// @param current_extent  The window's current framebuffer extent, 0 x 0
+  ///                        while minimized (e.g. `glfw::framebuffer_size`).
   /// @return The @ref Frame to record and pass to @ref end_frame; an *empty*
   ///         optional when nothing can render this tick (minimized window, or
   ///         the surface is still settling after a rebuild) — poll/wait for
