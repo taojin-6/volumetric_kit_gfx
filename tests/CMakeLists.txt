@@ -128,16 +128,38 @@ target_compile_definitions(
 vg_discover_tests(vg_core_test)
 
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
-# surface (VK_EXT_headless_surface). Skips wholesale where that surface or a
-# present-capable device is unavailable. Links gfx_ui for ui::overlay_config's
-# case, which needs a real swapchain.
-add_executable(vg_windowing_test windowing_test.cpp)
+# surface (VK_EXT_headless_surface), which skips wholesale where that surface or
+# a present-capable device is unavailable; and the surface sources, whose
+# refusals need at most an instance. Links gfx_ui for ui::overlay_config's case,
+# which needs a real swapchain.
+add_executable(vg_windowing_test windowing_test.cpp surface_source_test.cpp)
 target_link_libraries(
   vg_windowing_test
   PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_windowing
           volumetric_kit::core_test_support GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
+
+# windowing tier on Apple: metal_surface over a bare CAMetalLayer, with a
+# swapchain built on it; no window, no acquire, no present. One CTest entry, so
+# the build never runs the binary to list its tests. As for the shared-device
+# cases below, any skip but the one without a device fails. The CI Mac runs it;
+# a local run can exclude it (CONTRIBUTING.md, "Build and test").
+if(APPLE)
+  enable_language(OBJCXX)
+  add_executable(vg_metal_surface_test metal_surface_test.mm)
+  target_compile_options(vg_metal_surface_test PRIVATE -fobjc-arc)
+  target_link_libraries(
+    vg_metal_surface_test
+    PRIVATE volumetric_kit::gfx_windowing volumetric_kit::core_test_support
+            GTest::gtest_main Vulkan::Vulkan "-framework QuartzCore")
+  vg_target_warnings(vg_metal_surface_test)
+  add_test(NAME windowing.metal_surface COMMAND vg_metal_surface_test)
+  set_tests_properties(
+    windowing.metal_surface
+    PROPERTIES FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+               SKIP_REGULAR_EXPRESSION "no Vulkan device for this test")
+endif()
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
 # through a VK_EXT_headless_surface factory (the windowing-test vehicle) and
@@ -149,6 +171,17 @@ target_link_libraries(
                       GTest::gtest_main)
 vg_target_warnings(vg_app_test)
 vg_discover_tests(vg_app_test TEST_PREFIX "app.")
+# MoltenVK offers a headless surface, so on Apple the shared-device cases run
+# rather than skip: any skip but the one without a device fails, as the core's
+# cross-family tests do.
+if(APPLE)
+  add_test(NAME app.shared_windowed_app_on_moltenvk
+           COMMAND vg_app_test --gtest_filter=SharedWindowedAppTest.*)
+  set_tests_properties(
+    app.shared_windowed_app_on_moltenvk
+    PROPERTIES FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+               SKIP_REGULAR_EXPRESSION "no Vulkan device for this test")
+endif()
 
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device

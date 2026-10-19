@@ -10,13 +10,55 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/glfw/impl/framebuffer_pixels.hpp"
 
 namespace volumetric_kit::gfx::glfw {
+
+namespace {
+
+// GLFW's last error, after `call`, as an Unsupported status.
+core::Status glfw_failure(const char* call) {
+  const char* reason = nullptr;
+  glfwGetError(&reason);
+  return core::Status::unsupported(std::string(call) + " failed: " +
+                                   (reason != nullptr ? reason : "no reason"));
+}
+
+}  // namespace
+
+core::Result<std::unique_ptr<Library>> Library::init() {
+  glfwGetError(nullptr);  // the reason read on failure is this call's own
+  if (glfwInit() != GLFW_TRUE) {
+    return glfw_failure("glfwInit");
+  }
+  return std::unique_ptr<Library>(new Library());
+}
+
+Library::~Library() { glfwTerminate(); }
+
+void WindowDeleter::operator()(GLFWwindow* window) const noexcept {
+  glfwDestroyWindow(window);
+}
+
+core::Result<Window> create_window(int width, int height, const char* title) {
+  if (width <= 0 || height <= 0 || title == nullptr) {
+    return core::Status::invalid_argument(
+        "glfw::create_window needs a positive size and a title");
+  }
+  glfwGetError(nullptr);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
+  GLFWwindow* window = glfwCreateWindow(width, height, title, nullptr, nullptr);
+  if (window == nullptr) {
+    return glfw_failure("glfwCreateWindow");
+  }
+  return Window(window);
+}
 
 core::Result<std::vector<const char*>> instance_extensions() {
   // Drop an error left by an earlier call, so the reason read below is this
@@ -45,6 +87,16 @@ app::WindowedApp::SurfaceFactory glfw_surface_factory(GLFWwindow* window) {
     VKC_VK_TRY(glfwCreateWindowSurface(instance, window, nullptr, &surface));
     return surface;
   };
+}
+
+core::Result<windowing::SurfaceSource> surface_source(GLFWwindow* window) {
+  if (window == nullptr) {
+    return core::Status::invalid_argument(
+        "glfw::surface_source needs a window");
+  }
+  VKC_ASSIGN(std::vector<const char*> extensions, instance_extensions());
+  return windowing::SurfaceSource{std::move(extensions),
+                                  glfw_surface_factory(window)};
 }
 
 VkExtent2D framebuffer_size(GLFWwindow* window) {

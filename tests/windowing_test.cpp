@@ -30,6 +30,7 @@
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
+#include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace win = volumetric_kit::gfx::windowing;
@@ -47,14 +48,15 @@ class WindowingTest : public vg_test::RendererTest {
     if (base_setup_incomplete()) {
       return;
     }
-    if (!vg_test::has_headless_surface()) {
-      GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
+    auto headless = win::headless_surface();
+    if (!headless.ok()) {
+      GTEST_SKIP() << headless.status().message();
     }
     // The instance validates at the test's level, which may be above the
     // environment's: the layer reads its settings as the instance is created.
     const vkc::test::ValidationSession settings(active_validation());
-    auto instance = vkc::Instance::create(
-        vg_test::headless_instance_config(active_validation()));
+    auto instance = vkc::Instance::create(vg_test::surface_instance_config(
+        headless.value().instance_extensions, active_validation()));
     ASSERT_TRUE(instance.ok()) << instance.status().message();
     headless_instance_.emplace(std::move(instance).value());
     const vkc::Status loaded =

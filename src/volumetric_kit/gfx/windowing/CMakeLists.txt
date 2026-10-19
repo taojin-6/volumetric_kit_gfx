@@ -6,7 +6,8 @@
 # VkSurfaceKHR into RenderTargets and drives the present loop. Depends only on
 # gfx_core; deliberately GLFW-free (it takes a VkSurfaceKHR), so the swapchain
 # is unit-testable via VK_EXT_headless_surface and a consumer picks its own
-# window system. The GLFW glue is gfx_glfw's, not here.
+# window system. The headless and CAMetalLayer surface sources live here; the
+# GLFW glue is gfx_glfw's.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -15,7 +16,8 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_windowing)
 add_library(volumetric_kit::gfx_windowing ALIAS gfx_windowing)
 
-target_sources(gfx_windowing PRIVATE surface.cpp swapchain.cpp frame_loop.cpp)
+target_sources(gfx_windowing PRIVATE surface.cpp surface_source.cpp
+                                     swapchain.cpp frame_loop.cpp)
 
 generate_export_header(
   gfx_windowing

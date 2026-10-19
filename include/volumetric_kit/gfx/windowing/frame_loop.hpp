@@ -58,7 +58,11 @@ struct Frame {
   VkCommandBuffer cmd = VK_NULL_HANDLE;  ///< Recording command buffer.
   const RenderTarget* target = nullptr;  ///< The acquired image's target.
   uint32_t image_index = 0;              ///< Swapchain image index.
-  uint32_t slot = 0;                     ///< Frame-in-flight slot (internal).
+  /// The frame-in-flight slot, below @ref FrameLoop::frames_in_flight. The
+  /// slot's previous frame has completed when @ref FrameLoop::begin_frame
+  /// returns it, so per-slot consumers such as recon's `MeshExchange` key on
+  /// it.
+  uint32_t slot = 0;
   /// The frame's number: one more than the previous frame's, from 1. The
   /// loop's @ref FrameLoop::timeline reaches it once the frame's GPU work
   /// completes, so it keys what the frame uses (@ref RetireQueue).

@@ -2,11 +2,11 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- gfx_glfw: GLFW window glue ---------------------------------------------
-# What every GLFW application of the renderer repeats: the instance extensions,
-# the surface factory, the framebuffer extent, the cursor in framebuffer pixels,
-# a device shared with a compute library, and ImGui's GLFW platform backend.
-# Depends on gfx_app and gfx_ui; built only with VG_WITH_GLFW and an installed
-# GLFW (src/CMakeLists.txt).
+# What every GLFW application of the renderer repeats: GLFW's init guard, the
+# no-API window, the surface source, the framebuffer extent, the cursor in
+# framebuffer pixels, a device shared with a compute library, and ImGui's GLFW
+# platform backend. Depends on gfx_app and gfx_ui; built only with VG_WITH_GLFW
+# and an installed GLFW (src/CMakeLists.txt).
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 

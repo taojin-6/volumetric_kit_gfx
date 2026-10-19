@@ -20,12 +20,14 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/export.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
+#include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace volumetric_kit::gfx::app {
@@ -38,9 +40,9 @@ struct WindowedAppConfig {
   /// Enable the validation layer + debug messenger when available (see @ref
   /// InstanceConfig::enable_validation).
   bool enable_validation = false;
-  /// Surface/platform instance extensions the window system requires — e.g.
-  /// @ref glfw::instance_extensions for a GLFW window. Like the windowing
-  /// tier, this tier is window-system-agnostic, so the consumer supplies them.
+  /// Surface/platform instance extensions the window system requires: a
+  /// @ref windowing::SurfaceSource's. Like the windowing tier, this tier is
+  /// window-system-agnostic, so the consumer supplies them.
   std::vector<const char*> instance_extensions;
   /// Swapchain preferences: extent, color/depth formats, present mode, image
   /// count. With @ref windowing::SwapchainConfig::depth_format set, the app
@@ -64,6 +66,8 @@ struct WindowedAppConfig {
   core::DeviceRequirements device = device_requirements();
 };
 
+// TODO: the aggregate rule (AGENTS.md, "RAII resource types"): create and adopt
+// return a std::unique_ptr, with no empty state, across consumers.
 /// @brief Owns the whole windowed bring-up chain — `core::Instance`,
 ///        @ref windowing::Surface, `core::Device`, `core::Allocator`,
 ///        @ref windowing::Swapchain, @ref windowing::FrameLoop — created in
@@ -85,7 +89,9 @@ struct WindowedAppConfig {
 ///       @ref wait_idle after the render loop, before returning, so their
 ///       destruction is safe; a profiler attached via @ref set_profiler is
 ///       likewise destroyed first, so detach it (`set_profiler(nullptr)`)
-///       after idling.
+///       after idling. Moving the app keeps @ref device, @ref allocator,
+///       @ref swapchain and @ref frame_loop where they are, so what was
+///       built on them stays valid.
 ///
 /// @code
 /// VKC_ASSIGN(std::vector<const char*> extensions,
@@ -112,11 +118,11 @@ struct WindowedAppConfig {
 /// @endcode
 class VG_APP_API WindowedApp {
  public:
-  /// @brief Creates the `VkSurfaceKHR` on the instance the app just built.
-  ///        Called once by @ref create; the app adopts (and later destroys)
-  ///        the returned handle. Return a non-OK `core::Status` when the window
-  ///        system fails to create one.
-  using SurfaceFactory = std::function<core::Result<VkSurfaceKHR>(VkInstance)>;
+  /// @brief Creates the `VkSurfaceKHR` on the instance the app just built
+  ///        (@ref windowing::SurfaceFactory). Called once by @ref create; the
+  ///        app adopts (and later destroys) the returned handle. Return a
+  ///        non-OK `core::Status` when the window system fails to create one.
+  using SurfaceFactory = windowing::SurfaceFactory;
 
   /// @brief Construct an empty app (owns nothing; `valid()` is false).
   WindowedApp() = default;
@@ -188,6 +194,28 @@ class VG_APP_API WindowedApp {
   static core::Result<WindowedApp> adopt(const core::AdoptedDevice& adopted,
                                          const WindowedAppConfig& config,
                                          const SurfaceFactory& create_surface);
+
+  /// @brief @ref adopt on @p shared's graphics payload, presenting to the
+  ///        surface @p shared made, which this takes with
+  ///        `core::SharedDevice::release_surface()`.
+  ///
+  /// @code
+  /// VKC_ASSIGN(std::unique_ptr<core::SharedDevice> shared,
+  ///            app::make_shared_device(surface, compute, device_config));
+  /// VKC_ASSIGN(app::WindowedApp app,
+  ///            app::WindowedApp::adopt(*shared, config));
+  /// @endcode
+  /// @param shared  The device the renderer shares with a compute library,
+  ///                from @ref make_shared_device.
+  /// @param config  As the other @ref adopt.
+  /// @return As the other @ref adopt; `core::Status::Code::InvalidArgument`
+  ///         once the surface was taken, or where @p shared made none. An
+  ///         adopt that fails once it took the surface -- in
+  ///         `core::Device::adopt`, the swapchain or the frame loop -- destroys
+  ///         it, so a retry needs a new `core::SharedDevice`.
+  /// @warning @p shared must outlive the returned app.
+  static core::Result<WindowedApp> adopt(core::SharedDevice& shared,
+                                         const WindowedAppConfig& config);
 
   ~WindowedApp() = default;
   WindowedApp(WindowedApp&& other) noexcept = default;

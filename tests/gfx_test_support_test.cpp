@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // gfx_test_support.hpp: the fixtures ask for the renderer's requirements, and
-// the headless-surface instance is validated as the environment asks, or at a
+// the instance for a surface is validated as the environment asks, or at a
 // level a test gives.
 
 #include "gfx_test_support.hpp"
@@ -34,43 +34,44 @@ TEST_F(RendererFixtureTest, SelectsADeviceForTheRenderersRequirements) {
   EXPECT_TRUE(support.ok()) << support.status().message();
 }
 
-// Where the loader offers a headless surface, the instance for it is made,
-// and runs the validation the environment asks for.
-TEST_F(RendererFixtureTest, HeadlessInstanceMeetsTheEnvironmentsValidation) {
-  if (!vg_test::has_headless_surface()) {
-    GTEST_SKIP() << "VK_EXT_headless_surface unavailable";
-  }
-  auto instance = vkc::Instance::create(vg_test::headless_instance_config());
+// The instance for a surface is made, and runs the validation the environment
+// asks for. VK_KHR_surface, which every surface source names, is offered
+// wherever a driver presents.
+TEST_F(RendererFixtureTest, SurfaceInstanceMeetsTheEnvironmentsValidation) {
+  auto instance = vkc::Instance::create(
+      vg_test::surface_instance_config({VK_KHR_SURFACE_EXTENSION_NAME}));
   ASSERT_TRUE(instance.ok()) << instance.status().message();
   const vkc::Status loaded = test::check_layer_loaded(instance.value());
   EXPECT_TRUE(loaded.ok()) << loaded.message();
 }
 
-TEST(HeadlessInstanceConfigTest, ValidatesAsTheEnvironmentAsks) {
+TEST(SurfaceInstanceConfigTest, ValidatesAsTheEnvironmentAsks) {
   const test::ScopedEnv sync("VKC_TEST_SYNC_VALIDATION", nullptr);
   {
     const test::ScopedEnv on("VKC_TEST_VALIDATION", "1");
-    EXPECT_TRUE(vg_test::headless_instance_config().enable_validation);
+    EXPECT_TRUE(vg_test::surface_instance_config({}).enable_validation);
   }
   {
     const test::ScopedEnv off("VKC_TEST_VALIDATION", nullptr);
-    EXPECT_FALSE(vg_test::headless_instance_config().enable_validation);
+    EXPECT_FALSE(vg_test::surface_instance_config({}).enable_validation);
   }
 }
 
 // A test that validates above the environment asks at its own level.
-TEST(HeadlessInstanceConfigTest, ValidatesAtALevelGiven) {
+TEST(SurfaceInstanceConfigTest, ValidatesAtALevelGiven) {
   const test::ScopedEnv sync("VKC_TEST_SYNC_VALIDATION", nullptr);
   const test::ScopedEnv off("VKC_TEST_VALIDATION", nullptr);
-  EXPECT_TRUE(vg_test::headless_instance_config(test::Validation::Sync)
+  EXPECT_TRUE(vg_test::surface_instance_config({}, test::Validation::Sync)
                   .enable_validation);
-  EXPECT_FALSE(vg_test::headless_instance_config(test::Validation::Off)
+  EXPECT_FALSE(vg_test::surface_instance_config({}, test::Validation::Off)
                    .enable_validation);
 }
 
-TEST(HeadlessInstanceConfigTest, AsksForTheSurfaceExtensions) {
+TEST(SurfaceInstanceConfigTest, AsksForTheSurfaceExtensions) {
   const std::vector<const char*> extensions =
-      vg_test::headless_instance_config().extensions;
+      vg_test::surface_instance_config({VK_KHR_SURFACE_EXTENSION_NAME,
+                                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME})
+          .extensions;
   ASSERT_EQ(extensions.size(), 2U);
   EXPECT_EQ(std::string_view(extensions[0]), VK_KHR_SURFACE_EXTENSION_NAME);
   EXPECT_EQ(std::string_view(extensions[1]),

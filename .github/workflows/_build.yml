@@ -478,9 +478,8 @@ jobs:
       # macOS runners are display-less, so the example is build-only there (it is
       # runtime-validated locally on MoltenVK). On the self-hosted GPU box this
       # runs against the real 5090, still under Xvfb since the example opens a
-      # GLFW/X11 window.
-      # TODO: validate NVIDIA + Xvfb presentation on the box; if flaky, drive the
-      # example through VK_EXT_headless_surface (which the NVIDIA ICD supports).
+      # GLFW/X11 window. NVIDIA's ICD offers no VK_EXT_headless_surface, so this
+      # is the box's only present path.
       - name: Run windowed examples (Linux, Xvfb)
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
