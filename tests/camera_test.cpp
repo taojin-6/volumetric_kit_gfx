@@ -16,6 +16,7 @@
 #include <glm/geometric.hpp>  // length
 #include <glm/gtc/constants.hpp>
 #include <glm/trigonometric.hpp>  // radians
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -28,6 +29,24 @@ namespace {
 glm::vec3 to_ndc(const cam::Camera& camera, const glm::vec3& world) {
   const glm::vec4 clip = camera.view_proj() * glm::vec4(world, 1.0f);
   return glm::vec3(clip) / clip.w;
+}
+
+// A world point's place on screen in viewport heights from the centre, +x
+// right and +y down: the unit OrbitCamera's drags take. NDC spans 2 across the
+// height and 2 across the width, which is `aspect` heights.
+glm::vec2 in_heights(const cam::Camera& camera, float aspect,
+                     const glm::vec3& world) {
+  const glm::vec3 ndc = to_ndc(camera, world);
+  return 0.5f * glm::vec2(ndc.x * aspect, ndc.y);
+}
+
+// An orbit camera off every axis, so a drag's sign or axis mix-up shows.
+cam::OrbitCamera oblique_orbit() {
+  cam::OrbitCamera orbit;
+  orbit.set_target({1.0f, -2.0f, 3.0f});
+  orbit.set_distance(5.0f);
+  orbit.orbit(glm::radians(30.0f), glm::radians(20.0f));
+  return orbit;
 }
 
 }  // namespace
@@ -212,26 +231,23 @@ TEST(OrbitCamera, DistanceClampsToPositiveMinimum) {
   EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
 
   orbit.set_distance(10.0f);
-  orbit.zoom(0.0f);  // multiplicative collapse
+  orbit.zoom(1e-6f);  // multiplicative collapse
   EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
 }
 
-// A NaN distance write -- via zoom, set_distance, or dolly -- clamps to the
-// floor instead of poisoning the state (std::max floors it -- the arg order
-// matters for NaN), mirroring CameraRig's NonFiniteFocusDistanceClampsToFloor.
+// A NaN distance write -- via set_distance or dolly -- clamps to the floor
+// instead of poisoning the state (std::max floors it -- the arg order matters
+// for NaN), mirroring CameraRig's NonFiniteFocusDistanceClampsToFloor. zoom
+// ignores a NaN factor (ZoomIgnoresNonPositiveAndNonFiniteFactors).
 TEST(OrbitCamera, NonFiniteDistanceClampsToFloor) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
 
   cam::OrbitCamera orbit;
-  orbit.set_distance(4.0f);
-  orbit.zoom(nan);
+  orbit.set_distance(nan);
   EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
   EXPECT_TRUE(std::isfinite(orbit.eye().x));
   EXPECT_TRUE(std::isfinite(orbit.eye().y));
   EXPECT_TRUE(std::isfinite(orbit.eye().z));
-
-  orbit.set_distance(nan);
-  EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
 
   orbit.dolly(nan);  // kMinDistance + NaN is NaN again; the clamp re-floors it
   EXPECT_FLOAT_EQ(orbit.distance(), cam::OrbitCamera::kMinDistance);
@@ -323,4 +339,145 @@ TEST(OrbitCamera, ToCameraForwardsProjectionArguments) {
   // aspect (and breaks if fovy lands in aspect's slot).
   EXPECT_NEAR(to_ndc(camera, {half * kAspect * kDist, 0.0f, 0.0f}).x, 1.0f,
               1e-4f);
+}
+
+// The scene follows the pointer: a drag right, left, down or up carries a point
+// in front of the target that way on screen, by either verb. The direction is
+// checked, not just a sign, so a swapped axis fails too.
+TEST(OrbitCamera, DragsMoveTheSceneWithThePointer) {
+  constexpr float kFovy = glm::radians(50.0f);
+  constexpr float kAspect = 1.5f;
+  for (const bool pan : {false, true}) {
+    for (const glm::vec2 drag :
+         {glm::vec2(0.05f, 0.0f), glm::vec2(-0.05f, 0.0f),
+          glm::vec2(0.0f, 0.05f), glm::vec2(0.0f, -0.05f)}) {
+      SCOPED_TRACE(testing::Message() << (pan ? "drag_pan " : "drag_orbit ")
+                                      << drag.x << ", " << drag.y);
+      cam::OrbitCamera orbit = oblique_orbit();
+      const glm::vec3 in_front = 0.5f * (orbit.target() + orbit.eye());
+      const glm::vec2 before = in_heights(
+          orbit.to_camera(kFovy, kAspect, 0.1f, 100.0f), kAspect, in_front);
+      if (pan) {
+        orbit.drag_pan(drag, kFovy);
+      } else {
+        orbit.drag_orbit(drag);
+      }
+      const glm::vec2 moved =
+          in_heights(orbit.to_camera(kFovy, kAspect, 0.1f, 100.0f), kAspect,
+                     in_front) -
+          before;
+      EXPECT_GT(glm::dot(glm::normalize(moved), glm::normalize(drag)), 0.95f);
+    }
+  }
+}
+
+// One viewport height dragged turns the eye exactly kDragRadians, half a turn;
+// a vertical drag turns the elevation at the same rate.
+TEST(OrbitCamera, OneViewportHeightTurnsDragRadians) {
+  EXPECT_FLOAT_EQ(cam::OrbitCamera::kDragRadians, glm::pi<float>());
+
+  cam::OrbitCamera orbit;
+  orbit.set_azimuth(0.25f);
+  orbit.set_elevation(-0.5f);
+  orbit.drag_orbit({1.0f, 0.0f});
+  EXPECT_FLOAT_EQ(orbit.azimuth(), 0.25f - cam::OrbitCamera::kDragRadians);
+  EXPECT_FLOAT_EQ(orbit.elevation(), -0.5f);
+
+  orbit.drag_orbit({0.0f, 0.25f});  // a quarter height stays inside the clamp
+  EXPECT_FLOAT_EQ(orbit.azimuth(), 0.25f - cam::OrbitCamera::kDragRadians);
+  EXPECT_FLOAT_EQ(orbit.elevation(),
+                  -0.5f + 0.25f * cam::OrbitCamera::kDragRadians);
+}
+
+// A drag past a pole holds the elevation at the clamp, as orbit does.
+TEST(OrbitCamera, DragOrbitClampsElevation) {
+  cam::OrbitCamera orbit;
+  orbit.drag_orbit({0.0f, 1.0f});  // half a turn up from level
+  EXPECT_FLOAT_EQ(orbit.elevation(), cam::OrbitCamera::kMaxElevation);
+
+  orbit.drag_orbit({0.0f, -3.0f});
+  EXPECT_FLOAT_EQ(orbit.elevation(), -cam::OrbitCamera::kMaxElevation);
+}
+
+// drag_pan keeps the points at the target's depth under the pointer: through
+// to_camera, each moves on screen by exactly the drag, at any field of view.
+TEST(OrbitCamera, DragPanKeepsTargetDepthPointsUnderThePointer) {
+  constexpr float kAspect = 1.5f;
+  const glm::vec2 drag(0.125f, -0.3f);
+  for (const float fovy : {glm::radians(30.0f), glm::radians(75.0f)}) {
+    SCOPED_TRACE(fovy);
+    cam::OrbitCamera orbit = oblique_orbit();
+    // The view's right and up axes: the rows of its rotation.
+    const glm::mat4 view = orbit.view();
+    const glm::vec3 right(view[0][0], view[1][0], view[2][0]);
+    const glm::vec3 up(view[0][1], view[1][1], view[2][1]);
+    const glm::vec3 points[] = {orbit.target(),
+                                orbit.target() + 0.75f * right - 0.5f * up};
+    const cam::Camera before = orbit.to_camera(fovy, kAspect, 0.1f, 100.0f);
+
+    orbit.drag_pan(drag, fovy);
+    const cam::Camera after = orbit.to_camera(fovy, kAspect, 0.1f, 100.0f);
+    for (const glm::vec3& point : points) {
+      const glm::vec2 moved = in_heights(after, kAspect, point) -
+                              in_heights(before, kAspect, point);
+      EXPECT_NEAR(moved.x, drag.x, 1e-5f);
+      EXPECT_NEAR(moved.y, drag.y, 1e-5f);
+    }
+    EXPECT_FLOAT_EQ(orbit.distance(), 5.0f);
+  }
+}
+
+// zoom ignores a factor it cannot scale by -- a pinch can report 0 -- so the
+// distance keeps its value.
+TEST(OrbitCamera, ZoomIgnoresNonPositiveAndNonFiniteFactors) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  cam::OrbitCamera orbit;
+  orbit.set_distance(4.0f);
+  for (const float factor : {0.0f, -0.0f, -0.5f, -kInf, kInf,
+                             std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(factor);
+    orbit.zoom(factor);
+    EXPECT_FLOAT_EQ(orbit.distance(), 4.0f);
+  }
+}
+
+// A non-finite drag -- a delta over a zero height -- or field of view leaves
+// the state as it was instead of poisoning it, by either verb.
+TEST(OrbitCamera, DragsIgnoreNonFiniteInput) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  constexpr float kFovy = glm::radians(50.0f);
+  const cam::OrbitCamera start = oblique_orbit();
+  const auto expect_unchanged = [&](const cam::OrbitCamera& orbit) {
+    EXPECT_EQ(orbit.target(), start.target());
+    EXPECT_EQ(orbit.distance(), start.distance());
+    EXPECT_EQ(orbit.azimuth(), start.azimuth());
+    EXPECT_EQ(orbit.elevation(), start.elevation());
+  };
+  for (const glm::vec2 drag : {glm::vec2(kNan, 0.0f), glm::vec2(0.0f, kNan),
+                               glm::vec2(kInf, 0.0f), glm::vec2(0.0f, -kInf)}) {
+    SCOPED_TRACE(testing::Message() << drag.x << ", " << drag.y);
+    cam::OrbitCamera orbit = start;
+    orbit.drag_orbit(drag);
+    expect_unchanged(orbit);
+    orbit.drag_pan(drag, kFovy);
+    expect_unchanged(orbit);
+  }
+  for (const float fovy : {kNan, kInf}) {
+    SCOPED_TRACE(fovy);
+    cam::OrbitCamera orbit = start;
+    orbit.drag_pan({0.1f, 0.0f}, fovy);
+    expect_unchanged(orbit);
+  }
+}
+
+// A wheel notch in, then one out, returns to the start distance.
+TEST(OrbitCamera, WheelNotchRoundTrips) {
+  cam::OrbitCamera orbit;
+  orbit.set_distance(5.0f);
+  orbit.zoom(std::pow(cam::OrbitCamera::kZoomPerNotch, 1.0f));  // zooms in
+  EXPECT_FLOAT_EQ(orbit.distance(), 4.5f);
+
+  orbit.zoom(std::pow(cam::OrbitCamera::kZoomPerNotch, -1.0f));
+  EXPECT_NEAR(orbit.distance(), 5.0f, 1e-5f);
 }

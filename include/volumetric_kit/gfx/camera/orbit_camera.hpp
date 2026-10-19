@@ -9,9 +9,10 @@
 /// @ref OrbitCamera holds the *state* a turntable / "arcball-lite" interaction
 /// drives -- a `target` point and a spherical offset `{distance, azimuth,
 /// elevation}` -- and derives the eye position and view matrix from it. It owns
-/// no GPU resources and depends only on glm. Feed pointer deltas into
-/// @ref orbit / @ref pan / @ref dolly, then read @ref view or bake a full
-/// @ref to_camera (adding a projection) for submission.
+/// no GPU resources and depends only on glm. Feed drags into @ref drag_orbit /
+/// @ref drag_pan and wheel notches or a pinch into @ref zoom (or angles and
+/// world units into @ref orbit / @ref pan / @ref dolly), then read @ref view or
+/// bake a full @ref to_camera (adding a projection) for submission.
 
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/camera/export.hpp"
@@ -19,6 +20,7 @@
 #include "volumetric_kit/gfx/camera/impl/orientation.hpp"
 //
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 namespace volumetric_kit::gfx::camera {
@@ -43,12 +45,12 @@ namespace volumetric_kit::gfx::camera {
 /// OrbitCamera orbit;
 /// orbit.set_target({0, 0, 0});
 /// orbit.set_distance(5.0f);
-/// orbit.orbit(glm::radians(30.0f), glm::radians(20.0f));  // drag to rotate
-/// orbit.dolly(-1.0f);                                     // wheel to zoom in
-/// Camera cam = orbit.to_camera(glm::radians(60.0f), 16.0f / 9, 0.1f, 100.0f);
+/// const glm::vec2 drag = (cursor - last_cursor) / viewport_height;
+/// orbit.drag_orbit(drag);                                     // left drag
+/// orbit.drag_pan(drag, fovy);                                 // right drag
+/// orbit.zoom(std::pow(OrbitCamera::kZoomPerNotch, notches));  // wheel
+/// Camera cam = orbit.to_camera(fovy, 16.0f / 9, 0.1f, 100.0f);
 /// @endcode
-// TODO: fold OrbitCamera into CameraRig once downstream consumers exist to
-// inform the choice.
 class VG_CAMERA_API OrbitCamera {
  public:
   /// @brief Elevation clamp magnitude: just under a quarter turn (`~89.5°`).
@@ -63,6 +65,12 @@ class VG_CAMERA_API OrbitCamera {
   ///        Shares the camera tier's @ref kMinPivotDistance with
   ///        @ref CameraRig::kMinFocusDistance.
   static constexpr float kMinDistance = kMinPivotDistance;
+
+  /// @brief Radians the eye turns per viewport height dragged: half a turn.
+  static constexpr float kDragRadians = 3.14159265f;
+
+  /// @brief One wheel notch's zoom: `zoom(std::pow(kZoomPerNotch, notches))`.
+  static constexpr float kZoomPerNotch = 0.9f;
 
   /// Construct a default controller: target at the origin, unit distance,
   /// azimuth and elevation zero (eye in front on +Z).
@@ -82,8 +90,8 @@ class VG_CAMERA_API OrbitCamera {
   ///                     moves the target up.
   ///
   /// The deltas are world-unit distances in the current view plane (right / up
-  /// derived from the present orientation); scale them by @ref distance at the
-  /// call site for a zoom-consistent screen feel.
+  /// derived from the present orientation); @ref drag_pan takes a drag on
+  /// screen instead.
   void pan(float delta_right, float delta_up);
 
   /// @brief Move the eye toward or away from the target along the view ray.
@@ -92,12 +100,29 @@ class VG_CAMERA_API OrbitCamera {
   ///               @ref kMinDistance.
   void dolly(float delta);
 
-  /// @brief Scale @ref distance multiplicatively (a wheel-style zoom).
-  /// @param factor  Positive multiplier applied to @ref distance (`< 1` zooms
-  ///                in, `> 1` zooms out). The result is clamped to at least
-  ///                @ref kMinDistance.
-  /// @pre @p factor is > 0.
+  /// @brief Scale @ref distance multiplicatively (a wheel or pinch zoom).
+  /// @param factor  Multiplier applied to @ref distance (`< 1` zooms in, `> 1`
+  ///                zooms out); a pinch is `1 / scale`. The result is clamped
+  ///                to at least @ref kMinDistance. A non-finite or
+  ///                non-positive factor (a pinch can report 0) is ignored.
   void zoom(float factor);
+
+  /// @brief Orbit by a drag; the scene follows the pointer.
+  /// @param drag  The move in viewport heights, +x right, +y down: a cursor or
+  ///              finger delta over the viewport's height in the same unit, so
+  ///              window pixels, framebuffer pixels and UIKit points agree.
+  ///
+  /// The elevation is clamped as in @ref orbit. A non-finite drag (a delta
+  /// over a zero height) is ignored.
+  void drag_orbit(glm::vec2 drag);
+
+  /// @brief Pan by a drag; the point at the target's depth stays under it.
+  /// @param drag          As @ref drag_orbit.
+  /// @param fovy_radians  The vertical field of view the view is drawn with
+  ///                      (`(0, pi)`).
+  ///
+  /// A non-finite drag or field of view is ignored.
+  void drag_pan(glm::vec2 drag, float fovy_radians);
 
   /// @brief Set the point the camera orbits.
   /// @param target  New world-space target.

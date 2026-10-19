@@ -151,11 +151,19 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `app`: `shared_device_config`, the `core::SharedDeviceConfig` for one device
   a windowed renderer and a compute library share, from any window system's
   surface extensions and a `WindowDeviceConfig`.
+- `camera`: `OrbitCamera::drag_orbit` and `drag_pan` take a drag in viewport
+  heights, +x right and +y down, and the scene follows the pointer: one
+  height turns the eye `kDragRadians`, half a turn, and a pan keeps the point
+  at the target's depth under the pointer. `kZoomPerNotch` is one wheel
+  notch's `zoom` factor.
 
 ### Changed
 
 - `camera`: asymmetric orthographic projections flip their Y translation
   along with their scale, keeping off-center boxes inside the viewport.
+- `camera`: `OrbitCamera::zoom` ignores a non-finite or non-positive factor,
+  which a pinch can report, so the distance keeps its value; its precondition
+  is gone.
 - `pipelines`: **`HybridMeshPipeline` owns a fallback atlas**, and a frame
   with no atlas draws in vertex color instead of drawing nothing. Migrating:
   `HybridMeshPipeline::create(device.handle(), layout)` →
