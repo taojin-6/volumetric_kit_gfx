@@ -166,6 +166,45 @@ pipeline draws; and decoding the draw lists on the host each frame.
 windows and anti-aliased text edges read slightly differently from a UNORM
 target.
 
+## 2026-10-19 — ImGui on any window system
+
+**The contract.** gfx draws its ImGui panels the same way on every platform;
+only ImGui's platform half differs. `glfw::ImGuiGlfw` is GLFW's.
+`ui::ImGuiTouch` is the half for a window system ImGui has no backend for
+(UIKit now, Android later), fed by the app: a `DisplayFrame` each frame, and
+touches in points. It reads no window system, so it sits in `ui` beside the
+renderer half. `overlay_config(swapchain)` is the one home of the overlay
+config that gfx's examples, recon's viewers and calib's rig app each wrote.
+
+**Why one finger.** ImGui has one pointer, and a second finger belongs to
+the app's camera gestures (a pinch, a two-finger pan). Each event follows the
+touch-screen mouse source, so ImGui takes a finger's position and its press on
+separate frames: the widget under a finger, which has no hover to come from,
+sees it before the press.
+
+**Why a cancel is not a lift.** UIKit cancels the first finger when a pinch
+or a two-finger pan recognizes. A release where the finger rests would press
+the button under it, so `touch_cancelled` clears the position before it
+releases.
+
+**Why the work inset.** ImGui has no public setting for a per-edge safe area.
+`new_frame` assigns it to the main viewport's build inset
+(`ImGuiViewportP::BuildWorkInsetMin` / `Max`, internal), which
+`ImGui::NewFrame` moves into `WorkPos` / `WorkSize` and then zeroes.
+Assigning rather than adding means a tick the app skips cannot apply it twice;
+the cost is that it replaces what a main menu bar reserved the frame before.
+`imgui_touch_test` pins the behaviour, so an ImGui update that changes these
+internals fails there.
+
+**Why the scale is a config field.** ImGui adds its default font on the first
+frame and picks it by the size set then: the pixel font below 15 px, the
+vector font from there. A setter used after the first frame would stretch the
+pixel font. So `ImGuiOverlay::create` scales the fresh context's default dark
+style, the font size included, before that frame.
+
+**Why `ui` links `windowing`.** `overlay_config` takes a `Swapchain`, and
+`windowing` is left of `ui` in the tier order.
+
 ## 2026-10-18 — Categorical colours
 
 **The contract.** `pipelines::categorical_rgba8(i)` colours item i of a set

@@ -837,12 +837,9 @@ int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
   // layout's color + depth formats, so it draws into the same depth-capable
   // target; the swapchain holds its format + image count stable across
   // recreate, so the overlay survives resizes without rebuilding.
-  vg::ui::ImGuiOverlayConfig overlay_config;
-  overlay_config.layout = app.swapchain().layout();
-  overlay_config.min_image_count = app.swapchain().image_count();
-  overlay_config.image_count = app.swapchain().image_count();
-  auto overlay = vg::ui::ImGuiOverlay::create(
-      app.device(), app.instance().handle(), overlay_config);
+  auto overlay =
+      vg::ui::ImGuiOverlay::create(app.device(), app.instance().handle(),
+                                   vg::ui::overlay_config(app.swapchain()));
   if (!overlay.ok()) {
     std::fprintf(stderr, "overlay: %s\n", overlay.status().message().c_str());
     return 1;

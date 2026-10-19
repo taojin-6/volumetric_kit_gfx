@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// ImGuiOverlay: empty/default + argument validation, the move-only lifecycle
-// (it owns an ImGui context + imgui_impl_vulkan backend), and an end-to-end
-// new_frame -> build UI -> render into an offscreen target's dynamic-rendering
-// scope. The GPU cases skip when no Vulkan device is present; the headless path
-// exercises the real backend (font-atlas upload included) without a window.
+// ImGuiOverlay: empty/default + argument validation, the UI scale, the
+// move-only lifecycle (it owns an ImGui context + imgui_impl_vulkan backend),
+// and an end-to-end new_frame -> build UI -> render into an offscreen target's
+// dynamic-rendering scope. The GPU cases skip when no Vulkan device is present;
+// the headless path exercises the real backend (font-atlas upload included)
+// without a window.
 
 #include <gtest/gtest.h>
 
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <future>
+#include <limits>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -184,6 +186,67 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
       ui::ImGuiOverlay::create(device(), instance().handle(), config);
   ASSERT_FALSE(overlay.ok());
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+TEST_F(ImGuiOverlayDeviceTest, ScaleNotFiniteAndPositiveRejected) {
+  for (const float scale :
+       {0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity()}) {
+    SCOPED_TRACE(::testing::Message() << "scale " << scale);
+    ui::ImGuiOverlayConfig config = make_config(color_layout());
+    config.scale = scale;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    ASSERT_FALSE(overlay.ok());
+    EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
+  }
+}
+
+// --- Scale ------------------------------------------------------------------
+
+// The scale multiplies the style's sizes and the font ImGui draws with, from
+// what an overlay at scale 1 has.
+TEST_F(ImGuiOverlayDeviceTest, ScaleSizesTheStyleAndTheFont) {
+  vg::OffscreenTarget target = make_target();
+  struct Sizes {
+    ImGuiStyle style;
+    float font = 0.0f;
+  };
+  const auto sizes_at = [&](float scale) {
+    ui::ImGuiOverlayConfig config = make_config(target.layout());
+    config.scale = scale;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    EXPECT_TRUE(overlay.ok()) << overlay.status().message();
+    Sizes sizes;
+    if (!overlay.ok()) return sizes;
+    ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+    overlay.value().new_frame();
+    sizes.style = ImGui::GetStyle();
+    sizes.font = ImGui::GetFontSize();
+    render(target, overlay.value());
+    vkDeviceWaitIdle(device().handle());
+    return sizes;
+  };
+  const Sizes one = sizes_at(1.0f);
+  const Sizes two = sizes_at(2.0f);
+  ASSERT_GT(one.font, 0.0f);
+  EXPECT_FLOAT_EQ(two.font, 2.0f * one.font);
+  const auto expect_doubled = [](ImVec2 at_one, ImVec2 at_two) {
+    EXPECT_FLOAT_EQ(at_two.x, 2.0f * at_one.x);
+    EXPECT_FLOAT_EQ(at_two.y, 2.0f * at_one.y);
+  };
+  expect_doubled(one.style.WindowPadding, two.style.WindowPadding);
+  expect_doubled(one.style.FramePadding, two.style.FramePadding);
+  expect_doubled(one.style.ItemSpacing, two.style.ItemSpacing);
+  ASSERT_GT(one.style.ScrollbarRounding, 0.0f);
+  EXPECT_FLOAT_EQ(two.style.ScrollbarRounding,
+                  2.0f * one.style.ScrollbarRounding);
+  ASSERT_GT(one.style.TabRounding, 0.0f);
+  EXPECT_FLOAT_EQ(two.style.TabRounding, 2.0f * one.style.TabRounding);
+  // Scale 1 is ImGui's default style.
+  const ImGuiStyle defaults;
+  expect_doubled(defaults.WindowPadding, two.style.WindowPadding);
 }
 
 // --- Move-only lifecycle ----------------------------------------------------

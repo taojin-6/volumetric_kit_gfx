@@ -3,7 +3,8 @@
 
 // Windowing tier on a headless surface (VK_EXT_headless_surface): swapchain
 // creation, the FrameLoop acquire -> render -> present choreography, recreate,
-// and resource ownership. The whole suite skips when the runner has no
+// resource ownership, and the ImGui overlay's config from a swapchain
+// (ui::overlay_config). The whole suite skips when the runner has no
 // headless surface or no present-capable device, so it needs no display.
 
 #include <gtest/gtest.h>
@@ -26,6 +27,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
+#include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
@@ -410,6 +412,22 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
                                    &allocator_.value());
   ASSERT_FALSE(sc.ok());
   EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+// ui::overlay_config fills an overlay's config from a swapchain: its layout,
+// depth included, and its image count as both counts. An overlay builds on it.
+TEST_F(WindowingTest, OverlayConfigCarriesTheSwapchainsLayoutAndCount) {
+  win::Swapchain sc = make_depth_swapchain();
+  ASSERT_TRUE(sc.valid());
+  const vg::ui::ImGuiOverlayConfig config = vg::ui::overlay_config(sc);
+  EXPECT_TRUE(config.layout.compatible_with(sc.layout()));
+  EXPECT_EQ(config.layout.depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_EQ(config.min_image_count, sc.image_count());
+  EXPECT_EQ(config.image_count, sc.image_count());
+  EXPECT_EQ(config.scale, 1.0f);
+  auto overlay = vg::ui::ImGuiOverlay::create(
+      *device_, headless_instance_->handle(), config);
+  EXPECT_TRUE(overlay.ok()) << overlay.status().message();
 }
 
 // begin_frame on a loop whose borrowed swapchain has been emptied (moved-from,
