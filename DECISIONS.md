@@ -116,6 +116,32 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-16 — Points come straight from depth buffers.** `pipelines::DepthCloudPipeline`
   reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
   the host folds into matrices. See the dated entry below.
+- **2026-10-19 — Camera input is gestures.** On every platform, `camera::OrbitCamera`
+  takes drags in viewport heights and zoom factors, never raw pointer events, and no
+  platform-neutral tier routes them. See the dated entry below.
+
+## 2026-10-19 — Gestures drive the orbit camera
+
+**The contract.** `camera::OrbitCamera` takes the same gestures on every
+platform: drags in viewport heights (`drag_orbit`, `drag_pan`) and zoom
+factors (`zoom`, for a wheel or a pinch). Each shell divides its pointer or
+finger delta by the viewport's height in the same unit --
+`glfw::cursor_in_framebuffer` over the viewport's height in framebuffer
+pixels, UIKit's translation over the view's -- and calls the same verbs, so
+the mapping from a gesture to the camera has one home.
+
+**Why the shell routes.** Which button or finger count orbits, whether ImGui
+holds the pointer, and how a wheel's notches accumulate differ per window
+system, so the shell owns them: the camera takes no raw pointer events, and
+no platform-neutral tier (`camera`, `ui`, `app`, `windowing`) decides where
+one goes. The GLFW half of that glue -- scroll and key queues, the drag
+latch, ImGui capture -- belongs in `gfx_glfw`, deferred as calib's input-glue
+TODO (`calib_rig.cpp`) records.
+
+**Why OrbitCamera stays.** It is the turntable controller, no longer waiting
+to fold into `CameraRig`: its users -- calib's 3D view, and the player's --
+set and read a target, a distance and two angles, and a fold would change
+their code for no new behaviour.
 
 ## 2026-10-18 — Categorical colours
 
