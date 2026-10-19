@@ -58,8 +58,9 @@ struct VG_GLFW_API WindowDeleter {
 /// @brief An owned GLFW window.
 using Window = std::unique_ptr<GLFWwindow, WindowDeleter>;
 
-/// @brief A window with no client API, for Vulkan to present to. Other
-///        window hints stay as the caller set them.
+/// @brief A window with no client API, for Vulkan to present to. It sets the
+///        `GLFW_CLIENT_API` hint to `GLFW_NO_API`, which stays set for later
+///        windows; other hints stay as the caller set them.
 ///
 /// @code
 /// auto window = glfw::create_window(1280, 720, "viewer");

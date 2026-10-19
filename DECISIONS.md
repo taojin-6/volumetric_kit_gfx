@@ -138,19 +138,19 @@ header names an Objective-C type, and the entry point is resolved on the
 instance, so the source builds, and its refusals test, on every OS. Only a
 test on Apple makes the surface.
 
-**Why one headless factory.** `Surface::headless` and the app tests each made
-the headless surface, and the test support probed the loader for it.
-`headless_surface()` is now the one home, and its `Unsupported` is the probe:
-NVIDIA's ICD offers no `VK_EXT_headless_surface`, while Lavapipe and MoltenVK
-do. So on Apple the shared-device cases run, and a skip there fails.
+**One headless factory.** `headless_surface()` is the one home of the
+headless factory and of the loader probe, its `Unsupported`;
+`Surface::headless` and the tests take it. NVIDIA's ICD offers no
+`VK_EXT_headless_surface`, while Lavapipe and MoltenVK do, so on Apple the
+shared-device cases run, and a skip there fails.
 
-**Why adopt takes the `SharedDevice`.** recon's viewers, calib's rig app and
-ios's scanner each wrote the adopt lambda over `release_surface()`. A second
-adopt is refused, naming the taken surface, rather than handed a null one.
+**Why adopt takes the `SharedDevice`.** The surface a shared device made is
+the renderer's to take, once, so the overload takes it and no consumer writes
+the adopt lambda over `release_surface()`. A later adopt is refused, naming
+why, rather than handed a null surface.
 
 **GLFW's init and window.** `glfw::Library` and `glfw::create_window` are the
-init guard and the no-API window each GLFW application wrote; gfx's examples
-use them.
+one home of GLFW's init guard and its no-API window; gfx's examples use them.
 
 ## 2026-10-18 — Categorical colours
 

@@ -150,16 +150,16 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `windowing`: `SurfaceSource` (`windowing/surface_source.hpp`), a window
   system's instance extensions and surface factory together, with
   `headless_surface()` (`Unsupported` where the loader offers no
-  `VK_EXT_headless_surface`, as NVIDIA's does not) and `metal_surface(layer)`,
-  over a `CAMetalLayer`, as iOS presents. `Surface::headless` wraps
+  `VK_EXT_headless_surface`) and `metal_surface(layer)`, over a
+  `CAMetalLayer`, as iOS presents. `Surface::headless` wraps
   `headless_surface()`. `Frame::slot` is documented for per-slot consumers.
 - `glfw`: `surface_source(window)`; `Library`, GLFW initialized while it
   lives; and `create_window`, an owned `Window` with no client API. gfx's
   examples use them.
 - `app`: `make_shared_device(surface, compute, config)`, the shared device on
   any `SurfaceSource`, and `WindowedApp::adopt(shared, config)`, which adopts
-  a `core::SharedDevice` and takes its surface; a second adopt is refused with
-  `InvalidArgument`. `glfw::make_shared_device` wraps the former, and
+  a `core::SharedDevice` and takes its surface, once: a later adopt is refused
+  with `InvalidArgument`. `glfw::make_shared_device` wraps the former, and
   `WindowedApp::SurfaceFactory` is `windowing::SurfaceFactory`, so callers are
   unchanged.
 
