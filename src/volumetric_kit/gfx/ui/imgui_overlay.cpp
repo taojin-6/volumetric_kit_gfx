@@ -108,9 +108,7 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   init.PipelineInfoMain.MSAASamples = config.layout.samples;
   init.PipelineInfoMain.PipelineRenderingCreateInfo = rendering;
   init.CheckVkResultFn = &log_vk_result;
-  // ImGui's colours are sRGB-encoded, and upstream's shader writes them as
-  // given, which a UNORM target stores as they are. A target that encodes or
-  // stores linear light takes the variant, which decodes them first. Its
+  // The decoding variant (DECISIONS.md, "ImGui's colours as authored"). Its
   // SPIR-V is static, so it outlives the backend, as the backend requires.
   if (takes_linear_light(config.layout.color_formats[0])) {
     VkShaderModuleCreateInfo& frag = init.CustomShaderFragCreateInfo;

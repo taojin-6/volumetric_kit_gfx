@@ -123,7 +123,7 @@ what has landed since then. Record amendments when a contract changes.
 `IM_COL32` marks -- as authored on any target, as the pipelines show
 `pack_rgba8` colours. ImGui's colours are sRGB-encoded, and upstream's
 fragment shader writes them as given, which suits a UNORM target; an `_SRGB`
-target, the default swapchain's, encoded them again. Where the first color
+target, the default swapchain's, would encode them again. Where the first color
 attachment takes linear light (`_SRGB` or float, the pipelines' rule),
 `create` gives the backend a variant of that shader which decodes the vertex
 colour first.
