@@ -21,6 +21,7 @@
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/image_copy_layout.hpp"
 #include "volumetric_kit/gfx/core/mip_chain.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"

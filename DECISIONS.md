@@ -143,6 +143,29 @@ to fold into `CameraRig`: its users -- calib's 3D view, and the player's --
 set and read a target, a distance and two angles, and a fold would change
 their code for no new behaviour.
 
+## 2026-10-19 — ImGui's colours as authored
+
+**The contract.** `ui::ImGuiOverlay` shows ImGui's colours -- its theme and
+`IM_COL32` marks -- as authored on any target, as the pipelines show
+`pack_rgba8` colours. ImGui's colours are sRGB-encoded, and upstream's
+fragment shader writes them as given, which suits a UNORM target; an `_SRGB`
+target, the default swapchain's, would encode them again. Where the first color
+attachment takes linear light (`_SRGB` or float, the pipelines' rule),
+`create` gives the backend a variant of that shader which decodes the vertex
+colour first.
+
+**Why a derived shader.** The ui build derives the variant from the fetched
+`glsl_shader.frag` at configure time, as it patches the scissor ("Pictures
+written in regions", below), and fails if a line it rewrites changes
+upstream. It takes the curve from `shaders/common/srgb.glsl` and reaches the
+backend through `CustomShaderFragCreateInfo`, so it copies neither upstream's
+interface nor the curve. Rejected: a UNORM swapchain, which changes how every
+pipeline draws; and decoding the draw lists on the host each frame.
+
+**The cost.** On such a target ImGui blends in linear light, so translucent
+windows and anti-aliased text edges read slightly differently from a UNORM
+target.
+
 ## 2026-10-18 — Categorical colours
 
 **The contract.** `pipelines::categorical_rgba8(i)` colours item i of a set

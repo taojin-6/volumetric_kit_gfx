@@ -63,9 +63,8 @@ inline constexpr std::size_t kCategoricalPaletteSize = 7;
 /// @endcode
 /// @param index  The item's index in its set; any value.
 /// @return The item's colour as @ref pack_rgba8 packs it, opaque. `IM_COL32`
-///         packs the same layout, but ImGui writes its bytes unconverted, so
-///         it shows this colour on a `_UNORM` target only; on an `_SRGB`
-///         one, such as the default swapchain's, decode them to linear first.
+///         packs the same layout, and `ui::ImGuiOverlay` shows it as the
+///         pipelines do on any target.
 inline uint32_t categorical_rgba8(std::size_t index) noexcept {
   constexpr uint32_t kOkabeIto[kCategoricalPaletteSize] = {
       pack_rgba8(230, 159, 0),  pack_rgba8(86, 180, 233),

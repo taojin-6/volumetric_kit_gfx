@@ -13,11 +13,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <future>
 #include <mutex>
 #include <utility>
 #include <vector>
 
+#include <glm/gtc/packing.hpp>
+
+#include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "imgui.h"
 #include "ui_test_support.hpp"
@@ -61,10 +65,11 @@ class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
     return config;
   }
 
-  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64}) {
+  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64},
+                                  VkFormat format = kFormat) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
-    desc.color_format = kFormat;
+    desc.color_format = format;
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
@@ -267,6 +272,74 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device().handle());
+}
+
+// ImGui's colours show as authored on every target: a UNORM target stores and
+// blends their bytes as given; on an sRGB or float target the overlay decodes
+// them first, so the target blends and stores their linear light, which an
+// sRGB one encodes back. The right half is drawn translucent over black.
+TEST_F(ImGuiOverlayDeviceTest, ColoursShowAsAuthoredOnEveryTarget) {
+  constexpr uint8_t kColour[3] = {200, 100, 50};
+  constexpr uint8_t kAlpha = 128;
+  struct Case {
+    VkFormat format;
+    double scale;      // a stored value per unit: 255 for a byte, 1 for a half
+    double tolerance;  // in stored values
+  };
+  // What `format` stores, in [0, 1], for colour byte `byte` at `alpha`.
+  const auto expected = [](VkFormat format, uint8_t byte, double alpha) {
+    const double light = vg_test::srgb_to_linear(byte / 255.0) * alpha;
+    switch (format) {
+      case VK_FORMAT_R8G8B8A8_UNORM:
+        return byte / 255.0 * alpha;
+      case VK_FORMAT_R8G8B8A8_SRGB:
+        return vg_test::linear_to_srgb(light);
+      default:
+        return light;
+    }
+  };
+  for (const Case c : {Case{VK_FORMAT_R8G8B8A8_UNORM, 255.0, 1.0},
+                       Case{VK_FORMAT_R8G8B8A8_SRGB, 255.0, 1.0},
+                       Case{VK_FORMAT_R16G16B16A16_SFLOAT, 1.0, 2e-3}}) {
+    SCOPED_TRACE(::testing::Message() << "format " << c.format);
+    vg::OffscreenTarget target = make_target({64, 64}, c.format);
+    ui::ImGuiOverlay overlay = make_overlay(target.layout());
+    ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+    overlay.new_frame();
+    ImDrawList* draw = ImGui::GetBackgroundDrawList();
+    draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(32.0f, 64.0f),
+                        IM_COL32(kColour[0], kColour[1], kColour[2], 255));
+    draw->AddRectFilled(ImVec2(32.0f, 0.0f), ImVec2(64.0f, 64.0f),
+                        IM_COL32(kColour[0], kColour[1], kColour[2], kAlpha));
+    ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+    const auto* px = static_cast<const uint8_t*>(target.pixels());
+    ASSERT_NE(px, nullptr);
+    // Channel `ch` of texel (x, 32), as stored: a byte or a half.
+    const auto stored = [&](uint32_t x, int ch) -> double {
+      const size_t texel = size_t{32} * 64 + x;
+      if (c.format != VK_FORMAT_R16G16B16A16_SFLOAT) {
+        return px[texel * 4 + ch];
+      }
+      uint16_t half = 0;
+      std::memcpy(&half, px + texel * 8 + ch * 2, sizeof(half));
+      return glm::unpackHalf1x16(half);
+    };
+    struct Half {
+      uint32_t x;
+      double alpha;
+    };
+    for (const Half h : {Half{16, 1.0}, Half{48, kAlpha / 255.0}}) {
+      SCOPED_TRACE(::testing::Message() << "alpha " << h.alpha);
+      for (int ch = 0; ch < 3; ++ch) {
+        EXPECT_NEAR(stored(h.x, ch),
+                    c.scale * expected(c.format, kColour[ch], h.alpha),
+                    c.tolerance);
+      }
+      EXPECT_NEAR(stored(h.x, 3), c.scale, c.tolerance);
+    }
+    vkDeviceWaitIdle(device().handle());
+  }
 }
 
 // A region's grid, rendered: at any sub-pixel phase, with or without

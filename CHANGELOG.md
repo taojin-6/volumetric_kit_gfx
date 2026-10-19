@@ -8,6 +8,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Fixed
 
+- `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that
+  takes linear light (`_SRGB` or float). On the default `_SRGB` swapchain,
+  every consumer's panels show their authored colours; ImGui's `WindowBg`
+  (byte 15) showed as byte 69. No consumer code changes.
 - `DepthCloudPipeline` preserves border colours for coincident depth and
   colour cameras and rejects oversized images before byte-count overflow.
   Its cross-queue contract now requires a producer-signalled GPU semaphore
