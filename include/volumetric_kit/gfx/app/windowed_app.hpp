@@ -89,7 +89,9 @@ struct WindowedAppConfig {
 ///       @ref wait_idle after the render loop, before returning, so their
 ///       destruction is safe; a profiler attached via @ref set_profiler is
 ///       likewise destroyed first, so detach it (`set_profiler(nullptr)`)
-///       after idling.
+///       after idling. Moving the app keeps @ref device, @ref allocator,
+///       @ref swapchain and @ref frame_loop where they are, so what was
+///       built on them stays valid.
 ///
 /// @code
 /// VKC_ASSIGN(std::vector<const char*> extensions,

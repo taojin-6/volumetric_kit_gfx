@@ -344,10 +344,19 @@ TEST_F(WindowedAppTest, NullSurfaceFromFactoryIsRejected) {
 TEST_F(WindowedAppTest, MoveLeavesSourceEmpty) {
   vg::app::WindowedApp src = make_app(surface_config());
   ASSERT_TRUE(src.valid());
+  const vkc::Device* device = &src.device();
+  const vkc::Allocator* allocator = &src.allocator();
+  const win::Swapchain* swapchain = &src.swapchain();
+  const win::FrameLoop* frame_loop = &src.frame_loop();
 
   vg::app::WindowedApp moved(std::move(src));
   EXPECT_TRUE(moved.valid());
   EXPECT_FALSE(src.valid());  // NOLINT(bugprone-use-after-move)
+  // The header's promise: what was built on these before the move stays valid.
+  EXPECT_EQ(&moved.device(), device);
+  EXPECT_EQ(&moved.allocator(), allocator);
+  EXPECT_EQ(&moved.swapchain(), swapchain);
+  EXPECT_EQ(&moved.frame_loop(), frame_loop);
 
   // The moved-to app still renders: the loop's borrowed swapchain/device
   // addresses survived the move (the chain lives behind one stable pointer).
