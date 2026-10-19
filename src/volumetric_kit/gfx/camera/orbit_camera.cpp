@@ -12,6 +12,13 @@
 #include <glm/ext/matrix_transform.hpp>  // lookAt
 
 namespace volumetric_kit::gfx::camera {
+namespace {
+
+// A NaN or infinite move would poison the state for good, so a drag that
+// makes one is ignored.
+bool is_finite(glm::vec2 v) { return std::isfinite(v.x) && std::isfinite(v.y); }
+
+}  // namespace
 
 void OrbitCamera::orbit(float delta_azimuth, float delta_elevation) {
   azimuth_ += delta_azimuth;
@@ -35,13 +42,17 @@ void OrbitCamera::zoom(float factor) {
 void OrbitCamera::drag_orbit(glm::vec2 drag) {
   // The eye turns against the drag, so the scene turns with it: a drag right
   // swings the eye left, and a drag down raises it.
-  orbit(-kDragRadians * drag.x, kDragRadians * drag.y);
+  const glm::vec2 turn = kDragRadians * drag;
+  if (!is_finite(turn)) return;
+  orbit(-turn.x, turn.y);
 }
 
 void OrbitCamera::drag_pan(glm::vec2 drag, float fovy_radians) {
   // The world height the viewport spans at the target's depth.
   const float height = 2.0f * distance_ * std::tan(0.5f * fovy_radians);
-  pan(-drag.x * height, drag.y * height);
+  const glm::vec2 move = height * drag;
+  if (!is_finite(move)) return;
+  pan(-move.x, move.y);
 }
 
 void OrbitCamera::set_distance(float distance) noexcept {

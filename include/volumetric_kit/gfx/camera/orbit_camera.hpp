@@ -90,8 +90,8 @@ class VG_CAMERA_API OrbitCamera {
   ///                     moves the target up.
   ///
   /// The deltas are world-unit distances in the current view plane (right / up
-  /// derived from the present orientation); scale them by @ref distance at the
-  /// call site for a zoom-consistent screen feel.
+  /// derived from the present orientation); @ref drag_pan takes a drag on
+  /// screen instead.
   void pan(float delta_right, float delta_up);
 
   /// @brief Move the eye toward or away from the target along the view ray.
@@ -112,14 +112,16 @@ class VG_CAMERA_API OrbitCamera {
   ///              finger delta over the viewport's height in the same unit, so
   ///              window pixels, framebuffer pixels and UIKit points agree.
   ///
-  /// One viewport height turns the eye @ref kDragRadians; the elevation is
-  /// clamped as in @ref orbit.
+  /// The elevation is clamped as in @ref orbit. A non-finite drag (a delta
+  /// over a zero height) is ignored.
   void drag_orbit(glm::vec2 drag);
 
   /// @brief Pan by a drag; the point at the target's depth stays under it.
   /// @param drag          As @ref drag_orbit.
   /// @param fovy_radians  The vertical field of view the view is drawn with
   ///                      (`(0, pi)`).
+  ///
+  /// A non-finite drag or field of view is ignored.
   void drag_pan(glm::vec2 drag, float fovy_radians);
 
   /// @brief Set the point the camera orbits.

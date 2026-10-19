@@ -441,6 +441,36 @@ TEST(OrbitCamera, ZoomIgnoresNonPositiveAndNonFiniteFactors) {
   }
 }
 
+// A non-finite drag -- a delta over a zero height -- or field of view leaves
+// the state as it was instead of poisoning it, by either verb.
+TEST(OrbitCamera, DragsIgnoreNonFiniteInput) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  constexpr float kFovy = glm::radians(50.0f);
+  const cam::OrbitCamera start = oblique_orbit();
+  const auto expect_unchanged = [&](const cam::OrbitCamera& orbit) {
+    EXPECT_EQ(orbit.target(), start.target());
+    EXPECT_EQ(orbit.distance(), start.distance());
+    EXPECT_EQ(orbit.azimuth(), start.azimuth());
+    EXPECT_EQ(orbit.elevation(), start.elevation());
+  };
+  for (const glm::vec2 drag : {glm::vec2(kNan, 0.0f), glm::vec2(0.0f, kNan),
+                               glm::vec2(kInf, 0.0f), glm::vec2(0.0f, -kInf)}) {
+    SCOPED_TRACE(testing::Message() << drag.x << ", " << drag.y);
+    cam::OrbitCamera orbit = start;
+    orbit.drag_orbit(drag);
+    expect_unchanged(orbit);
+    orbit.drag_pan(drag, kFovy);
+    expect_unchanged(orbit);
+  }
+  for (const float fovy : {kNan, kInf}) {
+    SCOPED_TRACE(fovy);
+    cam::OrbitCamera orbit = start;
+    orbit.drag_pan({0.1f, 0.0f}, fovy);
+    expect_unchanged(orbit);
+  }
+}
+
 // A wheel notch in, then one out, returns to the start distance.
 TEST(OrbitCamera, WheelNotchRoundTrips) {
   cam::OrbitCamera orbit;
