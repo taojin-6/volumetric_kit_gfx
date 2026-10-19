@@ -16,8 +16,8 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_windowing)
 add_library(volumetric_kit::gfx_windowing ALIAS gfx_windowing)
 
-target_sources(gfx_windowing PRIVATE surface.cpp surface_source.cpp swapchain.cpp
-                                     frame_loop.cpp)
+target_sources(gfx_windowing PRIVATE surface.cpp surface_source.cpp
+                                     swapchain.cpp frame_loop.cpp)
 
 generate_export_header(
   gfx_windowing

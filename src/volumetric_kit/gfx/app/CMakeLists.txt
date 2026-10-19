@@ -8,8 +8,8 @@
 # creation); HeadlessApp is the surface-free instance -> device -> allocator
 # chain; make_shared_device builds the device a windowed app shares with a
 # compute library. Depends on gfx_core + gfx_windowing; GLFW-free like
-# windowing -- the consumer supplies a windowing::SurfaceSource, or the instance
-# extensions and a surface-creation callback.
+# windowing, so the consumer supplies a windowing::SurfaceSource, or the
+# instance extensions and a surface-creation callback.
 #
 # TODO: app/streamed_app (dynamic content; double-buffer + frame queue) joins
 # this tier once the interop tier that feeds it lands.
