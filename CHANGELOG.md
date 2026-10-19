@@ -23,6 +23,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- **gfx builds for iOS as the top-level project**: `-G Xcode
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0`, with `MoltenVK_ROOT` naming MoltenVK's
+  iOS release for the core (DECISIONS.md, "Vulkan headers come from the
+  system"). CI builds the libraries for iphoneos on the Debug Mac leg.
 - Examples read a shared JSON run configuration through core's optional
   `core_config` target. The command line is `--config <file>` or `--help`;
   defaults and validation belong to core, while renderer APIs remain typed.

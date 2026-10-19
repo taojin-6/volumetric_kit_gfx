@@ -411,13 +411,15 @@ jobs:
           cmake --build "$consumer/build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # gfx must stay generatable with -G Xcode -- that is the generator an iOS
-      # or macOS app bundle consumes. What regresses is the *generate*, not the
-      # build (e.g. a custom command reachable from two targets with no edge
-      # between them, which Xcode rejects outright), so generating is the whole
-      # check and no xcodebuild is needed. The Makefile legs above cannot see
-      # it. Xcode is multi-config, so one generate covers both build types --
-      # run it on the Debug leg only.
-      - name: Xcode generate check (macOS)
+      # or macOS app bundle consumes. What regresses on macOS is the *generate*,
+      # not the build (e.g. a custom command reachable from two targets with no
+      # edge between them, which Xcode rejects outright), so generating is the
+      # macOS check. The Makefile legs above cannot see it. The libraries are
+      # then built for iOS, which only a build checks: a compile that breaks on
+      # iOS alone, or a find that runs before the core's iOS module. Xcode is
+      # multi-config, so one generate covers both build types -- run it on the
+      # Debug leg only.
+      - name: Xcode generate check and iOS build (macOS)
         if: >-
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
           && matrix.build_type == 'Debug'
@@ -470,6 +472,22 @@ jobs:
           done
           rm -rf build-xcode
           cmake -S . -B build-xcode -G Xcode "${flags[@]}"
+
+          # The libraries for iPhone and iPad, against MoltenVK's iOS release:
+          # the core's cmake/vkc_ios.cmake reads MoltenVK_ROOT, which the
+          # runner's .env sets (the core's tools/runners/README.md, "Macs").
+          if [ -z "${MoltenVK_ROOT:-}" ]; then
+            echo "::error::MoltenVK_ROOT is not set: the iOS build needs MoltenVK's iOS release, named in this runner's .env by the core's setup-runners.sh"
+            exit 1
+          fi
+          rm -rf build-ios
+          cmake -S . -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+            -DVG_BUILD_TESTS=OFF -DVG_BUILD_EXAMPLES=OFF -DVG_WITH_GLFW=OFF \
+            "${flags[@]}"
+          cmake --build build-ios --config Debug \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
+            -- CODE_SIGNING_ALLOWED=NO
 
       # Runtime-validate the windowing tier through the real window -> surface ->
       # swapchain -> present path, which the headless-surface tests do not
