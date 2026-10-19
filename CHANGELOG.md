@@ -78,12 +78,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - `ui`: **ImGui on any window system.** `ImGuiTouch` (`ui/imgui_touch.hpp`)
   is the platform half for one ImGui has no backend for (UIKit, later
   Android): the app feeds it a `DisplayFrame` -- pixels, pixels per point, the
-  safe area and the clock -- and touches in points, and the first finger down
-  is ImGui's pointer. `ImGuiOverlayConfig::scale` sizes the font and the
-  style. `overlay_config(swapchain)` is the config that
-  draws into a swapchain, which gfx's examples use; recon's viewers and
-  calib's rig app move onto it at their next gfx bump. `gfx_ui` links
-  `gfx_windowing` PUBLIC.
+  safe area and the clock -- and touches in points, a cancel apart from a
+  lift, and the first finger down is ImGui's pointer.
+  `ImGuiOverlayConfig::scale` sizes the font and the style.
+  `overlay_config(swapchain)` is the config that draws into a swapchain,
+  which gfx's examples use; recon's viewers and calib's rig app move onto it
+  at their next gfx bump. `gfx_ui` links `gfx_windowing` PUBLIC.
 - `core`: `cmd_generate_mips`, `mip_level_count` and `mip_level_extent`
   (`core/mip_chain.hpp`) build a mip chain on the GPU from level 0, for an
   image filled any way; `UploadBatch`'s `generate_mips` uses them.

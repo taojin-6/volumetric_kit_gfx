@@ -133,6 +133,11 @@ touch-screen mouse source, so ImGui takes a finger's position and its press on
 separate frames: the widget under a finger, which has no hover to come from,
 sees it before the press.
 
+**Why a cancel is not a lift.** UIKit cancels the first finger when a pinch
+or a two-finger pan recognizes. A release where the finger rests would press
+the button under it, so `touch_cancelled` clears the position before it
+releases.
+
 **Why the work inset.** ImGui has no public setting for a per-edge safe area.
 `new_frame` assigns it to the main viewport's build inset
 (`ImGuiViewportP::BuildWorkInsetMin` / `Max`, internal), which

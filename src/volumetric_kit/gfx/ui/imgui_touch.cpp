@@ -10,7 +10,7 @@
 
 #include "imgui.h"
 // For the context's IO and its main viewport's work inset (ImGuiViewportP),
-// which has no public setter; ui_test pins what this relies on.
+// which has no public setter; imgui_touch_test pins what this relies on.
 #include "imgui_internal.h"
 
 namespace volumetric_kit::gfx::ui {
@@ -122,6 +122,21 @@ void ImGuiTouch::touch_ended(std::uintptr_t finger) {
   io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
   // No hover once the finger is gone.
   io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+}
+
+void ImGuiTouch::touch_cancelled(std::uintptr_t finger) {
+  if (finger_ != finger) {
+    return;
+  }
+  finger_.reset();
+  // The position clears first, so the release lands on no widget. ImGui holds
+  // a touch-screen release back a frame after a move, which would leave a held
+  // slider down at the cleared position; a mouse release it takes in the same
+  // frame.
+  touch_io(context_).AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+  ImGuiIO& io = context_.IO;
+  io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
 }
 
 }  // namespace volumetric_kit::gfx::ui

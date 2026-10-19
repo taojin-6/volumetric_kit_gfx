@@ -51,7 +51,7 @@ struct DisplayFrame {
 /// The first finger down is ImGui's pointer until it lifts or is cancelled.
 /// Later fingers are ignored, so a pinch or a two-finger pan reaches only the
 /// app. The finger is a touch-screen pointer: it has no hover, and its position
-/// is cleared on lift. Each frame: @ref new_frame, then
+/// is cleared when it goes. Each frame: @ref new_frame, then
 /// @ref ImGuiOverlay::new_frame. After that frame, `WantCaptureMouse` says
 /// whether a finger that landed before it is on a panel.
 ///
@@ -86,9 +86,12 @@ class VG_UI_API ImGuiTouch {
   ImGuiTouch(ImGuiTouch&&) = delete;
   ImGuiTouch& operator=(ImGuiTouch&&) = delete;
 
-  /// @brief This frame's display and clock. The safe area is assigned (never
-  ///        added) to the work inset each call, so a tick the app skips does
-  ///        not apply it twice; it replaces any inset a main menu bar reserved.
+  /// @brief This frame's display and clock.
+  ///
+  /// The safe area is assigned (never added) to the work inset each call, so a
+  /// tick the app skips does not apply it twice. ImGui's main menu bar and
+  /// viewport side bars ignore it, and it replaces the inset they reserved:
+  /// place panels from the main viewport's `WorkPos`.
   /// @param frame  The drawable, its scale, its safe area and the clock. The
   ///               first frame steps 1/60 s; a clock that stalls or goes back
   ///               steps 10 us.
@@ -105,10 +108,13 @@ class VG_UI_API ImGuiTouch {
   /// @param finger  As @ref touch_began.
   /// @param at      As @ref touch_began.
   void touch_moved(std::uintptr_t finger, glm::vec2 at);
-  /// @brief The finger lifted, or the system cancelled it (a recognizer took
-  ///        it).
+  /// @brief The finger lifted: a widget under it takes the release, as a tap.
   /// @param finger  As @ref touch_began.
   void touch_ended(std::uintptr_t finger);
+  /// @brief The system cancelled the finger (a recognizer took it): it goes
+  ///        without pressing a widget under it or moving a held one.
+  /// @param finger  As @ref touch_began.
+  void touch_cancelled(std::uintptr_t finger);
 
  private:
   explicit ImGuiTouch(ImGuiContext& context) noexcept;

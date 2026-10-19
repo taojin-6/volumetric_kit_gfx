@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Tao Jin
 
 // ImGuiTouch on a CPU-only ImGui context: the display and clock it feeds, a
-// tap as ImGui takes it across frames, the one-finger pointer, a panel's
-// capture, the safe area as the main viewport's work inset, and the binding.
-// No device is needed.
+// tap as ImGui takes it across frames, the one-finger pointer, a cancel that
+// presses nothing, a panel's capture, the safe area as the main viewport's work
+// inset, and the binding. No device is needed.
 
 #include <gtest/gtest.h>
 
@@ -78,12 +78,13 @@ TEST_F(ImGuiTouchTest, DeltaTimeIsASixtiethThenTheClockStep) {
   EXPECT_FLOAT_EQ(io.DeltaTime, 1.0f / 60.0f);
   touch_->new_frame(display(100.25));
   EXPECT_FLOAT_EQ(io.DeltaTime, 0.25f);
-  // A clock that goes back, or stalls, still steps forward, a little.
-  touch_->new_frame(display(99.0));
+  // A clock that stalls, or goes back, still steps forward, a little.
+  touch_->new_frame(display(100.25));
   EXPECT_GT(io.DeltaTime, 0.0f);
   EXPECT_LT(io.DeltaTime, 0.001f);
   touch_->new_frame(display(99.0));
   EXPECT_GT(io.DeltaTime, 0.0f);
+  EXPECT_LT(io.DeltaTime, 0.001f);
   ImGui::NewFrame();
   ImGui::Render();
 }
@@ -127,9 +128,9 @@ TEST_F(ImGuiTouchTest, OnlyTheFirstFingerDownIsThePointer) {
   EXPECT_EQ(io.MousePos.y, 40.0f);
   EXPECT_TRUE(io.MouseDown[0]);
 
-  // A cancel, as when a recognizer takes the finger, releases as a lift does.
-  // A finger still down from before stays the app's.
-  touch_->touch_ended(1);
+  // A cancel, as when a recognizer takes the finger, releases it too. A finger
+  // still down from before stays the app's.
+  touch_->touch_cancelled(1);
   touch_->touch_moved(2, {220.0f, 120.0f});
   frame();
   frame();
@@ -143,6 +144,77 @@ TEST_F(ImGuiTouchTest, OnlyTheFirstFingerDownIsThePointer) {
   EXPECT_EQ(io.MousePos.x, 50.0f);
   EXPECT_EQ(io.MousePos.y, 60.0f);
   EXPECT_TRUE(io.MouseDown[0]);
+}
+
+// The middle of the last item, where a finger lands on it.
+glm::vec2 item_middle() {
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  return {0.5f * (min.x + max.x), 0.5f * (min.y + max.y)};
+}
+
+// A recognizer that takes a finger resting on a button, as a pinch does,
+// presses nothing, however soon after the touch it does; a lift presses.
+TEST_F(ImGuiTouchTest, ACancelPressesNoButtonALiftDoes) {
+  int presses = 0;
+  glm::vec2 button;
+  const auto panel = [&] {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(200.0f, 200.0f));
+    ImGui::Begin("panel");
+    if (ImGui::Button("button", ImVec2(100.0f, 50.0f))) {
+      ++presses;
+    }
+    button = item_middle();
+    ImGui::End();
+  };
+  const auto frames = [&] {
+    for (int i = 0; i < 3; ++i) {
+      frame(panel);
+    }
+  };
+  frame(panel);
+  touch_->touch_began(1, button);
+  frames();
+  touch_->touch_cancelled(1);
+  frames();
+  EXPECT_EQ(presses, 0);
+  touch_->touch_began(2, button);
+  touch_->touch_cancelled(2);
+  frames();
+  EXPECT_EQ(presses, 0);
+
+  touch_->touch_began(3, button);
+  frames();
+  touch_->touch_ended(3);
+  frames();
+  EXPECT_EQ(presses, 1);
+}
+
+// A cancel mid-drag leaves a slider where the finger held it: the slider never
+// sees the cleared position while it is still down.
+TEST_F(ImGuiTouchTest, ACancelLeavesAHeldSliderWhereItWas) {
+  float value = 0.5f;
+  glm::vec2 grab;
+  const auto panel = [&] {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(200.0f, 200.0f));
+    ImGui::Begin("panel");
+    ImGui::SliderFloat("##slider", &value, 0.0f, 1.0f);
+    grab = item_middle();  // where 0.5 draws its grab
+    ImGui::End();
+  };
+  frame(panel);
+  touch_->touch_began(1, grab);
+  frame(panel);
+  frame(panel);
+  ASSERT_TRUE(ImGui::GetIO().MouseDown[0]);
+  ASSERT_NEAR(value, 0.5f, 0.01f);
+  touch_->touch_cancelled(1);
+  frame(panel);
+  frame(panel);
+  EXPECT_FALSE(ImGui::GetIO().MouseDown[0]);
+  EXPECT_NEAR(value, 0.5f, 0.01f);
 }
 
 // A finger that lands on a panel is ImGui's from the frame that takes its
