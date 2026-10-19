@@ -80,7 +80,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   Android): the app feeds it a `DisplayFrame` -- pixels, pixels per point, the
   safe area and the clock -- and touches in points, and the first finger down
   is ImGui's pointer. `ImGuiOverlayConfig::scale` sizes the font and the
-  style, about 2 on a phone. `overlay_config(swapchain)` is the config that
+  style. `overlay_config(swapchain)` is the config that
   draws into a swapchain, which gfx's examples use; recon's viewers and
   calib's rig app move onto it at their next gfx bump. `gfx_ui` links
   `gfx_windowing` PUBLIC.
