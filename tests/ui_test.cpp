@@ -61,10 +61,11 @@ class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
     return config;
   }
 
-  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64}) {
+  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64},
+                                  VkFormat format = kFormat) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
-    desc.color_format = kFormat;
+    desc.color_format = format;
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
@@ -267,6 +268,37 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device().handle());
+}
+
+// ImGui's colours show as authored on every target: a UNORM target stores
+// their bytes as given, and on an sRGB target the overlay decodes them first,
+// so its encode gives the same bytes back, rounded through linear light.
+TEST_F(ImGuiOverlayDeviceTest, ColoursShowAsAuthoredOnEveryTarget) {
+  constexpr uint8_t kR = 200, kG = 100, kB = 50;
+  struct Case {
+    VkFormat format;
+    int tolerance;
+  };
+  for (const Case c :
+       {Case{VK_FORMAT_R8G8B8A8_UNORM, 0}, Case{VK_FORMAT_R8G8B8A8_SRGB, 1}}) {
+    SCOPED_TRACE(::testing::Message() << "format " << c.format);
+    vg::OffscreenTarget target = make_target({64, 64}, c.format);
+    ui::ImGuiOverlay overlay = make_overlay(target.layout());
+    ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+    overlay.new_frame();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(
+        ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32(kR, kG, kB, 255));
+    ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+    const auto* px = static_cast<const uint8_t*>(target.pixels());
+    ASSERT_NE(px, nullptr);
+    constexpr size_t kCenter = (32 * 64 + 32) * 4;
+    EXPECT_NEAR(px[kCenter + 0], kR, c.tolerance);
+    EXPECT_NEAR(px[kCenter + 1], kG, c.tolerance);
+    EXPECT_NEAR(px[kCenter + 2], kB, c.tolerance);
+    EXPECT_EQ(px[kCenter + 3], 255);
+    vkDeviceWaitIdle(device().handle());
+  }
 }
 
 // A region's grid, rendered: at any sub-pixel phase, with or without
