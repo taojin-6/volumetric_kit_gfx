@@ -182,7 +182,8 @@ core::Result<WindowedApp> WindowedApp::adopt(core::SharedDevice& shared,
   if (shared.surface() == VK_NULL_HANDLE) {
     return core::Status::invalid_argument(
         "WindowedApp::adopt: the shared device has no surface to present to: "
-        "it was taken already, or none was made");
+        "an earlier adopt took it, whether or not it succeeded, or none was "
+        "made");
   }
   return adopt(shared.graphics_payload(), config,
                [&shared](VkInstance) -> core::Result<VkSurfaceKHR> {

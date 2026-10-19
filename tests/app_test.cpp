@@ -415,7 +415,7 @@ TEST(WindowedAppValidation, NullSurfaceFactoryIsRejected) {
 
 // adopt()'s argument checks all reject before a handle reaches Vulkan, so they
 // belong here rather than behind WindowedAppTest -- they need no device and no
-// headless surface, and so run on NVIDIA's ICD too, which offers none.
+// headless surface, so they run on every leg.
 
 // A windowed app must present, so a compute-only share is refused up front
 // rather than failing deeper as a missing present queue.
@@ -756,12 +756,33 @@ TEST_F(SharedWindowedAppTest, ASecondAdoptIsRefused) {
   auto second = vg::app::WindowedApp::adopt(*shared, windowed_config());
   ASSERT_FALSE(second.ok());
   EXPECT_EQ(second.status().domain(), vkc::Status::Code::InvalidArgument);
-  EXPECT_NE(second.status().message().find("taken"), std::string::npos)
+  EXPECT_NE(second.status().message().find("earlier adopt took it"),
+            std::string::npos)
       << second.status().message();
   // The first app still renders.
   const vkc::Status frames = run_frames(first.value(), 1);
   EXPECT_TRUE(frames.ok()) << frames.message();
   EXPECT_TRUE(first.value().wait_idle().ok());
+}
+
+// An adopt that fails after taking the surface destroys it, so a corrected
+// retry is refused as a second adopt is.
+TEST_F(SharedWindowedAppTest, AFailedAdoptConsumesTheSurface) {
+  const std::unique_ptr<vkc::SharedDevice> shared = make_shared();
+  ASSERT_NE(shared, nullptr);
+  vg::app::WindowedAppConfig failing = windowed_config();
+  failing.frames_in_flight = 0;  // FrameLoop::create refuses it, last
+  auto first = vg::app::WindowedApp::adopt(*shared, failing);
+  ASSERT_FALSE(first.ok());
+  EXPECT_EQ(first.status().domain(), vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(shared->surface(), VK_NULL_HANDLE);
+
+  auto retry = vg::app::WindowedApp::adopt(*shared, windowed_config());
+  ASSERT_FALSE(retry.ok());
+  EXPECT_EQ(retry.status().domain(), vkc::Status::Code::InvalidArgument);
+  EXPECT_NE(retry.status().message().find("earlier adopt took it"),
+            std::string::npos)
+      << retry.status().message();
 }
 
 }  // namespace

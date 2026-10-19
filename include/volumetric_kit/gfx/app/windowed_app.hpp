@@ -207,7 +207,10 @@ class VG_APP_API WindowedApp {
   ///                from @ref make_shared_device.
   /// @param config  As the other @ref adopt.
   /// @return As the other @ref adopt; `core::Status::Code::InvalidArgument`
-  ///         once the surface was taken, or where @p shared made none.
+  ///         once the surface was taken, or where @p shared made none. An
+  ///         adopt that fails once it took the surface -- in
+  ///         `core::Device::adopt`, the swapchain or the frame loop -- destroys
+  ///         it, so a retry needs a new `core::SharedDevice`.
   /// @warning @p shared must outlive the returned app.
   static core::Result<WindowedApp> adopt(core::SharedDevice& shared,
                                          const WindowedAppConfig& config);
