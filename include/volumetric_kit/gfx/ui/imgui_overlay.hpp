@@ -23,6 +23,10 @@ class Device;
 
 namespace volumetric_kit::gfx {
 
+namespace windowing {
+class Swapchain;
+}  // namespace windowing
+
 namespace ui {
 
 /// @brief Parameters for @ref ImGuiOverlay::create.
@@ -41,7 +45,21 @@ struct ImGuiOverlayConfig {
   /// Number of frames ImGui may have in flight; must be >= @ref
   /// min_image_count. Use the swapchain's image count.
   uint32_t image_count = 2;
+  /// The UI's size: the font and the style's sizes (spacing, padding,
+  /// rounding, borders) become this times ImGui's default dark style. Use 1
+  /// where the framebuffer scale covers HiDPI (macOS, Wayland), and about 2 on
+  /// a phone, so a button nears a fingertip. Finite and > 0. Read only by
+  /// @ref ImGuiOverlay::create: ImGui picks its font by size before the first
+  /// frame.
+  float scale = 1.0f;
 };
+
+/// @brief The config that draws into @p swapchain.
+/// @param swapchain  The swapchain the overlay renders into.
+/// @return Its layout, and its image count as both counts; `scale` is 1. Set
+///         `scale` after.
+VG_UI_API ImGuiOverlayConfig
+overlay_config(const windowing::Swapchain& swapchain);
 
 /// @brief Owns a Dear ImGui context and its `imgui_impl_vulkan` renderer
 ///        backend, and records the built UI into a command buffer.
@@ -49,7 +67,8 @@ struct ImGuiOverlayConfig {
 /// This is the *renderer* half of an ImGui integration only: it wires
 /// `imgui_impl_vulkan` to a `core::Device` and draws `ImDrawData` into a @ref
 /// RenderTarget's dynamic-rendering scope. The *platform* half — input and
-/// window sizing — is the caller's: `glfw::ImGuiGlfw` for a GLFW window. Each
+/// window sizing — is the caller's: `glfw::ImGuiGlfw` for a GLFW window, or
+/// @ref ImGuiTouch for a window system the app feeds (UIKit, Android). Each
 /// frame the caller runs its platform backend's new-frame (which sets
 /// `io.DisplaySize`), then @ref new_frame, builds UI with raw `ImGui::` calls,
 /// and inside a @ref RenderTarget::begin / @ref RenderTarget::end scope calls
@@ -71,10 +90,8 @@ struct ImGuiOverlayConfig {
 ///          ImGui pipeline and descriptor pool.
 ///
 /// @code
-/// auto overlay = ui::ImGuiOverlay::create(
-///     device, instance.handle(), {.layout = swapchain.layout(),
-///                                 .min_image_count = swapchain.image_count(),
-///                                 .image_count = swapchain.image_count()});
+/// auto overlay = ui::ImGuiOverlay::create(device, instance.handle(),
+///                                         ui::overlay_config(swapchain));
 /// if (!overlay) return overlay.status();
 /// VKC_ASSIGN(std::unique_ptr<glfw::ImGuiGlfw> platform,  // platform half
 ///            glfw::ImGuiGlfw::create(window, overlay.value().context()));
@@ -104,8 +121,9 @@ class VG_UI_API ImGuiOverlay {
   ///         `core::Status::Code::InvalidArgument` for a null @p instance /
   ///         moved-from @p device, a @ref RenderTargetLayout with no color
   ///         attachment or a zero sample count, a
-  ///         @ref ImGuiOverlayConfig::min_image_count below 2, or an
-  ///         @ref ImGuiOverlayConfig::image_count below it;
+  ///         @ref ImGuiOverlayConfig::min_image_count below 2, an
+  ///         @ref ImGuiOverlayConfig::image_count below it, or an
+  ///         @ref ImGuiOverlayConfig::scale that is not finite and > 0;
   ///         `core::Status::Code::Unsupported` for a @p device without the
   ///         renderer's requirements; a backend `core::Status` carrying the
   ///         `VkResult` if ImGui's Vulkan backend fails to initialize.

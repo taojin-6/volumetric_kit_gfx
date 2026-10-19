@@ -4,9 +4,10 @@
 # --- gfx_ui: Dear ImGui debug-overlay tier ----------------------------------
 # Wraps ImGui's Vulkan renderer backend (imgui_impl_vulkan) so a debug UI draws
 # into a RenderTarget through dynamic rendering, and draws marks over an image
-# view. The platform backend (imgui_impl_glfw) is gfx_glfw's
-# (glfw/CMakeLists.txt), so this tier stays GLFW-free like windowing. Depends on
-# gfx_core and gfx_camera.
+# view. The GLFW platform backend (imgui_impl_glfw) is gfx_glfw's
+# (glfw/CMakeLists.txt), so this tier stays GLFW-free like windowing; its own
+# platform half, ImGuiTouch, reads no window system. Depends on gfx_core,
+# gfx_camera and gfx_windowing.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -76,7 +77,7 @@ add_library(gfx_ui)
 add_library(volumetric_kit::gfx_ui ALIAS gfx_ui)
 
 target_sources(gfx_ui PRIVATE image_overlay.cpp imgui_overlay.cpp
-                              metrics_panel.cpp)
+                              imgui_touch.cpp metrics_panel.cpp)
 
 generate_export_header(
   gfx_ui
@@ -115,14 +116,16 @@ target_include_directories(
 target_include_directories(gfx_ui SYSTEM
                            PUBLIC "$<BUILD_INTERFACE:${VG_IMGUI_SOURCE_DIR}>")
 
-# gfx_core and gfx_camera are PUBLIC (RenderTargetLayout and ImageView2D are in
-# this tier's API); the ImGui backend and the Vulkan loader are PRIVATE --
-# neither imgui_impl_vulkan nor a loader symbol appears in this tier's public
-# surface. vg_imgui's backends/ include dir stays PRIVATE this way, so consumers
-# see imgui.h (added PUBLIC above) but not the renderer backend header.
+# gfx_core, gfx_camera and gfx_windowing are PUBLIC (RenderTargetLayout,
+# ImageView2D and overlay_config's Swapchain are in this tier's API); the ImGui
+# backend and the Vulkan loader are PRIVATE -- neither imgui_impl_vulkan nor a
+# loader symbol appears in this tier's public surface. vg_imgui's backends/
+# include dir stays PRIVATE this way, so consumers see imgui.h (added PUBLIC
+# above) but not the renderer backend header.
 target_link_libraries(
   gfx_ui
-  PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_camera Vulkan::Headers
+  PUBLIC volumetric_kit::gfx_core volumetric_kit::gfx_camera
+         volumetric_kit::gfx_windowing Vulkan::Headers
   PRIVATE vg_imgui Vulkan::Vulkan)
 
 vg_target_warnings(gfx_ui)

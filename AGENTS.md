@@ -64,11 +64,12 @@ tier may build on (e.g. `io` → `assets`, `pipelines` → `core` + `assets` + `
 `assets` is the format-neutral CPU data model (header-only, glm), and `io` holds the file
 loaders that produce it (glTF now; OBJ/PLY/assimp later). `camera` is the view and
 image-view math and the pinhole camera (glm only). `ui` is a Dear
-ImGui debug overlay (on `core`, and `camera` for `ImageOverlay`): it wraps ImGui's
-*renderer* backend (`imgui_impl_vulkan`) and draws into a `RenderTarget` via dynamic
-rendering. `glfw` (on `app` + `ui`) is the GLFW window glue, ImGui's *platform* backend
-(`imgui_impl_glfw`) included; it is the one tier that reads GLFW, so `windowing`, `app`
-and `ui` serve any window system.
+ImGui debug overlay (on `core`, `camera` for `ImageOverlay` and `windowing` for
+`overlay_config`): it wraps ImGui's *renderer* backend (`imgui_impl_vulkan`), draws into
+a `RenderTarget` via dynamic rendering, and holds `ImGuiTouch`, the *platform* half an
+app feeds where ImGui has no backend (UIKit). `glfw` (on `app` + `ui`) is the GLFW window
+glue, ImGui's *platform* backend (`imgui_impl_glfw`) included; it is the one tier that
+reads GLFW, so `windowing`, `app` and `ui` serve any window system.
 
 ## Key gotchas
 

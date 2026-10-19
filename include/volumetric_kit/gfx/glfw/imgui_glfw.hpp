@@ -30,7 +30,8 @@ namespace volumetric_kit::gfx::glfw {
 ///          the overlay that owns the context, so it is destroyed first.
 ///
 /// @code
-/// auto overlay = ui::ImGuiOverlay::create(device, instance, overlay_config);
+/// auto overlay = ui::ImGuiOverlay::create(device, instance,
+///                                         ui::overlay_config(swapchain));
 /// if (!overlay) return overlay.status();
 /// VKC_ASSIGN(std::unique_ptr<glfw::ImGuiGlfw> platform,
 ///            glfw::ImGuiGlfw::create(window, overlay.value().context()));
