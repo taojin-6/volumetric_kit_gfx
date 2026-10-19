@@ -7,6 +7,7 @@
 #include "volumetric_kit/gfx/camera/impl/orientation.hpp"  // shared controller math
 //
 #include <algorithm>  // std::clamp
+#include <cmath>      // std::isfinite, std::tan
 
 #include <glm/ext/matrix_transform.hpp>  // lookAt
 
@@ -26,7 +27,22 @@ void OrbitCamera::pan(float delta_right, float delta_up) {
 
 void OrbitCamera::dolly(float delta) { set_distance(distance_ + delta); }
 
-void OrbitCamera::zoom(float factor) { set_distance(distance_ * factor); }
+void OrbitCamera::zoom(float factor) {
+  if (!std::isfinite(factor) || factor <= 0.0f) return;
+  set_distance(distance_ * factor);
+}
+
+void OrbitCamera::drag_orbit(glm::vec2 drag) {
+  // The eye turns against the drag, so the scene turns with it: a drag right
+  // swings the eye left, and a drag down raises it.
+  orbit(-kDragRadians * drag.x, kDragRadians * drag.y);
+}
+
+void OrbitCamera::drag_pan(glm::vec2 drag, float fovy_radians) {
+  // The world height the viewport spans at the target's depth.
+  const float height = 2.0f * distance_ * std::tan(0.5f * fovy_radians);
+  pan(-drag.x * height, drag.y * height);
+}
 
 void OrbitCamera::set_distance(float distance) noexcept {
   distance_ = clamp_pivot_distance(distance);
