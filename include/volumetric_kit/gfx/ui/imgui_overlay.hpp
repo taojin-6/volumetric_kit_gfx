@@ -109,6 +109,9 @@ class VG_UI_API ImGuiOverlay {
   ImGuiOverlay() = default;
 
   /// @brief Create an ImGui context + Vulkan backend for @p device.
+  ///
+  /// On a target that takes linear light (`_SRGB` or float), ImGui's
+  /// sRGB-encoded colours are decoded first, so they show as authored.
   /// @param device    A device that enabled the renderer's requirements
   ///                  (@ref device_requirements); its handles back the backend.
   ///                  Borrowed by address: it must outlive the overlay and stay
