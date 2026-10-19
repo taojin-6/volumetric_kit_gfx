@@ -92,12 +92,9 @@ int run(GLFWwindow* window, const vkc::config::Config& settings) {
   // TODO: a swapchain that changed its image count on recreate would need the
   // overlay's backend updated (ImGui_ImplVulkan_SetMinImageCount, not yet
   // exposed by the ui tier); the kit's swapchain keeps it stable today.
-  vg::ui::ImGuiOverlayConfig overlay_config;
-  overlay_config.layout = app.swapchain().layout();
-  overlay_config.min_image_count = app.swapchain().image_count();
-  overlay_config.image_count = app.swapchain().image_count();
-  auto overlay = vg::ui::ImGuiOverlay::create(
-      app.device(), app.instance().handle(), overlay_config);
+  auto overlay =
+      vg::ui::ImGuiOverlay::create(app.device(), app.instance().handle(),
+                                   vg::ui::overlay_config(app.swapchain()));
   if (!overlay.ok()) {
     std::fprintf(stderr, "overlay: %s\n", overlay.status().message().c_str());
     return 1;

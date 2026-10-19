@@ -130,11 +130,13 @@ vg_discover_tests(vg_core_test)
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface), which skips wholesale where that surface or
 # a present-capable device is unavailable; and the surface sources, whose
-# refusals need at most an instance.
+# refusals need at most an instance. Links gfx_ui for ui::overlay_config's case,
+# which needs a real swapchain.
 add_executable(vg_windowing_test windowing_test.cpp surface_source_test.cpp)
 target_link_libraries(
-  vg_windowing_test PRIVATE volumetric_kit::gfx_windowing
-                            volumetric_kit::core_test_support GTest::gtest_main)
+  vg_windowing_test
+  PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_windowing
+          volumetric_kit::core_test_support GTest::gtest_main)
 vg_target_warnings(vg_windowing_test)
 vg_discover_tests(vg_windowing_test)
 
@@ -307,15 +309,16 @@ vg_discover_tests(vg_io_test TEST_PREFIX "io.")
 
 # ui tier: ImGuiOverlay driven headlessly -- create + new_frame + render into an
 # offscreen target (dynamic rendering), the move-only lifecycle, and argument
-# validation; and ImageOverlay's marks read back from a CPU-only ImGui frame's
-# draw list. The GPU cases skip where no Vulkan device is available; the test
-# links gfx_ui (which exposes imgui.h for the UI-building calls). It compiles
+# validation; and ImageOverlay's marks and ImGuiTouch's input on CPU-only ImGui
+# frames. The GPU cases skip where no Vulkan device is available; the test links
+# gfx_ui (which exposes imgui.h for the UI-building calls). It compiles
 # imgui_demo.cpp itself for ShowDemoWindow (the tier keeps the demo out of the
 # library), and links Vulkan::Vulkan directly because it records vkCmd*/
 # vkQueueSubmit (the loader does not propagate through a shared gfx_ui for the
 # test's own calls).
-add_executable(vg_ui_test ui_test.cpp image_overlay_test.cpp
-                          "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
+add_executable(
+  vg_ui_test ui_test.cpp image_overlay_test.cpp imgui_touch_test.cpp
+             "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
 target_link_libraries(
   vg_ui_test PRIVATE volumetric_kit::gfx_ui volumetric_kit::core_test_support
                      GTest::gtest_main Vulkan::Vulkan)

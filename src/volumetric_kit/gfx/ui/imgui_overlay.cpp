@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 
+#include <cmath>
 #include <mutex>
 #include <string>
 
@@ -10,12 +11,18 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
+#include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 // Third-party renderer backend. The platform backend (imgui_impl_glfw) is
 // gfx_glfw's, keeping this tier window-system-agnostic like the windowing tier.
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+
+// Upstream's fragment shader decoding ImGui's colours first, as
+// `vg_imgui_srgb_frag_spv` (+ `_size`), derived in ui/CMakeLists.txt.
+#include "imgui_srgb_frag.spv.hpp"
 
 namespace volumetric_kit::gfx::ui {
 namespace {
@@ -39,6 +46,14 @@ void log_vk_result(VkResult err) {
 }
 
 }  // namespace
+
+ImGuiOverlayConfig overlay_config(const windowing::Swapchain& swapchain) {
+  ImGuiOverlayConfig config;
+  config.layout = swapchain.layout();
+  config.min_image_count = swapchain.image_count();
+  config.image_count = swapchain.image_count();
+  return config;
+}
 
 core::Result<ImGuiOverlay> ImGuiOverlay::create(
     const core::Device& device, VkInstance instance,
@@ -67,6 +82,10 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
     return core::Status::invalid_argument(
         "ImGuiOverlay::create needs image_count >= min_image_count");
   }
+  if (!std::isfinite(config.scale) || config.scale <= 0.0f) {
+    return core::Status::invalid_argument(
+        "ImGuiOverlay::create needs a finite scale > 0");
+  }
   // The backend's pipeline is built for dynamic rendering on a graphics queue:
   // a device made for another library may lack either.
   VKC_TRY(device.check_enabled(device_requirements())
@@ -75,10 +94,6 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   // The ImGui pipeline is created (during Init) for dynamic rendering, so it
   // bakes the target's color/depth formats + sample count. The backend deep-
   // copies pColorAttachmentFormats, so the layout need not outlive this call.
-  // TODO: ImGui's colours are sRGB-encoded bytes that the backend writes
-  // unconverted, so an _SRGB target -- the default swapchain's -- encodes them
-  // twice: the theme and IM_COL32 marks (categorical_rgba8 swatches, say)
-  // wash out. Decode them to linear for such a target.
   VkPipelineRenderingCreateInfo rendering{};
   rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
   rendering.colorAttachmentCount = config.layout.color_count;
@@ -107,6 +122,14 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   init.PipelineInfoMain.MSAASamples = config.layout.samples;
   init.PipelineInfoMain.PipelineRenderingCreateInfo = rendering;
   init.CheckVkResultFn = &log_vk_result;
+  // The decoding variant (DECISIONS.md, "ImGui's colours as authored"). Its
+  // SPIR-V is static, so it outlives the backend, as the backend requires.
+  if (takes_linear_light(config.layout.color_formats[0])) {
+    VkShaderModuleCreateInfo& frag = init.CustomShaderFragCreateInfo;
+    frag.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    frag.codeSize = vg_imgui_srgb_frag_spv_size;
+    frag.pCode = reinterpret_cast<const uint32_t*>(vg_imgui_srgb_frag_spv);
+  }
 
   IMGUI_CHECKVERSION();
   ImGuiContext* context = ImGui::CreateContext();
@@ -115,6 +138,12 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   // directory; a consumer that wants persisted layout re-enables it via
   // context().
   ImGui::GetIO().IniFilename = nullptr;
+  // The fresh context's style is ImGui's default dark one. The font size goes
+  // in before the first frame, which adds ImGui's default font: the pixel font
+  // below 15 px, the vector one from there.
+  ImGuiStyle& style = ImGui::GetStyle();
+  style.ScaleAllSizes(config.scale);
+  style.FontScaleMain = config.scale;
 
   if (!ImGui_ImplVulkan_Init(&init)) {
     ImGui::DestroyContext(context);

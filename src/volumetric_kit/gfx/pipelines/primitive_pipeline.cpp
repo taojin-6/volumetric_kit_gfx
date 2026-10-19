@@ -12,6 +12,7 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/pipelines/impl/pipeline_util.hpp"
 

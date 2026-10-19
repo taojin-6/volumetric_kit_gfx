@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// ImGuiOverlay: empty/default + argument validation, the move-only lifecycle
-// (it owns an ImGui context + imgui_impl_vulkan backend), and an end-to-end
-// new_frame -> build UI -> render into an offscreen target's dynamic-rendering
-// scope. The GPU cases skip when no Vulkan device is present; the headless path
-// exercises the real backend (font-atlas upload included) without a window.
+// ImGuiOverlay: empty/default + argument validation, the UI scale, the
+// move-only lifecycle (it owns an ImGui context + imgui_impl_vulkan backend),
+// and an end-to-end new_frame -> build UI -> render into an offscreen target's
+// dynamic-rendering scope. The GPU cases skip when no Vulkan device is present;
+// the headless path exercises the real backend (font-atlas upload included)
+// without a window.
 
 #include <gtest/gtest.h>
 
@@ -13,11 +14,16 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <future>
+#include <limits>
 #include <mutex>
 #include <utility>
 #include <vector>
 
+#include <glm/gtc/packing.hpp>
+
+#include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "imgui.h"
 #include "ui_test_support.hpp"
@@ -61,10 +67,11 @@ class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
     return config;
   }
 
-  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64}) {
+  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64},
+                                  VkFormat format = kFormat) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
-    desc.color_format = kFormat;
+    desc.color_format = format;
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
@@ -181,6 +188,67 @@ TEST_F(ImGuiOverlayDeviceTest, ZeroSamplesRejected) {
   EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
+TEST_F(ImGuiOverlayDeviceTest, ScaleNotFiniteAndPositiveRejected) {
+  for (const float scale :
+       {0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity()}) {
+    SCOPED_TRACE(::testing::Message() << "scale " << scale);
+    ui::ImGuiOverlayConfig config = make_config(color_layout());
+    config.scale = scale;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    ASSERT_FALSE(overlay.ok());
+    EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
+  }
+}
+
+// --- Scale ------------------------------------------------------------------
+
+// The scale multiplies the style's sizes and the font ImGui draws with, from
+// what an overlay at scale 1 has.
+TEST_F(ImGuiOverlayDeviceTest, ScaleSizesTheStyleAndTheFont) {
+  vg::OffscreenTarget target = make_target();
+  struct Sizes {
+    ImGuiStyle style;
+    float font = 0.0f;
+  };
+  const auto sizes_at = [&](float scale) {
+    ui::ImGuiOverlayConfig config = make_config(target.layout());
+    config.scale = scale;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    EXPECT_TRUE(overlay.ok()) << overlay.status().message();
+    Sizes sizes;
+    if (!overlay.ok()) return sizes;
+    ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+    overlay.value().new_frame();
+    sizes.style = ImGui::GetStyle();
+    sizes.font = ImGui::GetFontSize();
+    render(target, overlay.value());
+    vkDeviceWaitIdle(device().handle());
+    return sizes;
+  };
+  const Sizes one = sizes_at(1.0f);
+  const Sizes two = sizes_at(2.0f);
+  ASSERT_GT(one.font, 0.0f);
+  EXPECT_FLOAT_EQ(two.font, 2.0f * one.font);
+  const auto expect_doubled = [](ImVec2 at_one, ImVec2 at_two) {
+    EXPECT_FLOAT_EQ(at_two.x, 2.0f * at_one.x);
+    EXPECT_FLOAT_EQ(at_two.y, 2.0f * at_one.y);
+  };
+  expect_doubled(one.style.WindowPadding, two.style.WindowPadding);
+  expect_doubled(one.style.FramePadding, two.style.FramePadding);
+  expect_doubled(one.style.ItemSpacing, two.style.ItemSpacing);
+  ASSERT_GT(one.style.ScrollbarRounding, 0.0f);
+  EXPECT_FLOAT_EQ(two.style.ScrollbarRounding,
+                  2.0f * one.style.ScrollbarRounding);
+  ASSERT_GT(one.style.TabRounding, 0.0f);
+  EXPECT_FLOAT_EQ(two.style.TabRounding, 2.0f * one.style.TabRounding);
+  // Scale 1 is ImGui's default style.
+  const ImGuiStyle defaults;
+  expect_doubled(defaults.WindowPadding, two.style.WindowPadding);
+}
+
 // --- Move-only lifecycle ----------------------------------------------------
 
 TEST_F(ImGuiOverlayDeviceTest, MoveConstructLeavesSourceEmpty) {
@@ -267,6 +335,74 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
   vkDeviceWaitIdle(device().handle());
+}
+
+// ImGui's colours show as authored on every target: a UNORM target stores and
+// blends their bytes as given; on an sRGB or float target the overlay decodes
+// them first, so the target blends and stores their linear light, which an
+// sRGB one encodes back. The right half is drawn translucent over black.
+TEST_F(ImGuiOverlayDeviceTest, ColoursShowAsAuthoredOnEveryTarget) {
+  constexpr uint8_t kColour[3] = {200, 100, 50};
+  constexpr uint8_t kAlpha = 128;
+  struct Case {
+    VkFormat format;
+    double scale;      // a stored value per unit: 255 for a byte, 1 for a half
+    double tolerance;  // in stored values
+  };
+  // What `format` stores, in [0, 1], for colour byte `byte` at `alpha`.
+  const auto expected = [](VkFormat format, uint8_t byte, double alpha) {
+    const double light = vg_test::srgb_to_linear(byte / 255.0) * alpha;
+    switch (format) {
+      case VK_FORMAT_R8G8B8A8_UNORM:
+        return byte / 255.0 * alpha;
+      case VK_FORMAT_R8G8B8A8_SRGB:
+        return vg_test::linear_to_srgb(light);
+      default:
+        return light;
+    }
+  };
+  for (const Case c : {Case{VK_FORMAT_R8G8B8A8_UNORM, 255.0, 1.0},
+                       Case{VK_FORMAT_R8G8B8A8_SRGB, 255.0, 1.0},
+                       Case{VK_FORMAT_R16G16B16A16_SFLOAT, 1.0, 2e-3}}) {
+    SCOPED_TRACE(::testing::Message() << "format " << c.format);
+    vg::OffscreenTarget target = make_target({64, 64}, c.format);
+    ui::ImGuiOverlay overlay = make_overlay(target.layout());
+    ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+    overlay.new_frame();
+    ImDrawList* draw = ImGui::GetBackgroundDrawList();
+    draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(32.0f, 64.0f),
+                        IM_COL32(kColour[0], kColour[1], kColour[2], 255));
+    draw->AddRectFilled(ImVec2(32.0f, 0.0f), ImVec2(64.0f, 64.0f),
+                        IM_COL32(kColour[0], kColour[1], kColour[2], kAlpha));
+    ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+    const auto* px = static_cast<const uint8_t*>(target.pixels());
+    ASSERT_NE(px, nullptr);
+    // Channel `ch` of texel (x, 32), as stored: a byte or a half.
+    const auto stored = [&](uint32_t x, int ch) -> double {
+      const size_t texel = size_t{32} * 64 + x;
+      if (c.format != VK_FORMAT_R16G16B16A16_SFLOAT) {
+        return px[texel * 4 + ch];
+      }
+      uint16_t half = 0;
+      std::memcpy(&half, px + texel * 8 + ch * 2, sizeof(half));
+      return glm::unpackHalf1x16(half);
+    };
+    struct Half {
+      uint32_t x;
+      double alpha;
+    };
+    for (const Half h : {Half{16, 1.0}, Half{48, kAlpha / 255.0}}) {
+      SCOPED_TRACE(::testing::Message() << "alpha " << h.alpha);
+      for (int ch = 0; ch < 3; ++ch) {
+        EXPECT_NEAR(stored(h.x, ch),
+                    c.scale * expected(c.format, kColour[ch], h.alpha),
+                    c.tolerance);
+      }
+      EXPECT_NEAR(stored(h.x, 3), c.scale, c.tolerance);
+    }
+    vkDeviceWaitIdle(device().handle());
+  }
 }
 
 // A region's grid, rendered: at any sub-pixel phase, with or without

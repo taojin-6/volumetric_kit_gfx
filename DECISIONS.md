@@ -116,6 +116,9 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-16 — Points come straight from depth buffers.** `pipelines::DepthCloudPipeline`
   reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
   the host folds into matrices. See the dated entry below.
+- **2026-10-19 — Camera input is gestures.** On every platform, `camera::OrbitCamera`
+  takes drags in viewport heights and zoom factors, never raw pointer events, and no
+  platform-neutral tier routes them. See the dated entry below.
 - **2026-10-19 — One surface source per window system.** `windowing::SurfaceSource` carries
   a window system's instance extensions and surface factory together, from one constructor
   each for a GLFW window, a `CAMetalLayer` and no window. See the dated entry below.
@@ -151,6 +154,91 @@ why, rather than handed a null surface.
 
 **GLFW's init and window.** `glfw::Library` and `glfw::create_window` are the
 one home of GLFW's init guard and its no-API window; gfx's examples use them.
+
+## 2026-10-19 — Gestures drive the orbit camera
+
+**The contract.** `camera::OrbitCamera` takes the same gestures on every
+platform: drags in viewport heights (`drag_orbit`, `drag_pan`) and zoom
+factors (`zoom`, for a wheel or a pinch). Each shell divides its pointer or
+finger delta by the viewport's height in the same unit --
+`glfw::cursor_in_framebuffer` over the viewport's height in framebuffer
+pixels, UIKit's translation over the view's -- and calls the same verbs, so
+the mapping from a gesture to the camera has one home.
+
+**Why the shell routes.** Which button or finger count orbits, whether ImGui
+holds the pointer, and how a wheel's notches accumulate differ per window
+system, so the shell owns them: the camera takes no raw pointer events, and
+no platform-neutral tier (`camera`, `ui`, `app`, `windowing`) decides where
+one goes. The GLFW half of that glue -- scroll and key queues, the drag
+latch, ImGui capture -- belongs in `gfx_glfw`, deferred as calib's input-glue
+TODO (`calib_rig.cpp`) records.
+
+**Why OrbitCamera stays.** It is the turntable controller, no longer waiting
+to fold into `CameraRig`: its users -- calib's 3D view, and the player's --
+set and read a target, a distance and two angles, and a fold would change
+their code for no new behaviour.
+
+## 2026-10-19 — ImGui's colours as authored
+
+**The contract.** `ui::ImGuiOverlay` shows ImGui's colours -- its theme and
+`IM_COL32` marks -- as authored on any target, as the pipelines show
+`pack_rgba8` colours. ImGui's colours are sRGB-encoded, and upstream's
+fragment shader writes them as given, which suits a UNORM target; an `_SRGB`
+target, the default swapchain's, would encode them again. Where the first color
+attachment takes linear light (`_SRGB` or float, the pipelines' rule),
+`create` gives the backend a variant of that shader which decodes the vertex
+colour first.
+
+**Why a derived shader.** The ui build derives the variant from the fetched
+`glsl_shader.frag` at configure time, as it patches the scissor ("Pictures
+written in regions", below), and fails if a line it rewrites changes
+upstream. It takes the curve from `shaders/common/srgb.glsl` and reaches the
+backend through `CustomShaderFragCreateInfo`, so it copies neither upstream's
+interface nor the curve. Rejected: a UNORM swapchain, which changes how every
+pipeline draws; and decoding the draw lists on the host each frame.
+
+**The cost.** On such a target ImGui blends in linear light, so translucent
+windows and anti-aliased text edges read slightly differently from a UNORM
+target.
+
+## 2026-10-19 — ImGui on any window system
+
+**The contract.** gfx draws its ImGui panels the same way on every platform;
+only ImGui's platform half differs. `glfw::ImGuiGlfw` is GLFW's.
+`ui::ImGuiTouch` is the half for a window system ImGui has no backend for
+(UIKit now, Android later), fed by the app: a `DisplayFrame` each frame, and
+touches in points. It reads no window system, so it sits in `ui` beside the
+renderer half. `overlay_config(swapchain)` is the one home of the overlay
+config that gfx's examples, recon's viewers and calib's rig app each wrote.
+
+**Why one finger.** ImGui has one pointer, and a second finger belongs to
+the app's camera gestures (a pinch, a two-finger pan). Each event follows the
+touch-screen mouse source, so ImGui takes a finger's position and its press on
+separate frames: the widget under a finger, which has no hover to come from,
+sees it before the press.
+
+**Why a cancel is not a lift.** UIKit cancels the first finger when a pinch
+or a two-finger pan recognizes. A release where the finger rests would press
+the button under it, so `touch_cancelled` clears the position before it
+releases.
+
+**Why the work inset.** ImGui has no public setting for a per-edge safe area.
+`new_frame` assigns it to the main viewport's build inset
+(`ImGuiViewportP::BuildWorkInsetMin` / `Max`, internal), which
+`ImGui::NewFrame` moves into `WorkPos` / `WorkSize` and then zeroes.
+Assigning rather than adding means a tick the app skips cannot apply it twice;
+the cost is that it replaces what a main menu bar reserved the frame before.
+`imgui_touch_test` pins the behaviour, so an ImGui update that changes these
+internals fails there.
+
+**Why the scale is a config field.** ImGui adds its default font on the first
+frame and picks it by the size set then: the pixel font below 15 px, the
+vector font from there. A setter used after the first frame would stretch the
+pixel font. So `ImGuiOverlay::create` scales the fresh context's default dark
+style, the font size included, before that frame.
+
+**Why `ui` links `windowing`.** `overlay_config` takes a `Swapchain`, and
+`windowing` is left of `ui` in the tier order.
 
 ## 2026-10-18 — Categorical colours
 

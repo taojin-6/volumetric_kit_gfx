@@ -14,6 +14,7 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/shader.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
