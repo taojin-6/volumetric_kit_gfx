@@ -39,12 +39,11 @@ TEST_F(MetalSurfaceTest, MakesASurfaceSizedByTheLayer) {
   auto instance = vkc::Instance::create(vg_test::surface_instance_config(
       source.value().instance_extensions, active_validation()));
   ASSERT_TRUE(instance.ok()) << instance.status().message();
+  // MoltenVK refuses only a null layer, and asks nothing of the window server,
+  // so a failure here is the factory's.
   const vkc::Result<VkSurfaceKHR> made =
       source.value().make_surface(instance.value().handle());
-  if (!made.ok()) {
-    GTEST_SKIP() << "the platform refuses a Metal surface: "
-                 << made.status().message();
-  }
+  ASSERT_TRUE(made.ok()) << made.status().message();
   const win::Surface surface(instance.value().handle(), made.value());
 
   vkc::DeviceRequirements requirements = vg::device_requirements();

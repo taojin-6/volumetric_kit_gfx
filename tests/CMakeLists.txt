@@ -140,9 +140,9 @@ vg_discover_tests(vg_windowing_test)
 
 # windowing tier on Apple: metal_surface over a bare CAMetalLayer, with a
 # swapchain built on it; no window, no acquire, no present. One CTest entry, so
-# the build never runs the binary to list its tests. A platform that refuses the
-# surface skips. The CI Mac runs it; a local run that must keep off the window
-# server excludes it (ctest -E metal_surface).
+# the build never runs the binary to list its tests. As for the shared-device
+# cases below, any skip but the one without a device fails. The CI Mac runs it;
+# a local run can exclude it (CONTRIBUTING.md, "Build and test").
 if(APPLE)
   enable_language(OBJCXX)
   add_executable(vg_metal_surface_test metal_surface_test.mm)
@@ -153,8 +153,10 @@ if(APPLE)
             GTest::gtest_main Vulkan::Vulkan "-framework QuartzCore")
   vg_target_warnings(vg_metal_surface_test)
   add_test(NAME windowing.metal_surface COMMAND vg_metal_surface_test)
-  set_tests_properties(windowing.metal_surface
-                       PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+  set_tests_properties(
+    windowing.metal_surface
+    PROPERTIES FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+               SKIP_REGULAR_EXPRESSION "no Vulkan device for this test")
 endif()
 
 # app tier: the WindowedApp/HeadlessApp bring-up facades. WindowedApp is driven
