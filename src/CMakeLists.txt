@@ -76,6 +76,8 @@ if(VG_INSTALL)
     REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE
     # Source-layout validation is shared only by implementation files.
     REGEX "volumetric_kit/gfx/core/impl/image_copy_layout\\.hpp$" EXCLUDE
+    # So are the color-attachment format tests.
+    REGEX "volumetric_kit/gfx/core/impl/color_attachment\\.hpp$" EXCLUDE
     # impl/pipeline_util.hpp is internal (command-recording helpers shared by
     # the tier's submit() .cpp files); no public header includes it, so keep it
     # out.
