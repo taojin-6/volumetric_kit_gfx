@@ -55,7 +55,8 @@ include(vg_sanitizers)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets are visible to every
-# subdirectory, not just the one find_package() ran in.
+# subdirectory, not just the one find_package() ran in: GLFW here, then the
+# core, then Vulkan and glm after it.
 
 # GLFW, for gfx_glfw and the examples: optional, so a headless build configures
 # without it. A `glfw` target the application already made is used as it is. CI
@@ -84,7 +85,8 @@ endif()
 # JSON configuration component, vkc_require_core's package helpers, and the
 # two-family test fixture (SharedDeviceTest) the cross-family tests use.
 #
-# TODO(G5): pin core at C2's merge (iOS: MoltenVK_ROOT, vkc_ios)
+# TODO: re-pin to the merge of the core's iOS PR (cmake/vkc_ios.cmake), and move
+# _build.yml's homebrew-key action to the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
@@ -124,8 +126,8 @@ vkc_require_core(${VG_VKC_MIN_VERSION} VULKAN)
 # cmake/vkc_ios.cmake, which runs as the core is added, answers both, with
 # MoltenVK's static library and the host's glm headers.
 #
-# Vulkan::Headers (the public-API types) and Vulkan::Vulkan (the loader our
-# implementation links privately).
+# Vulkan::Headers (the public-API types) and Vulkan::Vulkan (the loader, or
+# MoltenVK's static library on iOS, which our implementation links privately).
 find_package(Vulkan REQUIRED)
 
 # glm: the matrix/vector types in the camera and assets tiers' public headers.
