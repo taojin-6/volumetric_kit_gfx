@@ -175,6 +175,21 @@ core::Result<WindowedApp> WindowedApp::adopt(
   return app;
 }
 
+core::Result<WindowedApp> WindowedApp::adopt(core::SharedDevice& shared,
+                                             const WindowedAppConfig& config) {
+  // Refused here rather than as the factory's VK_NULL_HANDLE, so the message
+  // names the cause.
+  if (shared.surface() == VK_NULL_HANDLE) {
+    return core::Status::invalid_argument(
+        "WindowedApp::adopt: the shared device has no surface to present to: "
+        "it was taken already, or none was made");
+  }
+  return adopt(shared.graphics_payload(), config,
+               [&shared](VkInstance) -> core::Result<VkSurfaceKHR> {
+                 return shared.release_surface();
+               });
+}
+
 core::Result<std::optional<windowing::Frame>> WindowedApp::begin_frame(
     VkExtent2D current_extent) {
   if (state_ == nullptr) {

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// gfx_glfw: the instance extensions, the surface factory, the framebuffer
-// size and cursor, the shared device, and ImGui's GLFW platform backend.
-// Windows are made on GLFW's null platform (GLFW 3.4+), so no display is
-// needed; with an older GLFW those cases skip. The surface and the shared
-// device need more: GLFW 3.5.1+, whose null platform presents through
-// VK_EXT_headless_surface (3.4's makes no surface), and a Vulkan device with
-// that extension. One case iconifies a window on the native window system,
-// and skips where there is no display.
+// gfx_glfw: GLFW's init guard and window, the instance extensions, the surface
+// source and factory, the framebuffer size and cursor, the shared device, and
+// ImGui's GLFW platform backend. Windows are made on GLFW's null platform
+// (GLFW 3.4+), so no display is needed; with an older GLFW those cases skip.
+// The surface and the shared device need more: GLFW 3.5.1+, whose null
+// platform presents through VK_EXT_headless_surface (3.4's makes no surface),
+// and a Vulkan device with that extension. One case iconifies a window on the
+// native window system, and skips where there is no display.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -43,8 +43,10 @@
 #include "volumetric_kit/gfx/glfw/impl/framebuffer_pixels.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
+#include "volumetric_kit/gfx/windowing/surface_source.hpp"
 
 namespace glfw = volumetric_kit::gfx::glfw;
+namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
@@ -179,8 +181,8 @@ std::string null_surface_unavailable() {
            std::to_string(revision) +
            "'s null platform makes no Vulkan surface (3.5.1+ does)";
   }
-  if (!vg_test::has_headless_surface()) {
-    return "VK_EXT_headless_surface unavailable";
+  if (const auto headless = win::headless_surface(); !headless.ok()) {
+    return headless.status().message();
   }
   return {};
 }
@@ -231,7 +233,84 @@ bool has_extension(const std::vector<const char*>& names, const char* name) {
   return false;
 }
 
-// --- instance_extensions ----------------------------------------------------
+// --- Library / create_window ------------------------------------------------
+
+TEST(GlfwLibraryTest, InitializesGlfwUntilDestroyed) {
+#ifdef GLFW_PLATFORM_NULL
+  glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+  {
+    auto library = glfw::Library::init();
+    ASSERT_TRUE(library.ok()) << library.status().message();
+    EXPECT_EQ(glfwGetPlatform(), GLFW_PLATFORM_NULL);
+  }
+  // Terminated: GLFW is uninitialized again.
+  glfwGetError(nullptr);
+  EXPECT_EQ(glfwGetPlatform(), 0);
+  EXPECT_EQ(glfwGetError(nullptr), GLFW_NOT_INITIALIZED);
+  glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+#else
+  GTEST_SKIP() << "GLFW " << GLFW_VERSION_MAJOR << "." << GLFW_VERSION_MINOR
+               << " has no null platform";
+#endif
+}
+
+// A platform GLFW was built without fails glfwInit, which reports why.
+TEST(GlfwLibraryTest, AFailedInitIsUnsupportedWithGlfwsReason) {
+#if defined(GLFW_PLATFORM_NULL) && !defined(_WIN32)
+  glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WIN32);
+  const auto library = glfw::Library::init();
+  glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+  ASSERT_FALSE(library.ok());
+  EXPECT_EQ(library.status().domain(), vkc::Status::Code::Unsupported);
+  EXPECT_NE(library.status().message().find("glfwInit failed: "),
+            std::string::npos)
+      << library.status().message();
+#else
+  GTEST_SKIP() << "no platform hint, or Win32 is this build's platform";
+#endif
+}
+
+TEST(GlfwCreateWindowTest, RefusesANonPositiveSizeOrNoTitle) {
+  // Refused before GLFW is touched.
+  EXPECT_EQ(glfw::create_window(0, kHeight, "glfw_test").status().domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(glfw::create_window(kWidth, -1, "glfw_test").status().domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(glfw::create_window(kWidth, kHeight, nullptr).status().domain(),
+            vkc::Status::Code::InvalidArgument);
+}
+
+TEST(GlfwCreateWindowTest, UninitializedGlfwIsUnsupported) {
+  const auto window = glfw::create_window(kWidth, kHeight, "glfw_test");
+  ASSERT_FALSE(window.ok());
+  EXPECT_EQ(window.status().domain(), vkc::Status::Code::Unsupported);
+  EXPECT_NE(window.status().message().find("not initialized"),
+            std::string::npos)
+      << window.status().message();
+}
+
+// Whatever client API the hints asked for, the window has none.
+TEST(GlfwCreateWindowTest, MakesAWindowWithNoClientApi) {
+#ifdef GLFW_PLATFORM_NULL
+  glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+  auto library = glfw::Library::init();
+  ASSERT_TRUE(library.ok()) << library.status().message();
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+  const auto window = glfw::create_window(kWidth, kHeight, "glfw_test");
+  glfwDefaultWindowHints();
+  ASSERT_TRUE(window.ok()) << window.status().message();
+  EXPECT_EQ(glfwGetWindowAttrib(window.value().get(), GLFW_CLIENT_API),
+            GLFW_NO_API);
+  const VkExtent2D size = glfw::framebuffer_size(window.value().get());
+  EXPECT_EQ(size.width, static_cast<uint32_t>(kWidth));
+  EXPECT_EQ(size.height, static_cast<uint32_t>(kHeight));
+#else
+  GTEST_SKIP() << "GLFW " << GLFW_VERSION_MAJOR << "." << GLFW_VERSION_MINOR
+               << " has no null platform";
+#endif
+}
+
+// --- instance_extensions / surface_source -----------------------------------
 
 TEST(GlfwInstanceExtensionsTest, UninitializedGlfwIsAnError) {
   const vkc::Result<std::vector<const char*>> extensions =
@@ -253,6 +332,34 @@ TEST_F(GlfwWindowTest, InstanceExtensionsNameTheSurface) {
   EXPECT_TRUE(has_extension(extensions.value(), VK_KHR_SURFACE_EXTENSION_NAME));
   EXPECT_TRUE(has_extension(extensions.value(),
                             VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
+}
+
+TEST_F(GlfwWindowTest, SurfaceSourceNamesGlfwsExtensions) {
+  if (const std::string reason = null_surface_unavailable(); !reason.empty()) {
+    GTEST_SKIP() << reason;
+  }
+  const vkc::Result<win::SurfaceSource> source = glfw::surface_source(window());
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  const vkc::Result<std::vector<const char*>> extensions =
+      glfw::instance_extensions();
+  ASSERT_TRUE(extensions.ok()) << extensions.status().message();
+  EXPECT_EQ(source.value().instance_extensions, extensions.value());
+  EXPECT_TRUE(static_cast<bool>(source.value().make_surface));
+}
+
+TEST(GlfwSurfaceSourceTest, NullWindowIsRefused) {
+  // Refused before GLFW is asked for its extensions.
+  const vkc::Result<win::SurfaceSource> source = glfw::surface_source(nullptr);
+  ASSERT_FALSE(source.ok());
+  EXPECT_EQ(source.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+TEST(GlfwSurfaceSourceTest, UninitializedGlfwIsAnError) {
+  // Any non-null window: GLFW's refusal comes before it is read.
+  auto* const window = reinterpret_cast<GLFWwindow*>(0x1);
+  const vkc::Result<win::SurfaceSource> source = glfw::surface_source(window);
+  ASSERT_FALSE(source.ok());
+  EXPECT_EQ(source.status().domain(), vkc::Status::Code::Unsupported);
 }
 
 // --- framebuffer_size / framebuffer_extent / cursor_in_framebuffer ----------
@@ -465,13 +572,15 @@ class GlfwDeviceTest : public vg_test::RendererTest {
   std::unique_ptr<TestWindow> window_;
 };
 
-TEST_F(GlfwDeviceTest, SurfaceFactoryMakesTheWindowsSurface) {
-  vkc::InstanceConfig config = vg_test::headless_instance_config();
-  auto instance = vkc::Instance::create(config);
+TEST_F(GlfwDeviceTest, SurfaceSourceMakesTheWindowsSurface) {
+  const vkc::Result<win::SurfaceSource> source = glfw::surface_source(window());
+  ASSERT_TRUE(source.ok()) << source.status().message();
+  auto instance = vkc::Instance::create(
+      vg_test::surface_instance_config(source.value().instance_extensions));
   ASSERT_TRUE(instance.ok()) << instance.status().message();
 
   const vkc::Result<VkSurfaceKHR> surface =
-      glfw::glfw_surface_factory(window())(instance.value().handle());
+      source.value().make_surface(instance.value().handle());
   ASSERT_TRUE(surface.ok()) << surface.status().message();
   EXPECT_NE(surface.value(), VK_NULL_HANDLE);
   vkDestroySurfaceKHR(instance.value().handle(), surface.value(), nullptr);
@@ -508,12 +617,9 @@ TEST_F(GlfwDeviceTest, MakeSharedDeviceBuildsAPresentingDeviceForTheWindow) {
   // swapchain to the window.
   vg::app::WindowedAppConfig app_config;
   app_config.swapchain.extent = glfw::framebuffer_extent(window());
-  auto app = vg::app::WindowedApp::adopt(
-      shared->graphics_payload(), app_config,
-      [&shared](VkInstance) -> vkc::Result<VkSurfaceKHR> {
-        return shared->release_surface();
-      });
+  auto app = vg::app::WindowedApp::adopt(*shared, app_config);
   ASSERT_TRUE(app.ok()) << app.status().message();
+  EXPECT_EQ(shared->surface(), VK_NULL_HANDLE);
   const VkExtent2D extent = app.value().swapchain().extent();
   EXPECT_EQ(extent.width, static_cast<uint32_t>(kWidth));
   EXPECT_EQ(extent.height, static_cast<uint32_t>(kHeight));

@@ -6,3 +6,12 @@ ColumnLimit: 80
 IncludeBlocks: Preserve
 DerivePointerAlignment: false
 PointerAlignment: Left
+---
+# The same for Objective-C++ (tests/metal_surface_test.mm), which clang-format
+# refuses without a section of its own.
+Language: ObjC
+BasedOnStyle: Google
+ColumnLimit: 80
+IncludeBlocks: Preserve
+DerivePointerAlignment: false
+PointerAlignment: Left

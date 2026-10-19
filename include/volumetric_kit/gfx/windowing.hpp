@@ -5,14 +5,16 @@
 
 /// @file windowing.hpp
 /// @brief Convenience umbrella for the windowing tier — pulls in @ref
+///        volumetric_kit::gfx::windowing::SurfaceSource, @ref
 ///        volumetric_kit::gfx::windowing::Surface, @ref
 ///        volumetric_kit::gfx::windowing::Swapchain, and @ref
 ///        volumetric_kit::gfx::windowing::FrameLoop in one include.
 ///
-/// The three windowing types are always used together to drive a present loop
-/// (surface → swapchain → frames-in-flight), so this header lets a consumer
-/// write one `#include` instead of three. It is purely additive: the individual
-/// headers remain public for code that wants finer-grained dependencies.
+/// The windowing types are used together to drive a present loop (surface
+/// source → surface → swapchain → frames-in-flight), so this header lets a
+/// consumer write one `#include` instead of four. It is purely additive: the
+/// individual headers remain public for code that wants finer-grained
+/// dependencies.
 ///
 /// @note Like the headers it aggregates, this transitively includes the
 ///       core's `volumetric_kit/core/vulkan/vulkan.hpp`. If you rely on GLFW's
@@ -22,9 +24,11 @@
 ///
 /// @code
 /// #include "volumetric_kit/gfx/windowing.hpp"
-/// // -> windowing::Surface, windowing::Swapchain, windowing::FrameLoop
+/// // -> windowing::SurfaceSource, windowing::Surface, windowing::Swapchain,
+/// //    windowing::FrameLoop
 /// @endcode
 
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface.hpp"
+#include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"

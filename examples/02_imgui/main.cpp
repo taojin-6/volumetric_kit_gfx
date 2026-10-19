@@ -218,28 +218,17 @@ int main(int argc, char** argv) {
   }
   const vkc::config::Config& settings = loaded.value();
 
-  if (glfwInit() != GLFW_TRUE) {
-    std::fprintf(stderr, "glfwInit failed\n");
+  const auto library = glfw::Library::init();
+  if (!library.ok()) {
+    std::fprintf(stderr, "%s\n", library.status().message().c_str());
     return 1;
   }
-  if (glfwVulkanSupported() != GLFW_TRUE) {
-    std::fprintf(stderr, "GLFW reports no Vulkan loader available\n");
-    glfwTerminate();
+  const auto window =
+      glfw::create_window(settings.window.width, settings.window.height,
+                          "volumetric_kit_gfx \xE2\x80\x94 02_imgui");
+  if (!window.ok()) {
+    std::fprintf(stderr, "%s\n", window.status().message().c_str());
     return 1;
   }
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
-  GLFWwindow* window = glfwCreateWindow(
-      settings.window.width, settings.window.height,
-      "volumetric_kit_gfx \xE2\x80\x94 02_imgui", nullptr, nullptr);
-  if (window == nullptr) {
-    std::fprintf(stderr, "glfwCreateWindow failed\n");
-    glfwTerminate();
-    return 1;
-  }
-
-  const int rc = run(window, settings);
-
-  glfwDestroyWindow(window);
-  glfwTerminate();
-  return rc;
+  return run(window.value().get(), settings);
 }

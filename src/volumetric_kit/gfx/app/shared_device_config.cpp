@@ -5,6 +5,11 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <string>
+
+#include "volumetric_kit/core/base/log.hpp"
+#include "volumetric_kit/gfx/core/log.hpp"
 
 namespace volumetric_kit::gfx::app {
 
@@ -27,6 +32,23 @@ core::SharedDeviceConfig shared_device_config(
   shared.graphics = config.graphics;
   shared.graphics.needs_present = true;
   return shared;
+}
+
+core::Result<std::unique_ptr<core::SharedDevice>> make_shared_device(
+    const windowing::SurfaceSource& surface,
+    const core::DeviceRequirements& compute, const WindowDeviceConfig& config) {
+  core::SharedDeviceConfig shared =
+      shared_device_config(surface.instance_extensions, compute, config);
+  shared.make_surface = surface.make_surface;
+  VKC_ASSIGN(std::unique_ptr<core::SharedDevice> device,
+             core::SharedDevice::create(shared));
+  log_message(core::LogLevel::Info, "shared device: " + device->summary());
+  if (device->plan() == core::QueuePlan::SharedQueue) {
+    log_message(core::LogLevel::Warning,
+                "shared device: one queue shared under a mutex, so compute "
+                "and rendering serialize");
+  }
+  return device;
 }
 
 }  // namespace volumetric_kit::gfx::app

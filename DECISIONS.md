@@ -116,6 +116,41 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-16 — Points come straight from depth buffers.** `pipelines::DepthCloudPipeline`
   reads a producer's depth and colour buffers in its vertex stage, through pinhole cameras
   the host folds into matrices. See the dated entry below.
+- **2026-10-19 — One surface source per window system.** `windowing::SurfaceSource` carries
+  a window system's instance extensions and surface factory together, from one constructor
+  each for a GLFW window, a `CAMetalLayer` and no window. See the dated entry below.
+
+## 2026-10-19 — One surface source per window system
+
+**The contract.** A `windowing::SurfaceSource` is a window system's surface
+as the tiers above take it: its instance extensions and its factory, made by
+one constructor per window system -- `glfw::surface_source`,
+`windowing::metal_surface` and `windowing::headless_surface` -- so the two
+cannot disagree. Each refuses what it can see is wrong before an instance
+exists. `app::make_shared_device` builds the device a windowed renderer shares
+with a compute library on any of them, and `WindowedApp::adopt(SharedDevice&,
+...)` adopts it, taking its surface once.
+
+**Why `metal_surface` is in windowing.** It is the Vulkan call GLFW makes for
+a macOS window, so iOS presents through the MoltenVK path desktop macOS
+already runs, with no Metal API in gfx. The layer is a `const void*`, so no
+header names an Objective-C type, and the entry point is resolved on the
+instance, so the source builds, and its refusals test, on every OS. Only a
+test on Apple makes the surface.
+
+**Why one headless factory.** `Surface::headless` and the app tests each made
+the headless surface, and the test support probed the loader for it.
+`headless_surface()` is now the one home, and its `Unsupported` is the probe:
+NVIDIA's ICD offers no `VK_EXT_headless_surface`, while Lavapipe and MoltenVK
+do. So on Apple the shared-device cases run, and a skip there fails.
+
+**Why adopt takes the `SharedDevice`.** recon's viewers, calib's rig app and
+ios's scanner each wrote the adopt lambda over `release_surface()`. A second
+adopt is refused, naming the taken surface, rather than handed a null one.
+
+**GLFW's init and window.** `glfw::Library` and `glfw::create_window` are the
+init guard and the no-API window each GLFW application wrote; gfx's examples
+use them.
 
 ## 2026-10-18 — Categorical colours
 
@@ -286,6 +321,9 @@ library's `DeviceRequirements`, never the library.
   window system without GLFW (iOS's `CAMetalLayer`) uses them as before.
   The requirement union `make_shared_device` builds has no GLFW in it, so it
   lives in `app` as `shared_device_config`, for such a window system to call.
+  *Amended 2026-10-19:* `make_shared_device` itself moved to `app`, over a
+  `windowing::SurfaceSource`, and `glfw::make_shared_device` wraps it ("One
+  surface source per window system", above).
 - **Optional and build-tree only.** It is built with `VG_WITH_GLFW` where GLFW
   is installed, and is not installed or exported, like `gfx_ui`, until the
   ImGui headers are co-installed; recon and calib fetch gfx, so they can link
