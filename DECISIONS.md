@@ -933,6 +933,13 @@ vendors Vulkan-Headers or Vulkan-Utility-Libraries.
 - **An application decides the headers**, not gfx: one that wants a pin
   points `Vulkan_INCLUDE_DIR` at it, for gfx, the core and every other
   library alike.
+- *Amended 2026-10-19:* **a top-level build finds Vulkan and glm after the
+  core**, so in an iOS build the core's `cmake/vkc_ios.cmake` answers both:
+  MoltenVK's static library and headers (on iOS `MoltenVK_ROOT` picks them, not
+  `Vulkan_INCLUDE_DIR`) and the host's glm headers. An iOS build never fetches
+  glm; without the host's, it stops with the core's message. Elsewhere the
+  order changes one thing: a missing Vulkan SDK is reported by the core's find,
+  not gfx's.
 
 ## 2026-10-04 — Error handling comes from volumetric_kit_core
 

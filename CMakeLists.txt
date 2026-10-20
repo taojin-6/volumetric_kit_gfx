@@ -55,10 +55,8 @@ include(vg_sanitizers)
 
 # --- Public dependencies -----------------------------------------------------
 # Resolved at the top level so their imported targets are visible to every
-# subdirectory, not just the one find_package() ran in. Provides Vulkan::Headers
-# (the public-API types) and Vulkan::Vulkan (the loader our implementation links
-# privately).
-find_package(Vulkan REQUIRED)
+# subdirectory, not just the one find_package() ran in: GLFW here, then the
+# core, then Vulkan and glm after it.
 
 # GLFW, for gfx_glfw and the examples: optional, so a headless build configures
 # without it. A `glfw` target the application already made is used as it is. CI
@@ -66,21 +64,6 @@ find_package(Vulkan REQUIRED)
 if(VG_WITH_GLFW AND NOT TARGET glfw)
   # 3.3: gfx_glfw reads GLFW's errors with glfwGetError.
   find_package(glfw3 3.3 QUIET)
-endif()
-
-# glm: the matrix/vector types in the camera and assets tiers' public headers.
-# Prefer a system glm (its config defines glm::glm); fall back to the pinned
-# vendored copy from third_party/ when none is installed -- so the build is
-# self-contained on CI runners that don't ship glm, matching how the other deps
-# are vendored. VG_HAVE_SYSTEM_GLM records which path won, so third_party/ only
-# vendors glm (and lets it run its own install/export) when no system copy
-# exists. glm is a PUBLIC dependency either way, so the installed package config
-# re-finds it unconditionally (find_dependency(glm)).
-find_package(glm CONFIG QUIET)
-if(glm_FOUND)
-  set(VG_HAVE_SYSTEM_GLM ON)
-else()
-  set(VG_HAVE_SYSTEM_GLM OFF)
 endif()
 
 # volumetric_kit_core: gfx takes Status / Result / VKC_CHECK / log sink from its
@@ -99,16 +82,15 @@ endif()
 # tests and -Werror stay off in a subproject.
 #
 # The pin includes the timeline-value checks, core_test_support, the optional
-# JSON configuration component, vkc_require_core's package helpers, and the
-# two-family test fixture (SharedDeviceTest) the cross-family tests use.
-#
-# TODO: re-pin to core #36's merge commit once it merges (1315d80 is the PR's
-# head), then to the core's v0.1.0 tag once it is tagged.
+# JSON configuration component, vkc_require_core's package helpers, the
+# two-family test fixture (SharedDeviceTest) the cross-family tests use, and the
+# iOS module (cmake/vkc_ios.cmake) that answers gfx's finds of Vulkan and glm in
+# an iOS build. _build.yml's homebrew-key action runs at the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 1315d800d4137cf50641a3b52047b9fda2307240)
+  GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
@@ -117,7 +99,8 @@ if(VG_INSTALL)
   set(VKC_INSTALL ON)
 endif()
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
-# Vulkan headers find_package(Vulkan) found above.
+# Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
+# reads.
 set(VKC_WITH_VULKAN ON)
 # Only the example executables read run configuration. Renderer libraries and
 # headless consumers do not acquire the optional JSON configuration dependency.
@@ -137,6 +120,34 @@ FetchContent_MakeAvailable(volumetric_kit_core)
 # core. The installed package config checks the same.
 set(VG_VKC_MIN_VERSION 0.1.0)
 vkc_require_core(${VG_VKC_MIN_VERSION} VULKAN)
+
+# Vulkan and glm are found after the core is added: in an iOS build the core's
+# cmake/vkc_ios.cmake, which runs as the core is added, answers both, with
+# MoltenVK's static library and the host's glm headers.
+#
+# Vulkan::Headers (the public-API types) and Vulkan::Vulkan (the loader, or
+# MoltenVK's static library on iOS, which our implementation links privately).
+find_package(Vulkan REQUIRED)
+
+# glm: the matrix/vector types in the camera and assets tiers' public headers.
+# Prefer a system glm (its config defines glm::glm); fall back to the pinned
+# vendored copy from third_party/ when none is installed -- so the build is
+# self-contained on CI runners that don't ship glm, matching how the other deps
+# are vendored. VG_HAVE_SYSTEM_GLM records which path won, so third_party/ only
+# vendors glm (and lets it run its own install/export) when no system copy
+# exists. glm is a PUBLIC dependency either way, so the installed package config
+# re-finds it unconditionally (find_dependency(glm)). An iOS build takes the
+# core's answer or stops with its message; it never fetches glm.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  find_package(glm CONFIG REQUIRED)
+else()
+  find_package(glm CONFIG QUIET)
+endif()
+if(glm_FOUND)
+  set(VG_HAVE_SYSTEM_GLM ON)
+else()
+  set(VG_HAVE_SYSTEM_GLM OFF)
+endif()
 
 # --- Dependencies + library --------------------------------------------------
 add_subdirectory(third_party)

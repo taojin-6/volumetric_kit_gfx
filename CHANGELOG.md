@@ -23,6 +23,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- **gfx builds for iOS as the top-level project**, configured as the core's
+  README says for iOS, plus `-DVG_BUILD_TESTS=OFF`, since test discovery runs
+  each test binary on the build host (DECISIONS.md, "Vulkan headers come from
+  the system"). CI builds the libraries for iphoneos on the Debug Mac leg.
 - Examples read a shared JSON run configuration through core's optional
   `core_config` target. The command line is `--config <file>` or `--help`;
   defaults and validation belong to core, while renderer APIs remain typed.
@@ -203,9 +207,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at `1315d80` (core 0.10.0, the head of
-  core #36), which adds the two-family test fixture the cross-family tests
-  use.
+- build: gfx pins volumetric_kit_core at `7757c13` (core 0.12.0, the merge of
+  core #42), which adds the two-family test fixture the cross-family tests
+  use and the iOS module gfx's iOS build takes Vulkan and glm from.
 - `windowing`: a `Frame::waits` value must be reached before `end_frame`,
   as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
   host first; a submitted producer can still depend on an unresolved host
