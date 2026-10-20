@@ -217,14 +217,12 @@ jobs:
           echo "workspace ${GITHUB_WORKSPACE} -> ${h}"
 
       # The installed versions of the leg's formulae and of all they depend
-      # on, hashed, for the deps cache key below.
-      # TODO: re-pin to the full SHA of gfx's core pin (CMakeLists.txt) once
-      # core #39 merges and that pin includes it; 3badac2 is the PR's head.
-      # A pre-commit hook then holds the two pins equal.
+      # on, hashed, for the deps cache key below. The action runs at gfx's core
+      # pin (CMakeLists.txt), which a pre-commit hook holds it to.
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@3badac2e9bca719cf1d86fb9363d2f829d69451e
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@7757c131d7283cacd1fb478c7b0118f7844954d6
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 

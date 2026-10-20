@@ -82,16 +82,15 @@ endif()
 # tests and -Werror stay off in a subproject.
 #
 # The pin includes the timeline-value checks, core_test_support, the optional
-# JSON configuration component, vkc_require_core's package helpers, and the
-# two-family test fixture (SharedDeviceTest) the cross-family tests use.
-#
-# TODO: re-pin to the merge of the core's iOS PR (cmake/vkc_ios.cmake), and move
-# _build.yml's homebrew-key action to the same SHA.
+# JSON configuration component, vkc_require_core's package helpers, the
+# two-family test fixture (SharedDeviceTest) the cross-family tests use, and the
+# iOS module (cmake/vkc_ios.cmake) that answers gfx's finds of Vulkan and glm in
+# an iOS build. _build.yml's homebrew-key action runs at the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 1315d800d4137cf50641a3b52047b9fda2307240)
+  GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
 # gfx's install must carry the core its exported targets link, so VG_INSTALL
 # turns the core's install rules on. It never turns them off: they default ON,
 # and a sibling that installs (recon) needs them whichever project populates the
