@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -33,6 +34,11 @@ namespace {
 // which asks the backend to create and own the pool — so this tier holds no
 // VkDescriptorPool of its own.
 constexpr uint32_t kDescriptorPoolSize = 64;
+
+// The size of ImGui's default font at scale 1, which its own expected-size
+// rule takes when the style sets none (GetExpectedContextFontSize, static in
+// imgui_draw.cpp, so not callable here).
+constexpr float kDefaultFontSize = 13.0f;
 
 // Routes the Vulkan backend's internal VkResult failures into the kit's
 // diagnostic sink (where the Vulkan debug messenger already reports). Installed
@@ -85,6 +91,11 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   if (!std::isfinite(config.scale) || config.scale <= 0.0f) {
     return core::Status::invalid_argument(
         "ImGuiOverlay::create needs a finite scale > 0");
+  }
+  if (!std::isfinite(config.min_frame_height) ||
+      config.min_frame_height < 0.0f) {
+    return core::Status::invalid_argument(
+        "ImGuiOverlay::create needs a finite min_frame_height >= 0");
   }
   // The backend's pipeline is built for dynamic rendering on a graphics queue:
   // a device made for another library may lack either.
@@ -144,6 +155,13 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   ImGuiStyle& style = ImGui::GetStyle();
   style.ScaleAllSizes(config.scale);
   style.FontScaleMain = config.scale;
+  // A frame is the font size plus twice FramePadding.y tall. ImGui rounds the
+  // font size it draws with; the padding stays a whole unit, as ScaleAllSizes
+  // leaves it.
+  const float font_size = std::round(kDefaultFontSize * config.scale);
+  style.FramePadding.y =
+      std::max(style.FramePadding.y,
+               std::ceil(0.5f * (config.min_frame_height - font_size)));
 
   if (!ImGui_ImplVulkan_Init(&init)) {
     ImGui::DestroyContext(context);

@@ -47,11 +47,20 @@ struct ImGuiOverlayConfig {
   uint32_t image_count = 2;
   /// The UI's size: the font and the style's sizes (spacing, padding,
   /// rounding, borders) become this times ImGui's default dark style. Use 1
-  /// where the framebuffer scale covers HiDPI (macOS, Wayland), and about 2 on
-  /// a phone, so a button nears a fingertip. Finite and > 0. Read only by
+  /// where the framebuffer scale covers HiDPI (macOS, Wayland), and about 1.3
+  /// on a phone, with @ref min_frame_height sizing its buttons for a
+  /// fingertip. Finite and > 0. Read only by
   /// @ref ImGuiOverlay::create: ImGui picks its font by size before the first
   /// frame.
   float scale = 1.0f;
+  /// The least height of a frame (a button, a checkbox), in ImGui units,
+  /// which are points on a touch display: 44 on iOS, 48 (dp) on Android; 0
+  /// keeps ImGui's. @ref ImGuiOverlay::create raises the style's
+  /// `FramePadding.y`, after @ref scale, to the whole unit at which ImGui's
+  /// default font at that scale (13 x @ref scale, rounded as ImGui rounds
+  /// font sizes: no font exists yet at create) plus twice the padding reaches
+  /// it. Text keeps its size. Finite and >= 0. Read only by create.
+  float min_frame_height = 0.0f;
 };
 
 /// @brief The config that draws into @p swapchain.
@@ -125,8 +134,10 @@ class VG_UI_API ImGuiOverlay {
   ///         moved-from @p device, a @ref RenderTargetLayout with no color
   ///         attachment or a zero sample count, a
   ///         @ref ImGuiOverlayConfig::min_image_count below 2, an
-  ///         @ref ImGuiOverlayConfig::image_count below it, or an
-  ///         @ref ImGuiOverlayConfig::scale that is not finite and > 0;
+  ///         @ref ImGuiOverlayConfig::image_count below it, an
+  ///         @ref ImGuiOverlayConfig::scale that is not finite and > 0, or an
+  ///         @ref ImGuiOverlayConfig::min_frame_height that is not finite and
+  ///         >= 0;
   ///         `core::Status::Code::Unsupported` for a @p device without the
   ///         renderer's requirements; a backend `core::Status` carrying the
   ///         `VkResult` if ImGui's Vulkan backend fails to initialize.
