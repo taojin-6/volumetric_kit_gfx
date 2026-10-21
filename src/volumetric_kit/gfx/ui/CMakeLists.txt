@@ -108,8 +108,9 @@ set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(gfx_ui)
 add_library(volumetric_kit::gfx_ui ALIAS gfx_ui)
 
-target_sources(gfx_ui PRIVATE image_overlay.cpp imgui_overlay.cpp
-                              imgui_touch.cpp metrics_panel.cpp)
+target_sources(
+  gfx_ui PRIVATE collapsible_panel.cpp image_overlay.cpp imgui_overlay.cpp
+                 imgui_touch.cpp metrics_panel.cpp)
 
 generate_export_header(
   gfx_ui

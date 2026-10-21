@@ -25,40 +25,45 @@ void draw_metrics_panel(const FrameMetrics& metrics, const char* title,
     }
 
     ImGui::Separator();
-
-    if (metrics.sections.empty()) {
-      ImGui::TextDisabled("(no timed stages)");
-      // SizingFixedFit (columns size to content), not SizingStretchProp: the
-      // latter divides the available width among columns, which is NaN in an
-      // auto-sizing window before its width is known (its first, content-
-      // measuring frame) — a float-to-int cast that traps under UBSan.
-    } else if (ImGui::BeginTable("stages", 3,
-                                 ImGuiTableFlags_Borders |
-                                     ImGuiTableFlags_RowBg |
-                                     ImGuiTableFlags_SizingFixedFit)) {
-      ImGui::TableSetupColumn("Stage");
-      ImGui::TableSetupColumn("CPU ms");
-      ImGui::TableSetupColumn("GPU ms");
-      ImGui::TableHeadersRow();
-      for (const core::StageRow& section : metrics.sections) {
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(section.name != nullptr ? section.name : "");
-        ImGui::TableNextColumn();
-        ImGui::Text("%.3f", section.cpu_ms);
-        ImGui::TableNextColumn();
-        // has_gpu is the capability report: blank the GPU column for a CPU-only
-        // stage rather than printing a meaningless 0.000.
-        if (section.has_gpu) {
-          ImGui::Text("%.3f", section.gpu_ms);
-        } else {
-          ImGui::TextDisabled("-");
-        }
-      }
-      ImGui::EndTable();
-    }
+    draw_stage_table("stages", metrics.sections);
   }
   ImGui::End();
+}
+
+void draw_stage_table(const char* id, const std::vector<core::StageRow>& rows) {
+  if (rows.empty()) {
+    ImGui::TextDisabled("(no timed stages)");
+    return;
+  }
+  // SizingFixedFit (columns size to content), not SizingStretchProp: the
+  // latter divides the available width among columns, which is NaN in an
+  // auto-sizing window before its width is known (its first, content-measuring
+  // frame) — a float-to-int cast that traps under UBSan.
+  if (!ImGui::BeginTable(id, 3,
+                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                             ImGuiTableFlags_SizingFixedFit)) {
+    return;
+  }
+  ImGui::TableSetupColumn("Stage");
+  ImGui::TableSetupColumn("CPU ms");
+  ImGui::TableSetupColumn("GPU ms");
+  ImGui::TableHeadersRow();
+  for (const core::StageRow& row : rows) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(row.name != nullptr ? row.name : "");
+    ImGui::TableNextColumn();
+    ImGui::Text("%.3f", row.cpu_ms);
+    ImGui::TableNextColumn();
+    // has_gpu is the capability report: `-` for a CPU-only stage rather than a
+    // meaningless 0.000.
+    if (row.has_gpu) {
+      ImGui::Text("%.3f", row.gpu_ms);
+    } else {
+      ImGui::TextDisabled("-");
+    }
+  }
+  ImGui::EndTable();
 }
 
 }  // namespace volumetric_kit::gfx::ui

@@ -123,6 +123,25 @@ what has landed since then. Record amendments when a contract changes.
   a window system's instance extensions and surface factory together, from one constructor
   each for a GLFW window, a `CAMetalLayer` and no window. See the dated entry below.
 
+## 2026-10-20 — Panels for a finger
+
+**A frame height apart from the scale.** With `scale` alone, the 2 that made
+targets big enough for a finger made a panel too wide for a phone in portrait.
+`ImGuiOverlayConfig::min_frame_height` lets a phone take body-sized text (1.3)
+with 44-pt targets.
+
+**A collapsible panel is two windows.** ImGui takes input, or none, per
+window, so the header's button fills a window of its own and the body is a
+second one that takes none.
+
+**Why not ImGui's own collapse.** Its arrow is a font-size square, about
+17 pt at scale 1.3, too small to tap; a single tap on the title bar does not
+toggle it, only a double-click does; and a window with a title bar takes
+input over its whole body.
+
+**Why `draw_stage_table`.** A panel with lines of its own, such as the
+player's stats, shows its stages without a second window.
+
 ## 2026-10-19 — One surface source per window system
 
 **The contract.** A `windowing::SurfaceSource` is a window system's surface

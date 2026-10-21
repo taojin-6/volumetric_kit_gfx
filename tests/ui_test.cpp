@@ -26,12 +26,14 @@
 #include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "imgui.h"
+#include "imgui_internal.h"  // FindWindowByName, for a window's laid-out rect
 #include "ui_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
+#include "volumetric_kit/gfx/ui/collapsible_panel.hpp"
 #include "volumetric_kit/gfx/ui/image_overlay.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
@@ -202,6 +204,19 @@ TEST_F(ImGuiOverlayDeviceTest, ScaleNotFiniteAndPositiveRejected) {
   }
 }
 
+TEST_F(ImGuiOverlayDeviceTest, MinFrameHeightNotFiniteAndNonNegativeRejected) {
+  for (const float height : {-1.0f, std::numeric_limits<float>::quiet_NaN(),
+                             std::numeric_limits<float>::infinity()}) {
+    SCOPED_TRACE(::testing::Message() << "min_frame_height " << height);
+    ui::ImGuiOverlayConfig config = make_config(color_layout());
+    config.min_frame_height = height;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    ASSERT_FALSE(overlay.ok());
+    EXPECT_EQ(overlay.status().domain(), vkc::Status::Code::InvalidArgument);
+  }
+}
+
 // --- Scale ------------------------------------------------------------------
 
 // The scale multiplies the style's sizes and the font ImGui draws with, from
@@ -247,6 +262,69 @@ TEST_F(ImGuiOverlayDeviceTest, ScaleSizesTheStyleAndTheFont) {
   // Scale 1 is ImGui's default style.
   const ImGuiStyle defaults;
   expect_doubled(defaults.WindowPadding, two.style.WindowPadding);
+}
+
+// A phone's sizes: the least frame height raises the frames, a collapsible
+// panel's header among them, to the whole unit that reaches it, and keeps the
+// text the scale gives. One the frames already reach, or 0, keeps the style
+// the scale gives.
+TEST_F(ImGuiOverlayDeviceTest, MinFrameHeightRaisesTheFramesNotTheText) {
+  constexpr float kScale = 1.3f;
+  constexpr float kMinFrameHeight = 44.0f;
+  vg::OffscreenTarget target = make_target({256, 256});
+  struct Sizes {
+    ImVec2 frame_padding;
+    float font = 0.0f;
+    float frame = 0.0f;
+    float header = 0.0f;
+  };
+  const auto sizes_at = [&](float min_frame_height) {
+    ui::ImGuiOverlayConfig config = make_config(target.layout());
+    config.scale = kScale;
+    config.min_frame_height = min_frame_height;
+    auto overlay =
+        ui::ImGuiOverlay::create(device(), instance().handle(), config);
+    EXPECT_TRUE(overlay.ok()) << overlay.status().message();
+    Sizes sizes;
+    if (!overlay.ok()) return sizes;
+    ImGui::GetIO().DisplaySize = ImVec2(256.0f, 256.0f);
+    // Two frames: the header's window takes its size on the second.
+    bool open = true;
+    for (int frame = 0; frame < 2; ++frame) {
+      overlay.value().new_frame();
+      sizes.frame_padding = ImGui::GetStyle().FramePadding;
+      sizes.font = ImGui::GetFontSize();
+      sizes.frame = ImGui::GetFrameHeight();
+      if (ui::begin_collapsible_panel("##panel", "Stats", ImVec2(0.0f, 0.0f),
+                                      &open)) {
+        ImGui::TextUnformatted("bitrate");
+        ui::end_collapsible_panel();
+      }
+      render(target, overlay.value());
+    }
+    const ImGuiWindow* header = ImGui::FindWindowByName("##panel");
+    EXPECT_NE(header, nullptr);
+    if (header != nullptr) sizes.header = header->Size.y;
+    vkDeviceWaitIdle(device().handle());
+    return sizes;
+  };
+  const Sizes kept = sizes_at(0.0f);
+  const Sizes raised = sizes_at(kMinFrameHeight);
+  const Sizes reached = sizes_at(kept.frame);
+
+  ImGuiStyle scaled;
+  scaled.ScaleAllSizes(kScale);
+  EXPECT_EQ(kept.frame_padding.x, scaled.FramePadding.x);
+  EXPECT_EQ(kept.frame_padding.y, scaled.FramePadding.y);
+  EXPECT_EQ(reached.frame_padding.y, scaled.FramePadding.y);
+  ASSERT_LT(kept.frame, kMinFrameHeight);
+
+  EXPECT_GE(raised.frame, kMinFrameHeight);
+  EXPECT_LT(raised.frame, kMinFrameHeight + 2.0f);
+  EXPECT_EQ(raised.frame_padding.x, kept.frame_padding.x);
+  EXPECT_EQ(raised.font, kept.font);
+  EXPECT_GE(raised.header, raised.frame);
+  EXPECT_GE(kept.header, kept.frame);
 }
 
 // --- Move-only lifecycle ----------------------------------------------------
@@ -606,24 +684,30 @@ TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
 
 // --- Metrics panel: CPU-only widget building (no device) --------------------
 
-// Builds a headless ImGui frame (no renderer backend) around `build`, returning
-// the total vertex count of the resulting draw data — a proxy for "the panel
-// produced geometry".
+// What a headless ImGui frame (no renderer backend) around `build` drew: the
+// total vertex count of its draw data -- a proxy for "the panel produced
+// geometry" -- and the windows it rendered.
+struct Drawn {
+  int vertices = 0;
+  int windows = 0;
+};
+
 template <class Build>
-int panel_draw_vertices(Build&& build) {
+Drawn panel_draw(Build&& build) {
   const vg_test::HeadlessImGui imgui(ImVec2(320.0f, 240.0f));
 
   // Two frames: a brand-new auto-sizing window is rendered hidden on its first
   // frame while ImGui measures its content, emitting geometry only once
   // settled.
-  int vertices = 0;
+  Drawn drawn;
   for (int frame = 0; frame < 2; ++frame) {
     ImGui::NewFrame();
     build();
     ImGui::Render();
-    vertices = ImGui::GetDrawData()->TotalVtxCount;
+    drawn.vertices = ImGui::GetDrawData()->TotalVtxCount;
+    drawn.windows = ImGui::GetIO().MetricsRenderWindows;
   }
-  return vertices;
+  return drawn;
 }
 
 vg::FrameMetrics sample_metrics() {
@@ -645,12 +729,12 @@ vg::FrameMetrics sample_metrics() {
   return metrics;
 }
 
-// Geometry for a bare titled window with no body -- the title bar, border, and
-// background ImGui emits for any window. The panel must exceed this to prove it
+// A bare titled window with no body -- the title bar, border, and background
+// ImGui emits for any window. The panel must exceed its geometry to prove it
 // drew its body and not merely a window frame; the default title matches the
 // panel's so the decoration cancels out of the comparisons below.
-int bare_window_vertices() {
-  return panel_draw_vertices([] {
+Drawn bare_window() {
+  return panel_draw([] {
     ImGui::Begin("Performance");
     ImGui::End();
   });
@@ -662,20 +746,247 @@ int bare_window_vertices() {
 // decoration, so the surplus is body content -- a plain `> 0` would pass on the
 // title bar alone.
 TEST(MetricsPanelTest, ProducesGeometryForPopulatedMetrics) {
-  const int empty =
-      panel_draw_vertices([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
-  const int populated =
-      panel_draw_vertices([] { ui::draw_metrics_panel(sample_metrics()); });
-  EXPECT_GT(populated, empty);
+  const Drawn empty =
+      panel_draw([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
+  const Drawn populated =
+      panel_draw([] { ui::draw_metrics_panel(sample_metrics()); });
+  EXPECT_GT(populated.vertices, empty.vertices);
 }
 
 // Empty metrics (no stages, no budget) still draw a real body: the fps line and
 // the "(no timed stages)" placeholder push the window past bare decoration --
 // the empty-sections and no-budget branches.
 TEST(MetricsPanelTest, HandlesEmptyMetrics) {
-  const int empty =
-      panel_draw_vertices([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
-  EXPECT_GT(empty, bare_window_vertices());
+  const Drawn empty =
+      panel_draw([] { ui::draw_metrics_panel(vg::FrameMetrics{}); });
+  EXPECT_GT(empty.vertices, bare_window().vertices);
+}
+
+// The stage table draws into the caller's window and opens none: the frame
+// renders the bare window alone, with more geometry, with rows or without.
+TEST(StageTableTest, DrawsIntoTheCallersWindow) {
+  const Drawn bare = bare_window();
+  ASSERT_EQ(bare.windows, 1);
+  for (const std::vector<vkc::StageRow>& rows :
+       {sample_metrics().sections, std::vector<vkc::StageRow>{}}) {
+    SCOPED_TRACE(::testing::Message() << rows.size() << " rows");
+    const Drawn table = panel_draw([&] {
+      ImGui::Begin("Performance");
+      ui::draw_stage_table("stages", rows);
+      ImGui::End();
+    });
+    EXPECT_EQ(table.windows, bare.windows);
+    EXPECT_GT(table.vertices, bare.vertices);
+  }
+}
+
+// A row with no device span shows `-` in the GPU column, not a time of 0:
+// one glyph where `0.000` is five.
+TEST(StageTableTest, ARowWithNoGpuSpanShowsADash) {
+  const auto table_of = [](const vkc::StageRow& row) {
+    return panel_draw([&] {
+      ImGui::Begin("Performance");
+      ui::draw_stage_table("stages", {row});
+      ImGui::End();
+    });
+  };
+  vkc::StageRow cpu_only;
+  cpu_only.name = "cull";
+  cpu_only.cpu_ms = 0.3;
+  vkc::StageRow zero_gpu = cpu_only;
+  zero_gpu.has_gpu = true;
+  EXPECT_LT(table_of(cpu_only).vertices, table_of(zero_gpu).vertices);
+}
+
+// --- Collapsible panel: CPU-only widget building (no device) ----------------
+
+// Frames of a collapsible panel on a CPU-only context, with the mouse.
+class CollapsiblePanelTest : public ::testing::Test {
+ protected:
+  static constexpr const char* kId = "##panel";
+  static constexpr ImVec2 kPos{10.0f, 20.0f};
+
+  // One frame of the panel, with two lines of body when it is open. Returns
+  // what begin returned, and keeps the frame height, the font and title sizes
+  // and, when begin returned true, the body's window and rect. Begin leaves
+  // the body's window open when it returns true, and none otherwise.
+  bool frame() {
+    ImGui::NewFrame();
+    frame_height_ = ImGui::GetFrameHeight();
+    font_size_ = ImGui::GetFontSize();
+    title_width_ = ImGui::CalcTextSize(title_).x;
+    const ImVector<ImGuiWindowStackData>& stack =
+        ImGui::GetCurrentContext()->CurrentWindowStack;
+    const int depth = stack.Size;
+    const bool drawn = ui::begin_collapsible_panel(kId, title_, kPos, &open_);
+    EXPECT_EQ(stack.Size, depth + (drawn ? 1 : 0));
+    if (drawn) {
+      body_ = ImGui::GetCurrentWindow();
+      body_min_ = ImGui::GetWindowPos();
+      body_size_ = ImGui::GetWindowSize();
+      ImGui::TextUnformatted("bitrate 11.8 Mbit/s");
+      ImGui::TextUnformatted("rate 29.8 / 30 fps");
+      ui::end_collapsible_panel();
+    }
+    ImGui::Render();
+    return drawn;
+  }
+
+  // The header's window, as ImGui last laid it out and drew it.
+  static ImGuiWindow* header_window() {
+    ImGuiWindow* window = ImGui::FindWindowByName(kId);
+    EXPECT_NE(window, nullptr);
+    return window;
+  }
+
+  static ImRect header() {
+    const ImGuiWindow* window = header_window();
+    return window != nullptr ? window->Rect() : ImRect();
+  }
+
+  // The positions of the header's vertices, x then y.
+  static std::vector<float> header_vertices() {
+    std::vector<float> xy;
+    if (const ImGuiWindow* window = header_window()) {
+      for (const ImDrawVert& vertex : window->DrawList->VtxBuffer) {
+        xy.push_back(vertex.pos.x);
+        xy.push_back(vertex.pos.y);
+      }
+    }
+    return xy;
+  }
+
+  // The mouse moved to `at`, then pressed and released, a frame each: ImGui
+  // takes them on separate frames anyway.
+  void click(ImVec2 at) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(at.x, at.y);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+  }
+
+  vg_test::HeadlessImGui imgui_{ImVec2(320.0f, 240.0f)};
+  const char* title_ = "Stats";
+  bool open_ = true;
+  float frame_height_ = 0.0f;
+  float font_size_ = 0.0f;
+  float title_width_ = 0.0f;
+  ImGuiWindow* body_ = nullptr;
+  ImVec2 body_min_;
+  ImVec2 body_size_;
+};
+
+TEST_F(CollapsiblePanelTest, AClickOnTheHeaderClosesItAndAnotherOpensIt) {
+  frame();
+  frame();
+  const ImVec2 middle = header().GetCenter();
+  click(middle);
+  EXPECT_FALSE(open_);
+  click(middle);
+  EXPECT_TRUE(open_);
+}
+
+TEST_F(CollapsiblePanelTest, ClosedItReturnsFalseAndDrawsTheHeaderAlone) {
+  open_ = false;
+  EXPECT_FALSE(frame());
+  EXPECT_FALSE(frame());
+  EXPECT_EQ(ImGui::GetIO().MetricsRenderWindows, 1);
+  open_ = true;
+  EXPECT_TRUE(frame());
+  EXPECT_TRUE(frame());
+  EXPECT_EQ(ImGui::GetIO().MetricsRenderWindows, 2);
+}
+
+// The header takes the mouse; over the body it is the app's, as over nothing.
+TEST_F(CollapsiblePanelTest, OnlyTheHeaderTakesTheMouse) {
+  frame();
+  frame();
+  ImGuiIO& io = ImGui::GetIO();
+  const auto capture_at = [&](ImVec2 at) {
+    io.AddMousePosEvent(at.x, at.y);
+    frame();
+    frame();
+    return io.WantCaptureMouse;
+  };
+  EXPECT_TRUE(capture_at(header().GetCenter()));
+  EXPECT_FALSE(capture_at(ImVec2(body_min_.x + 0.5f * body_size_.x,
+                                 body_min_.y + 0.5f * body_size_.y)));
+  EXPECT_FALSE(capture_at(ImVec2(300.0f, 220.0f)));
+}
+
+// The body sits directly below the header from the first frame, before ImGui
+// has measured the header's window, and stays there.
+TEST_F(CollapsiblePanelTest, TheBodyStartsAtTheHeadersBottomFromTheFirstFrame) {
+  ASSERT_TRUE(frame());
+  const ImVec2 first = body_min_;
+  ASSERT_TRUE(frame());
+  const ImRect settled = header();
+  EXPECT_EQ(settled.Min.x, kPos.x);
+  EXPECT_EQ(settled.Min.y, kPos.y);
+  EXPECT_EQ(first.x, settled.Min.x);
+  EXPECT_EQ(first.y, settled.Max.y);
+  EXPECT_EQ(body_min_.y, first.y);
+}
+
+// The header is at least a frame tall, as ImGui's style sets it or as
+// ImGuiOverlayConfig::min_frame_height raises it.
+TEST_F(CollapsiblePanelTest, TheHeaderIsAtLeastAFrameTall) {
+  for (const float padding : {ImGui::GetStyle().FramePadding.y, 14.0f}) {
+    SCOPED_TRACE(::testing::Message() << "FramePadding.y " << padding);
+    ImGui::GetStyle().FramePadding.y = padding;
+    frame();
+    frame();
+    EXPECT_GE(header().GetHeight(), frame_height_);
+  }
+}
+
+// The header is one button wide enough for the arrow and the title, both
+// drawn, and the arrow turns with the state.
+TEST_F(CollapsiblePanelTest, TheHeaderHoldsTheArrowAndTheTitle) {
+  frame();
+  frame();
+  EXPECT_GE(header().GetWidth(), font_size_ + title_width_ +
+                                     2.0f * ImGui::GetStyle().FramePadding.x);
+  const std::vector<float> open = header_vertices();
+  open_ = false;
+  frame();
+  frame();
+  const std::vector<float> closed = header_vertices();
+  EXPECT_EQ(closed.size(), open.size());
+  EXPECT_NE(closed, open);
+  title_ = "";
+  frame();
+  frame();
+  EXPECT_LT(header_vertices().size(), closed.size());
+}
+
+// Both windows draw a 60 % background: the first vertex of each.
+TEST_F(CollapsiblePanelTest, BothWindowsHaveA60PercentBackground) {
+  frame();
+  frame();
+  ASSERT_NE(body_, nullptr);
+  for (const ImGuiWindow* window : {header_window(), body_}) {
+    ASSERT_NE(window, nullptr);
+    ASSERT_FALSE(window->DrawList->VtxBuffer.empty());
+    EXPECT_EQ(window->DrawList->VtxBuffer[0].col >> IM_COL32_A_SHIFT,
+              static_cast<ImU32>(IM_F32_TO_INT8_SAT(0.6f)));
+  }
+}
+
+// When ImGui skips a window, as ConfigDebugBeginReturnValueOnce has it skip
+// each new one, begin returns false with every window ended (frame checks),
+// and the panel draws from the next frame, its body below its header.
+TEST_F(CollapsiblePanelTest, WhenImGuiSkipsItBeginReturnsFalse) {
+  ImGui::GetIO().ConfigDebugBeginReturnValueOnce = true;
+  EXPECT_FALSE(frame());
+  EXPECT_TRUE(open_);
+  EXPECT_TRUE(frame());
+  EXPECT_TRUE(frame());
+  EXPECT_EQ(body_min_.x, header().Min.x);
+  EXPECT_EQ(body_min_.y, header().Max.y);
 }
 
 }  // namespace

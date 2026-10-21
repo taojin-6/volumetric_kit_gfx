@@ -23,6 +23,14 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `ui`: **panels for a finger.** `ImGuiOverlayConfig::min_frame_height`
+  makes every frame (a button, a checkbox) at least that tall -- 44 pt on
+  iOS -- while the text keeps the size `scale` gives.
+  `begin_collapsible_panel` / `end_collapsible_panel`
+  (`ui/collapsible_panel.hpp`) draw a panel that a tap or click on its header,
+  one button, opens and closes; its body takes no input, so a finger on it
+  reaches the scene. `draw_stage_table` (`ui/metrics_panel.hpp`) is
+  `draw_metrics_panel`'s stage table, drawn in the caller's window.
 - **gfx builds for iOS as the top-level project**, configured as the core's
   README says for iOS, plus `-DVG_BUILD_TESTS=OFF`, since test discovery runs
   each test binary on the build host (DECISIONS.md, "Vulkan headers come from
