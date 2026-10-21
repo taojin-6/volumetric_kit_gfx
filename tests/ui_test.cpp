@@ -780,6 +780,24 @@ TEST(StageTableTest, DrawsIntoTheCallersWindow) {
   }
 }
 
+// A row with no device span shows `-` in the GPU column, not a time of 0:
+// one glyph where `0.000` is five.
+TEST(StageTableTest, ARowWithNoGpuSpanShowsADash) {
+  const auto table_of = [](const vkc::StageRow& row) {
+    return panel_draw([&] {
+      ImGui::Begin("Performance");
+      ui::draw_stage_table("stages", {row});
+      ImGui::End();
+    });
+  };
+  vkc::StageRow cpu_only;
+  cpu_only.name = "cull";
+  cpu_only.cpu_ms = 0.3;
+  vkc::StageRow zero_gpu = cpu_only;
+  zero_gpu.has_gpu = true;
+  EXPECT_LT(table_of(cpu_only).vertices, table_of(zero_gpu).vertices);
+}
+
 // --- Collapsible panel: CPU-only widget building (no device) ----------------
 
 // Frames of a collapsible panel on a CPU-only context, with the mouse.
@@ -789,13 +807,21 @@ class CollapsiblePanelTest : public ::testing::Test {
   static constexpr ImVec2 kPos{10.0f, 20.0f};
 
   // One frame of the panel, with two lines of body when it is open. Returns
-  // what begin returned, and keeps the frame height and, when begin returned
-  // true, the body's rect.
+  // what begin returned, and keeps the frame height, the font and title sizes
+  // and, when begin returned true, the body's window and rect. Begin leaves
+  // the body's window open when it returns true, and none otherwise.
   bool frame() {
     ImGui::NewFrame();
     frame_height_ = ImGui::GetFrameHeight();
-    const bool drawn = ui::begin_collapsible_panel(kId, "Stats", kPos, &open_);
+    font_size_ = ImGui::GetFontSize();
+    title_width_ = ImGui::CalcTextSize(title_).x;
+    const ImVector<ImGuiWindowStackData>& stack =
+        ImGui::GetCurrentContext()->CurrentWindowStack;
+    const int depth = stack.Size;
+    const bool drawn = ui::begin_collapsible_panel(kId, title_, kPos, &open_);
+    EXPECT_EQ(stack.Size, depth + (drawn ? 1 : 0));
     if (drawn) {
+      body_ = ImGui::GetCurrentWindow();
       body_min_ = ImGui::GetWindowPos();
       body_size_ = ImGui::GetWindowSize();
       ImGui::TextUnformatted("bitrate 11.8 Mbit/s");
@@ -806,11 +832,28 @@ class CollapsiblePanelTest : public ::testing::Test {
     return drawn;
   }
 
-  // The header's window, as ImGui last laid it out.
-  static ImRect header() {
-    const ImGuiWindow* window = ImGui::FindWindowByName(kId);
+  // The header's window, as ImGui last laid it out and drew it.
+  static ImGuiWindow* header_window() {
+    ImGuiWindow* window = ImGui::FindWindowByName(kId);
     EXPECT_NE(window, nullptr);
+    return window;
+  }
+
+  static ImRect header() {
+    const ImGuiWindow* window = header_window();
     return window != nullptr ? window->Rect() : ImRect();
+  }
+
+  // The positions of the header's vertices, x then y.
+  static std::vector<float> header_vertices() {
+    std::vector<float> xy;
+    if (const ImGuiWindow* window = header_window()) {
+      for (const ImDrawVert& vertex : window->DrawList->VtxBuffer) {
+        xy.push_back(vertex.pos.x);
+        xy.push_back(vertex.pos.y);
+      }
+    }
+    return xy;
   }
 
   // The mouse moved to `at`, then pressed and released, a frame each: ImGui
@@ -826,8 +869,12 @@ class CollapsiblePanelTest : public ::testing::Test {
   }
 
   vg_test::HeadlessImGui imgui_{ImVec2(320.0f, 240.0f)};
+  const char* title_ = "Stats";
   bool open_ = true;
   float frame_height_ = 0.0f;
+  float font_size_ = 0.0f;
+  float title_width_ = 0.0f;
+  ImGuiWindow* body_ = nullptr;
   ImVec2 body_min_;
   ImVec2 body_size_;
 };
@@ -894,6 +941,52 @@ TEST_F(CollapsiblePanelTest, TheHeaderIsAtLeastAFrameTall) {
     frame();
     EXPECT_GE(header().GetHeight(), frame_height_);
   }
+}
+
+// The header is one button wide enough for the arrow and the title, both
+// drawn, and the arrow turns with the state.
+TEST_F(CollapsiblePanelTest, TheHeaderHoldsTheArrowAndTheTitle) {
+  frame();
+  frame();
+  EXPECT_GE(header().GetWidth(), font_size_ + title_width_ +
+                                     2.0f * ImGui::GetStyle().FramePadding.x);
+  const std::vector<float> open = header_vertices();
+  open_ = false;
+  frame();
+  frame();
+  const std::vector<float> closed = header_vertices();
+  EXPECT_EQ(closed.size(), open.size());
+  EXPECT_NE(closed, open);
+  title_ = "";
+  frame();
+  frame();
+  EXPECT_LT(header_vertices().size(), closed.size());
+}
+
+// Both windows draw a 60 % background: the first vertex of each.
+TEST_F(CollapsiblePanelTest, BothWindowsHaveA60PercentBackground) {
+  frame();
+  frame();
+  ASSERT_NE(body_, nullptr);
+  for (const ImGuiWindow* window : {header_window(), body_}) {
+    ASSERT_NE(window, nullptr);
+    ASSERT_FALSE(window->DrawList->VtxBuffer.empty());
+    EXPECT_EQ(window->DrawList->VtxBuffer[0].col >> IM_COL32_A_SHIFT,
+              static_cast<ImU32>(IM_F32_TO_INT8_SAT(0.6f)));
+  }
+}
+
+// When ImGui skips a window, as ConfigDebugBeginReturnValueOnce has it skip
+// each new one, begin returns false with every window ended (frame checks),
+// and the panel draws from the next frame, its body below its header.
+TEST_F(CollapsiblePanelTest, WhenImGuiSkipsItBeginReturnsFalse) {
+  ImGui::GetIO().ConfigDebugBeginReturnValueOnce = true;
+  EXPECT_FALSE(frame());
+  EXPECT_TRUE(open_);
+  EXPECT_TRUE(frame());
+  EXPECT_TRUE(frame());
+  EXPECT_EQ(body_min_.x, header().Min.x);
+  EXPECT_EQ(body_min_.y, header().Max.y);
 }
 
 }  // namespace

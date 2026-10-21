@@ -35,10 +35,10 @@ namespace volumetric_kit::gfx::ui {
 /// @param title  The header's text.
 /// @param pos    The header's top-left, in ImGui display coordinates.
 /// @param open   The caller's state; a tap or click on the header flips it.
-/// @return true when the body is open and ImGui draws it this frame: build it,
+/// @return true when the body is open and its `Begin` returned true: build it,
 ///         then call @ref end_collapsible_panel. false when it is closed or
-///         ImGui skips it (its `Begin` returned false): every window is
-///         already ended, so call nothing.
+///         its `Begin` returned false: every window is already ended, so call
+///         nothing.
 /// @pre An ImGui frame is active, with its context current; @p id, @p title
 ///      and @p open are not null.
 VG_UI_API bool begin_collapsible_panel(const char* id, const char* title,

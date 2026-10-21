@@ -125,33 +125,22 @@ what has landed since then. Record amendments when a contract changes.
 
 ## 2026-10-20 — Panels for a finger
 
-**The contract.** `ImGuiOverlayConfig::min_frame_height` is the least height
-of a frame, apart from `scale`, so a phone takes body-sized text (1.3) and
-44-pt targets; with one scale, the 2 that made targets big enough made a
-panel too wide for a phone in portrait. `create` raises only
-`FramePadding.y`, after `ScaleAllSizes`, from
-ImGui's default font size at that scale, 13 x scale rounded as ImGui rounds
-font sizes: no font exists before the first frame, and ImGui's own rule for
-that size is static in `imgui_draw.cpp`, so gfx states the 13.
+**A frame height apart from the scale.** With `scale` alone, the 2 that made
+targets big enough for a finger made a panel too wide for a phone in portrait.
+`ImGuiOverlayConfig::min_frame_height` lets a phone take body-sized text (1.3)
+with 44-pt targets.
 
-**A collapsible panel is two windows.** `begin_collapsible_panel` draws the
-header, an arrow and a title, as one button filling a window with no padding,
-and the body as a second window below it with `NoInputs`. The button is then
-the only part that takes input, and a finger on the body reaches the camera:
-a `NoMouseInputs` window is never the hovered one. The body is placed from
-the header's position and the frame height, so it sits below the header from
-the first frame, before ImGui has measured the header's window. The arrow is
-ImGui's `RenderArrow` (internal), as `ArrowButton` and `TreeNode` draw it;
-the default fonts have no ▸/▾ glyphs. The state is the caller's `bool`.
+**A collapsible panel is two windows.** ImGui takes input, or none, per
+window, so the header's button fills a window of its own and the body is a
+second one that takes none.
 
 **Why not ImGui's own collapse.** Its arrow is a font-size square, about
 17 pt at scale 1.3, too small to tap; a single tap on the title bar does not
 toggle it, only a double-click does; and a window with a title bar takes
 input over its whole body.
 
-**Why `draw_stage_table`.** It is `draw_metrics_panel`'s table, drawn in the
-caller's window, so a panel with lines of its own, such as the player's
-stats, shows its stages the same way without a second window.
+**Why `draw_stage_table`.** A panel with lines of its own, such as the
+player's stats, shows its stages without a second window.
 
 ## 2026-10-19 — One surface source per window system
 

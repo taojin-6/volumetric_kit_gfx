@@ -9,7 +9,7 @@
 
 #include "imgui.h"
 // For RenderArrow and RenderText, with which ImGui's own ArrowButton and
-// TreeNode draw their arrow and label.
+// TreeNode draw their arrow and label: the default fonts have no ▸ or ▾.
 #include "imgui_internal.h"
 
 namespace volumetric_kit::gfx::ui {

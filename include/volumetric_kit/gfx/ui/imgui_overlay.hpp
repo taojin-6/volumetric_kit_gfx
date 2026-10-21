@@ -65,8 +65,8 @@ struct ImGuiOverlayConfig {
 
 /// @brief The config that draws into @p swapchain.
 /// @param swapchain  The swapchain the overlay renders into.
-/// @return Its layout, and its image count as both counts; `scale` is 1. Set
-///         `scale` after.
+/// @return Its layout, and its image count as both counts; `scale` is 1 and
+///         `min_frame_height` 0. Set them after.
 VG_UI_API ImGuiOverlayConfig
 overlay_config(const windowing::Swapchain& swapchain);
 
