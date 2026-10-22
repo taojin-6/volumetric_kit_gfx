@@ -54,11 +54,10 @@ enum HybridMeshFlags : uint32_t {
   /// wrong way but carrying correct normals looks like its neighbours. Lit
   /// shading, which flips the normal on back faces, is what exposes that --
   /// and it hides the case where normal and winding are both inverted, which
-  /// this view shows. A zero normal shows mid-grey. The stored color is the
-  /// encoding itself (to 8-bit rounding: 0.5 lands on 127 or 128) on UNORM and
-  /// sRGB targets alike -- for an sRGB target the shader writes the linear
-  /// value the hardware encodes back to it -- so it matches other normal-map
-  /// tools on the default swapchain too.
+  /// this view shows. A zero normal shows mid-grey. The encoding is the color
+  /// shown: UNORM and sRGB targets store it (to 8-bit rounding: 0.5 lands on
+  /// 127 or 128), and a float target its linear light, so it matches other
+  /// normal-map tools on the default swapchain too.
   kHybridMeshNormals = 1u << 1,
   /// Shade every fragment from its interpolated vertex `color`, as if every
   /// `uv0` were negative: the atlas is not shown. Ignored by
@@ -82,7 +81,10 @@ enum HybridMeshFlags : uint32_t {
 /// carries a usable coordinate -- decoded as `-uv0 - 1`, of which `(-1, -1)`
 /// is the `(0, 0)` case. See @ref LiveMesh. Lighting is toggled by
 /// @ref kHybridMeshLit; @ref kHybridMeshNormals swaps the albedo for a
-/// normal-as-color debug view.
+/// normal-as-color debug view. Vertex colors and atlas texels are linear light
+/// (an `_SRGB` atlas decodes when sampled); a target that takes linear light
+/// (`_SRGB` or float) is given the shaded color as is, and a UNORM target
+/// sRGB-encoded, so a color shows alike on each.
 ///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected

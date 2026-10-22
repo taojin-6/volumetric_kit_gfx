@@ -50,13 +50,13 @@ static_assert(offsetof(PushConstants, flags) == 76,
 
 // hybrid_mesh.frag's specialization constants, constant_ids 0..3 in order. The
 // flag bits it tests come from HybridMeshFlags here, so the enum is their one
-// definition (the shader's defaults are 0, which switches a mode off); the
-// sRGB bit tells the normal view to pre-decode its encoding so that a target
-// which encodes on write stores the encoding itself.
+// definition (the shader's defaults are 0, which switches a mode off);
+// linear_target says whether the target takes linear light, which decides
+// what the shader writes.
 struct FragmentSpecialization {
   uint32_t flag_lit;
   uint32_t flag_normals;
-  VkBool32 srgb_target;
+  VkBool32 linear_target;
   uint32_t flag_vertex_color;
 };
 
@@ -129,15 +129,15 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   };
 
   // The fragment stage writes color attachment 0 only, so its format alone
-  // decides the sRGB path.
+  // decides the encoding.
   const FragmentSpecialization spec_data{
       kHybridMeshLit, kHybridMeshNormals,
-      is_srgb_attachment(layout.color_formats[0]) ? VK_TRUE : VK_FALSE,
+      takes_linear_light(layout.color_formats[0]) ? VK_TRUE : VK_FALSE,
       kHybridMeshVertexColor};
   const VkSpecializationMapEntry spec_entries[4] = {
       {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
       {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},
-      {2, offsetof(FragmentSpecialization, srgb_target), sizeof(VkBool32)},
+      {2, offsetof(FragmentSpecialization, linear_target), sizeof(VkBool32)},
       {3, offsetof(FragmentSpecialization, flag_vertex_color),
        sizeof(uint32_t)},
   };

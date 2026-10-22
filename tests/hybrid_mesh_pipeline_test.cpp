@@ -27,6 +27,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "color_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -162,6 +163,12 @@ bool any_pixel_drawn(const std::vector<uint8_t>& px) {
     }
   }
   return false;
+}
+
+// The byte a UNORM target stores for linear light `linear`: the shader writes
+// it sRGB-encoded.
+long encoded_byte(double linear) {
+  return std::lround(255.0 * vg_test::linear_to_srgb(linear));
 }
 
 // The RGBA pixel at (x, y) of a kSize x kSize readback.
@@ -363,9 +370,10 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
   }
 
   // Renders `draws` (bound with `atlas` as set 0) into a fresh offscreen target
-  // with the given flags, and returns a copy of the RGBA pixels. Each draw
-  // names either a static GpuMesh or a live indirect mesh -- the harness is
-  // agnostic, and a draw_count > 1 list exercises submit()'s per-draw dispatch.
+  // with the given flags, and returns a copy of the RGBA pixels (4 bytes a
+  // texel, or 16 for R32G32B32A32_SFLOAT). Each draw names either a static
+  // GpuMesh or a live indirect mesh -- the harness is agnostic, and a
+  // draw_count > 1 list exercises submit()'s per-draw dispatch.
   // `color_format` must match the layout `pipeline` was created for.
   std::vector<uint8_t> render(
       vkc::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
@@ -430,8 +438,9 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
     if (px == nullptr) {
       return {};
     }
-    return std::vector<uint8_t>(px,
-                                px + static_cast<size_t>(kSize) * kSize * 4);
+    const size_t texel = color_format == VK_FORMAT_R32G32B32A32_SFLOAT ? 16 : 4;
+    return std::vector<uint8_t>(
+        px, px + texel * static_cast<size_t>(kSize) * kSize);
   }
 
   // Single-draw convenience -- the common case is one mesh per frame.
@@ -545,10 +554,11 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   // Lit: the front-facing quads darken by a KNOWN factor --
   //   ambient + (1 - ambient) * max(dot(n, l), 0),  n = (0,0,1), ambient =
   //   0.25, l = normalize(the default light_dir).
-  // Asserting that specific value (not merely "dimmer than unlit") is what
-  // proves the directional term is applied: dropping it would leave the
-  // ambient-only ~0.25 * unlit (~64), which "dimmer than unlit" would still
-  // accept.
+  // The unlit sources are saturated (linear 1), so the lit ones are the factor
+  // itself, which the UNORM target stores encoded. Asserting that specific
+  // value (not merely "dimmer than unlit") is what proves the directional term
+  // is applied: dropping it would leave the ambient-only 0.25 (byte ~137),
+  // which "dimmer than unlit" would still accept.
   const std::vector<uint8_t> lit = render(
       allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
       atlas, pipelines::kHybridMeshLit);
@@ -559,12 +569,12 @@ TEST_F(HybridMeshRenderTest, RoutesAtlasAndVertexColor) {
   const float factor = 0.25f + 0.75f * std::fmax(glm::dot(n, l), 0.0f);
 
   const uint8_t* lit_left = pixel_at(lit, kSize / 4, kSize / 2);
-  EXPECT_NEAR(lit_left[0], std::lround(left[0] * factor), 4)
-      << "lit red = unlit red * directional factor (ambient-only would be ~64)";
+  EXPECT_NEAR(lit_left[0], encoded_byte(factor), 4)
+      << "lit red = unlit red * directional factor (ambient-only ~137)";
   EXPECT_LT(lit_left[0], left[0]) << "lit red darker than unlit";
 
   const uint8_t* lit_right = pixel_at(lit, 3 * kSize / 4, kSize / 2);
-  EXPECT_NEAR(lit_right[1], std::lround(right[1] * factor), 4)
+  EXPECT_NEAR(lit_right[1], encoded_byte(factor), 4)
       << "lit green = unlit green * directional factor";
   EXPECT_LT(lit_right[1], right[1]) << "lit green darker than unlit";
 }
@@ -601,7 +611,7 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
   ASSERT_EQ(lit.size(), static_cast<size_t>(kSize) * kSize * 4);
   const glm::vec3 l = glm::normalize(pipelines::HybridMeshFrame{}.light_dir);
   EXPECT_NEAR(pixel_at(lit, 3 * kSize / 4, kSize / 2)[1],
-              std::lround(255.0f * (0.25f + 0.75f * l.y)), 4)
+              encoded_byte(0.25 + 0.75 * l.y), 4)
       << "the right quad must be back-facing for the no-flip check to bite";
 
   const std::vector<uint8_t> normals =
@@ -699,6 +709,60 @@ TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
   EXPECT_NEAR(right[0], 128, 1);
   EXPECT_EQ(right[1], 0);
   EXPECT_NEAR(right[2], 128, 1);
+}
+
+// A mid-grey shows alike on every target: an albedo of linear 0.216 (sRGB byte
+// 128), and the normal view's mid-grey (the encoding 0.5, from a zero normal).
+// UNORM and sRGB targets store byte 128 for both, and a float target their
+// linear light. Written unencoded, a UNORM target would store the albedo as
+// 55; given the encoding, a float target would hold 0.5 for the normal view.
+TEST_F(HybridMeshRenderTest, MidGreyShowsAlikeOnEveryTarget) {
+  const double grey = vg_test::srgb_to_linear(128.0 / 255.0);
+  assets::Mesh mesh_cpu = make_hybrid_mesh();
+  for (assets::Vertex& v : mesh_cpu.vertices) {
+    v.color = glm::vec4(glm::vec3(static_cast<float>(grey)), 1.0f);
+    v.normal = {0.0f, 0.0f, 0.0f};
+  }
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+
+  struct View {
+    const char* name;
+    uint32_t flags;
+    double linear;  // the light a float target holds
+  };
+  const View views[] = {
+      {"albedo", 0u, grey},
+      {"normals", pipelines::kHybridMeshNormals, vg_test::srgb_to_linear(0.5)},
+  };
+  for (const VkFormat format :
+       {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB,
+        VK_FORMAT_R32G32B32A32_SFLOAT}) {
+    auto pipeline = pipelines::HybridMeshPipeline::create(
+        device(), allocator(), color_depth_layout(format));
+    ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+    for (const View& view : views) {
+      // With no atlas every triangle shows its vertex color.
+      const std::vector<uint8_t> px =
+          render(allocator(), pipeline.value(), draw, VK_NULL_HANDLE,
+                 view.flags, format);
+      const size_t texel = format == VK_FORMAT_R32G32B32A32_SFLOAT ? 16 : 4;
+      ASSERT_EQ(px.size(), texel * kSize * kSize);
+      const size_t at = (size_t{kSize / 2} * kSize + kSize / 4) * texel;
+      for (int c = 0; c < 3; ++c) {
+        if (format == VK_FORMAT_R32G32B32A32_SFLOAT) {
+          float value = 0.0f;
+          std::memcpy(&value, &px[at + c * sizeof(float)], sizeof(value));
+          EXPECT_NEAR(value, view.linear, 2e-3)
+              << view.name << " on float, channel " << c;
+        } else {
+          EXPECT_NEAR(px[at + c], 128, 1)
+              << view.name << " on format " << format << ", channel " << c;
+        }
+      }
+    }
+  }
 }
 
 // Bits HybridMeshFlags does not name are reserved, and the shader tests only
