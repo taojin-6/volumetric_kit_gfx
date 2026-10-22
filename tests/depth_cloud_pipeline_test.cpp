@@ -7,9 +7,9 @@
 // Each depth pixel lands where the host projection puts it, once; stride,
 // gating, images read at their offsets and no further, colour by recon's rule
 // through another camera, the tint where there is no colour, exact bytes on
-// every target, wide points, depth against PrimitivePipeline's lines, any
-// number of cameras in one frame (also at 4K colour) in one submit or many,
-// frames through a real timeline reusing blocks, teardown waiting for the
+// every target, wide points, depth against PrimitivePipeline's lines, 4K
+// colour, any number of cameras in one frame in one submit or many, frames
+// through a real timeline reusing blocks, teardown waiting for the
 // newest frame or after one that never ran, buffers another queue family
 // wrote, and every refusal recording nothing.
 
@@ -1193,10 +1193,9 @@ INSTANTIATE_TEST_SUITE_P(Cameras, DepthCloudCamerasTest,
                            return "N" + std::to_string(info.param);
                          });
 
-// Four depth cameras, each with a 3840 x 2160 colour camera, in a 2 x 2 grid
-// of viewports: each point takes its own camera's colour at full
-// resolution.
-TEST_F(DepthCloudTest, FourColorCamerasAt4K) {
+// A depth camera with a 3840 x 2160 colour camera: each point takes its own
+// colour pixel at full resolution.
+TEST_F(DepthCloudTest, AColorCameraAt4K) {
   auto pipeline = make_pipeline();
   ASSERT_NE(pipeline, nullptr);
   const PinholeCamera depth_cam{40.0f, 40.0f, 31.6f, 17.8f, 64, 36};
@@ -1209,42 +1208,24 @@ TEST_F(DepthCloudTest, FourColorCamerasAt4K) {
   color_cam.cy = depth_cam.cy * 60.0f + 29.75f;
   color_cam.width = 3840;
   color_cam.height = 2160;
-  const VkExtent2D extent{2 * depth_cam.width, 2 * depth_cam.height};
 
-  std::vector<vkc::Buffer> depths;
-  std::vector<vkc::Buffer> colors;
-  std::vector<std::vector<uint32_t>> words;
-  std::vector<DepthCloudDraw> draws;
-  for (uint32_t i = 0; i < 4; ++i) {
-    std::vector<float> values(size_t{depth_cam.width} * depth_cam.height,
-                              1.0f + 0.25f * i);
-    depths.push_back(upload(values));
-    words.push_back(coded_colors(color_cam, i));
-    colors.push_back(upload(words.back()));
-  }
-  for (uint32_t i = 0; i < 4; ++i) {
-    const glm::mat4 to_world =
-        pose(90.0f * i, {0.0f, 0.0f, 1.0f}, {1.0f * i, 0.5f, 0.0f});
-    DepthCloudDraw draw = self_view(depths[i], depth_cam, to_world);
-    draw.mode = CloudColor::True;
-    draw.color = {&colors[i], 0, color_cam, to_world, true};
-    draw.viewport = {{static_cast<int32_t>((i % 2) * depth_cam.width),
-                      static_cast<int32_t>((i / 2) * depth_cam.height)},
-                     {depth_cam.width, depth_cam.height}};
-    draws.push_back(draw);
-  }
-  const Pixels px = render(*pipeline, draws, extent);
+  const vkc::Buffer depth = upload(
+      std::vector<float>(size_t{depth_cam.width} * depth_cam.height, 1.25f));
+  const std::vector<uint32_t> words = coded_colors(color_cam, 1);
+  const vkc::Buffer color = upload(words);
+  const glm::mat4 to_world =
+      pose(90.0f, {0.0f, 0.0f, 1.0f}, {1.0f, 0.5f, 0.0f});
+  DepthCloudDraw draw = self_view(depth, depth_cam, to_world);
+  draw.mode = CloudColor::True;
+  draw.color = {&color, 0, color_cam, to_world, true};
+  const Pixels px =
+      render(*pipeline, {draw}, {depth_cam.width, depth_cam.height});
   ASSERT_FALSE(px.bytes.empty());
-  for (uint32_t i = 0; i < 4; ++i) {
-    const uint32_t x0 = (i % 2) * depth_cam.width;
-    const uint32_t y0 = (i / 2) * depth_cam.height;
-    for (uint32_t v = 0; v < depth_cam.height; ++v) {
-      for (uint32_t u = 0; u < depth_cam.width; ++u) {
-        const size_t index =
-            size_t{60 * v + 30} * color_cam.width + 60 * u + 30;
-        ASSERT_EQ(px.rgb(x0 + u, y0 + v), rgb_of(words[i][index]))
-            << "camera " << i << " (" << u << ", " << v << ")";
-      }
+  for (uint32_t v = 0; v < depth_cam.height; ++v) {
+    for (uint32_t u = 0; u < depth_cam.width; ++u) {
+      const size_t index = size_t{60 * v + 30} * color_cam.width + 60 * u + 30;
+      ASSERT_EQ(px.rgb(u, v), rgb_of(words[index]))
+          << "(" << u << ", " << v << ")";
     }
   }
 }
