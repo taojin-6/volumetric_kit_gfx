@@ -337,11 +337,13 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash. The consumer configure (label consumer)
-        # checks CMake, not a device, so one leg runs it.
+        # starts the system's bash. A test that hangs fails after a minute
+        # rather than holding the runner until the job's time limit; the
+        # slowest shard takes a few seconds. The consumer configure (label
+        # consumer) checks CMake, not a device, so one leg runs it.
         run: |
           DYLD_LIBRARY_PATH="${VKC_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure \
+            ctest --test-dir build --output-on-failure --timeout 60 \
               ${{ inputs.os != 'ubuntu-26.04' && '-LE consumer' || '' }}
 
       # A shard passes with its skipped tests unreported. On Apple a skip fails
