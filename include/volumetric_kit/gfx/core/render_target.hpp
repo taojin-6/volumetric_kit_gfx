@@ -70,13 +70,18 @@ struct RenderTargetAttachment {
 /// @brief Per-begin load/store ops and clear values passed to @ref
 ///        RenderTarget::begin.
 ///
-/// The ops apply uniformly to every attachment; @ref clear_color is used by
-/// each color attachment, and @ref clear_depth by the depth attachment, when
-/// @ref load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`. Per-attachment clears arrive
-/// with multi-attachment (MRT) support.
+/// @ref load_op applies to every attachment; @ref clear_color is used by each
+/// color attachment, and @ref clear_depth by the depth attachment, when @ref
+/// load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`. Per-attachment clears arrive with
+/// multi-attachment (MRT) support.
 struct RenderTargetBeginInfo {
   VkAttachmentLoadOp load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  /// The color attachments' store op.
   VkAttachmentStoreOp store_op = VK_ATTACHMENT_STORE_OP_STORE;
+  /// The depth attachment's store op. `DONT_CARE` drops depth when the scope
+  /// ends, so a tile-based GPU does not write it back to memory; set `STORE`
+  /// when a later scope loads it.
+  VkAttachmentStoreOp depth_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   VkClearColorValue clear_color{};  ///< When @ref load_op clears a color view.
   /// When @ref load_op clears a depth attachment; `depth = 1.0` pairs with a
   /// `VK_COMPARE_OP_LESS` test (clear to the far plane).

@@ -1093,6 +1093,13 @@ TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
   EXPECT_FALSE(win::swapchain_stale(vkc::Status{}));
 }
 
+// FIFO by default: it paces frames to the display, where MAILBOX would render
+// uncapped on a GPU an app may share with compute.
+TEST(SwapchainConfigTest, DefaultsToFifo) {
+  EXPECT_EQ(win::SwapchainConfig{}.preferred_present_mode,
+            VK_PRESENT_MODE_FIFO_KHR);
+}
+
 // Acquire / present / recreate on an empty swapchain (default-constructed,
 // moved-from, or after a failed rebuild) fail with InvalidArgument instead of
 // dereferencing null handles. Needs no instance/device, so it runs everywhere.

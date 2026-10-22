@@ -65,20 +65,16 @@ void RenderTarget::begin(VkCommandBuffer cmd,
     color_attachments[i].clearValue.color = info.clear_color;
   }
 
-  // The depth attachment reuses the color load/store ops (RenderTargetBeginInfo
-  // documents uniform ops); only the clear value is depth-specific. The target
-  // is depth-only (OffscreenTarget rejects combined depth/stencil formats), so
-  // DEPTH_ATTACHMENT_OPTIMAL is valid without the separateDepthStencilLayouts
-  // feature.
-  // TODO: per-attachment load/store ops (e.g. load color while clearing depth)
-  // arrive with the per-attachment MRT controls.
+  // The target is depth-only (OffscreenTarget rejects combined depth/stencil
+  // formats), so DEPTH_ATTACHMENT_OPTIMAL is valid without the
+  // separateDepthStencilLayouts feature.
   VkRenderingAttachmentInfo depth_attachment{};
   if (has_depth()) {
     depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depth_attachment.imageView = depth_.view;
     depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depth_attachment.loadOp = info.load_op;
-    depth_attachment.storeOp = info.store_op;
+    depth_attachment.storeOp = info.depth_store_op;
     depth_attachment.clearValue.depthStencil = info.clear_depth;
   }
 

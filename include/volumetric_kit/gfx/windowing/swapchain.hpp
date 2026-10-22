@@ -38,8 +38,10 @@ struct SwapchainConfig {
   VkFormat preferred_format = VK_FORMAT_B8G8R8A8_SRGB;
   /// Color space paired with @ref preferred_format.
   VkColorSpaceKHR preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-  /// Preferred present mode; falls back to FIFO (always supported).
-  VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+  /// Preferred present mode; falls back to FIFO (always supported). FIFO, the
+  /// default, paces frames to the display; MAILBOX renders as fast as the GPU
+  /// allows and blocks less with a third image (@ref min_image_count).
+  VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
   /// Requested image count; `0` selects the surface minimum + 1. Clamped to the
   /// surface's supported `[minImageCount, maxImageCount]`.
   uint32_t min_image_count = 0;
@@ -55,8 +57,8 @@ struct SwapchainConfig {
   ///       carries no per-frame barrier; cross-frame correctness relies on each
   ///       frame *clearing* depth (`load_op = CLEAR`, the default). A consumer
   ///       that instead loads a prior frame's depth (temporal reuse) must
-  ///       insert its own barrier — the swapchain does not synchronize a
-  ///       cross-frame depth read.
+  ///       store it (`depth_store_op = STORE`) and insert its own barrier —
+  ///       the swapchain does not synchronize a cross-frame depth read.
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
 };
 
