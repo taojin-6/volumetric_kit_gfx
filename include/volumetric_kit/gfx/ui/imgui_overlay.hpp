@@ -168,12 +168,14 @@ class VG_UI_API ImGuiOverlay {
   ///             layout is compatible with @ref ImGuiOverlayConfig::layout.
   /// @pre `valid()`, and @ref new_frame was called this frame. Makes @ref
   ///      context the current ImGui context.
-  /// @note On the first call (and whenever a texture is (re)created) the atlas
-  ///       uploads through the backend's own command buffer via a blocking
-  ///       queue submit on the graphics queue, not @p cmd, so it is safe inside
-  ///       the rendering scope. That submit is taken under the device's
-  ///       `core::Device::submit_mutex`, so it is serialized on a shared
-  ///       (adopted) queue like every other renderer submit.
+  /// @note On the first call, and whenever the frame adds glyphs (a character
+  ///       or font size not drawn before), the atlas uploads through the
+  ///       backend's own command buffer via a blocking queue submit on the
+  ///       graphics queue, not @p cmd, so it is safe inside the rendering
+  ///       scope. Such a call holds the device's `core::Device::submit_mutex`,
+  ///       so the submit is serialized on a shared (adopted) queue like every
+  ///       other renderer submit; any other call only records into @p cmd and
+  ///       takes no lock.
   void render(VkCommandBuffer cmd);
 
   /// @return The owned `ImGuiContext` (`nullptr` when empty). Pass to

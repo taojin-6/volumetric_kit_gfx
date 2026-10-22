@@ -117,9 +117,9 @@ core::Result<ImGuiOverlay> ImGuiOverlay::create(
   init.PhysicalDevice = device.physical_device();
   init.Device = device.handle();
   init.QueueFamily = device.queue_family();
-  // The backend submits on this queue itself when it (re)creates a texture (the
+  // The backend submits on this queue itself when it updates a texture (the
   // font atlas on first render): a private command buffer + blocking submit,
-  // not the caller's. render() takes the device's submit_mutex around that call
+  // not the caller's. render() takes the device's submit_mutex on such a frame
   // so a shared (adopted) queue stays externally synchronized.
   init.Queue = device.queue();
   init.DescriptorPoolSize = kDescriptorPoolSize;  // backend creates+owns it
@@ -207,13 +207,20 @@ void ImGuiOverlay::render(VkCommandBuffer cmd) {
   VKC_CHECK(context_ != nullptr, "render on an empty ImGuiOverlay");
   ImGui::SetCurrentContext(context_);
   ImGui::Render();
-  // RenderDrawData may (re)create a texture — the font atlas on first render —
-  // which the backend uploads via its own command buffer + a blocking submit on
-  // the graphics queue. Hold the device's submit mutex across it -- the
-  // embedder's on a queue shared with another library, else the device's own
-  // -- so it never races the renderer's or a sibling library's submits.
-  const std::lock_guard<std::mutex> lock(*device_->submit_mutex());
-  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+  ImDrawData* draw_data = ImGui::GetDrawData();
+  // RenderDrawData uses the queue only to update a texture whose status is not
+  // OK, with a blocking submit of its own. Only then hold the device's submit
+  // mutex -- the embedder's on a queue shared with another library, else the
+  // device's own -- so that submit never races another on the queue.
+  std::unique_lock<std::mutex> lock(*device_->submit_mutex(), std::defer_lock);
+  if (draw_data->Textures != nullptr &&
+      std::any_of(draw_data->Textures->begin(), draw_data->Textures->end(),
+                  [](const ImTextureData* tex) {
+                    return tex->Status != ImTextureStatus_OK;
+                  })) {
+    lock.lock();
+  }
+  ImGui_ImplVulkan_RenderDrawData(draw_data, cmd);
 }
 
 void ImGuiOverlay::destroy() noexcept {

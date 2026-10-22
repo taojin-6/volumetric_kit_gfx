@@ -212,6 +212,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   FIFO**, which paces frames to the display; MAILBOX rendered uncapped where
   the surface offered it, on a GPU the app may share with compute. A MAILBOX
   swapchain no longer gets a third image unless `min_image_count` asks.
+- `ui`: `ImGuiOverlay::render` holds the device's submit mutex only on a
+  frame that updates a texture (the font atlas, when glyphs are added), the
+  only kind on which ImGui's backend submits; other frames no longer
+  serialize against submits from other threads.
 - `camera`: asymmetric orthographic projections flip their Y translation
   along with their scale, keeping off-center boxes inside the viewport.
 - `camera`: `OrbitCamera::zoom` ignores a non-finite or non-positive factor,
