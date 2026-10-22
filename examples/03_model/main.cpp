@@ -930,31 +930,34 @@ int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
     // depth attachment; the default load op clears both.
     vg::RenderTargetBeginInfo begin;
     begin.clear_color = background();
-    f.target->begin(cmd, begin);
     {
-      // Per-pass GPU stages: a timestamp pair + a VK_EXT_debug_utils label
-      // around each, resolved into the metrics the overlay panel shows.
-      vg::Profiler::Scope skybox_scope =
-          profiler.value().gpu_scope(cmd, "skybox");
-      record_skybox(cmd, extent, skybox, view_proj, rig.position());
-    }
-    pipelines::PbrFrame frame_info;
-    frame_info.extent = extent;
-    frame_info.view_proj = view_proj;
-    frame_info.scene = &scene;
-    frame_info.slot = f.slot;
-    frame_info.draws = gpu_model.value().draws().data();
-    frame_info.draw_count =
-        static_cast<uint32_t>(gpu_model.value().draws().size());
-    {
-      vg::Profiler::Scope pbr_scope = profiler.value().gpu_scope(cmd, "pbr");
-      pipeline.value().submit(cmd, frame_info);
-    }
-    // Composite the debug overlay on top of the scene, within the same
-    // dynamic-rendering scope.
-    overlay.value().render(cmd);
+      // One GPU stage around the whole pass -- a timestamp pair + a
+      // VK_EXT_debug_utils label, resolved into the metrics the overlay panel
+      // shows -- and CPU-only stages inside it (see Profiler::gpu_scope).
+      vg::Profiler::Scope pass_scope = profiler.value().gpu_scope(cmd, "pass");
+      f.target->begin(cmd, begin);
+      {
+        vg::Profiler::Scope skybox_scope = profiler.value().cpu_scope("skybox");
+        record_skybox(cmd, extent, skybox, view_proj, rig.position());
+      }
+      pipelines::PbrFrame frame_info;
+      frame_info.extent = extent;
+      frame_info.view_proj = view_proj;
+      frame_info.scene = &scene;
+      frame_info.slot = f.slot;
+      frame_info.draws = gpu_model.value().draws().data();
+      frame_info.draw_count =
+          static_cast<uint32_t>(gpu_model.value().draws().size());
+      {
+        vg::Profiler::Scope pbr_scope = profiler.value().cpu_scope("pbr");
+        pipeline.value().submit(cmd, frame_info);
+      }
+      // Composite the debug overlay on top of the scene, within the same
+      // dynamic-rendering scope.
+      overlay.value().render(cmd);
 
-    f.target->end(cmd);
+      f.target->end(cmd);
+    }
 
     const vkc::Status present = app.end_frame(f);
     if (!present.ok() && !win::swapchain_stale(present)) {

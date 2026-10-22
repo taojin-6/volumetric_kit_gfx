@@ -16,6 +16,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   before the surface's first format, which is UNORM on Android.
 - `io::load_gltf` reports an image it cannot hold (16-bit, or not decoded)
   through `warnings`, as it does a dropped primitive.
+- `Profiler::gpu_scope` says to wrap a whole render pass: on Apple GPUs a
+  scope inside one reads about 0 ms. `example_03_model` now does so.
 - `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that
   takes linear light (`_SRGB` or float). On the default `_SRGB` swapchain,
   every consumer's panels show their authored colours; ImGui's `WindowBg`
