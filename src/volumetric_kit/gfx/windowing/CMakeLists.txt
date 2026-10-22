@@ -9,7 +9,6 @@
 # window system. The headless and CAMetalLayer surface sources live here; the
 # GLFW glue is gfx_glfw's.
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
@@ -42,10 +41,8 @@ endif()
 target_compile_features(gfx_windowing PUBLIC cxx_std_17)
 
 target_include_directories(
-  gfx_windowing
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  gfx_windowing PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                       "$<BUILD_INTERFACE:${_vg_generated_inc}>")
 
 # gfx_core is PUBLIC (its types, and the core's Device under them, appear in
 # this tier's API), and brings the core's vulkan tier, whose format.hpp
@@ -59,17 +56,3 @@ target_link_libraries(
   PRIVATE Vulkan::Vulkan)
 
 vg_target_warnings(gfx_windowing)
-
-if(VG_INSTALL)
-  install(
-    TARGETS gfx_windowing
-    EXPORT volumetric_kit_gfxTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  install(
-    DIRECTORY "${_vg_generated_inc}/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-endif()

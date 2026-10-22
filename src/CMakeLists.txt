@@ -2,10 +2,8 @@
 # Copyright (c) 2026 Tao Jin
 
 # Orchestrator for the component tiers. Each subdirectory owns its own target
-# and build settings and installs itself into the shared
-# volumetric_kit_gfxTargets export set; the strict dependency rule (a tier may
-# depend only on tiers to its left) is expressed by what each links.
-include(GNUInstallDirs)
+# and build settings; the strict dependency rule (a tier may depend only on
+# tiers to its left) is expressed by what each links.
 
 add_subdirectory(volumetric_kit/gfx/core)
 add_subdirectory(volumetric_kit/gfx/windowing)
@@ -24,10 +22,7 @@ endif()
 # TODO: add_subdirectory() for passes as that tier lands.
 
 # --- gfx: umbrella alias ----------------------------------------------------
-# Consumers link `volumetric_kit::gfx` and get whatever tiers are built. gfx_ui
-# and gfx_glfw are build-tree only (BUILD_INTERFACE) until the ImGui-header
-# packaging is sorted, so they join the umbrella for in-tree consumers without
-# entering the installed export set (see ui/CMakeLists.txt).
+# Consumers link `volumetric_kit::gfx` and get whatever tiers are built.
 add_library(gfx INTERFACE)
 add_library(volumetric_kit::gfx ALIAS gfx)
 target_link_libraries(
@@ -39,69 +34,7 @@ target_link_libraries(
             gfx_io
             gfx_pipelines
             gfx_app
-            $<BUILD_INTERFACE:gfx_ui>)
+            gfx_ui)
 if(TARGET gfx_glfw)
-  target_link_libraries(gfx INTERFACE $<BUILD_INTERFACE:gfx_glfw>)
-endif()
-
-# --- Install / export -------------------------------------------------------
-# Tiers install their own targets into volumetric_kit_gfxTargets (above); here
-# we add the umbrella, ship the public header tree, and finalize the export set
-# and package config.
-if(VG_INSTALL)
-  install(TARGETS gfx EXPORT volumetric_kit_gfxTargets)
-
-  install(
-    DIRECTORY "${PROJECT_SOURCE_DIR}/include/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp"
-    # ui/ needs the generated ui/export.hpp and the ImGui headers, and neither
-    # is installed while gfx_ui stays build-tree-only (see the install TODO in
-    # volumetric_kit/gfx/ui/CMakeLists.txt), so an installed copy would not
-    # compile -- keep the tier out until gfx_ui is exported.
-    REGEX "volumetric_kit/gfx/ui(/|$)" EXCLUDE
-    # glfw/ is build-tree-only with gfx_ui, for the same reason.
-    REGEX "volumetric_kit/gfx/glfw(/|$)" EXCLUDE
-    # impl/depth_attachment.hpp is internal: only offscreen_target.cpp and
-    # swapchain.cpp include it, both in-tree, and no installed header does --
-    # keep it out. Whenever a header is excluded here, every installed header
-    # that includes it must be excluded too -- the smoke check in
-    # .github/workflows/_build.yml compiles the installed tree to keep that
-    # honest.
-    REGEX "volumetric_kit/gfx/core/impl/depth_attachment\\.hpp$" EXCLUDE
-    # impl/vk_query.hpp is internal too ("Not a public header."); no installed
-    # header includes it, so keep it out. The other impl/ headers ship because
-    # public headers include them (impl/retire_list.hpp, ...).
-    REGEX "volumetric_kit/gfx/core/impl/vk_query\\.hpp$" EXCLUDE
-    # Source-layout validation is shared only by implementation files.
-    REGEX "volumetric_kit/gfx/core/impl/image_copy_layout\\.hpp$" EXCLUDE
-    # So are the color-attachment format tests.
-    REGEX "volumetric_kit/gfx/core/impl/color_attachment\\.hpp$" EXCLUDE
-    # impl/pipeline_util.hpp is internal (command-recording helpers shared by
-    # the tier's submit() .cpp files); no public header includes it, so keep it
-    # out.
-    REGEX "volumetric_kit/gfx/pipelines/impl/pipeline_util\\.hpp$" EXCLUDE)
-
-  install(
-    EXPORT volumetric_kit_gfxTargets
-    NAMESPACE volumetric_kit::
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_gfx")
-
-  # The installed package re-finds the core at the MAJOR.MINOR this build used:
-  # the core's version file accepts only the same minor before 1.0.
-  vkc_core_version(VG_VKC_MAJOR_MINOR MAJOR_MINOR)
-
-  include(CMakePackageConfigHelpers)
-  configure_package_config_file(
-    "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_gfxConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_gfxConfig.cmake"
-    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_gfx")
-  write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_gfxConfigVersion.cmake"
-    COMPATIBILITY SameMajorVersion)
-  install(
-    FILES "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_gfxConfig.cmake"
-          "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_gfxConfigVersion.cmake"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_gfx")
+  target_link_libraries(gfx INTERFACE gfx_glfw)
 endif()

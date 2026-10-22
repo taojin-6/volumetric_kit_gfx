@@ -337,10 +337,12 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash.
+        # starts the system's bash. The consumer configure (label consumer)
+        # checks CMake, not a device, so one leg runs it.
         run: |
           DYLD_LIBRARY_PATH="${VKC_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure
+            ctest --test-dir build --output-on-failure \
+              ${{ inputs.os != 'ubuntu-26.04' && '-LE consumer' || '' }}
 
       - name: Run the configured headless example
         if: steps.detect.outputs.present == 'true'
@@ -351,62 +353,6 @@ jobs:
               -DEXPECTED_SCREENSHOT="$PWD/build/examples/config/model.ppm" \
               -DWORK_DIR="$PWD/build/screenshot-working-directory" \
               -P tests/example_screenshot.cmake
-
-      # Nothing above compiles the *installed* tree, so an install-list mistake
-      # -- shipping a header whose own #include was excluded -- reaches
-      # consumers with CI green. Two cheap checks close that:
-      #   1. include closure: every "volumetric_kit/..." include in an installed
-      #      header must itself be installed. This is what catches an EXCLUDE
-      #      that orphans a dependent header.
-      #   2. a real downstream build: find_package the installed package and
-      #      compile every public header (impl/ headers are documented as
-      #      "included from" their parent, never standalone, so they are not
-      #      included directly here -- check 1 is what covers them).
-      - name: Install and consume the installed package
-        if: steps.detect.outputs.present == 'true'
-        run: |
-          set -euo pipefail
-          prefix="${{ runner.temp }}/vg_install"
-          consumer="${{ runner.temp }}/vg_consumer"
-          rm -rf "$prefix" "$consumer"
-          cmake --install build --prefix "$prefix"
-
-          python3 - "$prefix/include" <<'EOF'
-          import pathlib, re, sys
-          root = pathlib.Path(sys.argv[1])
-          pat = re.compile(r'^\s*#\s*include\s*"(volumetric_kit/[^"]+)"', re.M)
-          headers = sorted(root.rglob("*.hpp"))
-          missing = [(str(h.relative_to(root)), inc)
-                     for h in headers
-                     for inc in pat.findall(h.read_text())
-                     if not (root / inc).exists()]
-          for h, inc in missing:
-              print(f"::error::installed header {h} includes {inc}, which is NOT installed")
-          print(f"include closure: {len(headers)} headers, {len(missing)} broken include(s)")
-          sys.exit(1 if missing else 0)
-          EOF
-
-          mkdir -p "$consumer"
-          cat > "$consumer/CMakeLists.txt" <<'EOF'
-          cmake_minimum_required(VERSION 3.21)
-          project(vg_consumer CXX)
-          find_package(volumetric_kit_gfx CONFIG REQUIRED)
-          add_executable(consumer main.cpp)
-          target_link_libraries(consumer PRIVATE volumetric_kit::gfx)
-          EOF
-          python3 - "$prefix/include" "$consumer/main.cpp" <<'EOF'
-          import pathlib, sys
-          root = pathlib.Path(sys.argv[1])
-          hdrs = sorted(str(p.relative_to(root)) for p in root.rglob("*.hpp")
-                        if "/impl/" not in str(p))
-          pathlib.Path(sys.argv[2]).write_text(
-              "".join(f'#include "{h}"\n' for h in hdrs) + "int main() { return 0; }\n")
-          print(f"consumer includes {len(hdrs)} public headers")
-          EOF
-          cmake -S "$consumer" -B "$consumer/build" \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_PREFIX_PATH="$prefix"
-          cmake --build "$consumer/build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # gfx must stay generatable with -G Xcode -- that is the generator an iOS
       # or macOS app bundle consumes. What regresses on macOS is the *generate*,

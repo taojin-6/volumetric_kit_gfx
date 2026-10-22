@@ -122,6 +122,11 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-19 — One surface source per window system.** `windowing::SurfaceSource` carries
   a window system's instance extensions and surface factory together, from one constructor
   each for a GLFW window, a `CAMetalLayer` and no window. See the dated entry below.
+- **2026-10-22 — gfx is consumed by commit.** Applications fetch it pinned by commit
+  (FetchContent or `add_subdirectory`), as the player and the iOS app do; gfx has no install
+  rules, `VG_INSTALL` or package config. No consumer installed it, and siblings pinning the
+  core at different minors could not share one install prefix. This amends every entry below
+  that describes an installed package.
 
 ## 2026-10-20 — Panels for a finger
 

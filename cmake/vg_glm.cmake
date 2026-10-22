@@ -17,10 +17,8 @@
 # near half of the frustum silently disappears -- no compile error, no VUID,
 # nothing to grep for.
 #
-# The definition is attached to *our* targets rather than to glm::glm so it
-# survives install/export: a consumer resolving glm through find_dependency(glm)
-# gets an unmodified glm, and only the usage requirements we export can carry
-# the convention across the package boundary.
+# The definition is attached to *our* targets rather than to glm::glm, which a
+# system glm defines and gfx does not own.
 function(vg_glm_conventions target scope)
   if(NOT scope STREQUAL "PUBLIC" AND NOT scope STREQUAL "INTERFACE")
     message(

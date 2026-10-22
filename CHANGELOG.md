@@ -6,6 +6,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ## [Unreleased]
 
+### Removed
+
+- **gfx installs nothing.** Its install rules, `VG_INSTALL` and the
+  `volumetric_kit_gfx` package config are gone: fetch gfx pinned by commit
+  (README.md, "Use it in your project"), as the player and the iOS app do.
+
 ### Fixed
 
 - `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that

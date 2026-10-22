@@ -9,7 +9,6 @@
 # tier rule (depend only on tiers to the left) is satisfied trivially: it
 # depends on no other tier.
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
@@ -42,10 +41,8 @@ endif()
 target_compile_features(gfx_camera PUBLIC cxx_std_17)
 
 target_include_directories(
-  gfx_camera
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  gfx_camera PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                    "$<BUILD_INTERFACE:${_vg_generated_inc}>")
 
 # glm is PUBLIC: it appears in this tier's public API (glm::mat4 / glm::vec3
 # return and parameter types). It is the only link dependency -- no gfx_core, no
@@ -53,29 +50,12 @@ target_include_directories(
 target_link_libraries(gfx_camera PUBLIC glm::glm)
 
 # Pin glm's clip-space depth convention as a PUBLIC compile definition, not just
-# in a header: PUBLIC puts it on the command line of anything linking gfx_camera
-# (build tree and, via the install interface, installed consumers), so the
-# guarantee no longer depends on a consumer including camera.hpp before any
-# <glm/...>. impl/glm_config.hpp mirrors the define at the include site; this is
-# the authoritative, order-independent half. See cmake/vg_glm.cmake for why
-# every glm-exposing tier -- not just this one -- has to carry it.
+# in a header: PUBLIC puts it on the command line of anything linking
+# gfx_camera, so the guarantee no longer depends on a consumer including
+# camera.hpp before any <glm/...>. impl/glm_config.hpp mirrors the define at the
+# include site; this is the authoritative, order-independent half. See
+# cmake/vg_glm.cmake for why every glm-exposing tier -- not just this one -- has
+# to carry it.
 vg_glm_conventions(gfx_camera PUBLIC)
 
 vg_target_warnings(gfx_camera)
-
-# Install the target into the shared export set + the headers this tier
-# generates. The umbrella target, public-header tree, and package config are
-# finalized by the parent (src/CMakeLists.txt).
-if(VG_INSTALL)
-  install(
-    TARGETS gfx_camera
-    EXPORT volumetric_kit_gfxTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  install(
-    DIRECTORY "${_vg_generated_inc}/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-endif()

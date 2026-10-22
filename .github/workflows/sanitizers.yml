@@ -111,7 +111,8 @@ jobs:
       #
       # --parallel: a hosted runner sets no CTEST_PARALLEL_LEVEL, so ctest would
       # otherwise run the suite one test at a time. A leak or sanitizer finding
-      # fails its shard, and the report's stack traces name the code.
+      # fails its shard, and the report's stack traces name the code. The
+      # consumer configure runs on a build leg (_build.yml).
       - name: Test
         env:
           # As in _build.yml: shuffled order, a fixture test without a Vulkan
@@ -121,4 +122,6 @@ jobs:
           GTEST_SHUFFLE: '1'
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
-        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+        run: |
+          ctest --test-dir build --output-on-failure --parallel "$(nproc)" \
+            -LE consumer

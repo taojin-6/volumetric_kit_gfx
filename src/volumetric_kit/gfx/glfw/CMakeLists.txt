@@ -8,7 +8,6 @@
 # platform backend. Depends on gfx_app and gfx_ui; built only with VG_WITH_GLFW
 # and an installed GLFW (src/CMakeLists.txt).
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 # imgui_impl_glfw.cpp, compiled once here in its own static library without the
 # first-party warning flags, as vg_imgui is (ui/CMakeLists.txt). It calls the
@@ -52,10 +51,8 @@ endif()
 target_compile_features(gfx_glfw PUBLIC cxx_std_17)
 
 target_include_directories(
-  gfx_glfw
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  gfx_glfw PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                  "$<BUILD_INTERFACE:${_vg_generated_inc}>")
 
 # gfx_app (the surface factory's type) and gfx_ui (the ImGui context the backend
 # binds, and imgui.h) are PUBLIC, as are GLFW, whose window the API takes, and
@@ -68,8 +65,3 @@ target_link_libraries(
 vg_glm_conventions(gfx_glfw PUBLIC)
 
 vg_target_warnings(gfx_glfw)
-
-# TODO: install/export gfx_glfw with gfx_ui, once the ImGui headers are
-# co-installed (ui/CMakeLists.txt). Until then it is build-tree-only: the
-# umbrella takes it through BUILD_INTERFACE and the header install excludes
-# glfw/ (src/CMakeLists.txt).
