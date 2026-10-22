@@ -144,13 +144,6 @@ core::Status Swapchain::build(VkExtent2D desired) {
   uint32_t image_count = requested_min_image_count_ != 0
                              ? requested_min_image_count_
                              : caps.minImageCount + 1;
-  // MAILBOX is only non-blocking with a third image (one on screen, one queued,
-  // one being rendered); raise the floor when we selected it and the caller did
-  // not pin a count. Still clamped to the surface's supported range below.
-  if (present_mode_ == VK_PRESENT_MODE_MAILBOX_KHR &&
-      requested_min_image_count_ == 0) {
-    image_count = std::max(image_count, 3u);
-  }
   image_count = std::max(image_count, caps.minImageCount);
   if (caps.maxImageCount != 0) {
     image_count = std::min(image_count, caps.maxImageCount);
