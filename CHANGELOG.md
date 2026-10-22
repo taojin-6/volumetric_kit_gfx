@@ -14,6 +14,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   a float target linear light.
 - `windowing::Swapchain` falls back to an `_SRGB` format the surface offers
   before the surface's first format, which is UNORM on Android.
+- `io::load_gltf` reports an image it cannot hold (16-bit, or not decoded)
+  through `warnings`, as it does a dropped primitive.
 - `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that
   takes linear light (`_SRGB` or float). On the default `_SRGB` swapchain,
   every consumer's panels show their authored colours; ImGui's `WindowBg`
