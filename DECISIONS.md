@@ -615,7 +615,9 @@ included -- the failure that hid the Ubuntu 22.04 leg's results from August to
 #113. Instead CI sets `VKC_REQUIRE_VULKAN_DEVICE`, under which a fixture test
 that cannot get an instance or device fails rather than skips, so no shard
 passes with its tests skipped. Locally the default stays one CTest entry per
-test.
+test. *Amended 2026-10-22:* that covers a missing device only; a shard on Apple
+also fails on any other skip, and the Linux legs list theirs in the step
+summary.
 
 ## 2026-10-05 — 2D images: convert, then mip, then draw
 

@@ -33,10 +33,12 @@ include(GoogleTest)
 #
 # A shard gets no SKIP_REGULAR_EXPRESSION: one skipped test among its many would
 # mark the whole shard skipped, failures included. It passes or fails on its
-# exit code alone. Skips stay visible where it matters through
-# VKC_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
-# Vulkan device fails rather than skips. Test PROPERTIES given to
-# vg_discover_tests reach each shard, so a TIMEOUT there bounds a shard.
+# exit code, and CI sets VKC_REQUIRE_VULKAN_DEVICE so that a fixture test
+# without a Vulkan device fails rather than skips. Other skips are capability
+# probes: on Apple, where MoltenVK offers everything the tests probe, a shard
+# fails on any skip; on Linux, where NVIDIA's driver lacks some (DECISIONS.md,
+# "One surface source per window system"), CI lists them (_build.yml). Test
+# PROPERTIES given to vg_discover_tests reach each shard.
 set(VG_TEST_SHARDS
     0
     CACHE STRING
@@ -60,6 +62,10 @@ function(vg_discover_tests target)
     return()
   endif()
   cmake_parse_arguments(arg "" "TEST_PREFIX" "PROPERTIES" ${ARGN})
+  set(no_skip)
+  if(APPLE)
+    set(no_skip FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+  endif()
   math(EXPR last "${VG_TEST_SHARDS} - 1")
   foreach(index RANGE ${last})
     set(name "${arg_TEST_PREFIX}${target}.shard${index}")
@@ -69,7 +75,7 @@ function(vg_discover_tests target)
       PROPERTIES
         ENVIRONMENT
         "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}"
-        ${arg_PROPERTIES})
+        ${no_skip} ${arg_PROPERTIES})
   endforeach()
 endfunction()
 
@@ -142,9 +148,9 @@ vg_discover_tests(vg_windowing_test)
 
 # windowing tier on Apple: metal_surface over a bare CAMetalLayer, with a
 # swapchain built on it; no window, no acquire, no present. One CTest entry, so
-# the build never runs the binary to list its tests. As for the shared-device
-# cases below, any skip but the one without a device fails. The CI Mac runs it;
-# a local run can exclude it (CONTRIBUTING.md, "Build and test").
+# the build never runs the binary to list its tests. As in a shard on Apple, any
+# skip but the one without a device fails. The CI Mac runs it; a local run can
+# exclude it (CONTRIBUTING.md, "Build and test").
 if(APPLE)
   enable_language(OBJCXX)
   add_executable(vg_metal_surface_test metal_surface_test.mm)
@@ -171,17 +177,6 @@ target_link_libraries(
                       GTest::gtest_main)
 vg_target_warnings(vg_app_test)
 vg_discover_tests(vg_app_test TEST_PREFIX "app.")
-# MoltenVK offers a headless surface, so on Apple the shared-device cases run
-# rather than skip: any skip but the one without a device fails, as the core's
-# cross-family tests do.
-if(APPLE)
-  add_test(NAME app.shared_windowed_app_on_moltenvk
-           COMMAND vg_app_test --gtest_filter=SharedWindowedAppTest.*)
-  set_tests_properties(
-    app.shared_windowed_app_on_moltenvk
-    PROPERTIES FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
-               SKIP_REGULAR_EXPRESSION "no Vulkan device for this test")
-endif()
 
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device

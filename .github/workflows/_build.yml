@@ -344,6 +344,21 @@ jobs:
             ctest --test-dir build --output-on-failure \
               ${{ inputs.os != 'ubuntu-26.04' && '-LE consumer' || '' }}
 
+      # A shard passes with its skipped tests unreported. On Apple a skip fails
+      # its shard; on Linux, where NVIDIA's driver lacks capabilities some tests
+      # probe, the step summary lists them (tests/CMakeLists.txt).
+      - name: List skipped tests (Linux)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
+        run: |
+          skipped=$(grep -h '^\[  SKIPPED \] .* ms)$' \
+            build/Testing/Temporary/LastTest.log | sort || true)
+          {
+            echo "### Skipped tests: $(grep -c . <<<"$skipped")"
+            echo '```'
+            echo "$skipped"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run the configured headless example
         if: steps.detect.outputs.present == 'true'
         run: |
