@@ -38,27 +38,23 @@ vulkaninfo --summary   # expect GPU0 ... driverID = DRIVER_ID_MOLTENVK
 
 ## Use it in your project
 
-The library is consumable both via `FetchContent` and an installed
-`find_package`. Link the component target you need; the umbrella alias
-`volumetric_kit::gfx` pulls in the available tiers.
+gfx is consumed by commit: fetch it with `FetchContent`, or add a checkout
+with `add_subdirectory`; it installs nothing. Link the component target you
+need; the umbrella alias `volumetric_kit::gfx` pulls in the available tiers.
 
 ```cmake
-# Option A — FetchContent (pin GIT_TAG to a release tag or commit SHA):
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG main)
+  GIT_TAG <commit SHA>)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
-
-# Option B — installed package:
-#   find_package(volumetric_kit_gfx CONFIG REQUIRED)
 
 target_link_libraries(your_app PRIVATE volumetric_kit::gfx_core)
 ```
 
-The build-tree `volumetric_kit::gfx_ui` target uses 32-bit ImGui indices and
-propagates `ImDrawIdx=unsigned int` to consumers, including any ImGui platform
+The `volumetric_kit::gfx_ui` target uses 32-bit ImGui indices and propagates
+`ImDrawIdx=unsigned int` to consumers, including any ImGui platform
 backend or demo sources they compile. Rebuild those sources with the target's
 usage requirements; all code sharing its ImGui context must use the same index
 type.
@@ -72,18 +68,17 @@ core's vulkan tier, which gfx's API names as the core does
 (`volumetric_kit::core::`, `vkc::` by convention); both are fetched pinned by
 commit and linked PUBLIC, so a `Status`, a device or a buffer passes between
 gfx, recon and calib unchanged and one `set_log_handler` routes all three. An
-installed gfx carries the core beside it and re-finds it; an application that
-also fetches recon declares `volumetric_kit_core` first to pick one pin for
-both, no older than `VG_VKC_MIN_VERSION` (CMakeLists.txt) and with the core's
-vulkan tier on (`VKC_WITH_VULKAN`), which gfx checks at configure with the
-core's `vkc_require_core`. Build against a local core checkout with
+application that also fetches recon declares `volumetric_kit_core` first to
+pick one pin for both, no older than `VG_VKC_MIN_VERSION` (CMakeLists.txt) and
+with the core's vulkan tier on (`VKC_WITH_VULKAN`), which gfx checks at
+configure with the core's `vkc_require_core`. Build against a local core checkout with
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
 gfx compiles against the system's Vulkan headers -- 1.3.275 or newer with the
 pinned core -- and vendors none. To build against a pinned copy,
 point `Vulkan_INCLUDE_DIR` at it; the loader still comes from the system.
 
-Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES`, `VG_INSTALL` and
+Useful options. `VG_BUILD_TESTS`, `VG_BUILD_EXAMPLES` and
 `VG_WARNINGS_AS_ERRORS` default ON only when `volumetric_kit_gfx` is the
 top-level project (OFF when it is consumed via FetchContent /
 `add_subdirectory`). `VG_WITH_GLFW` (`gfx_glfw` and the examples, where GLFW
@@ -136,8 +131,8 @@ replaced by file fields.
 Only the example executables need `volumetric_kit::core_config`. Gfx enables
 `VKC_WITH_CONFIG` when those executables build; a consuming application that
 makes core available first must enable it there if it also enables gfx's
-examples. Renderer libraries and their installed APIs remain independent of
-the JSON configuration component.
+examples. Renderer libraries and their APIs remain independent of the JSON
+configuration component.
 
 ```bash
 pre-commit install   # clang-format + cmake-format + hygiene hooks

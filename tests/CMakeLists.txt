@@ -33,10 +33,11 @@ include(GoogleTest)
 #
 # A shard gets no SKIP_REGULAR_EXPRESSION: one skipped test among its many would
 # mark the whole shard skipped, failures included. It passes or fails on its
-# exit code alone. Skips stay visible where it matters through
-# VKC_REQUIRE_VULKAN_DEVICE, which CI sets so that a fixture test without a
-# Vulkan device fails rather than skips. Test PROPERTIES given to
-# vg_discover_tests reach each shard, so a TIMEOUT there bounds a shard.
+# exit code, and CI sets VKC_REQUIRE_VULKAN_DEVICE so that a fixture test
+# without a Vulkan device fails rather than skips. Other skips are capability
+# probes: on Apple, where MoltenVK offers everything the tests probe, a shard
+# fails on any skip; on Linux, where NVIDIA's driver lacks some (DECISIONS.md,
+# "One surface source per window system"), CI lists them (_build.yml).
 set(VG_TEST_SHARDS
     0
     CACHE STRING
@@ -59,7 +60,11 @@ function(vg_discover_tests target)
     gtest_discover_tests(${target} ${ARGN})
     return()
   endif()
-  cmake_parse_arguments(arg "" "TEST_PREFIX" "PROPERTIES" ${ARGN})
+  cmake_parse_arguments(arg "" "TEST_PREFIX" "" ${ARGN})
+  set(no_skip)
+  if(APPLE)
+    set(no_skip FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+  endif()
   math(EXPR last "${VG_TEST_SHARDS} - 1")
   foreach(index RANGE ${last})
     set(name "${arg_TEST_PREFIX}${target}.shard${index}")
@@ -69,7 +74,7 @@ function(vg_discover_tests target)
       PROPERTIES
         ENVIRONMENT
         "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}"
-        ${arg_PROPERTIES})
+        ${no_skip})
   endforeach()
 endfunction()
 
@@ -142,9 +147,9 @@ vg_discover_tests(vg_windowing_test)
 
 # windowing tier on Apple: metal_surface over a bare CAMetalLayer, with a
 # swapchain built on it; no window, no acquire, no present. One CTest entry, so
-# the build never runs the binary to list its tests. As for the shared-device
-# cases below, any skip but the one without a device fails. The CI Mac runs it;
-# a local run can exclude it (CONTRIBUTING.md, "Build and test").
+# the build never runs the binary to list its tests. As in a shard on Apple, any
+# skip but the one without a device fails. The CI Mac runs it; a local run can
+# exclude it (CONTRIBUTING.md, "Build and test").
 if(APPLE)
   enable_language(OBJCXX)
   add_executable(vg_metal_surface_test metal_surface_test.mm)
@@ -171,17 +176,6 @@ target_link_libraries(
                       GTest::gtest_main)
 vg_target_warnings(vg_app_test)
 vg_discover_tests(vg_app_test TEST_PREFIX "app.")
-# MoltenVK offers a headless surface, so on Apple the shared-device cases run
-# rather than skip: any skip but the one without a device fails, as the core's
-# cross-family tests do.
-if(APPLE)
-  add_test(NAME app.shared_windowed_app_on_moltenvk
-           COMMAND vg_app_test --gtest_filter=SharedWindowedAppTest.*)
-  set_tests_properties(
-    app.shared_windowed_app_on_moltenvk
-    PROPERTIES FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
-               SKIP_REGULAR_EXPRESSION "no Vulkan device for this test")
-endif()
 
 # camera tier: Camera / OrbitCamera / CameraRig math. Pure CPU (glm only, no
 # Vulkan), so every case runs on every platform regardless of device
@@ -197,8 +191,7 @@ vg_discover_tests(vg_camera_test)
 # shared device fixture (skips when no device). Links gfx_pipelines, which
 # brings core, assets and camera (primitive_pipeline_test draws through a
 # camera::Camera), plus gfx_io so pbr_model_test can drive the real load_gltf ->
-# PbrModel::create path against the Box.glb fixture (defined below, next to the
-# fixture download).
+# PbrModel::create path on a box .glb it writes (box_glb.hpp).
 add_executable(
   vg_pipelines_test
   color_test.cpp
@@ -250,59 +243,11 @@ vg_target_warnings(vg_assets_test)
 # selectable as a group with `ctest -R assets`.
 vg_discover_tests(vg_assets_test TEST_PREFIX "assets.")
 
-# io tier: the glTF loader test loads the Khronos Box.glb sample (CC0). Fetch it
-# at configure time so CI does not need it committed; the download is
-# best-effort -- if the network is unavailable the file is simply absent and the
-# glTF tests skip. VG_ASSETS_DIR is defined only when the fixture is present.
-set(_vg_assets_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets")
-set(_vg_box_glb "${_vg_assets_dir}/Box.glb")
-# Pinned to a specific glTF-Sample-Assets commit (not the moving `main`) plus a
-# content hash, so the fixture is reproducible and a tampered/truncated payload
-# is rejected rather than silently tested against.
-set(_vg_box_url
-    "https://github.com/KhronosGroup/glTF-Sample-Assets/raw/2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf/Models/Box/glTF-Binary/Box.glb"
-)
-set(_vg_box_sha256
-    "ed52f7192b8311d700ac0ce80644e3852cd01537e4d62241b9acba023da3d54e")
-# Drop a stale/corrupt prior download (e.g. a truncated file from an interrupted
-# run) so the verified fetch below replaces it instead of testing against junk.
-if(EXISTS "${_vg_box_glb}")
-  file(SHA256 "${_vg_box_glb}" _vg_box_have)
-  if(NOT _vg_box_have STREQUAL _vg_box_sha256)
-    file(REMOVE "${_vg_box_glb}")
-  endif()
-endif()
-if(NOT EXISTS "${_vg_box_glb}")
-  file(MAKE_DIRECTORY "${_vg_assets_dir}")
-  message(STATUS "io test: fetching Box.glb fixture")
-  file(
-    DOWNLOAD "${_vg_box_url}" "${_vg_box_glb}"
-    EXPECTED_HASH SHA256=${_vg_box_sha256}
-    STATUS _vg_box_status
-    TIMEOUT 30)
-  list(GET _vg_box_status 0 _vg_box_rc)
-  if(NOT _vg_box_rc EQUAL 0)
-    list(GET _vg_box_status 1 _vg_box_err)
-    message(
-      STATUS "io test: Box.glb unavailable (${_vg_box_err}); glTF tests skip")
-    # A failed EXPECTED_HASH download can leave a partial file; remove it so a
-    # later configure refetches and the tests skip cleanly in the meantime.
-    file(REMOVE "${_vg_box_glb}")
-  endif()
-endif()
-
+# io tier: the glTF loader, on files the tests write (box_glb.hpp).
 add_executable(vg_io_test io_test.cpp)
 target_link_libraries(vg_io_test PRIVATE volumetric_kit::gfx_io
                                          GTest::gtest_main)
 vg_target_warnings(vg_io_test)
-if(EXISTS "${_vg_box_glb}")
-  target_compile_definitions(vg_io_test
-                             PRIVATE VG_ASSETS_DIR="${_vg_assets_dir}")
-  # pbr_model_test (in vg_pipelines_test, above) drives the same fixture through
-  # load_gltf -> PbrModel::create; gate its define the same way.
-  target_compile_definitions(vg_pipelines_test
-                             PRIVATE VG_ASSETS_DIR="${_vg_assets_dir}")
-endif()
 # Prefix the ctest names ("io.GltfLoader.*") so this CPU-only tier is selectable
 # as a group with `ctest -R io`.
 vg_discover_tests(vg_io_test TEST_PREFIX "io.")
@@ -339,48 +284,19 @@ if(TARGET volumetric_kit::gfx_glfw)
     PRIVATE volumetric_kit::gfx_glfw volumetric_kit::core_test_support
             GTest::gtest_main Vulkan::Vulkan)
   vg_target_warnings(vg_glfw_test)
-  # The native-window case asks CoreGraphics for a GUI session before glfwInit,
-  # which outside one waits for the window server forever.
-  if(APPLE)
-    target_link_libraries(vg_glfw_test PRIVATE "-framework CoreGraphics"
-                                               "-framework CoreFoundation")
-  endif()
-  # A hung case, as when a window system never answers, fails after a minute
-  # rather than holding the runner until the job's time limit.
-  vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw." PROPERTIES TIMEOUT 60)
+  vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw.")
 endif()
 
-# gfx as its consumers take it (consumer/), configure only, with the dependency
-# sources this build fetched. As an application's subproject: the defaults hold,
-# and gfx refuses a core the application made available first that is older than
-# VG_VKC_MIN_VERSION (one stamped 0.0.1) or lacks the vulkan tier. As an
-# installed package: it configures, and on an installed core without the vulkan
-# tier, built for the test, it is not found, saying why -- an error found
-# REQUIRED, and not one found QUIET.
-set(_vg_consumer
-    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/consumer" -G
-    "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
-# This build's prefixes, after any a test puts first (_vg_more_prefixes): a
-# -DCMAKE_PREFIX_PATH given twice keeps only the last.
-set(_vg_prefixes)
-set(_vg_more_prefixes)
+# gfx as an application takes it (consumer/), configure only, with the
+# dependency sources this build fetched. It checks CMake, not a device, so CI
+# runs it on one leg (label consumer).
+FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vg_core_source)
+set(_vg_subdirectory "-DVG_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                     "-DVKC_SOURCE_DIR=${_vg_core_source}")
 if(CMAKE_PREFIX_PATH)
   string(REPLACE ";" "$<SEMICOLON>" _vg_prefixes "${CMAKE_PREFIX_PATH}")
-  set(_vg_more_prefixes "$<SEMICOLON>${_vg_prefixes}")
+  list(APPEND _vg_subdirectory "-DCMAKE_PREFIX_PATH=${_vg_prefixes}")
 endif()
-set(_vg_consumer_dir "${CMAKE_CURRENT_BINARY_DIR}/consumer")
-
-# Sets <test>'s PASS_REGULAR_EXPRESSION to <message>, a space in which matches
-# however CMake wrapped the error's lines.
-function(_vg_expect_message test message)
-  string(REPLACE " " "[ \n]+" message "${message}")
-  set_tests_properties(${test} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
-endfunction()
-
-FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vg_core_source)
-set(_vg_subdirectory
-    -DVG_CONSUME=subdirectory "-DVG_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    "-DVKC_SOURCE_DIR=${_vg_core_source}" "-DCMAKE_PREFIX_PATH=${_vg_prefixes}")
 foreach(_vg_dep VulkanMemoryAllocator tinygltf spirv-cross imgui glm)
   unset(_vg_dep_source)
   FetchContent_GetProperties(${_vg_dep} SOURCE_DIR _vg_dep_source)
@@ -390,91 +306,10 @@ foreach(_vg_dep VulkanMemoryAllocator tinygltf spirv-cross imgui glm)
          "-DFETCHCONTENT_SOURCE_DIR_${_vg_dep_upper}=${_vg_dep_source}")
   endif()
 endforeach()
-
-add_test(NAME vg_consumer_subdirectory
-         COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory"
-                 ${_vg_subdirectory} -DVKC_WITH_VULKAN=ON)
-
 add_test(
-  NAME vg_consumer_subdirectory_old_core
+  NAME vg_consumer_subdirectory
   COMMAND
-    ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory_old_core"
-    ${_vg_subdirectory} -DVKC_WITH_VULKAN=ON -DVG_CONSUMER_CORE_VERSION=0.0.1)
-_vg_expect_message(
-  vg_consumer_subdirectory_old_core
-  "volumetric_kit_gfx needs volumetric_kit_core ${VG_VKC_MIN_VERSION} or newer, but the core at .+ is 0.0.1: pin v${VG_VKC_MIN_VERSION} or newer"
-)
-
-add_test(
-  NAME vg_consumer_subdirectory_core_without_vulkan
-  COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/subdirectory_no_vulkan"
-          ${_vg_subdirectory} -DVKC_WITH_VULKAN=OFF)
-_vg_expect_message(
-  vg_consumer_subdirectory_core_without_vulkan
-  "volumetric_kit_gfx needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
-)
-
-if(VG_INSTALL)
-  set(_vg_stage "${_vg_consumer_dir}/stage")
-  add_test(NAME vg_consumer_install
-           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
-                   --config "$<CONFIG>" --prefix "${_vg_stage}")
-  set_tests_properties(vg_consumer_install PROPERTIES FIXTURES_SETUP
-                                                      vg_consumer_stage)
-
-  set(_vg_base_core "${_vg_consumer_dir}/base_core")
-  add_test(
-    NAME vg_consumer_base_core_configure
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${_vg_core_source}" -B "${_vg_base_core}/build" -G
-      "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      -DVKC_WITH_VULKAN=OFF -DVKC_BUILD_TESTS=OFF -DVKC_WARNINGS_AS_ERRORS=OFF
-      "-DCMAKE_INSTALL_PREFIX=${_vg_base_core}/install")
-  set_tests_properties(vg_consumer_base_core_configure
-                       PROPERTIES FIXTURES_SETUP vg_consumer_base_core_build)
-  add_test(NAME vg_consumer_base_core_install
-           COMMAND "${CMAKE_COMMAND}" --build "${_vg_base_core}/build" --target
-                   install)
-  set_tests_properties(
-    vg_consumer_base_core_install
-    PROPERTIES FIXTURES_REQUIRED vg_consumer_base_core_build FIXTURES_SETUP
-               vg_consumer_base_core)
-
-  add_test(
-    NAME vg_consumer_find_package
-    COMMAND
-      ${_vg_consumer} -B "${_vg_consumer_dir}/find_package"
-      -DVG_CONSUME=find_package
-      "-DCMAKE_PREFIX_PATH=${_vg_stage}${_vg_more_prefixes}")
-  set_tests_properties(vg_consumer_find_package PROPERTIES FIXTURES_REQUIRED
-                                                           vg_consumer_stage)
-
-  # The base core first, so the package re-finds it rather than the stage's.
-  set(_vg_no_vulkan
-      -DVG_CONSUME=find_package
-      "-DCMAKE_PREFIX_PATH=${_vg_base_core}/install$<SEMICOLON>${_vg_stage}${_vg_more_prefixes}"
-  )
-  set(_vg_no_vulkan_reason
-      "volumetric_kit_gfx needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
-  )
-  add_test(
-    NAME vg_consumer_find_package_core_without_vulkan
-    COMMAND ${_vg_consumer} -B "${_vg_consumer_dir}/find_package_no_vulkan"
-            ${_vg_no_vulkan})
-  _vg_expect_message(vg_consumer_find_package_core_without_vulkan
-                     "Reason given by package: ${_vg_no_vulkan_reason}")
-  add_test(
-    NAME vg_consumer_find_package_optional_core_without_vulkan
-    COMMAND
-      ${_vg_consumer} -B "${_vg_consumer_dir}/find_package_optional_no_vulkan"
-      ${_vg_no_vulkan} -DVG_CONSUMER_OPTIONAL=ON)
-  _vg_expect_message(
-    vg_consumer_find_package_optional_core_without_vulkan
-    "volumetric_kit_gfx not found: ${_vg_no_vulkan_reason}.+Generating done")
-  set_tests_properties(
-    vg_consumer_find_package_core_without_vulkan
-    vg_consumer_find_package_optional_core_without_vulkan
-    PROPERTIES FIXTURES_REQUIRED "vg_consumer_stage;vg_consumer_base_core")
-  set_tests_properties(vg_consumer_find_package_optional_core_without_vulkan
-                       PROPERTIES FAIL_REGULAR_EXPRESSION "CMake Error")
-endif()
+    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/consumer" -B
+    "${CMAKE_CURRENT_BINARY_DIR}/consumer" -G "${CMAKE_GENERATOR}"
+    "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" ${_vg_subdirectory})
+set_tests_properties(vg_consumer_subdirectory PROPERTIES LABELS consumer)

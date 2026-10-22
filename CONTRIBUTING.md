@@ -44,11 +44,10 @@ VKC_REQUIRE_VULKAN_DEVICE=1 VKC_TEST_VALIDATION=1 \
 
 On macOS the layer needs the setup in the core's
 [CONTRIBUTING](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONTRIBUTING.md#gpu-tests).
-Two Mac tests reach the display stack: `windowing.metal_surface` builds a
-swapchain on a `CAMetalLayer`, and `GlfwNativeWindowTest` opens a window. A
-run that must not, such as an agent's, excludes them with
-`ctest -E 'metal_surface|GlfwNativeWindowTest'`; `GTEST_FILTER` does not, as
-ctest passes each test its own `--gtest_filter`.
+One Mac test reaches the display stack: `windowing.metal_surface` builds a
+swapchain on a `CAMetalLayer`. A run that must not, such as an agent's,
+excludes it with `ctest -E metal_surface`; `GTEST_FILTER` does not, as ctest
+passes each test its own `--gtest_filter`.
 
 ## Formatting and CI
 

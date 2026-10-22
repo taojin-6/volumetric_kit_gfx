@@ -18,12 +18,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- Options -----------------------------------------------------------------
-# Examples, tests, install rules and -Werror default ON only when gfx is the
-# top-level project, so an application that fetches gfx builds the libraries
-# alone, with no warnings-as-errors from its own compiler.
+# Examples, tests and -Werror default ON only when gfx is the top-level project,
+# so an application that fetches gfx builds the libraries alone, with no
+# warnings-as-errors from its own compiler.
 option(VG_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
 option(VG_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
-option(VG_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VG_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
 # VG_WITH_GLFW builds gfx_glfw, the GLFW window glue, and the examples on it;
@@ -91,13 +90,6 @@ FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
-# gfx's install must carry the core its exported targets link, so VG_INSTALL
-# turns the core's install rules on. It never turns them off: they default ON,
-# and a sibling that installs (recon) needs them whichever project populates the
-# core first.
-if(VG_INSTALL)
-  set(VKC_INSTALL ON)
-endif()
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.
@@ -117,7 +109,7 @@ FetchContent_MakeAvailable(volumetric_kit_core)
 # The oldest core gfx builds with, and its vulkan tier, checked in the core that
 # arrived: the pin and the set() above are lost when calib or the application
 # made the core available first, and FetchContent may have found an installed
-# core. The installed package config checks the same.
+# core.
 set(VG_VKC_MIN_VERSION 0.1.0)
 vkc_require_core(${VG_VKC_MIN_VERSION} VULKAN)
 
@@ -134,10 +126,8 @@ find_package(Vulkan REQUIRED)
 # vendored copy from third_party/ when none is installed -- so the build is
 # self-contained on CI runners that don't ship glm, matching how the other deps
 # are vendored. VG_HAVE_SYSTEM_GLM records which path won, so third_party/ only
-# vendors glm (and lets it run its own install/export) when no system copy
-# exists. glm is a PUBLIC dependency either way, so the installed package config
-# re-finds it unconditionally (find_dependency(glm)). An iOS build takes the
-# core's answer or stops with its message; it never fetches glm.
+# vendors glm when no system copy exists. An iOS build takes the core's answer
+# or stops with its message; it never fetches glm.
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   find_package(glm CONFIG REQUIRED)
 else()

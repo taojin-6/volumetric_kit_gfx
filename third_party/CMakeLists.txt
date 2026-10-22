@@ -3,16 +3,15 @@
 
 # Dependencies. System via find_package: the Vulkan headers and loader, and
 # glslc/glslangValidator (shader compilation, through the core's
-# vkc_compile_shaders) -- re-findable, keeping the installed export clean
-# (consumers find_dependency(Vulkan)). The library compiles against the system's
-# Vulkan headers, as the family's core does (its DECISIONS.md, "Vulkan headers
-# come from the system"), and takes its VkFormat metadata from the core's
-# format.hpp. glm (camera tier) is preferred from the system too (resolved at
-# the top level), falling back to a pinned vendored copy below when none is
-# installed. Vendored via pinned FetchContent: spirv-cross (SPIR-V reflection; a
-# static archive linked privately into gfx_core), tinygltf, ImGui and
-# googletest. VMA is the core's: its allocator compiles it, and gfx no longer
-# builds a copy (DECISIONS.md, "Memory comes from volumetric_kit_core").
+# vkc_compile_shaders). The library compiles against the system's Vulkan
+# headers, as the family's core does (its DECISIONS.md, "Vulkan headers come
+# from the system"), and takes its VkFormat metadata from the core's format.hpp.
+# glm (camera tier) is preferred from the system too (resolved at the top
+# level), falling back to a pinned vendored copy below when none is installed.
+# Vendored via pinned FetchContent: spirv-cross (SPIR-V reflection; a static
+# archive linked privately into gfx_core), tinygltf, ImGui and googletest. VMA
+# is the core's: its allocator compiles it, and gfx no longer builds a copy
+# (DECISIONS.md, "Memory comes from volumetric_kit_core").
 
 include(FetchContent)
 
@@ -23,18 +22,13 @@ include(FetchContent)
 # --- glm: header-only vector/matrix math (camera + assets tiers) --------------
 # Only vendored when the top level did not find a system glm. glm's CMake
 # defines the same glm::glm target FetchContent exposes, so the tiers link one
-# name either way. Pinned to a tagged release; its tests are off. Its install is
-# tied to VG_INSTALL: gfx_camera/gfx_assets link glm PUBLIC, so when we
-# install/export we need glm in an export set too -- letting glm run its own
-# install (which exports the glm target and ships a glmConfig into our prefix)
-# satisfies that and lets the package's find_dependency(glm) resolve the
-# co-installed copy.
+# name either way. Pinned to a tagged release; its tests and install are off.
 if(NOT VG_HAVE_SYSTEM_GLM)
   set(GLM_BUILD_TESTS
       OFF
       CACHE BOOL "" FORCE)
   set(GLM_BUILD_INSTALL
-      ${VG_INSTALL}
+      OFF
       CACHE BOOL "" FORCE)
   FetchContent_Declare(
     glm
@@ -73,11 +67,8 @@ FetchContent_Declare(
   SOURCE_SUBDIR _headers_only_)
 
 # --- spirv-cross: SPIR-V reflection (reflection-driven descriptor layouts) ----
-# Build spirv-cross-core as a static archive. SPIRV_CROSS_STATIC defaults ON
-# upstream, but spirv-cross *gates the install/export of the core lib* on it
-# (its CMakeLists guards the core-lib install block with
-# `if(SPIRV_CROSS_STATIC)`) -- so pin it ON to keep our packaging self-contained
-# under VG_INSTALL rather than reliant on that default holding.
+# Build spirv-cross-core as a static archive, linked privately into gfx_core,
+# without its CLI, tests or install rules.
 set(SPIRV_CROSS_STATIC
     ON
     CACHE BOOL "" FORCE)
@@ -105,22 +96,9 @@ set(SPIRV_CROSS_ENABLE_REFLECT
 set(SPIRV_CROSS_ENABLE_UTIL
     OFF
     CACHE BOOL "" FORCE)
-# Tie spirv-cross's own install to VG_INSTALL: gfx_core links spirv-cross-core
-# (privately, for SPIR-V reflection), so when we install/export,
-# spirv-cross-core must live in an export set too. Letting spirv-cross run its
-# own install (exporting its targets + shipping spirv_cross_*Config into our
-# prefix) satisfies that and lets the package's
-# find_dependency(spirv_cross_core) resolve it -- the same arrangement glm uses
-# above.
-if(VG_INSTALL)
-  set(SPIRV_CROSS_SKIP_INSTALL
-      OFF
-      CACHE BOOL "" FORCE)
-else()
-  set(SPIRV_CROSS_SKIP_INSTALL
-      ON
-      CACHE BOOL "" FORCE)
-endif()
+set(SPIRV_CROSS_SKIP_INSTALL
+    ON
+    CACHE BOOL "" FORCE)
 FetchContent_Declare(
   spirv-cross
   GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git

@@ -8,7 +8,6 @@
 # tiers to its left and the roots -- core, assets and camera -- plus the Vulkan
 # loader (privately, for the vkCmd* calls in record_draw).
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
@@ -54,10 +53,8 @@ endif()
 target_compile_features(gfx_pipelines PUBLIC cxx_std_17)
 
 target_include_directories(
-  gfx_pipelines
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  gfx_pipelines PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                       "$<BUILD_INTERFACE:${_vg_generated_inc}>")
 
 # core (Allocator/Buffer/Result), assets (the Mesh data model) and camera
 # (image_draw takes a camera::ImageView2D) appear in this tier's public API, so
@@ -77,9 +74,9 @@ target_link_libraries(
 # SPIR-V and embed each as a constexpr byte array compiled into the library
 # (pbr_pipeline.cpp #includes model_{vert,frag}.spv.hpp), so a consumer needs no
 # shader files. vkc_embed_shaders (volumetric_kit_core's vkc_shaders.cmake) puts
-# the generated headers on a PRIVATE include path -- internal, not installed --
-# and the vg_ prefix keeps the symbols apart from a sibling's shader of the same
-# name. vulkan1.3 is gfx's device floor (device.cpp).
+# the generated headers on a PRIVATE include path -- internal -- and the vg_
+# prefix keeps the symbols apart from a sibling's shader of the same name.
+# vulkan1.3 is gfx's device floor (device.cpp).
 vkc_embed_shaders(
   gfx_pipelines
   SYMBOL_PREFIX
@@ -159,20 +156,3 @@ vkc_embed_shaders(
   "${PROJECT_SOURCE_DIR}/shaders/depth_cloud.vert")
 
 vg_target_warnings(gfx_pipelines)
-
-# Install the target into the shared export set + the headers this tier
-# generates. The umbrella target, public-header tree, and package config are
-# finalized by the parent (src/CMakeLists.txt).
-if(VG_INSTALL)
-  install(
-    TARGETS gfx_pipelines
-    EXPORT volumetric_kit_gfxTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  install(
-    DIRECTORY "${_vg_generated_inc}/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-endif()

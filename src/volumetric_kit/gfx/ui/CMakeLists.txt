@@ -9,7 +9,6 @@
 # platform half, ImGuiTouch, reads no window system. Depends on gfx_core,
 # gfx_camera and gfx_windowing.
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 # The ui tier builds generated copies of two ImGui sources, patched below. The
 # fetched sources stay untouched, and a patch whose upstream text is gone fails
@@ -136,18 +135,14 @@ target_compile_features(gfx_ui PUBLIC cxx_std_17)
 target_compile_definitions(gfx_ui PUBLIC ${_vg_imgui_definitions})
 
 target_include_directories(
-  gfx_ui
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vg_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  gfx_ui PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                "$<BUILD_INTERFACE:${_vg_generated_inc}>")
 
 # Consumers write raw ImGui:: calls, so imgui.h must reach them -- SYSTEM so
-# their -Werror does not fire on it, and BUILD_INTERFACE-only for now (vg_imgui
-# is PRIVATE below, so its include dirs do not propagate to consumers; this is
-# what exposes imgui.h, minus the backends/ dir). Co-installing these headers is
-# the deferred packaging step (see the install TODO below).
-target_include_directories(gfx_ui SYSTEM
-                           PUBLIC "$<BUILD_INTERFACE:${VG_IMGUI_SOURCE_DIR}>")
+# their -Werror does not fire on it. vg_imgui is PRIVATE below, so its include
+# dirs do not propagate to consumers; this is what exposes imgui.h, minus the
+# backends/ dir.
+target_include_directories(gfx_ui SYSTEM PUBLIC "${VG_IMGUI_SOURCE_DIR}")
 
 # gfx_core, gfx_camera and gfx_windowing are PUBLIC (RenderTargetLayout,
 # ImageView2D and overlay_config's Swapchain are in this tier's API); the ImGui
@@ -175,10 +170,3 @@ vkc_embed_shaders(
   "${_vg_imgui_frag}")
 
 vg_target_warnings(gfx_ui)
-
-# TODO: install/export gfx_ui once the ImGui headers it exposes (PUBLIC, build
-# tree only) and the PRIVATE vg_imgui static lib are co-installed. Until then
-# gfx_ui is build-tree-only: examples + tests link it directly, the umbrella
-# pulls it in through BUILD_INTERFACE, and the header install excludes ui/ (both
-# in src/CMakeLists.txt), so the installed package carries no trace of this
-# tier.

@@ -791,7 +791,8 @@ TEST_F(ImageWriteTest, AnyNumberOfRegionsOfMixedSizes) {
 
 // The rig mosaic at full size: four 4K pictures in a 7696 x 4336 picture with
 // a 16-texel gutter, its extent a multiple of 16. Level 4 (481 x 271) holds
-// each tile's color inside and black between.
+// each tile's color inside and black between. Each 4K picture is flat, filled
+// on the GPU ahead of the write, so none is made on the host.
 TEST_F(ImageWriteTest, ATwoByTwoMosaicOf4KPictures) {
   const pipelines::ImagePipeline pipeline = make_pipeline();
   constexpr VkExtent2D k4K{3840, 2160};
@@ -809,6 +810,16 @@ TEST_F(ImageWriteTest, ATwoByTwoMosaicOf4KPictures) {
 
   const std::array<std::array<uint8_t, 3>, 4> colors = {
       {{90, 88, 168}, {150, 168, 88}, {60, 168, 168}, {200, 88, 88}}};
+  const auto fillable = [&](VkDeviceSize bytes) {
+    vkc::BufferDesc desc;
+    desc.size = bytes;
+    desc.usage =
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    auto buffer = image_allocator().create_buffer(desc);
+    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
+    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
+  };
+  const VkDeviceSize luma_bytes = VkDeviceSize{k4K.width} * k4K.height;
   std::vector<BufferPlanes> sources;
   sources.reserve(4);
   std::vector<pipelines::ImageWrite> writes;
@@ -818,13 +829,20 @@ TEST_F(ImageWriteTest, ATwoByTwoMosaicOf4KPictures) {
   swatches.reserve(4);
   for (uint32_t i = 0; i < 4; ++i) {
     const auto& c = colors[i];
-    sources.push_back(
-        buffers_of(flat(k4K.width, k4K.height, c[0], c[1], c[2])));
+    sources.push_back({fillable(luma_bytes), fillable(luma_bytes / 2)});
     writes.push_back(write_of(sources[i], g.origins[i], k4K));
     swatches.push_back(buffers_of(flat(16, 16, c[0], c[1], c[2])));
     swatch[i] = make_texture(pipeline, {16, 16}, M::Nv12, VK_FORMAT_UNDEFINED);
   }
   const Pixels level4 = read_level(mosaic, 4, [&](VkCommandBuffer cmd) {
+    for (uint32_t i = 0; i < 4; ++i) {
+      // A word of luma bytes, and of Cb, Cr pairs.
+      const auto& c = colors[i];
+      vkCmdFillBuffer(cmd, sources[i].luma.handle(), 0, VK_WHOLE_SIZE,
+                      c[0] * 0x01010101u);
+      vkCmdFillBuffer(cmd, sources[i].chroma.handle(), 0, VK_WHOLE_SIZE,
+                      c[1] * 0x00010001u + c[2] * 0x01000100u);
+    }
     write_and_convert(cmd, pipeline, mosaic, writes);
     for (uint32_t i = 0; i < 4; ++i) {
       write_and_convert(cmd, pipeline, swatch[i],

@@ -15,8 +15,8 @@
 ///   *must* be set consistently across every TU that instantiates glm's
 ///   projections. The authoritative, order-independent guarantee is a PUBLIC
 ///   compile definition on the `gfx_camera` target (see its CMakeLists), which
-///   reaches the library's own TUs and -- via the install interface -- every
-///   consumer regardless of include order. This header mirrors the same define
+///   reaches the library's own TUs and every consumer regardless of include
+///   order. This header mirrors the same define
 ///   at the include site so it stays local and reviewable, and so a TU that
 ///   includes `camera.hpp` without linking the target still gets it.
 ///
