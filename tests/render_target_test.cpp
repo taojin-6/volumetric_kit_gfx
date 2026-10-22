@@ -61,6 +61,15 @@ TEST(RenderTargetLayoutTest, FormatsPastColorCountAreIgnored) {
   EXPECT_TRUE(color_layout(kColor).compatible_with(other));
 }
 
+// Both kinds of attachment are cleared, color is stored to be presented or read
+// back, and depth, which nothing reads after the scope, is dropped.
+TEST(RenderTargetBeginInfoTest, DefaultsClearAllAndStoreOnlyColor) {
+  const vg::RenderTargetBeginInfo info;
+  EXPECT_EQ(info.load_op, VK_ATTACHMENT_LOAD_OP_CLEAR);
+  EXPECT_EQ(info.store_op, VK_ATTACHMENT_STORE_OP_STORE);
+  EXPECT_EQ(info.depth_store_op, VK_ATTACHMENT_STORE_OP_DONT_CARE);
+}
+
 TEST(RenderTargetTest, DefaultConstructedIsEmpty) {
   vg::RenderTarget target;
   EXPECT_FALSE(target.valid());

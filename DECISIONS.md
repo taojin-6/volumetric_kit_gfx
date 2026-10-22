@@ -897,7 +897,8 @@ core's names", above).
 - **Borrowers ask the device for its submit mutex.** It is never null -- the
   embedder's on a shared queue, else the device's own, which does not move with
   it -- so `ImGuiOverlay` borrows the device by address, as `Swapchain` and
-  `FrameLoop` do, and locks its mutex on each render.
+  `FrameLoop` do, and locks its mutex on a render that updates a texture, the
+  only kind on which the backend submits.
 - **The allocator reads the device's usable version** (`caps().api_version()`,
   the lower of the device's and its instance's) instead of reconstructing the
   instance's from the loader, which an adopted device's could not be.

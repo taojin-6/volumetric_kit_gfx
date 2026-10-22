@@ -572,6 +572,8 @@ TEST_F(GraphicsPipelineDeviceTest, DepthTestKeepsNearerSurface) {
   // first and a FAR red one (z = 0.7) listed last. drawIndexed rasterizes the
   // far triangle after the near, so without depth testing the center would end
   // up red; VK_COMPARE_OP_LESS must reject the far fragments and keep it blue.
+  // render_mesh's default begin info drops depth when the scope ends
+  // (depth_store_op DONT_CARE), which leaves the test inside it intact.
   const MeshVertex verts[6] = {
       {{-0.9f, -0.9f, 0.3f}, {0.0f, 0.0f, 1.0f}},
       {{0.9f, -0.9f, 0.3f}, {0.0f, 0.0f, 1.0f}},

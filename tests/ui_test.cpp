@@ -645,39 +645,61 @@ TEST_F(ImGuiOverlayDeviceTest, ImageMarksKeepPixelsAtClipEdges) {
   }
 }
 
-// render() may submit on the device's queue itself (the font atlas, on the
-// first frame), so it holds the device's submit mutex -- the one every other
-// submit on that queue holds -- whether or not the queue is shared.
-TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheDeviceSubmitMutex) {
+// render() may submit on the device's queue itself, to update a texture (the
+// font atlas, on the first frame), so then it holds the device's submit mutex
+// -- the one every other submit on that queue holds -- whether or not the
+// queue is shared. A frame that draws no new glyph updates no texture: it only
+// records, and takes no lock.
+TEST_F(ImGuiOverlayDeviceTest, RenderHoldsTheSubmitMutexOnlyToUpdateATexture) {
   vg::OffscreenTarget target = make_target();
   ui::ImGuiOverlay overlay = make_overlay(target.layout());
   ImGui::SetCurrentContext(overlay.context());
   ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
-  overlay.new_frame();
-  ImGui::ShowDemoWindow();
 
   auto pool =
       vkc::CommandPool::create(device().handle(), device().queue_family());
   ASSERT_TRUE(pool.ok()) << pool.status().message();
-  auto cmd = pool.value().allocate_primary();
-  ASSERT_TRUE(cmd.ok()) << cmd.status().message();
-  ASSERT_TRUE(
-      cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
-  const VkCommandBuffer raw = cmd.value().handle();
   const vg::RenderTarget rt = target.target();
-  rt.begin(raw, vg::RenderTargetBeginInfo{});
+  for (const bool uploads : {true, false}) {
+    SCOPED_TRACE(uploads ? "atlas upload" : "no texture update");
+    overlay.new_frame();
+    // The same text each frame, in a window sized up front so ImGui draws it
+    // on the first: the second frame adds no glyph to the atlas.
+    ImGui::SetNextWindowSize(ImVec2(60.0f, 40.0f));
+    ImGui::Begin("w");
+    ImGui::TextUnformatted("glyphs");
+    ImGui::End();
+    if (!uploads) {
+      for (const ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+        ASSERT_EQ(tex->Status, ImTextureStatus_OK);
+      }
+    }
 
-  std::unique_lock<std::mutex> held(*device().submit_mutex());
-  std::future<void> rendered =
-      std::async(std::launch::async, [&overlay, raw] { overlay.render(raw); });
-  // Blocked for as long as the mutex is held; it finishes once released.
-  EXPECT_EQ(rendered.wait_for(std::chrono::milliseconds(100)),
-            std::future_status::timeout);
-  held.unlock();
-  rendered.get();
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(
+        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+    const VkCommandBuffer raw = cmd.value().handle();
+    rt.begin(raw, vg::RenderTargetBeginInfo{});
 
-  rt.end(raw);
-  ASSERT_TRUE(cmd.value().end().ok());
+    std::unique_lock<std::mutex> held(*device().submit_mutex());
+    std::future<void> rendered = std::async(
+        std::launch::async, [&overlay, raw] { overlay.render(raw); });
+    // An upload waits for as long as the mutex is held; a frame without one
+    // finishes under it.
+    if (uploads) {
+      EXPECT_EQ(rendered.wait_for(std::chrono::milliseconds(100)),
+                std::future_status::timeout);
+    } else {
+      EXPECT_EQ(rendered.wait_for(std::chrono::seconds(10)),
+                std::future_status::ready);
+    }
+    held.unlock();
+    rendered.get();
+
+    rt.end(raw);
+    ASSERT_TRUE(cmd.value().end().ok());
+  }
   vkDeviceWaitIdle(
       device().handle());  // the backend's own upload, before teardown
 }

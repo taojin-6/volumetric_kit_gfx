@@ -144,13 +144,6 @@ core::Status Swapchain::build(VkExtent2D desired) {
   uint32_t image_count = requested_min_image_count_ != 0
                              ? requested_min_image_count_
                              : caps.minImageCount + 1;
-  // MAILBOX is only non-blocking with a third image (one on screen, one queued,
-  // one being rendered); raise the floor when we selected it and the caller did
-  // not pin a count. Still clamped to the surface's supported range below.
-  if (present_mode_ == VK_PRESENT_MODE_MAILBOX_KHR &&
-      requested_min_image_count_ == 0) {
-    image_count = std::max(image_count, 3u);
-  }
   image_count = std::max(image_count, caps.minImageCount);
   if (caps.maxImageCount != 0) {
     image_count = std::min(image_count, caps.maxImageCount);
@@ -277,10 +270,7 @@ core::Status Swapchain::create_image_resources(VkExtent2D extent) {
     }
 
     // RenderTarget ignores an empty-view depth, so pass it unconditionally (no
-    // caller-side null guard). The depth reuses the target's shared load/store
-    // op — color must STORE to present, so depth is stored too; harmless here
-    // since it is cleared each frame (see RenderTarget's per-attachment-op
-    // TODO).
+    // caller-side null guard).
     const RenderTargetAttachment attachment{image, view, format_};
     targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT,
                           &depth_attachment);
