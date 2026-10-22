@@ -640,40 +640,6 @@ TEST_F(HybridMeshRenderTest, NormalsViewEncodesTheUnflippedMeshNormal) {
       << "kHybridMeshNormals ignores kHybridMeshLit";
 }
 
-// A zero normal has no direction to encode: safe_normalize() maps it to 0, so
-// the view shows mid-grey rather than the NaN a bare normalize() would write.
-TEST_F(HybridMeshRenderTest, NormalsViewShowsAZeroNormalAsMidGrey) {
-  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
-                                                        color_depth_layout());
-  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
-
-  assets::Mesh mesh_cpu = make_hybrid_mesh();
-  for (assets::Vertex& v : mesh_cpu.vertices) {
-    v.normal = {0.0f, 0.0f, 0.0f};
-  }
-  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
-  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
-
-  const uint8_t atlas_px[4] = {255, 0, 0, 255};  // red, never shown here
-  std::vector<AtlasResources> atlas_res;
-  const VkDescriptorSet atlas =
-      make_atlas(allocator(), pipeline.value(), atlas_px, {1, 1},
-                 sizeof(atlas_px), atlas_res);
-  ASSERT_NE(atlas, VK_NULL_HANDLE);
-
-  const std::vector<uint8_t> normals = render(
-      allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
-      atlas, pipelines::kHybridMeshNormals);
-  ASSERT_EQ(normals.size(), static_cast<size_t>(kSize) * kSize * 4);
-  for (uint32_t x : {kSize / 4, 3 * kSize / 4}) {
-    const uint8_t* p = pixel_at(normals, x, kSize / 2);
-    for (int c = 0; c < 3; ++c) {
-      EXPECT_NEAR(p[c], 128, 1)
-          << "zero normal -> mid-grey at x=" << x << ", channel " << c;
-    }
-  }
-}
-
 // On an sRGB target the view pre-decodes its encoding, so the byte stored is
 // still normalize(n) * 0.5 + 0.5 -- what other normal-map tools show. Written
 // as-is, the hardware's encode would lift 0.5 to ~188, so the 128s below are
@@ -712,7 +678,8 @@ TEST_F(HybridMeshRenderTest, NormalsViewStoresTheEncodingOnAnSrgbTarget) {
 }
 
 // A mid-grey shows alike on every target: an albedo of linear 0.216 (sRGB byte
-// 128), and the normal view's mid-grey (the encoding 0.5, from a zero normal).
+// 128), and the normal view's mid-grey (the encoding 0.5, from a zero normal,
+// which safe_normalize() maps to 0 where a bare normalize() writes NaN).
 // UNORM and sRGB targets store byte 128 for both, and a float target their
 // linear light. Written unencoded, a UNORM target would store the albedo as
 // 55; given the encoding, a float target would hold 0.5 for the normal view.
