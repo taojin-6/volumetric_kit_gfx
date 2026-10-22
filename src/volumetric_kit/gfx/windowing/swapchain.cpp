@@ -277,10 +277,7 @@ core::Status Swapchain::create_image_resources(VkExtent2D extent) {
     }
 
     // RenderTarget ignores an empty-view depth, so pass it unconditionally (no
-    // caller-side null guard). The depth reuses the target's shared load/store
-    // op — color must STORE to present, so depth is stored too; harmless here
-    // since it is cleared each frame (see RenderTarget's per-attachment-op
-    // TODO).
+    // caller-side null guard).
     const RenderTargetAttachment attachment{image, view, format_};
     targets_.emplace_back(extent, &attachment, 1, VK_SAMPLE_COUNT_1_BIT,
                           &depth_attachment);

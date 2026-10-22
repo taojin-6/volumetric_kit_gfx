@@ -55,8 +55,8 @@ struct SwapchainConfig {
   ///       carries no per-frame barrier; cross-frame correctness relies on each
   ///       frame *clearing* depth (`load_op = CLEAR`, the default). A consumer
   ///       that instead loads a prior frame's depth (temporal reuse) must
-  ///       insert its own barrier — the swapchain does not synchronize a
-  ///       cross-frame depth read.
+  ///       store it (`depth_store_op = STORE`) and insert its own barrier —
+  ///       the swapchain does not synchronize a cross-frame depth read.
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
 };
 
