@@ -7,9 +7,10 @@
 // Each depth pixel lands where the host projection puts it, once; stride,
 // gating, images read at their offsets and no further, colour by recon's rule
 // through another camera, the tint where there is no colour, exact bytes on
-// every target, wide points, depth against PrimitivePipeline's lines, 4K
-// colour, any number of cameras in one frame in one submit or many, frames
-// through a real timeline reusing blocks, teardown waiting for the
+// every target, wide points, depth against PrimitivePipeline's lines, each
+// camera's own colour in one frame (one at 4K), any number of cameras in one
+// frame in one submit or many, frames through a real timeline reusing
+// blocks, teardown waiting for the
 // newest frame or after one that never ran, buffers another queue family
 // wrote, and every refusal recording nothing.
 
@@ -1193,9 +1194,10 @@ INSTANTIATE_TEST_SUITE_P(Cameras, DepthCloudCamerasTest,
                            return "N" + std::to_string(info.param);
                          });
 
-// A depth camera with a 3840 x 2160 colour camera: each point takes its own
-// colour pixel at full resolution.
-TEST_F(DepthCloudTest, AColorCameraAt4K) {
+// Two depth cameras side by side in one frame, each with its own colour
+// camera, one of them 3840 x 2160: each point takes its own camera's colour
+// pixel, the 4K one's at full resolution.
+TEST_F(DepthCloudTest, TwoColorCamerasOneAt4K) {
   auto pipeline = make_pipeline();
   ASSERT_NE(pipeline, nullptr);
   const PinholeCamera depth_cam{40.0f, 40.0f, 31.6f, 17.8f, 64, 36};
@@ -1208,24 +1210,35 @@ TEST_F(DepthCloudTest, AColorCameraAt4K) {
   color_cam.cy = depth_cam.cy * 60.0f + 29.75f;
   color_cam.width = 3840;
   color_cam.height = 2160;
+  // The other camera's colour pixel (u, v).
+  const PinholeCamera small_cam = shifted(depth_cam, 0.25f, 0.25f);
 
   const vkc::Buffer depth = upload(
       std::vector<float>(size_t{depth_cam.width} * depth_cam.height, 1.25f));
   const std::vector<uint32_t> words = coded_colors(color_cam, 1);
   const vkc::Buffer color = upload(words);
+  const std::vector<uint32_t> small_words = coded_colors(small_cam, 2);
+  const vkc::Buffer small_color = upload(small_words);
   const glm::mat4 to_world =
       pose(90.0f, {0.0f, 0.0f, 1.0f}, {1.0f, 0.5f, 0.0f});
   DepthCloudDraw draw = self_view(depth, depth_cam, to_world);
   draw.mode = CloudColor::True;
   draw.color = {&color, 0, color_cam, to_world, true};
-  const Pixels px =
-      render(*pipeline, {draw}, {depth_cam.width, depth_cam.height});
+  DepthCloudDraw beside = draw;
+  beside.color.buffer = &small_color;
+  beside.color.camera = small_cam;
+  beside.viewport.offset.x = static_cast<int32_t>(depth_cam.width);
+  const Pixels px = render(*pipeline, {draw, beside},
+                           {2 * depth_cam.width, depth_cam.height});
   ASSERT_FALSE(px.bytes.empty());
   for (uint32_t v = 0; v < depth_cam.height; ++v) {
     for (uint32_t u = 0; u < depth_cam.width; ++u) {
       const size_t index = size_t{60 * v + 30} * color_cam.width + 60 * u + 30;
       ASSERT_EQ(px.rgb(u, v), rgb_of(words[index]))
-          << "(" << u << ", " << v << ")";
+          << "4K camera (" << u << ", " << v << ")";
+      ASSERT_EQ(px.rgb(depth_cam.width + u, v),
+                rgb_of(small_words[size_t{v} * depth_cam.width + u]))
+          << "other camera (" << u << ", " << v << ")";
     }
   }
 }
