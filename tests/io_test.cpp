@@ -239,3 +239,34 @@ TEST(GltfLoader, ReportsDroppedPrimitiveThroughWarnings) {
   EXPECT_NE(warnings.front().find("POSITION"), std::string::npos)
       << warnings.front();
 }
+
+// tinygltf decodes a 16-bit PNG at 16 bits per channel, which assets::Image
+// cannot hold. The image keeps its slot, empty, so texture indices stay
+// right, and the drop is reported through the warnings channel. The image is
+// a 1x1 16-bit grey PNG.
+TEST(GltfLoader, ReportsDroppedSixteenBitImageThroughWarnings) {
+  const std::string gltf = R"({
+    "asset": {"version": "2.0"},
+    "images": [{"name": "Height16", "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABEAAAAABq7kcWAAAAC0lEQVR4nGNoYAAAAQMAgT5MxZMAAAAASUVORK5CYII="}]
+  })";
+  const std::string path = std::string(testing::TempDir()) + "vg_image16.gltf";
+  {
+    std::ofstream(path) << gltf;
+  }
+
+  std::string err;
+  std::vector<std::string> warnings;
+  std::optional<assets::Model> model = io::load_gltf(path, &err, &warnings);
+  std::remove(path.c_str());
+
+  ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
+  ASSERT_EQ(model->images.size(), 1u);
+  EXPECT_FALSE(model->images.front().valid());
+
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings.front().find("image 0 ('Height16') dropped"),
+            std::string::npos)
+      << warnings.front();
+  EXPECT_NE(warnings.front().find("16-bit"), std::string::npos)
+      << warnings.front();
+}

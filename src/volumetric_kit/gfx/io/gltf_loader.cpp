@@ -381,20 +381,29 @@ Material convert_material(const tinygltf::Model& gltf,
 // `src` is taken by non-const ref so its decoded pixel buffer can be moved out
 // rather than copied (textures are megabytes); `gltf` is a local in load_gltf
 // and is discarded afterwards, so mutating it is safe.
-Image convert_image(tinygltf::Image& src) {
+//
+// Only adopts the pixels when they are dimensionally consistent (8-bit,
+// tightly packed). An image tinygltf left undecoded (a missing external file)
+// or decoded at another depth (16-bit) yields an empty, default Image --
+// valid() == false -- instead of one whose width/height/channels lie about a
+// too-small buffer; `reason` then names why, and `src` is left untouched.
+Image convert_image(tinygltf::Image& src, std::string& reason) {
   Image img;
-  // Only adopt the pixels when they are dimensionally consistent (8-bit,
-  // tightly packed). A decode failure or an unsupported depth (e.g. 16-bit)
-  // leaves an empty, default Image -- valid() == false -- instead of one whose
-  // width/height/channels lie about a too-small buffer.
-  if (src.width <= 0 || src.height <= 0 || src.component <= 0 ||
-      src.bits != 8) {
+  if (src.width <= 0 || src.height <= 0 || src.component <= 0) {
+    reason = "not decoded";
+    return img;
+  }
+  if (src.bits != 8) {
+    reason = std::to_string(src.bits) + "-bit channels (8-bit only)";
     return img;
   }
   const std::size_t expected = static_cast<std::size_t>(src.width) *
                                static_cast<std::size_t>(src.height) *
                                static_cast<std::size_t>(src.component);
-  if (src.image.size() != expected) return img;
+  if (src.image.size() != expected) {
+    reason = "pixel data size mismatch";
+    return img;
+  }
 
   img.name = !src.name.empty() ? std::move(src.name) : std::move(src.uri);
   img.width = static_cast<std::uint32_t>(src.width);
@@ -538,9 +547,20 @@ std::optional<Model> load_gltf(std::string_view path, std::string* error,
 
   Model model;
 
+  // An image convert_image cannot hold keeps its slot, empty, so material
+  // indices still address the right images (PbrModel binds its fallback
+  // there); the drop is reported as a dropped primitive is.
   model.images.reserve(gltf.images.size());
-  for (tinygltf::Image& img : gltf.images) {
-    model.images.push_back(convert_image(img));
+  for (std::size_t ii = 0; ii < gltf.images.size(); ++ii) {
+    tinygltf::Image& src = gltf.images[ii];
+    std::string reason;
+    Image img = convert_image(src, reason);
+    if (!img.valid() && warnings != nullptr) {
+      std::string what = "image " + std::to_string(ii);
+      if (!src.name.empty()) what += " ('" + src.name + "')";
+      warnings->push_back(what + " dropped: " + reason);
+    }
+    model.images.push_back(std::move(img));
   }
 
   model.materials.reserve(gltf.materials.size());

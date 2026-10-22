@@ -33,9 +33,11 @@ namespace volumetric_kit::gfx::io {
 /// parser are not fatal and are not surfaced here.
 ///
 /// A load can also succeed *partially*: a mesh primitive the converter cannot
-/// represent is dropped from the returned model rather than failing the load.
-/// Pass @p warnings to observe such drops -- a silently incomplete model is
-/// otherwise indistinguishable from a complete one.
+/// represent is dropped from the returned model rather than failing the load,
+/// and an image that is not decoded or not 8 bits per channel stays in
+/// @ref assets::Model::images as an empty (`!valid()`) image. Pass @p warnings
+/// to observe such drops -- a silently incomplete model is otherwise
+/// indistinguishable from a complete one.
 ///
 /// @note Sparse accessors and accessors without a bufferView (both spec-valid)
 ///       are not supported yet; a primitive whose POSITION or index accessor
@@ -45,9 +47,9 @@ namespace volumetric_kit::gfx::io {
 /// @param error     Optional out-param; on failure, set to the failure reason
 ///                  (left unchanged on success). Pass `nullptr` to ignore it.
 /// @param warnings  Optional out-param; one message is appended per dropped
-///                  primitive, naming the mesh, the primitive index, and the
-///                  reason. Never cleared, and untouched when nothing is
-///                  dropped. Pass `nullptr` to ignore drops.
+///                  primitive or image, naming it and the reason. Never
+///                  cleared, and untouched when nothing is dropped. Pass
+///                  `nullptr` to ignore drops.
 /// @return The loaded @ref assets::Model on success, or `std::nullopt` on
 ///         failure.
 ///

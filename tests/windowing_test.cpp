@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -24,6 +25,8 @@
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
+#include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
@@ -217,6 +220,34 @@ TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
       EXPECT_NE(sc.image_view(i), sc.image_view(j));
     }
   }
+}
+
+// Without the preferred pair, the swapchain takes an _SRGB format the surface
+// offers in the preferred color space before its first pair, which on an
+// Android surface is R8G8B8A8_UNORM (MoltenVK's lists B8G8R8A8_UNORM first).
+// No surface offers R8_UNORM.
+TEST_F(WindowingTest, PrefersAnSrgbFormatToTheFirstPair) {
+  auto formats =
+      vg::surface_formats(device_->physical_device(), surface_.handle());
+  ASSERT_TRUE(formats.ok()) << formats.status().message();
+  const bool offers_srgb =
+      std::any_of(formats.value().begin(), formats.value().end(),
+                  [](const VkSurfaceFormatKHR& f) {
+                    return vg::is_srgb_attachment(f.format) &&
+                           f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+                  });
+  if (!offers_srgb) {
+    GTEST_SKIP() << "the surface offers no _SRGB format";
+  }
+
+  win::SwapchainConfig cfg;
+  cfg.extent = {256, 256};
+  cfg.preferred_format = VK_FORMAT_R8_UNORM;
+  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
+  ASSERT_TRUE(sc.ok()) << sc.status().message();
+  EXPECT_TRUE(vg::is_srgb_attachment(sc.value().format()))
+      << "chose format " << sc.value().format() << "; the first offered is "
+      << formats.value().front().format;
 }
 
 TEST_F(WindowingTest, FrameLoopRendersAndPresents) {

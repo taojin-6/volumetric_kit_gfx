@@ -14,6 +14,7 @@
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/vk_query.hpp"
 
@@ -78,15 +79,23 @@ core::Status Swapchain::select_surface_properties(
   if (formats.empty()) {
     return core::Status::unsupported("Swapchain: surface reports no formats");
   }
-  // Prefer the requested format + color space; else take the first supported.
-  VkSurfaceFormatKHR chosen = formats[0];
-  for (const VkSurfaceFormatKHR& f : formats) {
-    if (f.format == config.preferred_format &&
-        f.colorSpace == config.preferred_color_space) {
-      chosen = f;
-      break;
-    }
+  // Prefer the requested format + color space; else an _SRGB format in that
+  // color space, which encodes on write as the default preference does (an
+  // Android surface lists R8G8B8A8_UNORM first and offers no B8G8R8A8_SRGB);
+  // else take the first supported.
+  auto it = std::find_if(formats.begin(), formats.end(),
+                         [&](const VkSurfaceFormatKHR& f) {
+                           return f.format == config.preferred_format &&
+                                  f.colorSpace == config.preferred_color_space;
+                         });
+  if (it == formats.end()) {
+    it = std::find_if(formats.begin(), formats.end(),
+                      [&](const VkSurfaceFormatKHR& f) {
+                        return is_srgb_attachment(f.format) &&
+                               f.colorSpace == config.preferred_color_space;
+                      });
   }
+  const VkSurfaceFormatKHR chosen = it != formats.end() ? *it : formats[0];
   format_ = chosen.format;
   color_space_ = chosen.colorSpace;
 

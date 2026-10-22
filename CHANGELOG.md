@@ -8,6 +8,15 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Fixed
 
+- `HybridMeshPipeline` sRGB-encodes its shaded colour on a UNORM target, so
+  a mesh no longer shows about 2x too dark in the midtones there (a mid-grey
+  stored byte 55, not 128). Its normal view gives a float target linear light.
+- `windowing::Swapchain` falls back to an `_SRGB` format the surface offers
+  before the surface's first format, which is UNORM on Android.
+- `io::load_gltf` reports an image it cannot hold (16-bit, or not decoded)
+  through `warnings`, as it does a dropped primitive.
+- `Profiler::gpu_scope` says to wrap a whole render pass: on Apple GPUs a
+  scope inside one reads about 0 ms. `example_03_model` now does so.
 - `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that
   takes linear light (`_SRGB` or float). On the default `_SRGB` swapchain,
   every consumer's panels show their authored colours; ImGui's `WindowBg`

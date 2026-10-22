@@ -37,10 +37,12 @@ pc;
 
 // Supplied by HybridMeshPipeline::create: the HybridMeshFlags bits, taken from
 // the host enum so it is their one definition (a 0 here switches the mode off),
-// and whether color attachment 0 encodes sRGB on write.
+// and whether color attachment 0 holds linear light. An _SRGB target, which
+// encodes on write, and a float target are given linear light; a UNORM target
+// stores what is written, so it is given the encoding.
 layout(constant_id = 0) const uint kFlagLit = 0u;      // kHybridMeshLit
 layout(constant_id = 1) const uint kFlagNormals = 0u;  // kHybridMeshNormals
-layout(constant_id = 2) const bool kSrgbTarget = false;
+layout(constant_id = 2) const bool kLinearTarget = false;
 layout(constant_id = 3) const uint kFlagVertexColor = 0u;  // kHybridMeshVertexColor
 
 layout(location = 0) out vec4 out_color;
@@ -56,13 +58,13 @@ void main() {
   // faces, so a region whose normals point the wrong way reads as a color jump
   // instead of being masked the way lit shading masks it. (Winding alone does
   // not change this output; lit shading is what shows that.) A zero normal
-  // encodes to mid-grey. An sRGB target encodes what is written, so writing
-  // srgb_to_linear(c) stores c itself. `flags` is a push constant, so this
-  // branch is dynamically uniform and the atlas sample below stays in uniform
-  // control flow.
+  // encodes to mid-grey. The encoding is the color to show, so a target that
+  // takes linear light is given srgb_to_linear(c), which an sRGB target stores
+  // as c itself. `flags` is a push constant, so this branch is dynamically
+  // uniform and the atlas sample below stays in uniform control flow.
   if ((pc.flags & kFlagNormals) != 0u) {
     vec3 encoded = safe_normalize(frag_normal) * 0.5 + 0.5;
-    out_color = vec4(kSrgbTarget ? srgb_to_linear(encoded) : encoded, 1.0);
+    out_color = vec4(kLinearTarget ? srgb_to_linear(encoded) : encoded, 1.0);
     return;
   }
 
@@ -84,5 +86,6 @@ void main() {
     albedo *= ambient + (1.0 - ambient) * max(dot(n, pc.light_dir), 0.0);
   }
 
-  out_color = vec4(albedo, 1.0);
+  // Albedo and shading are linear light; a UNORM target is given them encoded.
+  out_color = vec4(kLinearTarget ? albedo : linear_to_srgb(albedo), 1.0);
 }
