@@ -37,8 +37,7 @@ include(GoogleTest)
 # without a Vulkan device fails rather than skips. Other skips are capability
 # probes: on Apple, where MoltenVK offers everything the tests probe, a shard
 # fails on any skip; on Linux, where NVIDIA's driver lacks some (DECISIONS.md,
-# "One surface source per window system"), CI lists them (_build.yml). Test
-# PROPERTIES given to vg_discover_tests reach each shard.
+# "One surface source per window system"), CI lists them (_build.yml).
 set(VG_TEST_SHARDS
     0
     CACHE STRING
@@ -61,7 +60,7 @@ function(vg_discover_tests target)
     gtest_discover_tests(${target} ${ARGN})
     return()
   endif()
-  cmake_parse_arguments(arg "" "TEST_PREFIX" "PROPERTIES" ${ARGN})
+  cmake_parse_arguments(arg "" "TEST_PREFIX" "" ${ARGN})
   set(no_skip)
   if(APPLE)
     set(no_skip FAIL_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
@@ -75,7 +74,7 @@ function(vg_discover_tests target)
       PROPERTIES
         ENVIRONMENT
         "GTEST_TOTAL_SHARDS=${VG_TEST_SHARDS};GTEST_SHARD_INDEX=${index}"
-        ${no_skip} ${arg_PROPERTIES})
+        ${no_skip})
   endforeach()
 endfunction()
 
