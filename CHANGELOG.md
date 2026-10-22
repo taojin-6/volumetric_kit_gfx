@@ -12,6 +12,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   the other pipelines do, so a mesh no longer shows about 2x too dark in the
   midtones there (a mid-grey stored byte 55, not 128). Its normal view gives
   a float target linear light.
+- `windowing::Swapchain` falls back to an `_SRGB` format the surface offers
+  before the surface's first format, which is UNORM on Android.
 - `ui::ImGuiOverlay` decodes ImGui's sRGB-encoded colours on a target that
   takes linear light (`_SRGB` or float). On the default `_SRGB` swapchain,
   every consumer's panels show their authored colours; ImGui's `WindowBg`

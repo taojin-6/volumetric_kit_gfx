@@ -6,7 +6,8 @@
 /// @file core/impl/color_attachment.hpp
 /// What a color-attachment format does with the values a fragment shader
 /// writes, for the tiers whose shaders write color -- pipelines and ui -- so
-/// each picks its encoding by one rule. Not a public header.
+/// each picks its encoding by one rule, and for windowing's choice of a
+/// swapchain format. Not a public header.
 
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
