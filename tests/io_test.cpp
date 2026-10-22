@@ -13,44 +13,22 @@
 #include <glm/geometric.hpp>  // length
 #include <glm/mat4x4.hpp>
 
+#include "box_glb.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
 #include "volumetric_kit/gfx/io/gltf_loader.hpp"
 
 namespace assets = volumetric_kit::gfx::assets;
 namespace io = volumetric_kit::gfx::io;
 
-namespace {
-
-// Absolute path to the Box.glb fixture, baked in by CMake (see
-// tests/CMakeLists.txt). Empty if the fixture was not available at configure
-// time -- the glTF tests then skip rather than fail.
-#ifdef VG_ASSETS_DIR
-constexpr const char* kAssetsDir = VG_ASSETS_DIR;
-#else
-constexpr const char* kAssetsDir = "";
-#endif
-
-std::string box_path() { return std::string(kAssetsDir) + "/Box.glb"; }
-
-// True when the Box.glb fixture is present and readable *now*. VG_ASSETS_DIR is
-// baked in at configure time, but the file can be removed afterwards (e.g. `git
-// clean` of the gitignored tests/assets/), so re-check at runtime: a missing
-// fixture skips the glTF tests rather than failing them.
-bool have_fixture() {
-  if (std::string(kAssetsDir).empty()) return false;
-  std::ifstream f(box_path(), std::ios::binary);
-  return f.good();
-}
-
-}  // namespace
-
-// The Khronos Box sample is a single mesh of 24 vertices (6 faces x 4, no
+// The box (box_glb.hpp) is a single mesh of 24 vertices (6 faces x 4, no
 // shared corners because each face needs its own normal) and 36 indices (12
 // triangles).
 TEST(GltfLoader, LoadsBoxGlb) {
-  if (!have_fixture()) GTEST_SKIP() << "Box.glb fixture unavailable";
+  const std::string path = std::string(testing::TempDir()) + "vg_io_box.glb";
+  ASSERT_TRUE(vg_test::write_box_glb(path));
   std::string err;
-  std::optional<assets::Model> model = io::load_gltf(box_path(), &err);
+  std::optional<assets::Model> model = io::load_gltf(path, &err);
+  std::remove(path.c_str());
   ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
 
   ASSERT_EQ(model->meshes.size(), 1u);
@@ -64,15 +42,15 @@ TEST(GltfLoader, LoadsBoxGlb) {
     EXPECT_LT(i, mesh.vertices.size());
   }
 
-  // The Box ships per-face normals; every one decodes to a unit vector. This
+  // The box has per-face normals; every one decodes to a unit vector. This
   // exercises the attribute-decode path -- a stride/count regression would fail
   // here, not merely change a vertex count.
   for (const assets::Vertex& v : mesh.vertices) {
     EXPECT_NEAR(glm::length(v.normal), 1.0f, 1e-3f);
   }
 
-  // The Box has one material; its base color is the red the sample defines
-  // (0.8, 0.0, 0.0, 1.0), and it is opaque/single-sided.
+  // The box has one material; its base color is red (0.8, 0.0, 0.0, 1.0), and
+  // it is opaque/single-sided.
   ASSERT_EQ(model->materials.size(), 1u);
   const assets::Material& mat = model->materials.front();
   EXPECT_EQ(mesh.material, 0u);
@@ -83,11 +61,11 @@ TEST(GltfLoader, LoadsBoxGlb) {
   EXPECT_EQ(mat.alpha_mode, assets::AlphaMode::Opaque);
   EXPECT_FALSE(mat.double_sided);
 
-  // The Box has no textures; the model carries no decoded images.
+  // The box has no textures; the model carries no decoded images.
   EXPECT_TRUE(model->images.empty());
   EXPECT_EQ(mat.base_color_texture, assets::kNoTexture);
 
-  // The scene references the mesh through its node tree. The Box has two nodes:
+  // The scene references the mesh through its node tree. The box has two nodes:
   // the root carries the model matrix (a -90deg rotation about X) and parents
   // the second, which draws mesh 0. The transform lives on the node hierarchy,
   // never on the (shared) mesh.

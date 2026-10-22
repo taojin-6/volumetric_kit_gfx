@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <fstream>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <utility>
@@ -15,6 +15,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "box_glb.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/assets/model.hpp"
@@ -26,25 +27,6 @@ namespace {
 namespace assets = volumetric_kit::gfx::assets;
 namespace io = volumetric_kit::gfx::io;
 namespace pipelines = volumetric_kit::gfx::pipelines;
-
-// Absolute path to the Box.glb fixture, baked in by CMake (see
-// tests/CMakeLists.txt). Empty if the fixture was not available at configure
-// time -- the glTF-backed test then skips rather than fails.
-#ifdef VG_ASSETS_DIR
-constexpr const char* kAssetsDir = VG_ASSETS_DIR;
-#else
-constexpr const char* kAssetsDir = "";
-#endif
-
-std::string box_path() { return std::string(kAssetsDir) + "/Box.glb"; }
-
-// True when the Box.glb fixture is present and readable *now* (the file can be
-// removed after configure time; see io_test.cpp).
-bool have_fixture() {
-  if (std::string(kAssetsDir).empty()) return false;
-  std::ifstream f(box_path(), std::ios::binary);
-  return f.good();
-}
 
 // One triangle under one root node -- the smallest drawable model. The mesh
 // names no material, so a created PbrModel resolves it to the fallback.
@@ -176,12 +158,14 @@ TEST(PbrMaterialDescTest, MapsEveryFactor) {
   EXPECT_EQ(d.sampler, VK_NULL_HANDLE);
 }
 
-// The real thing end to end: the Khronos Box.glb (one mesh, one material,
-// one node) through load_gltf -> PbrModel::create.
+// The real thing end to end: a box .glb (one mesh, one material, a mesh node
+// under a root; box_glb.hpp) through load_gltf -> PbrModel::create.
 TEST_F(PbrModelTest, CreatesFromBoxGlb) {
-  if (!have_fixture()) GTEST_SKIP() << "Box.glb fixture unavailable";
+  const std::string path = std::string(testing::TempDir()) + "vg_pbr_box.glb";
+  ASSERT_TRUE(vg_test::write_box_glb(path));
   std::string err;
-  std::optional<assets::Model> model = io::load_gltf(box_path(), &err);
+  std::optional<assets::Model> model = io::load_gltf(path, &err);
+  std::remove(path.c_str());
   ASSERT_TRUE(model.has_value()) << "load_gltf failed: " << err;
 
   pipelines::PbrModel gpu = make_model(*model);
@@ -196,7 +180,7 @@ TEST_F(PbrModelTest, CreatesFromBoxGlb) {
 }
 
 // A material with real texture maps drives the full upload path (to_rgba8, the
-// sRGB-vs-UNORM per-slot policy, tex_for -> a real image) -- which Box.glb (no
+// sRGB-vs-UNORM per-slot policy, tex_for -> a real image) -- which the box (no
 // images) never exercises. Under validation-with-teeth, a wrong format/barrier
 // for the uploaded maps fails the test.
 TEST_F(PbrModelTest, UploadsTexturedMaterial) {
@@ -211,7 +195,7 @@ TEST_F(PbrModelTest, UploadsTexturedMaterial) {
 
 // The node tree composes parent * child down to world space: a mesh under a
 // child node inherits its parent's transform. Guards the multiply order and
-// that the parent transform is not dropped (Box.glb has a -90deg root rotation
+// that the parent transform is not dropped (the box has a -90deg root rotation
 // no other test checks).
 TEST_F(PbrModelTest, ComposesNodeWorldTransforms) {
   glm::mat4 parent_xf(1.0f);
