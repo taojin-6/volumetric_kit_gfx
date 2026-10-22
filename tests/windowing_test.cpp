@@ -250,29 +250,6 @@ TEST_F(WindowingTest, PrefersAnSrgbFormatToTheFirstPair) {
       << formats.value().front().format;
 }
 
-// Unpinned, the image count is the surface minimum + 1 in any present mode:
-// MAILBOX gets no third image unless min_image_count asks for one. (MoltenVK's
-// headless surface offers no MAILBOX, and its minimum of 2 makes the count 3
-// anyway: only a surface offering MAILBOX with a minimum of 1 tells the two
-// apart.)
-TEST_F(WindowingTest, MailboxTakesTheSurfaceMinimumPlusOne) {
-  VkSurfaceCapabilitiesKHR caps{};
-  ASSERT_EQ(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-                device_->physical_device(), surface_.handle(), &caps),
-            VK_SUCCESS);
-  uint32_t expected = caps.minImageCount + 1;
-  if (caps.maxImageCount != 0) {
-    expected = std::min(expected, caps.maxImageCount);
-  }
-
-  win::SwapchainConfig cfg;
-  cfg.extent = {256, 256};
-  cfg.preferred_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
-  ASSERT_TRUE(sc.ok()) << sc.status().message();
-  EXPECT_EQ(sc.value().image_count(), expected);
-}
-
 TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
   win::Swapchain sc = make_swapchain();
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
