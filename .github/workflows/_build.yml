@@ -67,12 +67,14 @@ jobs:
     steps:
       # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
       # install steps use it); we run as root in the container, so install them
-      # before anything else. Skipped on hosted runners.
+      # before anything else. The NVIDIA shader cache's base directory must
+      # exist (ci.yml). Skipped on hosted runners.
       - name: Bootstrap container
         if: inputs.container != ''
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git sudo
+          mkdir -p "$__GL_SHADER_DISK_CACHE_PATH"
 
       - uses: actions/checkout@v7
 
