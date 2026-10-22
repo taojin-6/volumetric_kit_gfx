@@ -16,6 +16,9 @@ vkgfx-env.sh
 *.ppm
 *.png.actual
 
+# Local glTF models (checkouts keep Box.glb and others here); not committed
+/tests/assets/
+
 # CMake/user state
 CMakeUserPresets.json
 .cache/
