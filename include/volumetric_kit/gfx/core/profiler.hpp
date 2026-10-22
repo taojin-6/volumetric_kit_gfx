@@ -82,7 +82,7 @@ struct ProfilerConfig {
 /// profiler.begin_frame(frame.slot, frame.cmd);
 /// {
 ///   Profiler::Scope pass = profiler.gpu_scope(frame.cmd, "main pass");
-///   // ... record draws into frame.cmd ...
+///   // ... begin the pass, record its draws into frame.cmd, end it ...
 /// }  // pass ends: GPU end-timestamp + label close recorded here
 /// profiler.end_frame();
 /// const FrameMetrics& m = profiler.metrics();  // resolved snapshot (lags N)
@@ -188,6 +188,10 @@ class VG_CORE_API Profiler {
   ///              row's name is never null.
   /// @return A @ref Scope timing until it is destroyed; inert if called outside
   ///         a frame or with a null @p cmd.
+  /// @note Open it outside a render pass, around the whole pass. On Apple GPUs
+  ///       MoltenVK samples GPU time only between Metal encoders, so a scope
+  ///       opened and closed inside one dynamic-rendering pass reads about
+  ///       0 ms; time the work inside a pass with @ref cpu_scope.
   Scope gpu_scope(VkCommandBuffer cmd, const char* name);
 
   /// @return The most recently resolved frame's metrics, empty until the first

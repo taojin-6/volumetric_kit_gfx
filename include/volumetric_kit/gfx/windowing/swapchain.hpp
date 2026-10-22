@@ -33,7 +33,8 @@ struct SwapchainConfig {
   /// Desired image size in texels; clamped to the surface's supported range, or
   /// overridden by the surface's fixed `currentExtent` when it dictates one.
   VkExtent2D extent{};
-  /// Preferred color format; falls back to the surface's first supported pair.
+  /// Preferred color format; falls back to an `_SRGB` format the surface
+  /// offers in @ref preferred_color_space, then to its first supported pair.
   VkFormat preferred_format = VK_FORMAT_B8G8R8A8_SRGB;
   /// Color space paired with @ref preferred_format.
   VkColorSpaceKHR preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
