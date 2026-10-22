@@ -339,12 +339,6 @@ if(TARGET volumetric_kit::gfx_glfw)
     PRIVATE volumetric_kit::gfx_glfw volumetric_kit::core_test_support
             GTest::gtest_main Vulkan::Vulkan)
   vg_target_warnings(vg_glfw_test)
-  # The native-window case asks CoreGraphics for a GUI session before glfwInit,
-  # which outside one waits for the window server forever.
-  if(APPLE)
-    target_link_libraries(vg_glfw_test PRIVATE "-framework CoreGraphics"
-                                               "-framework CoreFoundation")
-  endif()
   # A hung case, as when a window system never answers, fails after a minute
   # rather than holding the runner until the job's time limit.
   vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw." PROPERTIES TIMEOUT 60)

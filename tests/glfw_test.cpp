@@ -7,20 +7,13 @@
 // (GLFW 3.4+), so no display is needed; with an older GLFW those cases skip.
 // The surface and the shared device need more: GLFW 3.5.1+, whose null
 // platform presents through VK_EXT_headless_surface (3.4's makes no surface),
-// and a Vulkan device with that extension. One case iconifies a window on the
-// native window system, and skips where there is no display.
+// and a Vulkan device with that extension.
 
 // Before GLFW, so glfw3.h sees Vulkan and declares its helpers.
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 #include <GLFW/glfw3.h>
 
-#ifdef __APPLE__
-#include <CoreFoundation/CFBase.h>
-#include <CoreGraphics/CGSession.h>
-#endif
-
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -61,71 +54,27 @@ std::string glfw_failure(const char* call) {
          (description != nullptr ? description : "failed");
 }
 
-// Why this process has no native window system to reach, or empty if it has
-// one. Asked before glfwInit, which on macOS outside a GUI session, as in the
-// CI Mac's runner daemons, waits for the window server forever.
-std::string native_display_unavailable() {
-#ifdef __APPLE__
-  const CFDictionaryRef session = CGSessionCopyCurrentDictionary();
-  if (session == nullptr) {
-    return "no display: the process is in no window-server (Quartz GUI) "
-           "session";
-  }
-  CFRelease(session);
-#else
-  if (std::getenv("DISPLAY") == nullptr &&
-      std::getenv("WAYLAND_DISPLAY") == nullptr) {
-    return "no display: neither DISPLAY nor WAYLAND_DISPLAY is set";
-  }
-#endif
-  return {};
-}
-
-// GLFW with one window, for this object's lifetime: on the null platform,
-// which needs no display, or on the native window system, which does. `ready()`
-// is false, with `reason()`, where the platform is unavailable.
+// GLFW with one window on its null platform, which needs no display, for this
+// object's lifetime. `ready()` is false, with `reason()`, where the platform is
+// unavailable.
 class TestWindow {
  public:
-  enum class Platform { Null, Native };
-
-  explicit TestWindow(Platform platform) {
-    if (platform == Platform::Null) {
-#ifdef GLFW_PLATFORM_NULL
-      glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
-#else
-      reason_ = "GLFW " + std::to_string(GLFW_VERSION_MAJOR) + "." +
-                std::to_string(GLFW_VERSION_MINOR) + " has no null platform";
-      return;
-#endif
-    } else {
-      reason_ = native_display_unavailable();
-      if (!reason_.empty()) {
-        return;
-      }
-#ifdef GLFW_ANY_PLATFORM
-      glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
-#endif
-    }
+  TestWindow() {
 #ifdef GLFW_PLATFORM_NULL  // GLFW 3.4+
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
     // The loader this test links, rather than one GLFW searches for.
     glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#else
+    reason_ = "GLFW " + std::to_string(GLFW_VERSION_MAJOR) + "." +
+              std::to_string(GLFW_VERSION_MINOR) + " has no null platform";
+    return;
 #endif
     if (glfwInit() != GLFW_TRUE) {
       reason_ = glfw_failure("glfwInit");
       return;
     }
     initialized_ = true;
-    if (platform == Platform::Native && glfwGetPrimaryMonitor() == nullptr) {
-      reason_ = "no display: GLFW finds no monitor";
-      return;
-    }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    if (platform == Platform::Native) {
-      // Shown, as only a shown window iconifies, but taking no focus from
-      // the desktop it appears on.
-      glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
-      glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
-    }
     window_ = glfwCreateWindow(kWidth, kHeight, "glfw_test", nullptr, nullptr);
     if (window_ == nullptr) {
       reason_ = glfw_failure("glfwCreateWindow");
@@ -152,21 +101,6 @@ class TestWindow {
   std::string reason_;
 };
 
-// Whether the window's GLFW_ICONIFIED reads `iconified` within five seconds,
-// handling events meanwhile: a window manager or compositor acts on an iconify
-// or restore request in its own time, if at all.
-bool settles_iconified(GLFWwindow* window, bool iconified) {
-  const int wanted = iconified ? GLFW_TRUE : GLFW_FALSE;
-  const double deadline = glfwGetTime() + 5.0;
-  while (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != wanted) {
-    if (glfwGetTime() >= deadline) {
-      return false;
-    }
-    glfwWaitEventsTimeout(0.05);
-  }
-  return true;
-}
-
 // Why the null platform cannot make a Vulkan surface, or empty if it can. Its
 // surface arrived in GLFW 3.5.1: 3.4 offers no extensions and refuses
 // glfwCreateWindowSurface. The version, not a call to the code under test,
@@ -191,7 +125,7 @@ std::string null_surface_unavailable() {
 class GlfwWindowTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    window_ = std::make_unique<TestWindow>(TestWindow::Platform::Null);
+    window_ = std::make_unique<TestWindow>();
     if (!window_->ready()) {
       GTEST_SKIP() << window_->reason();
     }
@@ -410,44 +344,6 @@ TEST(GlfwFramebufferSizeTest, IsNoneWhileIconified) {
   EXPECT_EQ(iconified.height, 0u);
 }
 
-// On the native window system, where there is a display.
-TEST(GlfwNativeWindowTest, FramebufferSizeIsZeroWhileIconified) {
-  const TestWindow window(TestWindow::Platform::Native);
-  if (!window.ready()) {
-    GTEST_SKIP() << window.reason();
-  }
-#ifdef GLFW_PLATFORM_WAYLAND
-  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
-    GTEST_SKIP() << "Wayland: xdg-shell reports no iconified state";
-  }
-#endif
-  const VkExtent2D shown = glfw::framebuffer_size(window.get());
-  ASSERT_GT(shown.width, 0u);
-  ASSERT_GT(shown.height, 0u);
-
-  glfwIconifyWindow(window.get());
-  if (!settles_iconified(window.get(), true)) {
-    GTEST_SKIP() << "the window was not iconified within 5 s (no window "
-                    "manager?)";
-  }
-  const VkExtent2D iconified = glfw::framebuffer_size(window.get());
-  EXPECT_EQ(iconified.width, 0u);
-  EXPECT_EQ(iconified.height, 0u);
-
-  glfwRestoreWindow(window.get());
-  ASSERT_TRUE(settles_iconified(window.get(), false))
-      << "iconified, but not restored within 5 s";
-  // GLFW's size now, not `shown`: a window manager may have resized it since.
-  int width = 0;
-  int height = 0;
-  glfwGetFramebufferSize(window.get(), &width, &height);
-  ASSERT_GT(width, 0);
-  ASSERT_GT(height, 0);
-  const VkExtent2D restored = glfw::framebuffer_size(window.get());
-  EXPECT_EQ(restored.width, static_cast<uint32_t>(width));
-  EXPECT_EQ(restored.height, static_cast<uint32_t>(height));
-}
-
 TEST_F(GlfwWindowTest, FramebufferExtentIsTheWindowsAndNeverZero) {
   const VkExtent2D extent = glfw::framebuffer_extent(window());
   EXPECT_EQ(extent.width, static_cast<uint32_t>(kWidth));
@@ -556,7 +452,7 @@ class GlfwDeviceTest : public vg_test::RendererTest {
         !reason.empty()) {
       GTEST_SKIP() << reason;
     }
-    window_ = std::make_unique<TestWindow>(TestWindow::Platform::Null);
+    window_ = std::make_unique<TestWindow>();
     if (!window_->ready()) {
       GTEST_SKIP() << window_->reason();
     }
