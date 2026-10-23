@@ -48,7 +48,7 @@ struct ProfilerConfig {
   /// `core::DeviceTime::NotTimed`. The core's timer holds at most
   /// `2 * core::GpuTimer::kMaxSpans` timestamps, the most a Metal-backed pool
   /// holds, so where the frames in flight need more the bound is lowered to
-  /// fit. `frames_in_flight * this * 2` must fit in 32 bits. Must be >= 1.
+  /// fit (logged). Must be >= 1.
   uint32_t max_gpu_sections_per_frame = 32;
 };
 
@@ -73,6 +73,11 @@ struct ProfilerConfig {
 /// command buffer other than the frame's, or where the frame's timestamps
 /// were not readable when its slot recurred; unavailable where the queue
 /// cannot time; none for a CPU scope.
+///
+/// A scope's host time splits as a `core::StageScope`'s does, as each open
+/// scope is one on its thread: the core's blocking waits inside it -- a fence,
+/// a timeline semaphore, a blocking submit -- are its `wait_ms`
+/// (`core::note_blocked`), so its busy time never holds a wait.
 ///
 /// @warning The @p device passed to @ref create must outlive the profiler (it
 ///          owns a timestamp pool freed through that device, and borrows the
@@ -112,6 +117,9 @@ class VG_CORE_API Profiler {
   /// of its device time and closes the label, so scope it to exactly the work
   /// it should measure. A default-constructed (or moved-from) `Scope` is inert
   /// and finalizes nothing.
+  ///
+  /// @warning Close it, or end its frame, on the thread that opened it: it is
+  ///          a core scope on that thread's stack (`VKC_CHECK`).
   class Scope {
    public:
     /// @brief An inert scope: times and finalizes nothing.
@@ -145,8 +153,7 @@ class VG_CORE_API Profiler {
   ///         where the timestamp pool will not allocate -- or a non-OK
   ///         `core::Status`: `core::Status::Code::InvalidArgument` when
   ///         @p config has a zero `frames_in_flight` or
-  ///         `max_gpu_sections_per_frame`, or a
-  ///         `frames_in_flight * max_gpu_sections_per_frame * 2` past 32 bits;
+  ///         `max_gpu_sections_per_frame`;
   ///         `core::Status::Code::Unsupported` for a @p device without the
   ///         renderer's requirements.
   static core::Result<Profiler> create(const core::Device& device,

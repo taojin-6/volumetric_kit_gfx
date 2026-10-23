@@ -276,7 +276,8 @@ class VG_WINDOWING_API FrameLoop {
   /// and `present`, the present call. `frame wait` and `present` are wait
   /// rows (`cpu_ms == wait_ms`), which reach the scopes the caller has open
   /// around them as blocked time (`core::WaitScope`). Without a profiler the
-  /// loop measures nothing.
+  /// loop adds no rows, and its waits, the acquire and the present included,
+  /// still reach those scopes (`core::note_blocked`).
   /// @param profiler  Borrowed and nullable. When set, the loop calls the
   ///                  profiler's `begin_frame` (for the slot, after waiting for
   ///                  its previous frame, with the frame's command buffer) and

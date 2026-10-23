@@ -39,7 +39,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 ### Added
 
 - `ui`: `StageWindow`, the line `draw_stage_table` draws above its table:
-  the frames its figures cover, their unit, and how many were device-timed.
+  the frames its figures cover, their unit, how many were device-timed, and
+  the application's note (its timing mode and clock calibration).
 - `core`: `Profiler::add_rows` adds a render loop's host rows to the frame,
   after its own stages, while it records or once it has ended.
 - `windowing`: `FrameWait` shows a live mesh's wait.
@@ -221,7 +222,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- build: gfx pins volumetric_kit_core at `e4d00f1` (core 0.20.0, the head
+- build: gfx pins volumetric_kit_core at `9b64ebb` (core 0.20.0, the head
   of the core's #50, re-pinned to its merge before this lands).
   `VG_VKC_MIN_VERSION` is 0.20.0, for `GpuTiles` and a row's wait and device
   halves: an application that declares the core first pins it at 0.20.0 or
@@ -237,13 +238,17 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   measured, `NotTimed` (past the bound, another command buffer, or not
   readable yet) or `Unavailable` (no timestamps); `has_gpu` still means
   measured. A timestamp pool that will not allocate leaves `gpu_timing()`
-  false rather than failing `create`. Migrating: read `device` to tell n/t
-  from n/a.
+  false rather than failing `create`, and a bound past what the core's timer
+  holds is lowered, never refused, however large. Each open scope is a
+  `core::StageScope`, so a core wait inside it is its row's `wait_ms`.
+  Migrating: read `device` to tell n/t from n/a; close a scope, or end its
+  frame, on the thread that opened it.
 - `windowing`: **`FrameLoop` reports its own blocking** to an attached
   profiler: rows `frame wait`, `submit` and `present` follow the caller's
-  stages, and its waits reach the caller's open `core::StageScope`s as
-  blocked time. Migrating: code that counts `FrameMetrics::sections` or
-  indexes past the caller's stages finds three more rows; find rows by name.
+  stages. Its waits, the acquire and the present included, reach the
+  caller's open `core::StageScope`s as blocked time, profiler or not.
+  Migrating: code that counts `FrameMetrics::sections` or indexes past the
+  caller's stages finds three more rows; find rows by name.
 - `core`: **depth is not stored by default.** `RenderTargetBeginInfo` has
   its own `depth_store_op`, `DONT_CARE` by default, so a tile-based GPU
   (Apple, Android) no longer writes depth back to memory every frame. Color

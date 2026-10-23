@@ -5,13 +5,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 
 namespace {
@@ -153,11 +157,11 @@ TEST_F(ProfilerTest, MemorySourcePopulatesAggregateMemory) {
 
 // --- GPU resolve: multi-slot + multi-section indexing ----------------------
 
-// Exercises the per-slot query base (slot*max*2) and the intra-frame stride (a
-// second section's queries at local offset 2) — both always 0 in the other
-// tests (frames=1, one section). A wrong per-slot or per-section offset reads
-// an unwritten / other-slot query, so read_results returns NOT_READY and
-// has_gpu flips off; the names also let a swapped pairing show.
+// Exercises two frames in flight, each holding its own range of the timer, and
+// a second section's tiles in one frame — neither of which the one-slot,
+// one-section tests reach. A frame resolved from another's range, or a section
+// summing the wrong tiles, reads a mark not written for it, so the row reads
+// NotTimed and has_gpu flips off; the names also let a swapped pairing show.
 TEST_F(ProfilerTest, MultiSlotMultiSectionResolves) {
   vg::Profiler profiler = make_profiler(/*frames=*/2, /*max_gpu=*/8);
 
@@ -251,13 +255,30 @@ TEST_F(ProfilerTest, NullNameStageIsRecordedUnnamed) {
   EXPECT_EQ(stages.rows().size(), 1u);
 }
 
-// The pool holds frames_in_flight * max_gpu_sections_per_frame * 2 queries; a
-// product past 32 bits (here wrapping to 2) is refused rather than sizing a
-// pool smaller than the ranges the slots index.
-TEST_F(ProfilerTest, CreateRejectsQueryCountOverflow) {
-  auto result = vg::Profiler::create(device(), make_config(3, 0x2AAAAAABu));
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.status().domain(), vkc::Status::Code::InvalidArgument);
+// A bound past what the core's timer holds for the frames in flight is
+// lowered, not refused: two frames take 2048 pairs of queries at most, so the
+// bound becomes 1023 and each frame's 1024 pairs fit beside the other's. A
+// frame that took a pair more would leave the next no range, so both frames
+// in flight are timed.
+TEST_F(ProfilerTest, ABoundPastWhatTheTimerHoldsIsLowered) {
+  vg::Profiler profiler = make_profiler(/*frames=*/2, /*max_gpu=*/0x7FFFFFFFu);
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    auto a = profiler.gpu_scope(cmd, "a");
+  });
+  run_frame(profiler, 1, [&](VkCommandBuffer cmd) {
+    auto b = profiler.gpu_scope(cmd, "b");
+  });
+  const vkc::DeviceTime timed = profiler.gpu_timing()
+                                    ? vkc::DeviceTime::Measured
+                                    : vkc::DeviceTime::Unavailable;
+  run_frame(profiler, 0, [](VkCommandBuffer) {});
+  ASSERT_EQ(profiler.metrics().sections.size(), 1u);
+  EXPECT_STREQ(profiler.metrics().sections[0].name, "a");
+  EXPECT_EQ(profiler.metrics().sections[0].device, timed);
+  run_frame(profiler, 1, [](VkCommandBuffer) {});
+  ASSERT_EQ(profiler.metrics().sections.size(), 1u);
+  EXPECT_STREQ(profiler.metrics().sections[0].name, "b");
+  EXPECT_EQ(profiler.metrics().sections[0].device, timed);
 }
 
 // --- move-only contract: Profiler ------------------------------------------
@@ -410,6 +431,55 @@ TEST_F(ProfilerTest, AGpuScopeHoldsTheScopesNestedInIt) {
   EXPECT_GE(outer.gpu_ms, a.gpu_ms + b.gpu_ms);
   EXPECT_GE(a.gpu_ms, 0.0);
   EXPECT_GE(b.gpu_ms, 0.0);
+  // Each fill counts to its own scope: what outer holds beyond a and b is the
+  // gaps between the marks, small beside either fill. A scope credited the
+  // tile after its own would hold a gap, and outer both fills over it.
+  EXPECT_LE(outer.gpu_ms - a.gpu_ms - b.gpu_ms,
+            0.5 * std::min(a.gpu_ms, b.gpu_ms) + 1e-9)
+      << "outer " << outer.gpu_ms << " ms, a " << a.gpu_ms << ", b "
+      << b.gpu_ms;
+}
+
+// A scope's host time splits into busy and blocked as a core scope's does: a
+// core wait inside it -- here a timeline semaphore another thread signals --
+// is its wait, and the wait of the scope around it, and no other scope's.
+TEST_F(ProfilerTest, ACoreWaitInsideAScopeIsItsWait) {
+  vg::Profiler profiler = make_profiler();
+  auto made = vkc::TimelineSemaphore::create(device());
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  vkc::TimelineSemaphore timeline = std::move(made).value();
+  vkc::Status waited;
+  vkc::Status signalled;
+  profiler.begin_frame(0, VK_NULL_HANDLE);
+  {
+    auto frame = profiler.cpu_scope("frame");
+    {
+      auto waiting = profiler.cpu_scope("waiting");
+      std::thread signaller([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        signalled = timeline.signal(1);
+      });
+      waited = timeline.wait(1);
+      signaller.join();
+    }
+    auto after = profiler.cpu_scope("after");
+  }
+  profiler.end_frame();
+  ASSERT_TRUE(signalled.ok()) << signalled.message();
+  ASSERT_TRUE(waited.ok()) << waited.message();
+  profiler.begin_frame(0, VK_NULL_HANDLE);  // publishes the frame
+  profiler.end_frame();
+
+  const std::vector<vkc::StageRow>& rows = profiler.metrics().sections;
+  ASSERT_EQ(rows.size(), 3u);
+  const vkc::StageRow& frame = rows[0];
+  const vkc::StageRow& waiting = rows[1];
+  const vkc::StageRow& after = rows[2];
+  EXPECT_GT(waiting.wait_ms, 0.0);
+  EXPECT_LE(waiting.wait_ms, waiting.cpu_ms);
+  EXPECT_EQ(frame.wait_ms, waiting.wait_ms);
+  EXPECT_LE(frame.wait_ms, frame.cpu_ms);
+  EXPECT_EQ(after.wait_ms, 0.0);
 }
 
 // A render loop's rows come after the frame's own stages, whether added while

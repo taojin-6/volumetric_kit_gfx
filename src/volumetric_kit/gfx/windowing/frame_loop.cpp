@@ -3,9 +3,11 @@
 
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 
+#include <chrono>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
@@ -16,6 +18,21 @@
 namespace volumetric_kit::gfx::windowing {
 
 namespace {
+
+// Run `call`, one the host may block in that no core wait reports -- the
+// acquire, the present -- and report its span to the scopes open on this
+// thread as blocked time (core::note_blocked), with a profiler attached or
+// not. Inside the loop's own wait rows the report stops at them, as their
+// span already holds it.
+template <class Call>
+auto blocking(Call&& call) {
+  const auto start = std::chrono::steady_clock::now();
+  auto result = call();
+  core::note_blocked(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count());
+  return result;
+}
 
 // The semaphores one of the loop's submits waits for and sets, as the parallel
 // arrays VkSubmitInfo and VkTimelineSemaphoreSubmitInfo take. A binary
@@ -257,8 +274,9 @@ core::Result<Frame> FrameLoop::begin_frame() {
     // numbered on a timeline").
     VKC_TRY(in_flight_[slot].wait());
 
-    core::Result<uint32_t> acquired =
-        swapchain_.acquire_next_image(image_available_[slot].handle());
+    core::Result<uint32_t> acquired = blocking([&] {
+      return swapchain_.acquire_next_image(image_available_[slot].handle());
+    });
     if (!acquired.ok()) {
       // OUT_OF_DATE (or another error) flows to the caller, which recreates
       // the swapchain and retries; nothing was consumed, so the retry is this
@@ -466,7 +484,8 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   core::Status present;
   {
     const core::WaitScope presenting(rows, "present");
-    present = swapchain_.present(frame.image_index, rendered);
+    present = blocking(
+        [&] { return swapchain_.present(frame.image_index, rendered); });
   }
   if (profiler_ != nullptr) {
     profiler_->add_rows(rows_);

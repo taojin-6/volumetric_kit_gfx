@@ -144,16 +144,24 @@ gfx shows both, and adds the blocking only it sees.
   a cell of its own now (`ui::draw_stage_table`), and host time is busy time,
   as a wait is no work. The line above the table (`ui::StageWindow`) states
   the frames the figures cover and how many were timed, so a stream's frames
-  and a display's are not read alike. The panel's "ms/frame" was the
-  recording time; the period now comes from the rate.
+  and a display's are not read alike, then the application's note: when it
+  times and how its clocks are calibrated, which only it knows. The panel's
+  "ms/frame" was the recording time; the period now comes from the rate.
 - **The frame loop reports its own blocking.** With a profiler attached,
   `FrameLoop` adds `frame wait` -- the slot's fence, the acquire and the
   image's previous frame -- `submit` and `present` after the caller's stages
   (`Profiler::add_rows`), each in its own frame: a frame stays unpublished
   until its slot recurs, so its present joins it. The waits are
   `core::WaitScope`s, so a scope the caller holds around the frame sees them
-  as blocked time, the acquire included, which no core wait covers. Without
-  a profiler nothing is measured.
+  as blocked time. The acquire and the present, which no core wait covers,
+  report their spans themselves (`core::note_blocked`), so without a
+  profiler the caller's scopes still see every wait, and only the rows are
+  missing.
+- **A profiler scope's wait is the core's.** Each open `Profiler::Scope` is a
+  `core::StageScope` on its thread, so a core wait inside one -- a fence, a
+  timeline, a blocking submit -- is that row's `wait_ms`, and its host
+  column, busy time, never holds it. The scope therefore closes on the
+  thread that opened it, as a core scope does.
 - **The profiler times on the core's ranges** (D9). It replaces "The profiler
   stays gfx's, on the core's `QueryPool`" (2026-10-04, below). Each frame
   takes a range of one `core::GpuTimer` as its `core::GpuTiles`, holds it
@@ -166,7 +174,10 @@ gfx shows both, and adds the blocking only it sees.
   was not yet readable, and `Unavailable` where the queue has no timestamps
   or the pool will not allocate, which no longer fails `create`. The core's
   ceiling of 4096 timestamps a pool, the most a Metal-backed pool holds,
-  lowers `max_gpu_sections_per_frame` where the frames in flight need more.
+  lowers `max_gpu_sections_per_frame` where the frames in flight need more:
+  a frame of n scopes takes n + 1 pairs, so each frame in flight gets at most
+  `kMaxSpans / frames_in_flight` pairs, n one fewer. No count can then pass
+  32 bits, so `create` no longer refuses a bound whose product would.
 
 ## 2026-10-20 — Panels for a finger
 

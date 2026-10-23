@@ -371,6 +371,30 @@ TEST_F(WindowingTest, FrameLoopAddsItsWaitSubmitAndPresentRows) {
   EXPECT_LT(ticks.rows()[0].wait_ms, ticks.rows()[0].cpu_ms);
 }
 
+// Without a profiler the loop adds no rows, but the caller's scope still sees
+// the acquire and the present, which no core wait covers, as blocked time. On
+// the first frame the slot's fence is signalled and no image is in use, so no
+// core wait blocks: the wait is theirs alone.
+TEST_F(WindowingTest, AcquireAndPresentReachTheCallersScopeWithoutAProfiler) {
+  win::Swapchain sc = make_swapchain();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+
+  vkc::StageMetrics ticks;
+  {
+    const vkc::StageScope tick(ticks, "tick");
+    auto frame = loop.value()->begin_frame();
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    record_clear(frame.value());
+    ASSERT_TRUE(loop.value()->end_frame(frame.value()).ok());
+  }
+  vkDeviceWaitIdle(device_->handle());
+
+  ASSERT_EQ(ticks.rows().size(), 1u);
+  EXPECT_GT(ticks.rows()[0].wait_ms, 0.0);
+  EXPECT_LT(ticks.rows()[0].wait_ms, ticks.rows()[0].cpu_ms);
+}
+
 TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
   win::Swapchain sc = make_swapchain({256, 256});
   const VkFormat format = sc.format();

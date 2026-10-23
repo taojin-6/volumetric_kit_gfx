@@ -7,12 +7,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
-#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
@@ -46,11 +47,23 @@ double ms_since(Clock::time_point start) {
 // close, the scopes nested in it included, as a timestamp pair at its ends
 // measured it.
 struct Profiler::Impl {
-  // A stage recorded in the current frame; CPU time is filled in on finalize.
+  // A stage's core scope while it is open: on its thread's stack of open
+  // scopes, so the core's waits inside it -- a fence, a timeline, a blocking
+  // submit -- reach it as blocked time, as they reach a caller's
+  // core::StageScope. Heap-held, as the stack holds it by address while
+  // `current` reallocates; it times the stage's host span too.
+  struct Host {
+    core::StageMetrics rows;
+    std::optional<core::StageScope> scope;
+  };
+
+  // A stage recorded in the current frame; its host time and wait are filled
+  // in on finalize.
   struct Section {
     const char* name = nullptr;
-    Clock::time_point cpu_start{};
+    std::unique_ptr<Host> host;  // while open
     double cpu_ms = 0.0;
+    double wait_ms = 0.0;
     bool finished = false;
     // Its open and close mark tiles: the stage's device time is tiles
     // [first_tile, end_tile).
@@ -127,7 +140,13 @@ struct Profiler::Impl {
     return tile;
   }
 
-  // Stop a stage's CPU clock and, for a GPU stage, mark its close and close
+  // Open a stage's core scope, which starts its host clock.
+  static void open(Section& s) {
+    s.host = std::make_unique<Host>();
+    s.host->scope.emplace(s.host->rows, s.name);
+  }
+
+  // Stop a stage's host clock and, for a GPU stage, mark its close and close
   // its label. Idempotent so a finalize-then-destroy Scope is safe.
   void finalize(uint32_t index) {
     if (index >= current.size()) {
@@ -137,7 +156,11 @@ struct Profiler::Impl {
     if (s.finished) {
       return;
     }
-    s.cpu_ms = ms_since(s.cpu_start);
+    s.host->scope.reset();
+    const core::StageRow& host = s.host->rows.rows().front();
+    s.cpu_ms = host.cpu_ms;
+    s.wait_ms = host.wait_ms;
+    s.host.reset();
     if (s.tiled) {
       s.end_tile = boundary(s.cmd);
     }
@@ -175,6 +198,7 @@ struct Profiler::Impl {
       core::StageRow out;
       out.name = s.name;
       out.cpu_ms = s.cpu_ms;
+      out.wait_ms = s.wait_ms;
       out.device = s.untimed;
       if (s.tiled) {
         out.device = core::DeviceTime::Measured;
@@ -202,14 +226,6 @@ core::Result<Profiler> Profiler::create(const core::Device& device,
   if (config.max_gpu_sections_per_frame == 0) {
     return core::Status::invalid_argument(
         "Profiler::create: max_gpu_sections_per_frame is zero");
-  }
-  // Two queries per section for every slot: a count past 32 bits would wrap
-  // to a pool smaller than the ranges the slots index.
-  if (config.max_gpu_sections_per_frame >
-      std::numeric_limits<uint32_t>::max() / 2 / config.frames_in_flight) {
-    return core::Status::invalid_argument(
-        "Profiler::create: frames_in_flight * max_gpu_sections_per_frame * 2 "
-        "does not fit in 32 bits");
   }
   // The profiler times frames the renderer records: a device made for another
   // library may lack the renderer's floor, a graphics queue included.
@@ -403,9 +419,9 @@ Profiler::Scope Profiler::cpu_scope(const char* name) {
   Impl& d = *impl_;
   Impl::Section s;
   s.name = name != nullptr ? name : kUnnamedStage;
-  s.cpu_start = Clock::now();
+  Impl::open(s);
   const uint32_t index = static_cast<uint32_t>(d.current.size());
-  d.current.push_back(s);
+  d.current.push_back(std::move(s));
   return Scope(impl_.get(), index);
 }
 
@@ -416,7 +432,7 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   Impl& d = *impl_;
   Impl::Section s;
   s.name = name != nullptr ? name : kUnnamedStage;
-  s.cpu_start = Clock::now();
+  Impl::open(s);
   s.cmd = cmd;
   s.untimed = d.untimed_state();
 
@@ -452,7 +468,7 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   }
 
   const uint32_t index = static_cast<uint32_t>(d.current.size());
-  d.current.push_back(s);
+  d.current.push_back(std::move(s));
   return Scope(impl_.get(), index);
 }
 
