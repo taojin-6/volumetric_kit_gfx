@@ -188,6 +188,9 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsThroughAPipelineCache) {
   const vkc::Device& own = *made;
   vg::ShaderModule vert =
       vg_test::load_module(own.handle(), "triangle.vert.spv");
+  if (!vg_test::driver_keeps_pipelines(own.handle(), vert.handle())) {
+    GTEST_SKIP() << "the driver keeps nothing in a pipeline cache";
+  }
   vg::ShaderModule frag =
       vg_test::load_module(own.handle(), "triangle.frag.spv");
   vg::GraphicsPipelineDesc desc;
@@ -205,13 +208,10 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsThroughAPipelineCache) {
   auto first = vg::GraphicsPipeline::create(own.handle(), desc);
   ASSERT_TRUE(first.ok()) << first.status().message();
   const std::size_t one = vg_test::pipeline_cache_bytes(own);
+  EXPECT_GT(one, empty);
   auto again = vg::GraphicsPipeline::create(own.handle(), desc);
   ASSERT_TRUE(again.ok()) << again.status().message();
   EXPECT_EQ(vg_test::pipeline_cache_bytes(own), one);  // served from the cache
-  if (one == empty) {
-    GTEST_SKIP() << "the driver keeps nothing in a pipeline cache";
-  }
-  EXPECT_GT(one, empty);
 }
 
 TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {

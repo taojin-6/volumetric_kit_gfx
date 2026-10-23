@@ -56,6 +56,8 @@ if(NOT TARGET volumetric_kit::core_test_support)
       "FetchContent_MakeAvailable(volumetric_kit_core); an installed core has "
       "none.")
 endif()
+# core_test_main came in core 0.19.0, after gfx's VG_VKC_MIN_VERSION.
+vkc_require_core(0.19.0)
 
 function(vg_discover_tests target)
   if(NOT VG_TEST_SHARDS GREATER 0)
@@ -219,8 +221,9 @@ target_link_libraries(
           volumetric_kit::core_test_support volumetric_kit::core_test_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
-# update's barriers are checked against a writer in a stage of its own; and
-# shader_common_test's probe, which runs the pipelines' shared GLSL helpers.
+# update's barriers are checked against a writer in a stage of its own;
+# shader_common_test's probe, which runs the pipelines' shared GLSL helpers; and
+# a vertex stage with no inputs, for pipeline_cache_test's probe of the driver.
 vkc_compile_shaders(
   vg_pipelines_test
   OUTPUT_DIR
@@ -231,7 +234,8 @@ vkc_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/write_words.comp"
-  "${PROJECT_SOURCE_DIR}/shaders/common_probe.comp")
+  "${PROJECT_SOURCE_DIR}/shaders/common_probe.comp"
+  "${PROJECT_SOURCE_DIR}/shaders/image_convert.vert")
 target_compile_definitions(
   vg_pipelines_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
