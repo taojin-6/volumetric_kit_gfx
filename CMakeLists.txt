@@ -80,16 +80,16 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin includes the timeline-value checks, core_test_support, the optional
-# JSON configuration component, vkc_require_core's package helpers, the
-# two-family test fixture (SharedDeviceTest) the cross-family tests use, and the
-# iOS module (cmake/vkc_ios.cmake) that answers gfx's finds of Vulkan and glm in
-# an iOS build. _build.yml's homebrew-key action runs at the same SHA.
+# The pin (core 0.19.0, #49's merge) has what gfx relies on: the timeline-value
+# checks, the optional JSON configuration component, core_test_support with its
+# two-family fixture, and the iOS module (cmake/vkc_ios.cmake) that answers
+# gfx's finds of Vulkan and glm in an iOS build. _build.yml's homebrew-key
+# action runs at the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
+  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.

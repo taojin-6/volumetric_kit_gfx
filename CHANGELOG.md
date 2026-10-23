@@ -210,6 +210,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- build: gfx pins volumetric_kit_core at `ff44a98` (core 0.19.0, #49's
+  merge).
 - `core`: **depth is not stored by default.** `RenderTargetBeginInfo` has
   its own `depth_store_op`, `DONT_CARE` by default, so a tile-based GPU
   (Apple, Android) no longer writes depth back to memory every frame. Color
@@ -239,9 +241,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at `7757c13` (core 0.12.0, the merge of
-  core #42), which adds the two-family test fixture the cross-family tests
-  use and the iOS module gfx's iOS build takes Vulkan and glm from.
 - `windowing`: a `Frame::waits` value must be reached before `end_frame`,
   as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
   host first; a submitted producer can still depend on an unresolved host
