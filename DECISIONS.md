@@ -47,7 +47,8 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-04 — Sync, descriptors and queries come from volumetric_kit_core.** gfx's
   fences, semaphores, descriptor objects, command pools and buffers, query pool and
   `UniqueHandle` are gone; gfx uses the core's. The profiler times frames on the core's
-  `QueryPool`, and `FrameMetrics` holds the core's `StageRow`s. See the dated entry below.
+  `QueryPool` (*amended 2026-10-23*: its `GpuTimer`), and `FrameMetrics` holds the core's
+  `StageRow`s. See the dated entry below.
 - **2026-10-04 — gfx names the core's types as the core does** (`core::Buffer`, `vkc::Buffer`
   outside gfx), with no aliases of its own: one name per type across the family. See
   "Memory comes from volumetric_kit_core", below.
@@ -127,6 +128,45 @@ what has landed since then. Record amendments when a contract changes.
   rules, `VG_INSTALL` or package config. No consumer installed it, and siblings pinning the
   core at different minors could not share one install prefix. This amends every entry below
   that describes an installed package.
+- **2026-10-23 — A frame's timing says where its time went.** The stage table splits host
+  time into busy and blocked and says what each GPU cell holds; the frame loop reports its own
+  waits, submit and present; the profiler times on the core's per-frame ranges. See the dated
+  entry below.
+
+## 2026-10-23 — A frame's timing says where its time went
+
+The family's timing design (its D3 and D9, the core's 0.20.0) splits a
+stage's host time into busy and blocked, and says what its device half holds.
+gfx shows both, and adds the blocking only it sees.
+
+- **Each cell says what it holds.** The GPU column's `-` stood alike for a
+  host-only stage, a stage run untimed and a queue that cannot time; each has
+  a cell of its own now (`ui::draw_stage_table`), and host time is busy time,
+  as a wait is no work. The line above the table (`ui::StageWindow`) states
+  the frames the figures cover and how many were timed, so a stream's frames
+  and a display's are not read alike. The panel's "ms/frame" was the
+  recording time; the period now comes from the rate.
+- **The frame loop reports its own blocking.** With a profiler attached,
+  `FrameLoop` adds `frame wait` -- the slot's fence, the acquire and the
+  image's previous frame -- `submit` and `present` after the caller's stages
+  (`Profiler::add_rows`), each in its own frame: a frame stays unpublished
+  until its slot recurs, so its present joins it. The waits are
+  `core::WaitScope`s, so a scope the caller holds around the frame sees them
+  as blocked time, the acquire included, which no core wait covers. Without
+  a profiler nothing is measured.
+- **The profiler times on the core's ranges** (D9). It replaces "The profiler
+  stays gfx's, on the core's `QueryPool`" (2026-10-04, below). Each frame
+  takes a range of one `core::GpuTimer` as its `core::GpuTiles`, holds it
+  until its slot recurs, and marks it at `begin_frame`, at each GPU scope's
+  open and close, and at `end_frame`. The tiles are named by index, and a
+  scope's time is the sum of the tiles between its marks, so it measures what
+  a timestamp pair at its ends did, nested scopes included, and two scopes of
+  one name stay two rows. It costs the two marks at the frame's ends. A row
+  reads `NotTimed` past the bound, on another command buffer, or where a mark
+  was not yet readable, and `Unavailable` where the queue has no timestamps
+  or the pool will not allocate, which no longer fails `create`. The core's
+  ceiling of 4096 timestamps a pool, the most a Metal-backed pool holds,
+  lowers `max_gpu_sections_per_frame` where the frames in flight need more.
 
 ## 2026-10-20 — Panels for a finger
 
@@ -742,7 +782,9 @@ uploads and the frames-in-flight profiler.
     (`Status::Code::Unsupported`); gfx's accepted any `VkQueryType`. A
     pipeline-statistics pool is a raw `vkCreateQueryPool` until the core
     takes the type.
-- **The profiler stays gfx's, on the core's `QueryPool`.** The core's
+- **The profiler stays gfx's, on the core's `QueryPool`.** *Replaced
+  2026-10-23:* it times on the core's `GpuTimer` ranges ("A frame's timing
+  says where its time went", above). The core's
   DECISIONS.md rebuilds the profiler on its `QueryPool` and `GpuTimer`. The
   frames-in-flight shape -- a slot's timestamps read when the slot recurs,
   after its fence -- is the profiler's own, and the core's `QueryPool`
