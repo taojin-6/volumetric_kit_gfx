@@ -14,11 +14,13 @@
 #include <cstdint>
 #include <future>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "gfx_test_support.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -197,6 +199,19 @@ class FrameTimelineTest : public WindowingTest {
   }
 };
 
+// A published frame's rows by name, in order.
+std::vector<std::string> row_names(const vg::FrameMetrics& metrics) {
+  std::vector<std::string> names;
+  for (const vkc::StageRow& row : metrics.sections) {
+    names.emplace_back(row.name);
+  }
+  return names;
+}
+
+// A frame of one stage, "accepted", then the loop's own rows.
+const std::vector<std::string> kAcceptedFrameRows = {"accepted", "frame wait",
+                                                     "submit", "present"};
+
 TEST_F(WindowingTest, CreatesSwapchainWithRenderTargets) {
   win::Swapchain sc = make_swapchain();
   EXPECT_TRUE(sc.valid());
@@ -306,6 +321,54 @@ TEST_F(WindowingTest, FrameLoopDrivesAttachedProfiler) {
   // passed the frame's own cmd to the profiler's begin_frame, and the fixture's
   // validation capture fails the test on any mis-wired reset / timestamp.
   EXPECT_EQ(m.sections[0].has_gpu, profiler.value().gpu_timing());
+}
+
+// The loop adds its own rows after the caller's stages: its wait before the
+// frame and its present are all wait, its submit is host work, and none has a
+// device half. Their waits reach the caller's scope around the frame.
+TEST_F(WindowingTest, FrameLoopAddsItsWaitSubmitAndPresentRows) {
+  win::Swapchain sc = make_swapchain();
+  vg::ProfilerConfig pcfg;
+  pcfg.frames_in_flight = 2;
+  auto profiler = vg::Profiler::create(*device_, pcfg);
+  ASSERT_TRUE(profiler.ok()) << profiler.status().message();
+  auto loop = win::FrameLoop::create(*device_, sc, 2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  loop.value()->set_profiler(&profiler.value());
+
+  vkc::StageMetrics ticks;
+  for (int i = 0; i < 4; ++i) {
+    const vkc::StageScope tick(ticks, "tick");
+    auto frame = loop.value()->begin_frame();
+    ASSERT_TRUE(frame.ok()) << frame.status().message();
+    {
+      vg::Profiler::Scope pass =
+          profiler.value().gpu_scope(frame.value().cmd, "frame");
+      record_clear(frame.value());
+    }
+    ASSERT_TRUE(loop.value()->end_frame(frame.value()).ok());
+  }
+  vkDeviceWaitIdle(device_->handle());
+
+  // The second frame, which the fourth's begin_frame published.
+  const vg::FrameMetrics& m = profiler.value().metrics();
+  ASSERT_EQ(row_names(m), (std::vector<std::string>{"frame", "frame wait",
+                                                    "submit", "present"}));
+  const vkc::StageRow& waited = m.sections[1];
+  const vkc::StageRow& submitted = m.sections[2];
+  const vkc::StageRow& presented = m.sections[3];
+  EXPECT_GT(waited.wait_ms, 0.0);
+  EXPECT_DOUBLE_EQ(waited.cpu_ms, waited.wait_ms);
+  EXPECT_GT(submitted.cpu_ms, 0.0);
+  EXPECT_DOUBLE_EQ(submitted.wait_ms, 0.0);
+  EXPECT_GT(presented.wait_ms, 0.0);
+  EXPECT_DOUBLE_EQ(presented.cpu_ms, presented.wait_ms);
+  for (const vkc::StageRow* row : {&waited, &submitted, &presented}) {
+    EXPECT_EQ(row->device, vkc::DeviceTime::None) << row->name;
+  }
+  ASSERT_EQ(ticks.rows().size(), 1u);
+  EXPECT_GT(ticks.rows()[0].wait_ms, 0.0);
+  EXPECT_LT(ticks.rows()[0].wait_ms, ticks.rows()[0].cpu_ms);
 }
 
 TEST_F(WindowingTest, RecreateKeepsFormatAndLayout) {
@@ -576,8 +639,7 @@ TEST_F(WindowingTest,
       ASSERT_TRUE(loop.value()->end_frame(*next.value()).ok());
       ASSERT_TRUE(run_frames(*loop.value(), 1).ok());
       const vg::FrameMetrics& metrics = profiler.value().metrics();
-      ASSERT_EQ(metrics.sections.size(), 1u);
-      EXPECT_STREQ(metrics.sections[0].name, "accepted");
+      ASSERT_EQ(row_names(metrics), kAcceptedFrameRows);
       EXPECT_EQ(metrics.sections[0].has_gpu, profiler.value().gpu_timing());
       vkDeviceWaitIdle(device_->handle());
     }
@@ -973,8 +1035,7 @@ TEST_F(WindowingTest, EndFrameRefusesPointsItCannotHonour) {
   EXPECT_TRUE(run_frames(*loop.value(), 2).ok());
   vkDeviceWaitIdle(device_->handle());
   const vg::FrameMetrics& m = profiler.value().metrics();
-  ASSERT_EQ(m.sections.size(), 1u);
-  EXPECT_STREQ(m.sections[0].name, "accepted");
+  ASSERT_EQ(row_names(m), kAcceptedFrameRows);
   EXPECT_EQ(m.sections[0].has_gpu, profiler.value().gpu_timing());
 }
 

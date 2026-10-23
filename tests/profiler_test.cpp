@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <utility>
+#include <vector>
 
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -51,6 +52,17 @@ class ProfilerTest : public vg_test::RendererDeviceTest {
       profiler.end_frame();
     });
     ASSERT_TRUE(status.ok()) << status.message();
+  }
+
+  // A 16 MiB device-only buffer: a fill of it is work the GPU takes a
+  // measurable time over.
+  vkc::Buffer fill_target() {
+    vkc::BufferDesc desc;
+    desc.size = 16u << 20;
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    auto buffer = allocator().create_buffer(desc);
+    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
+    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
   }
 };
 
@@ -319,6 +331,117 @@ TEST_F(ProfilerTest, ScopeSelfMoveIsSafe) {
     EXPECT_TRUE(scope.active());
   }
   profiler.end_frame();
+}
+
+// --- device halves, on the core's tiles -------------------------------------
+
+// Each row says what its device half holds: a GPU scope within the bound is
+// measured, one past it and one on another command buffer are not timed, a
+// CPU scope has none; where the queue cannot time, every GPU scope reads
+// unavailable.
+TEST_F(ProfilerTest, EachRowSaysWhatItsDeviceHalfHolds) {
+  vg::Profiler profiler = make_profiler(/*frames=*/1, /*max_gpu=*/1);
+  // Each scope closes at the end of its statement.
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    (void)profiler.gpu_scope(cmd, "timed");
+    (void)profiler.gpu_scope(cmd, "past the bound");
+    (void)profiler.cpu_scope("host");
+  });
+  vkc::Status status = device().submit_single_time([&](VkCommandBuffer cmd) {
+    profiler.begin_frame(0, VK_NULL_HANDLE);  // publishes the first frame
+    (void)profiler.gpu_scope(cmd, "other buffer");
+    profiler.end_frame();
+  });
+  ASSERT_TRUE(status.ok()) << status.message();
+  const vkc::DeviceTime measured = profiler.gpu_timing()
+                                       ? vkc::DeviceTime::Measured
+                                       : vkc::DeviceTime::Unavailable;
+  const vkc::DeviceTime untimed = profiler.gpu_timing()
+                                      ? vkc::DeviceTime::NotTimed
+                                      : vkc::DeviceTime::Unavailable;
+
+  const std::vector<vkc::StageRow> first = profiler.metrics().sections;
+  ASSERT_EQ(first.size(), 3u);
+  EXPECT_EQ(first[0].device, measured);
+  EXPECT_EQ(first[0].has_gpu, profiler.gpu_timing());
+  EXPECT_EQ(first[1].device, untimed);
+  EXPECT_FALSE(first[1].has_gpu);
+  EXPECT_EQ(first[2].device, vkc::DeviceTime::None);
+
+  run_frame(profiler, 0, [](VkCommandBuffer) {});
+  const vg::FrameMetrics& second = profiler.metrics();
+  ASSERT_EQ(second.sections.size(), 1u);
+  EXPECT_EQ(second.sections[0].device, untimed);
+}
+
+// A GPU scope's time runs from its open to its close, so it holds the scopes
+// nested in it, and a scope's time ends at its close: each nested fill counts
+// to its own scope and to the one around both.
+TEST_F(ProfilerTest, AGpuScopeHoldsTheScopesNestedInIt) {
+  vg::Profiler profiler = make_profiler();
+  vkc::Buffer first = fill_target();
+  vkc::Buffer second = fill_target();
+  ASSERT_TRUE(first.valid() && second.valid());
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    auto outer = profiler.gpu_scope(cmd, "outer");
+    {
+      auto a = profiler.gpu_scope(cmd, "a");
+      vkCmdFillBuffer(cmd, first.handle(), 0, VK_WHOLE_SIZE, 1u);
+    }
+    {
+      auto b = profiler.gpu_scope(cmd, "b");
+      vkCmdFillBuffer(cmd, second.handle(), 0, VK_WHOLE_SIZE, 2u);
+    }
+  });
+  run_frame(profiler, 0, [](VkCommandBuffer) {});
+
+  const vg::FrameMetrics& m = profiler.metrics();
+  ASSERT_EQ(m.sections.size(), 3u);
+  const vkc::StageRow& outer = m.sections[0];
+  const vkc::StageRow& a = m.sections[1];
+  const vkc::StageRow& b = m.sections[2];
+  if (!profiler.gpu_timing()) {
+    EXPECT_EQ(outer.device, vkc::DeviceTime::Unavailable);
+    return;
+  }
+  ASSERT_EQ(outer.device, vkc::DeviceTime::Measured);
+  ASSERT_EQ(a.device, vkc::DeviceTime::Measured);
+  ASSERT_EQ(b.device, vkc::DeviceTime::Measured);
+  EXPECT_GE(outer.gpu_ms, a.gpu_ms + b.gpu_ms);
+  EXPECT_GE(a.gpu_ms, 0.0);
+  EXPECT_GE(b.gpu_ms, 0.0);
+}
+
+// A render loop's rows come after the frame's own stages, whether added while
+// the frame records or once it has ended, and rows of one name accumulate;
+// outside a frame, nothing is added.
+TEST_F(ProfilerTest, AddedRowsFollowTheFramesOwnStages) {
+  vg::Profiler profiler = make_profiler();
+  vkc::StageMetrics waited;
+  waited.add_cpu("frame wait", 2.0);
+  waited.add_wait("frame wait", 2.0);
+  vkc::StageMetrics presented;
+  presented.add_cpu("present", 0.5);
+  presented.add_wait("present", 0.5);
+
+  profiler.add_rows(presented);  // no frame yet
+  run_frame(profiler, 0, [&](VkCommandBuffer cmd) {
+    profiler.add_rows(waited);
+    auto pass = profiler.gpu_scope(cmd, "pass");
+  });
+  profiler.add_rows(presented);
+  profiler.add_rows(presented);
+  run_frame(profiler, 0, [](VkCommandBuffer) {});
+
+  const vg::FrameMetrics& m = profiler.metrics();
+  ASSERT_EQ(m.sections.size(), 3u);
+  EXPECT_STREQ(m.sections[0].name, "pass");
+  EXPECT_STREQ(m.sections[1].name, "frame wait");
+  EXPECT_DOUBLE_EQ(m.sections[1].wait_ms, 2.0);
+  EXPECT_STREQ(m.sections[2].name, "present");
+  EXPECT_DOUBLE_EQ(m.sections[2].cpu_ms, 1.0);
+  EXPECT_DOUBLE_EQ(m.sections[2].wait_ms, 1.0);
+  EXPECT_EQ(m.sections[2].device, vkc::DeviceTime::None);
 }
 
 // A default-constructed scope is inert and finalizes nothing; moving it stays
