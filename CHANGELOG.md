@@ -222,8 +222,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- build: gfx pins volumetric_kit_core at `9b64ebb` (core 0.20.0, the head
-  of the core's #50, re-pinned to its merge before this lands).
+- build: gfx pins volumetric_kit_core at `0daced5` (core 0.20.0, the core's
+  #50 merge).
   `VG_VKC_MIN_VERSION` is 0.20.0, for `GpuTiles` and a row's wait and device
   halves: an application that declares the core first pins it at 0.20.0 or
   newer.

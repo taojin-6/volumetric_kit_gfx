@@ -87,14 +87,11 @@ endif()
 # and core_test_main), and the iOS module (cmake/vkc_ios.cmake) that answers
 # gfx's finds of Vulkan and glm in an iOS build. _build.yml's homebrew-key
 # action runs at the same SHA.
-#
-# TODO(timing): re-pin to core's merge commit (taojin-6/volumetric_kit_core
-# #50); this is its branch's head.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 9b64ebbd109ccb6dc3d7928d1278a01d6a08084e)
+  GIT_TAG 0daced5a3b3ef3b64ad2f8f245aa437367d3ed55)
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.
