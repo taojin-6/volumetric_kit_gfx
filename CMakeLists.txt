@@ -107,10 +107,9 @@ if(VG_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
-# The oldest core gfx builds with (0.18.0: Device::pipeline_cache), and its
-# vulkan tier, checked in the core that arrived: the pin and the set() above are
-# lost when calib or the application made the core available first, and
-# FetchContent may have found an installed core.
+# The oldest core gfx builds with, the first with Device::pipeline_cache, and
+# its vulkan tier, checked in the core that arrived: the pin and the set() above
+# are lost when calib or the application made the core available first.
 set(VG_VKC_MIN_VERSION 0.18.0)
 vkc_require_core(${VG_VKC_MIN_VERSION} VULKAN)
 
