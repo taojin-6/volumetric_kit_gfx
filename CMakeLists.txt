@@ -81,10 +81,10 @@ endif()
 # tests and -Werror stay off in a subproject.
 #
 # The pin (core 0.19.0, #49's merge) has what gfx relies on: the timeline-value
-# checks, the optional JSON configuration component, core_test_support with its
-# two-family fixture, and the iOS module (cmake/vkc_ios.cmake) that answers
-# gfx's finds of Vulkan and glm in an iOS build. _build.yml's homebrew-key
-# action runs at the same SHA.
+# checks, the optional JSON configuration component, the test support
+# (core_test_support with its two-family fixture, and core_test_main), and the
+# iOS module (cmake/vkc_ios.cmake) that answers gfx's finds of Vulkan and glm in
+# an iOS build. _build.yml's homebrew-key action runs at the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
