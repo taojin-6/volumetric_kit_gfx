@@ -94,7 +94,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG e4d00f1f21ee532eabfeea0aeb41ef3c0bbd9270)
+  GIT_TAG 9b64ebbd109ccb6dc3d7928d1278a01d6a08084e)
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.
