@@ -22,37 +22,42 @@
 
 namespace volumetric_kit::gfx {
 
-/// @brief A timed frame: per-stage CPU/GPU spans plus whole-frame and memory
-///        aggregates, with no backend types attached.
+/// @brief A timed frame: per-stage host and device spans plus whole-frame and
+///        memory aggregates, with no backend types attached.
 ///
 /// A producer fills one of these per frame from its timers and memory
 /// accounting; the overlay (or a headless harness) reads it. Each
-/// `core::StageRow` in @ref sections is one labelled stage: its CPU span, and
-/// -- where `has_gpu` says GPU timing was available -- its GPU span. The name
-/// is a pointer with string-literal lifetime, not a copy. @ref cpu_frame_ms /
-/// @ref fps describe the frame as a whole, and @ref memory_used_bytes / @ref
+/// `core::StageRow` in @ref sections is one labelled stage: its host span,
+/// the part of it spent blocked (`wait_ms`), and its device half, which
+/// `device` says the state of (`core::DeviceTime`). The name is a pointer
+/// with string-literal lifetime, not a copy. @ref cpu_frame_ms / @ref fps
+/// describe the frame as a whole, and @ref memory_used_bytes / @ref
 /// memory_budget_bytes report aggregate device memory.
 ///
 /// @code
 /// FrameMetrics metrics;
-/// // StageRow fields are positional (C++17): name, cpu_ms, gpu_ms, has_gpu.
-/// metrics.sections.push_back({"shadow", 0.8, 1.2, true});
-/// metrics.sections.push_back({"upload", 0.3});  // CPU-only (no GPU timing)
+/// core::StageRow shadow{"shadow", 0.8, 1.2, true};  // name, cpu, gpu, has_gpu
+/// shadow.device = core::DeviceTime::Measured;
+/// metrics.sections.push_back(shadow);
+/// metrics.sections.push_back({"upload", 0.3});  // host-only: device None
 /// metrics.cpu_frame_ms = 11.0;
 /// metrics.fps = 90.0;
 /// for (const core::StageRow& s : metrics.sections) {
-///   // has_gpu IS the capability report: read gpu_ms only when it is set.
-///   double gpu = s.has_gpu ? s.gpu_ms : 0.0;
-///   draw_row(s.name, s.cpu_ms, gpu, s.has_gpu);
+///   // device says what gpu_ms holds: read it only when Measured.
+///   const bool timed = s.device == core::DeviceTime::Measured;
+///   draw_row(s.name, s.cpu_ms - s.wait_ms, s.wait_ms, timed ? s.gpu_ms : 0.0);
 /// }
 /// @endcode
 struct FrameMetrics {
-  /// The frame's stages, in record order. Empty for a frame with no timed
-  /// sections.
+  /// The frame's stages, in record order, then the rows its render loop
+  /// added for its own waits, submit and present (@ref Profiler::add_rows).
+  /// Empty for a frame with neither.
   std::vector<core::StageRow> sections;
-  /// Whole-frame CPU time, in milliseconds.
+  /// The frame's recording time on the host, in milliseconds: from the
+  /// profiler's `begin_frame` to its `end_frame`.
   double cpu_frame_ms = 0.0;
-  /// Frames per second (e.g. a smoothed rate the producer maintains).
+  /// Frames per second (e.g. a smoothed rate the producer maintains); its
+  /// inverse is the frame period.
   double fps = 0.0;
   /// Aggregate device memory currently in use, in bytes: each heap's
   /// `HeapStats::usage_bytes`, summed. Where the device enables
