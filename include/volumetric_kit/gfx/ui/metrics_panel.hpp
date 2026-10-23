@@ -17,25 +17,32 @@
 namespace volumetric_kit::gfx::ui {
 
 /// @brief What a stage table's figures cover, stated on the line above it:
-///        the frames they are taken over, and how many of those had their
-///        device work timed.
+///        the frames they are taken over, how many of those had their device
+///        work timed, and what the application adds -- when it times, how its
+///        clocks are calibrated -- which only it knows.
 ///
 /// @code
 /// ui::StageWindow window;
 /// window.frames = 150;  // the rows are means over the last 150 frames
 /// window.timed = 150;   // each of them device-timed
 /// window.unit = "stream frame";
+/// window.note = "GPU timing while this panel is open";
 /// ui::draw_stage_table("worker", rows, window);
-/// // draws "per stream frame · last 150 · GPU timed in 150" above the table
+/// // draws "per stream frame · last 150 · GPU timed in 150 · GPU timing while
+/// // this panel is open" above the table
 /// @endcode
 struct StageWindow {
   /// The frames the figures are taken over: 1 for one frame's, more for
-  /// their mean. 0, the default, states nothing, and no line is drawn.
+  /// their mean. 0, the default, states no counts.
   std::uint32_t frames = 0;
   /// Of @ref frames, how many had their device work timed.
   std::uint32_t timed = 0;
   /// What one frame is, e.g. `"display frame"`; null reads `"frame"`.
   const char* unit = nullptr;
+  /// Text drawn after the counts, e.g. the timing mode and the clocks'
+  /// calibration; read only while the table is drawn. Null, the default,
+  /// adds none; with no counts and no note, no line is drawn.
+  const char* note = nullptr;
 };
 
 /// @brief Build a debug panel for a profiler snapshot with `ImGui::` calls.

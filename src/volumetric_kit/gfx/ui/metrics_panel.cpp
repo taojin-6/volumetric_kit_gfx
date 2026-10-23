@@ -91,11 +91,17 @@ void draw_metrics_panel(const FrameMetrics& metrics, const char* title,
 
 void draw_stage_table(const char* id, const std::vector<core::StageRow>& rows,
                       const StageWindow& window) {
+  std::string line;
   if (window.frames > 0) {
-    const std::string line = std::string("per ") +
-                             (window.unit != nullptr ? window.unit : "frame") +
-                             " · last " + std::to_string(window.frames) +
-                             " · GPU timed in " + std::to_string(window.timed);
+    line = std::string("per ") +
+           (window.unit != nullptr ? window.unit : "frame") + " · last " +
+           std::to_string(window.frames) + " · GPU timed in " +
+           std::to_string(window.timed);
+  }
+  if (window.note != nullptr) {
+    line += (line.empty() ? "" : " · ") + std::string(window.note);
+  }
+  if (!line.empty()) {
     ImGui::TextDisabled("%s", line.c_str());
   }
   if (rows.empty()) {

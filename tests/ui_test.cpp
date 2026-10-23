@@ -915,7 +915,7 @@ TEST(StageTableTest, ARowSettingOnlyHasGpuReadsMeasured) {
 }
 
 // The line above the table states what the figures cover, its unit "frame"
-// unless named, and nothing by default.
+// unless named, then the application's note; nothing by default.
 TEST(StageTableTest, TheStatusLineStatesTheWindow) {
   const std::vector<vkc::StageRow> rows = {
       stage("decode", 1.0, 0.0, vkc::DeviceTime::Measured, 2.0)};
@@ -930,6 +930,18 @@ TEST(StageTableTest, TheStatusLineStatesTheWindow) {
   EXPECT_NE(
       table_text(rows, window).find("per frame · last 150 · GPU timed in 120"),
       std::string::npos);
+  window.note = "clocks calibrated ±2 µs";
+  EXPECT_NE(table_text(rows, window)
+                .find("per frame · last 150 · GPU timed in 120 · clocks "
+                      "calibrated ±2 µs"),
+            std::string::npos);
+  // A note alone is the whole line.
+  ui::StageWindow off;
+  off.note = "GPU timing off";
+  const std::string alone = table_text(rows, off);
+  EXPECT_NE(alone.find("GPU timing off"), std::string::npos) << alone;
+  EXPECT_EQ(alone.find("GPU timed"), std::string::npos) << alone;
+  EXPECT_EQ(alone.find(" · GPU timing off"), std::string::npos) << alone;
   EXPECT_EQ(table_text(rows).find("GPU timed"), std::string::npos);
 }
 
