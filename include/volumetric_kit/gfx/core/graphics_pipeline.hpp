@@ -91,6 +91,9 @@ struct GraphicsPipelineDesc {
   /// descriptor array must keep its default here.
   // TODO: a vertex_specialization twin once a vertex stage needs one.
   const VkSpecializationInfo* fragment_specialization = nullptr;
+  /// The pipeline cache to build through, the device's
+  /// (`core::Device::pipeline_cache`); `VK_NULL_HANDLE` for none.
+  VkPipelineCache cache = VK_NULL_HANDLE;
 };
 
 /// @brief Owns a graphics `VkPipeline` and the `VkPipelineLayout` it was built

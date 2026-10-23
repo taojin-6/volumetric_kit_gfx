@@ -155,6 +155,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.depth_test = true;
   desc.depth_write = true;
   desc.fragment_specialization = &spec;
+  desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(vk, desc));
 
   // Atlas tiles meet at their edges, so the sampler clamps rather than wraps

@@ -405,6 +405,7 @@ core::Result<ImagePipeline> ImagePipeline::create(
   convert_desc.fragment_shader = &convert_frag;
   convert_desc.layout.color_formats[0] = kDisplayFormat;
   convert_desc.layout.color_count = 1;
+  convert_desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline convert,
              GraphicsPipeline::create(vk, convert_desc));
 
@@ -422,6 +423,7 @@ core::Result<ImagePipeline> ImagePipeline::create(
   draw_desc.fragment_shader = &draw_frag;
   draw_desc.layout = layout;
   draw_desc.fragment_specialization = &spec;
+  draw_desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline draw, GraphicsPipeline::create(vk, draw_desc));
 
   // The planes are read texel for texel (texelFetch ignores the filter), and

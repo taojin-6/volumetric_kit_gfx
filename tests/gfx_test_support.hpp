@@ -7,12 +7,17 @@
 /// What gfx's GPU tests add to the core's test fixtures
 /// (`volumetric_kit/core/testing/vulkan_fixture.hpp`), which share the
 /// instance and device, skip or fail without them, and fail a test on any
-/// validation error: the renderer's device, and the instance for a surface the
-/// windowing and app tests present to.
+/// validation error: the renderer's device, the instance for a surface the
+/// windowing and app tests present to, and what a device's pipeline cache
+/// holds.
 
+#include <gtest/gtest.h>
+
+#include <cstddef>
 #include <vector>
 
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/device_requirements.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -51,6 +56,16 @@ inline vkc::InstanceConfig surface_instance_config(
   vkc::InstanceConfig config = vkc::test::instance_config(validation);
   config.extensions = surface_extensions;
   return config;
+}
+
+// The bytes `device`'s pipeline cache holds: a header, then what the driver
+// keeps (lavapipe keeps nothing).
+inline std::size_t pipeline_cache_bytes(const vkc::Device& device) {
+  std::size_t bytes = 0;
+  EXPECT_EQ(vkGetPipelineCacheData(device.handle(), device.pipeline_cache(),
+                                   &bytes, nullptr),
+            VK_SUCCESS);
+  return bytes;
 }
 
 }  // namespace vg_test

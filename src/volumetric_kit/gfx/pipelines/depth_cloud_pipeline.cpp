@@ -320,6 +320,7 @@ core::Result<std::unique_ptr<DepthCloudPipeline>> DepthCloudPipeline::create(
   pipeline_desc.depth_test = true;
   pipeline_desc.depth_write = true;
   pipeline_desc.fragment_specialization = &spec;
+  pipeline_desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline pipeline,
              GraphicsPipeline::create(vk, pipeline_desc));
 

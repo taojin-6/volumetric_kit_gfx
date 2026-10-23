@@ -95,6 +95,7 @@ int run(GLFWwindow* window, const vkc::config::Config& settings) {
   pipeline_desc.vertex_shader = &vert.value();
   pipeline_desc.fragment_shader = &frag.value();
   pipeline_desc.layout = app.swapchain().layout();
+  pipeline_desc.cache = app.device().pipeline_cache();
   auto pipeline =
       vg::GraphicsPipeline::create(app.device().handle(), pipeline_desc);
   if (!pipeline.ok()) {

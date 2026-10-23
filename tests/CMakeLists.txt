@@ -209,6 +209,7 @@ add_executable(
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
   pbr_scene_test.cpp
+  pipeline_cache_test.cpp
   primitive_pipeline_test.cpp
   shader_common_test.cpp
   streamed_atlas_test.cpp)
