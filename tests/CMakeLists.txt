@@ -56,8 +56,6 @@ if(NOT TARGET volumetric_kit::core_test_support)
       "FetchContent_MakeAvailable(volumetric_kit_core); an installed core has "
       "none.")
 endif()
-# The first core with core_test_main, newer than gfx's VG_VKC_MIN_VERSION.
-vkc_require_core(0.19.0)
 
 function(vg_discover_tests target)
   if(NOT VG_TEST_SHARDS GREATER 0)

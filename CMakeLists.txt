@@ -80,17 +80,21 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin (core 0.19.0, #49's merge) has what gfx relies on: the device's
+# The pin (core 0.20.0) has what gfx relies on: tiled device time (GpuTimer,
+# GpuTiles) and the busy, blocked and device halves of a stage row, the device's
 # pipeline cache, the timeline-value checks, the optional JSON configuration
 # component, the test support (core_test_support with its two-family fixture,
 # and core_test_main), and the iOS module (cmake/vkc_ios.cmake) that answers
 # gfx's finds of Vulkan and glm in an iOS build. _build.yml's homebrew-key
 # action runs at the same SHA.
+#
+# TODO(timing): re-pin to core's merge commit (taojin-6/volumetric_kit_core
+# #50); this is its branch's head.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
+  GIT_TAG e4d00f1f21ee532eabfeea0aeb41ef3c0bbd9270)
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.
@@ -107,10 +111,11 @@ if(VG_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
-# The oldest core gfx builds with, the first with Device::pipeline_cache, and
-# its vulkan tier, checked in the core that arrived: the pin and the set() above
-# are lost when calib or the application made the core available first.
-set(VG_VKC_MIN_VERSION 0.18.0)
+# The oldest core gfx builds with, the first with GpuTiles and a row's wait and
+# device halves, and its vulkan tier, checked in the core that arrived: the pin
+# and the set() above are lost when calib or the application made the core
+# available first.
+set(VG_VKC_MIN_VERSION 0.20.0)
 vkc_require_core(${VG_VKC_MIN_VERSION} VULKAN)
 
 # Vulkan and glm are found after the core is added: in an iOS build the core's

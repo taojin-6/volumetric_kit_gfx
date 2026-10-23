@@ -216,9 +216,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- build: gfx pins volumetric_kit_core at `ff44a98` (core 0.19.0, #49's
-  merge). `VG_VKC_MIN_VERSION` is 0.18.0, for `Device::pipeline_cache`: an
-  application that declares the core first pins it at 0.18.0 or newer.
+- build: gfx pins volumetric_kit_core at `e4d00f1` (core 0.20.0, the head
+  of the core's #50, re-pinned to its merge before this lands).
+  `VG_VKC_MIN_VERSION` is 0.20.0, for `GpuTiles` and a row's wait and device
+  halves: an application that declares the core first pins it at 0.20.0 or
+  newer.
 - `core`: **depth is not stored by default.** `RenderTargetBeginInfo` has
   its own `depth_store_op`, `DONT_CARE` by default, so a tile-based GPU
   (Apple, Android) no longer writes depth back to memory every frame. Color
