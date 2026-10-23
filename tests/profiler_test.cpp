@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -67,6 +68,20 @@ class ProfilerTest : public vg_test::RendererDeviceTest {
     auto buffer = allocator().create_buffer(desc);
     EXPECT_TRUE(buffer.ok()) << buffer.status().message();
     return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
+  }
+
+  // Whether the queue is MoltenVK's, whose timestamps may snap to Metal
+  // encoder boundaries, so a tile need not hold the work recorded between its
+  // marks (the data-flow design's V1): a single tile's magnitude is checked
+  // only elsewhere.
+  bool marks_may_snap() {
+    VkPhysicalDeviceDriverProperties driver{};
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &driver;
+    vkGetPhysicalDeviceProperties2(device().physical_device(), &properties);
+    return driver.driverID == VK_DRIVER_ID_MOLTENVK;
   }
 };
 
@@ -434,6 +449,13 @@ TEST_F(ProfilerTest, AGpuScopeHoldsTheScopesNestedInIt) {
   // Each fill counts to its own scope: what outer holds beyond a and b is the
   // gaps between the marks, small beside either fill. A scope credited the
   // tile after its own would hold a gap, and outer both fills over it.
+  if (marks_may_snap()) {
+    std::cout << "note: MoltenVK's marks may snap to encoder boundaries, so "
+                 "each fill's tile goes unchecked: outer "
+              << outer.gpu_ms << " ms, a " << a.gpu_ms << ", b " << b.gpu_ms
+              << "\n";
+    return;
+  }
   EXPECT_LE(outer.gpu_ms - a.gpu_ms - b.gpu_ms,
             0.5 * std::min(a.gpu_ms, b.gpu_ms) + 1e-9)
       << "outer " << outer.gpu_ms << " ms, a " << a.gpu_ms << ", b "
