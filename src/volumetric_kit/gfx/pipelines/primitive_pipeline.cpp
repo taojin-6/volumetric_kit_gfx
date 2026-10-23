@@ -93,6 +93,7 @@ core::Result<std::unique_ptr<PrimitivePipeline>> PrimitivePipeline::create(
   desc.depth_test = true;
   desc.depth_write = true;
   desc.fragment_specialization = &spec;
+  desc.cache = device.pipeline_cache();
 
   desc.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
   VKC_ASSIGN(GraphicsPipeline points, GraphicsPipeline::create(vk, desc));

@@ -45,7 +45,9 @@ set(VG_TEST_SHARDS
 
 # The GPU tests derive from the core's test fixtures
 # (tests/gfx_test_support.hpp; the core's README, "Use it in your project"),
-# which gfx's top-level CMakeLists.txt asks the core to build.
+# which gfx's top-level CMakeLists.txt asks the core to build. A suite with
+# death tests links the core's core_test_main in place of GTest::gtest_main, so
+# that on Linux a death test's child dumps no core.
 if(NOT TARGET volumetric_kit::core_test_support)
   message(
     FATAL_ERROR
@@ -54,6 +56,8 @@ if(NOT TARGET volumetric_kit::core_test_support)
       "FetchContent_MakeAvailable(volumetric_kit_core); an installed core has "
       "none.")
 endif()
+# The first core with core_test_main, newer than gfx's VG_VKC_MIN_VERSION.
+vkc_require_core(0.19.0)
 
 function(vg_discover_tests target)
   if(NOT VG_TEST_SHARDS GREATER 0)
@@ -106,8 +110,9 @@ add_executable(
   sampler_test.cpp
   texture_upload_test.cpp)
 target_link_libraries(
-  vg_core_test PRIVATE volumetric_kit::gfx_core
-                       volumetric_kit::core_test_support GTest::gtest_main)
+  vg_core_test
+  PRIVATE volumetric_kit::gfx_core volumetric_kit::core_test_support
+          volumetric_kit::core_test_main)
 vg_target_warnings(vg_core_test)
 
 # shader_test loads a compiled SPIR-V blob; compile the triangle shaders next to
@@ -206,17 +211,19 @@ add_executable(
   pbr_model_test.cpp
   pbr_pipeline_test.cpp
   pbr_scene_test.cpp
+  pipeline_cache_test.cpp
   primitive_pipeline_test.cpp
   shader_common_test.cpp
   streamed_atlas_test.cpp)
 target_link_libraries(
   vg_pipelines_test
   PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io
-          volumetric_kit::core_test_support GTest::gtest_main)
+          volumetric_kit::core_test_support volumetric_kit::core_test_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
-# update's barriers are checked against a writer in a stage of its own; and
-# shader_common_test's probe, which runs the pipelines' shared GLSL helpers.
+# update's barriers are checked against a writer in a stage of its own;
+# shader_common_test's probe, which runs the pipelines' shared GLSL helpers; and
+# a vertex stage with no inputs, for pipeline_cache_test's probe of the driver.
 vkc_compile_shaders(
   vg_pipelines_test
   OUTPUT_DIR
@@ -227,7 +234,8 @@ vkc_compile_shaders(
   "${PROJECT_SOURCE_DIR}/shaders"
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/write_words.comp"
-  "${PROJECT_SOURCE_DIR}/shaders/common_probe.comp")
+  "${PROJECT_SOURCE_DIR}/shaders/common_probe.comp"
+  "${PROJECT_SOURCE_DIR}/shaders/image_convert.vert")
 target_compile_definitions(
   vg_pipelines_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
@@ -266,7 +274,7 @@ add_executable(
              "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
 target_link_libraries(
   vg_ui_test PRIVATE volumetric_kit::gfx_ui volumetric_kit::core_test_support
-                     GTest::gtest_main Vulkan::Vulkan)
+                     volumetric_kit::core_test_main Vulkan::Vulkan)
 vg_target_warnings(vg_ui_test)
 set_source_files_properties("${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
                             PROPERTIES COMPILE_OPTIONS "-w")
@@ -282,7 +290,7 @@ if(TARGET volumetric_kit::gfx_glfw)
   target_link_libraries(
     vg_glfw_test
     PRIVATE volumetric_kit::gfx_glfw volumetric_kit::core_test_support
-            GTest::gtest_main Vulkan::Vulkan)
+            volumetric_kit::core_test_main Vulkan::Vulkan)
   vg_target_warnings(vg_glfw_test)
   vg_discover_tests(vg_glfw_test TEST_PREFIX "glfw.")
 endif()

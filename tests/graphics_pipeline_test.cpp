@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// GraphicsPipeline: validation, move semantics, and an end-to-end offscreen
-// draw. The draw test builds the hello-triangle pipeline from the compiled
-// triangle shaders for an OffscreenTarget's layout, renders into it through a
-// dynamic-rendering scope, reads it back, and asserts that a triangle landed
-// where it should -- the first test in the suite that actually rasterizes.
+// GraphicsPipeline: validation, move semantics, a pipeline cache, and an
+// end-to-end offscreen draw. The draw test builds the hello-triangle pipeline
+// from the compiled triangle shaders for an OffscreenTarget's layout, renders
+// into it through a dynamic-rendering scope, reads it back, and asserts that a
+// triangle landed where it should -- the first test in the suite that actually
+// rasterizes.
 
 #include <gtest/gtest.h>
 
@@ -20,6 +21,7 @@
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/core/graphics_pipeline.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -174,6 +176,42 @@ TEST_F(GraphicsPipelineDeviceTest, BuildsFromTriangleShaders) {
   EXPECT_TRUE(pipeline.valid());
   EXPECT_NE(pipeline.handle(), VK_NULL_HANDLE);
   EXPECT_NE(pipeline.layout(), VK_NULL_HANDLE);
+}
+
+// So a pipeline built again on one device, per view or camera, is compiled
+// once.
+TEST_F(GraphicsPipelineDeviceTest, BuildsThroughAPipelineCache) {
+  // A device of the test's own, so its cache starts empty.
+  const vkc::Result<vkc::Device> made =
+      vkc::Device::create(instance(), physical(), requirements());
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  const vkc::Device& own = *made;
+  vg::ShaderModule vert =
+      vg_test::load_module(own.handle(), "triangle.vert.spv");
+  if (!vg_test::driver_keeps_pipelines(own.handle(), vert.handle())) {
+    GTEST_SKIP() << "the driver keeps nothing in a pipeline cache";
+  }
+  vg::ShaderModule frag =
+      vg_test::load_module(own.handle(), "triangle.frag.spv");
+  vg::GraphicsPipelineDesc desc;
+  desc.vertex_shader = &vert;
+  desc.fragment_shader = &frag;
+  desc.layout = color_layout();
+  const std::size_t empty = vg_test::pipeline_cache_bytes(own);
+
+  // No cache, the default, leaves the device's untouched.
+  auto uncached = vg::GraphicsPipeline::create(own.handle(), desc);
+  ASSERT_TRUE(uncached.ok()) << uncached.status().message();
+  EXPECT_EQ(vg_test::pipeline_cache_bytes(own), empty);
+
+  desc.cache = own.pipeline_cache();
+  auto first = vg::GraphicsPipeline::create(own.handle(), desc);
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  const std::size_t one = vg_test::pipeline_cache_bytes(own);
+  EXPECT_GT(one, empty);
+  auto again = vg::GraphicsPipeline::create(own.handle(), desc);
+  ASSERT_TRUE(again.ok()) << again.status().message();
+  EXPECT_EQ(vg_test::pipeline_cache_bytes(own), one);  // served from the cache
 }
 
 TEST_F(GraphicsPipelineDeviceTest, EmptyLayoutRejected) {

@@ -309,8 +309,8 @@ core::Result<GraphicsPipeline> GraphicsPipeline::create(
   info.renderPass = VK_NULL_HANDLE;
 
   VkPipeline pipeline = VK_NULL_HANDLE;
-  VKC_VK_TRY(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info,
-                                       nullptr, &pipeline));
+  VKC_VK_TRY(vkCreateGraphicsPipelines(device, desc.cache, 1, &info, nullptr,
+                                       &pipeline));
 
   GraphicsPipeline result;
   result.set_layouts_ = std::move(set_layouts);

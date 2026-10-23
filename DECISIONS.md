@@ -566,12 +566,11 @@ place: a `RetireQueue` on the timeline.
   `FrameLoop::end_frame` says why. A producer whose
   value is not yet reached is gated on the host
   ([the live-mesh contract](docs/integration/recon-live-mesh.md)).
-- **The core pin is `ce76978`**, which includes the timeline-value checks
-  and the 0.1.0 package helpers. The core's former `Submitted` spelling now
-  means `Reached`: a submitted producer alone does not prove its upstream
-  dependencies are resolved. Atlas retirement still checks whether work was
-  submitted, through the core's signal-value ordering check, before waiting
-  on the host or releasing a discarded frame's images.
+- **The core's former `Submitted` spelling now means `Reached`**: a
+  submitted producer alone does not prove its upstream dependencies are
+  resolved. Atlas retirement still checks whether work was submitted,
+  through the core's signal-value ordering check, before waiting on the
+  host or releasing a discarded frame's images.
 
 ## 2026-10-05 — GPU tests share a device per process
 

@@ -38,6 +38,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `core`: **pipelines build through the device's pipeline cache.**
+  `GraphicsPipelineDesc::cache` (default none) passes a `VkPipelineCache` to
+  `GraphicsPipeline::create`. `DepthCloudPipeline`, `HybridMeshPipeline`,
+  `ImagePipeline` and `PrimitivePipeline` build through
+  `core::Device::pipeline_cache`, so building one again on the same device
+  -- one per view or camera -- reuses its compiled shaders.
 - `ui`: **panels for a finger.** `ImGuiOverlayConfig::min_frame_height`
   makes every frame (a button, a checkbox) at least that tall -- 44 pt on
   iOS -- while the text keeps the size `scale` gives.
@@ -210,6 +216,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- build: gfx pins volumetric_kit_core at `ff44a98` (core 0.19.0, #49's
+  merge). `VG_VKC_MIN_VERSION` is 0.18.0, for `Device::pipeline_cache`: an
+  application that declares the core first pins it at 0.18.0 or newer.
 - `core`: **depth is not stored by default.** `RenderTargetBeginInfo` has
   its own `depth_store_op`, `DONT_CARE` by default, so a tile-based GPU
   (Apple, Android) no longer writes depth back to memory every frame. Color
@@ -239,9 +248,6 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   that fails before its submit is replaced by an empty submit, so its number
   is still set; the next extent-taking `begin_frame` rebuilds the swapchain to
   release the frame's unpresented image.
-- build: gfx pins volumetric_kit_core at `7757c13` (core 0.12.0, the merge of
-  core #42), which adds the two-family test fixture the cross-family tests
-  use and the iOS module gfx's iOS build takes Vulkan and glm from.
 - `windowing`: a `Frame::waits` value must be reached before `end_frame`,
   as the core's `TimelineWaits::Reached` requires. Wait for a producer on the
   host first; a submitted producer can still depend on an unresolved host
@@ -424,9 +430,9 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   - Vulkan headers 1.3.204 or newer are required, 1.3.208 on Apple; older ones
     fail at configure or in `core/vulkan.hpp`, naming the version needed.
   - An application that fetches the core before gfx sets `VKC_WITH_VULKAN ON`
-    first and pins the core at `VG_VKC_MIN_VERSION` (0.1.0) or newer. From
-    0.1.0 on, gfx otherwise refuses to configure, naming the version or tier
-    the core lacks and the fix (the core's `vkc_require_core`); an older core
+    first and pins the core at `VG_VKC_MIN_VERSION` or newer. From 0.1.0 on,
+    gfx otherwise refuses to configure, naming the version or tier the core
+    lacks and the fix (the core's `vkc_require_core`); an older core
     stops at gfx's `vkc_require_core` call as an unknown command (the core's
     README, "Use it in your project"): move the first-declared pin to 0.1.0
     or newer. The installed package is not found on an installed core that is
