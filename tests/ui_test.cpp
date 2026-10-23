@@ -6,7 +6,8 @@
 // and an end-to-end new_frame -> build UI -> render into an offscreen target's
 // dynamic-rendering scope. The GPU cases skip when no Vulkan device is present;
 // the headless path exercises the real backend (font-atlas upload included)
-// without a window.
+// without a window. The metrics panel and the stage table are read back as the
+// text ImGui's log takes down, on a context with no device.
 
 #include <gtest/gtest.h>
 
@@ -18,6 +19,7 @@
 #include <future>
 #include <limits>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -802,22 +804,169 @@ TEST(StageTableTest, DrawsIntoTheCallersWindow) {
   }
 }
 
-// A row with no device span shows `-` in the GPU column, not a time of 0:
-// one glyph where `0.000` is five.
-TEST(StageTableTest, ARowWithNoGpuSpanShowsADash) {
-  const auto table_of = [](const vkc::StageRow& row) {
-    return panel_draw([&] {
-      ImGui::Begin("Performance");
-      ui::draw_stage_table("stages", {row});
-      ImGui::End();
-    });
+// --- Stage table: the text each cell draws (no device) ----------------------
+
+// The text a headless ImGui frame around `build` drew, as ImGui's log takes it
+// down: a table's cells each open with a `|`, and its rows close with one.
+// Logging starts in the frame's implicit window, so it spans every window
+// `build` opens; two frames, as in panel_draw.
+template <class Build>
+std::string panel_text(Build&& build) {
+  const vg_test::HeadlessImGui imgui(ImVec2(800.0f, 600.0f));
+  std::string text;
+  for (int frame = 0; frame < 2; ++frame) {
+    ImGui::NewFrame();
+    ImGui::LogToBuffer();
+    build();
+    text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+    ImGui::LogFinish();
+    ImGui::Render();
+  }
+  return text;
+}
+
+std::string table_text(const std::vector<vkc::StageRow>& rows,
+                       const ui::StageWindow& window = {}) {
+  return panel_text([&] {
+    ImGui::Begin("Performance");
+    ui::draw_stage_table("stages", rows, window);
+    ImGui::End();
+  });
+}
+
+using Cells = std::vector<std::vector<std::string>>;
+
+// The logged table's rows, its header first, as trimmed cell text: each row is
+// `columns` cells between `|`s, and the text up to the next row's first `|`.
+Cells table_cells(const std::string& text, std::size_t columns) {
+  std::vector<std::string> fields;
+  for (std::size_t at = text.find('|'); at != std::string::npos;) {
+    const std::size_t next = text.find('|', at + 1);
+    std::string field =
+        text.substr(at + 1, next == std::string::npos ? next : next - at - 1);
+    const std::size_t first = field.find_first_not_of(" \n");
+    const std::size_t last = field.find_last_not_of(" \n");
+    fields.push_back(first == std::string::npos
+                         ? std::string()
+                         : field.substr(first, last - first + 1));
+    at = next;
+  }
+  Cells rows;
+  for (std::size_t i = 0; i + columns < fields.size(); i += columns + 1) {
+    rows.emplace_back(
+        fields.begin() + static_cast<std::ptrdiff_t>(i),
+        fields.begin() + static_cast<std::ptrdiff_t>(i + columns));
+  }
+  return rows;
+}
+
+vkc::StageRow stage(const char* name, double cpu_ms, double wait_ms,
+                    vkc::DeviceTime device, double gpu_ms = 0.0) {
+  vkc::StageRow row;
+  row.name = name;
+  row.cpu_ms = cpu_ms;
+  row.wait_ms = wait_ms;
+  row.device = device;
+  row.gpu_ms = gpu_ms;
+  row.has_gpu = device == vkc::DeviceTime::Measured;
+  return row;
+}
+
+// Each device state has a cell of its own: a time, `n/t`, `n/a`, or blank for
+// a host-only row, never a meaningless 0.000. No row waited, so there is no
+// wait column.
+TEST(StageTableTest, EachDeviceStateHasItsOwnCell) {
+  const std::string text =
+      table_text({stage("render", 1.0, 0.0, vkc::DeviceTime::Measured, 1.2),
+                  stage("mesh", 0.5, 0.0, vkc::DeviceTime::NotTimed),
+                  stage("decode", 0.25, 0.0, vkc::DeviceTime::Unavailable),
+                  stage("cull", 0.3, 0.0, vkc::DeviceTime::None)});
+  EXPECT_EQ(table_cells(text, 3), (Cells{{"Stage", "host ms", "GPU ms"},
+                                         {"render", "1.000", "1.200"},
+                                         {"mesh", "0.500", "n/t"},
+                                         {"decode", "0.250", "n/a"},
+                                         {"cull", "0.300", ""}}))
+      << text;
+}
+
+// Host is busy time, never a wait: a row's wait has a column of its own, which
+// comes with the first row that waited, and a row that only waited has no
+// host time.
+TEST(StageTableTest, HostIsBusyTimeAndAWaitHasItsOwnColumn) {
+  const std::string text =
+      table_text({stage("read", 2.0, 0.5, vkc::DeviceTime::None),
+                  stage("wait: GPU", 1.5, 1.5, vkc::DeviceTime::None),
+                  stage("draw", 0.75, 0.0, vkc::DeviceTime::Measured, 0.5)});
+  EXPECT_EQ(table_cells(text, 4),
+            (Cells{{"Stage", "host ms", "wait ms", "GPU ms"},
+                   {"read", "1.500", "0.500", ""},
+                   {"wait: GPU", "", "1.500", ""},
+                   {"draw", "0.750", "", "0.500"}}))
+      << text;
+}
+
+// A row built positionally, before `device` existed, says measured through
+// has_gpu alone.
+TEST(StageTableTest, ARowSettingOnlyHasGpuReadsMeasured) {
+  const std::string text = table_text({vkc::StageRow{"pass", 0.25, 0.5, true}});
+  EXPECT_EQ(table_cells(text, 3),
+            (Cells{{"Stage", "host ms", "GPU ms"}, {"pass", "0.250", "0.500"}}))
+      << text;
+}
+
+// The line above the table states what the figures cover, its unit "frame"
+// unless named, then the application's note; nothing by default.
+TEST(StageTableTest, TheStatusLineStatesTheWindow) {
+  const std::vector<vkc::StageRow> rows = {
+      stage("decode", 1.0, 0.0, vkc::DeviceTime::Measured, 2.0)};
+  ui::StageWindow window;
+  window.frames = 150;
+  window.timed = 120;
+  window.unit = "stream frame";
+  EXPECT_NE(table_text(rows, window)
+                .find("per stream frame · last 150 · GPU timed in 120"),
+            std::string::npos);
+  window.unit = nullptr;
+  EXPECT_NE(
+      table_text(rows, window).find("per frame · last 150 · GPU timed in 120"),
+      std::string::npos);
+  window.note = "clocks calibrated ±2 µs";
+  EXPECT_NE(table_text(rows, window)
+                .find("per frame · last 150 · GPU timed in 120 · clocks "
+                      "calibrated ±2 µs"),
+            std::string::npos);
+  // A note alone is the whole line.
+  ui::StageWindow off;
+  off.note = "GPU timing off";
+  const std::string alone = table_text(rows, off);
+  EXPECT_NE(alone.find("GPU timing off"), std::string::npos) << alone;
+  EXPECT_EQ(alone.find("GPU timed"), std::string::npos) << alone;
+  EXPECT_EQ(alone.find(" · GPU timing off"), std::string::npos) << alone;
+  EXPECT_EQ(table_text(rows).find("GPU timed"), std::string::npos);
+}
+
+// The panel states the rate, the period it gives and the recording time apart,
+// and one frame's GPU timing where a stage has a device half.
+TEST(MetricsPanelTest, StatesTheFrameAndWhetherItsGpuWasTimed) {
+  const auto text_of = [](const vg::FrameMetrics& metrics) {
+    return panel_text([&] { ui::draw_metrics_panel(metrics); });
   };
-  vkc::StageRow cpu_only;
-  cpu_only.name = "cull";
-  cpu_only.cpu_ms = 0.3;
-  vkc::StageRow zero_gpu = cpu_only;
-  zero_gpu.has_gpu = true;
-  EXPECT_LT(table_of(cpu_only).vertices, table_of(zero_gpu).vertices);
+  const std::string text = text_of(sample_metrics());
+  EXPECT_NE(text.find("90.0 fps · 11.11 ms a frame · 11.00 ms recording"),
+            std::string::npos)
+      << text;
+  EXPECT_NE(text.find("per frame · last 1 · GPU timed in 1"), std::string::npos)
+      << text;
+
+  vg::FrameMetrics untimed = sample_metrics();
+  untimed.sections[0].has_gpu = false;
+  untimed.sections[0].device = vkc::DeviceTime::NotTimed;
+  EXPECT_NE(text_of(untimed).find("per frame · last 1 · GPU timed in 0"),
+            std::string::npos);
+
+  vg::FrameMetrics host_only;
+  host_only.sections.push_back(stage("cull", 0.3, 0.0, vkc::DeviceTime::None));
+  EXPECT_EQ(text_of(host_only).find("GPU timed"), std::string::npos);
 }
 
 // --- Collapsible panel: CPU-only widget building (no device) ----------------

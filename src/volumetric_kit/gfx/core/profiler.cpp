@@ -3,15 +3,20 @@
 
 #include "volumetric_kit/gfx/core/profiler.hpp"
 
+#include <algorithm>
 #include <chrono>
-#include <limits>
+#include <cstdint>
+#include <cstdlib>
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/core/vulkan/query_pool.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 
@@ -31,64 +36,89 @@ double ms_since(Clock::time_point start) {
 
 }  // namespace
 
-// pImpl: keeps the timestamp pool and <chrono> out of the public header. One
-// owns-everything struct; the only owned Vulkan resource is the core's
-// QueryPool (move-only), so Profiler's move/dtor are defaulted around the
-// unique_ptr.
+// pImpl: keeps the timer and <chrono> out of the public header. One
+// owns-everything struct; the owned Vulkan resources are the core's timer and
+// the frames' tiles (move-only), so Profiler's move/dtor are defaulted around
+// the unique_ptr.
+//
+// A frame's device time is one core::GpuTiles: a mark at begin_frame, at each
+// GPU scope's open and close, and at end_frame. Each mark starts a tile named
+// by its index, so a scope's time is the sum of the tiles from its open to its
+// close, the scopes nested in it included, as a timestamp pair at its ends
+// measured it.
 struct Profiler::Impl {
-  // A stage recorded in the current frame; CPU time is filled in on finalize.
+  // A stage's core scope while it is open: on its thread's stack of open
+  // scopes, so the core's waits inside it -- a fence, a timeline, a blocking
+  // submit -- reach it as blocked time, as they reach a caller's
+  // core::StageScope. Heap-held, as the stack holds it by address while
+  // `current` reallocates; it times the stage's host span too.
+  struct Host {
+    core::StageMetrics rows;
+    std::optional<core::StageScope> scope;
+  };
+
+  // A stage recorded in the current frame; its host time and wait are filled
+  // in on finalize.
   struct Section {
     const char* name = nullptr;
-    Clock::time_point cpu_start{};
+    std::unique_ptr<Host> host;  // while open
     double cpu_ms = 0.0;
+    double wait_ms = 0.0;
     bool finished = false;
-    bool has_gpu = false;  // a timestamp pair was written for this stage
+    // Its open and close mark tiles: the stage's device time is tiles
+    // [first_tile, end_tile).
+    bool tiled = false;
+    uint32_t first_tile = 0;
+    uint32_t end_tile = 0;
+    // The device half when no tile times it: None for a CPU stage.
+    core::DeviceTime untimed = core::DeviceTime::None;
     // begin_debug_label was called for this stage, so finalize makes the
     // matching end_debug_label call (both no-ops without debug labels).
     bool label = false;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
-    uint32_t begin_query = 0;  // absolute query index; the end query is +1
   };
 
   // The frame buffered against one in-flight slot, resolved + published when
   // the slot recurs (its GPU submission has retired by then).
   struct SlotFrame {
     std::vector<Section> sections;
+    core::StageMetrics loop;  // add_rows', shown after the sections
+    core::GpuTiles tiles;
     double cpu_frame_ms = 0.0;
     double fps = 0.0;
     uint64_t mem_used = 0;
     uint64_t mem_budget = 0;
-    uint32_t query_base = 0;
-    uint32_t gpu_count = 0;
     bool pending = false;
   };
 
   // Capabilities + config, captured once at create().
   uint32_t frames_in_flight = 1;
-  uint32_t max_gpu_sections = 0;
-  uint32_t valid_bits = 0;
-  float ts_period_ns = 0.0f;
+  uint32_t max_gpu_sections = 0;  // the bound, lowered to what the timer holds
   // Borrowed: records the labels, and outlives the profiler.
   const core::Device* device = nullptr;
-  // The core's pool, valid exactly where the device can time (non-zero
-  // timestampValidBits): the one record of whether GPU timing is on.
-  // TODO: time on the core's GpuTimer instead if it gains a frames-in-flight
-  // window (a slot's spans read when the slot recurs); today it reads spans
-  // when a blocking submit returns (DECISIONS.md, "Sync, descriptors and
-  // queries come from volumetric_kit_core").
-  core::QueryPool query_pool;
+  // The core's timer: every frame in flight holds a range of its queries
+  // until its slot recurs. Available exactly where the device can time.
+  core::GpuTimer timer;
+  // Tile t's name, its index; a frame has at most 2 * max_gpu_sections + 1.
+  std::vector<std::string> tile_names;
   const core::Allocator* allocator = nullptr;  // borrowed; sampled at end_frame
 
   std::vector<SlotFrame> slots;  // one per in-flight slot
 
   // The frame currently being recorded (between begin_frame and end_frame).
   std::vector<Section> current;
+  core::StageMetrics current_loop;
+  core::GpuTiles current_tiles;
+  uint32_t tile = 0;  // the open tile's index
   uint32_t current_slot = 0;
   VkCommandBuffer current_cmd = VK_NULL_HANDLE;
   uint32_t gpu_count = 0;
   Clock::time_point frame_start{};
   bool in_frame = false;
   bool warned_overflow = false;
+  // The slot of the frame end_frame last ended, until the next begin_frame:
+  // where add_rows goes between frames.
+  std::optional<uint32_t> ended_slot;
 
   // fps smoothed (EMA) over the begin-to-begin cadence.
   Clock::time_point last_begin{};
@@ -97,14 +127,27 @@ struct Profiler::Impl {
 
   FrameMetrics published;  // latest resolved snapshot
 
-  // Base query index for a slot's range: two queries (begin + end) per section,
-  // max_gpu_sections sections per slot. The single source of the pool layout.
-  uint32_t slot_query_base(uint32_t slot) const {
-    return slot * max_gpu_sections * 2;
+  // Why a GPU stage no tile times reads untimed.
+  core::DeviceTime untimed_state() const noexcept {
+    return timer.available() ? core::DeviceTime::NotTimed
+                             : core::DeviceTime::Unavailable;
   }
 
-  // Stop a stage's CPU clock and, for a GPU stage, record its end timestamp and
-  // close its label. Idempotent so a finalize-then-destroy Scope is safe.
+  // Start the next tile: a mark in the frame's command buffer.
+  uint32_t boundary(VkCommandBuffer cmd) {
+    ++tile;
+    current_tiles.mark(cmd, tile_names[tile].c_str());
+    return tile;
+  }
+
+  // Open a stage's core scope, which starts its host clock.
+  static void open(Section& s) {
+    s.host = std::make_unique<Host>();
+    s.host->scope.emplace(s.host->rows, s.name);
+  }
+
+  // Stop a stage's host clock and, for a GPU stage, mark its close and close
+  // its label. Idempotent so a finalize-then-destroy Scope is safe.
   void finalize(uint32_t index) {
     if (index >= current.size()) {
       return;
@@ -113,10 +156,13 @@ struct Profiler::Impl {
     if (s.finished) {
       return;
     }
-    s.cpu_ms = ms_since(s.cpu_start);
-    if (s.has_gpu) {
-      query_pool.cmd_write_timestamp(
-          s.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query + 1);
+    s.host->scope.reset();
+    const core::StageRow& host = s.host->rows.rows().front();
+    s.cpu_ms = host.cpu_ms;
+    s.wait_ms = host.wait_ms;
+    s.host.reset();
+    if (s.tiled) {
+      s.end_tile = boundary(s.cmd);
     }
     if (s.label) {
       device->end_debug_label(s.cmd, s.name);
@@ -124,38 +170,49 @@ struct Profiler::Impl {
     s.finished = true;
   }
 
-  // Resolve a retired slot's GPU ticks and pair them with its buffered CPU
-  // halves into the published snapshot.
-  void publish(const SlotFrame& f) {
+  // Resolve a retired slot's tiles and pair them with its buffered CPU halves
+  // into the published snapshot.
+  void publish(SlotFrame& f) {
     FrameMetrics m;
     m.cpu_frame_ms = f.cpu_frame_ms;
     m.fps = f.fps;
     m.memory_used_bytes = f.mem_used;
     m.memory_budget_bytes = f.mem_budget;
 
-    std::vector<uint64_t> ticks;
-    bool gpu_ok = false;
-    if (f.gpu_count > 0) {
-      ticks.resize(static_cast<size_t>(f.gpu_count) * 2);
-      gpu_ok =
-          query_pool.read_results(f.query_base, f.gpu_count * 2, ticks.data())
-              .ok();
+    // Never waits: the caller waited the slot's fence, and a mark not yet
+    // readable leaves its tiles NotTimed.
+    f.tiles.resolve();
+    std::vector<double> tile_ms(tile_names.size(), 0.0);
+    std::vector<core::DeviceTime> tile_state(tile_names.size(),
+                                             core::DeviceTime::NotTimed);
+    for (const core::StageRow& row : f.tiles.rows()) {
+      const unsigned long t = std::strtoul(row.name, nullptr, 10);
+      if (t < tile_names.size()) {
+        tile_ms[t] = row.gpu_ms;
+        tile_state[t] = row.device;
+      }
     }
 
-    m.sections.reserve(f.sections.size());
+    m.sections.reserve(f.sections.size() + f.loop.rows().size());
     for (const Section& s : f.sections) {
       core::StageRow out;
       out.name = s.name;
       out.cpu_ms = s.cpu_ms;
-      if (s.has_gpu && gpu_ok) {
-        const uint32_t local = s.begin_query - f.query_base;
-        out.gpu_ms = core::ticks_to_ms(
-            core::timestamp_delta(ticks[local], ticks[local + 1], valid_bits),
-            ts_period_ns);
-        out.has_gpu = true;
+      out.wait_ms = s.wait_ms;
+      out.device = s.untimed;
+      if (s.tiled) {
+        out.device = core::DeviceTime::Measured;
+        for (uint32_t t = s.first_tile; t < s.end_tile; ++t) {
+          out.gpu_ms += tile_ms[t];
+          out.device = std::max(out.device, tile_state[t]);
+        }
+        if (out.device != core::DeviceTime::Measured) out.gpu_ms = 0.0;
       }
+      out.has_gpu = out.device == core::DeviceTime::Measured;
       m.sections.push_back(out);
     }
+    m.sections.insert(m.sections.end(), f.loop.rows().begin(),
+                      f.loop.rows().end());
     published = std::move(m);
   }
 };
@@ -170,39 +227,42 @@ core::Result<Profiler> Profiler::create(const core::Device& device,
     return core::Status::invalid_argument(
         "Profiler::create: max_gpu_sections_per_frame is zero");
   }
-  // Two queries per section for every slot: a count past 32 bits would wrap
-  // to a pool smaller than the ranges the slots index.
-  if (config.max_gpu_sections_per_frame >
-      std::numeric_limits<uint32_t>::max() / 2 / config.frames_in_flight) {
-    return core::Status::invalid_argument(
-        "Profiler::create: frames_in_flight * max_gpu_sections_per_frame * 2 "
-        "does not fit in 32 bits");
-  }
   // The profiler times frames the renderer records: a device made for another
   // library may lack the renderer's floor, a graphics queue included.
   VKC_TRY(device.check_enabled(device_requirements())
               .with_context("Profiler::create"));
 
+  // A frame of n GPU scopes takes 2n + 2 marks, n + 1 of the timer's pairs,
+  // and every frame in flight holds its own: lower the bound until they fit.
+  constexpr uint32_t kSpans = core::GpuTimer::kMaxSpans;
+  const uint32_t per_frame = kSpans / config.frames_in_flight;
+  const uint32_t sections =
+      per_frame == 0
+          ? 0
+          : std::min(config.max_gpu_sections_per_frame, per_frame - 1);
+  if (sections < config.max_gpu_sections_per_frame) {
+    log_message(core::LogLevel::Warning,
+                "Profiler::create: max_gpu_sections_per_frame lowered to " +
+                    std::to_string(sections) + ", the most the core's timer " +
+                    "holds for " + std::to_string(config.frames_in_flight) +
+                    " frames in flight");
+  }
+
   auto impl = std::make_unique<Impl>();
   impl->frames_in_flight = config.frames_in_flight;
-  impl->max_gpu_sections = config.max_gpu_sections_per_frame;
-  impl->valid_bits = device.timestamp_valid_bits();
-  impl->ts_period_ns = device.caps().limits().timestampPeriod;
+  impl->max_gpu_sections = sections;
   impl->device = &device;
   impl->slots.resize(config.frames_in_flight);
-
-  // The timestamp pool exists only where timing is supported; without it every
-  // GPU scope is a CPU-timed (and possibly labelled) no-op on the GPU clock.
-  if (impl->valid_bits != 0) {
-    const uint32_t query_count =
-        config.frames_in_flight * config.max_gpu_sections_per_frame * 2;
-    core::Result<core::QueryPool> pool =
-        core::QueryPool::create(device.handle(), query_count);
-    if (!pool) {
-      return pool.status();
-    }
-    impl->query_pool = std::move(pool).value();
+  impl->tile_names.reserve(2 * static_cast<size_t>(sections) + 1);
+  for (uint32_t t = 0; t <= 2 * sections; ++t) {
+    impl->tile_names.push_back(std::to_string(t));
   }
+  // Unavailable rather than failing where the queue has no timestamps or the
+  // pool will not allocate (logged): every GPU scope is then a CPU-timed
+  // (and possibly labelled) no-op on the GPU clock.
+  const uint32_t spans =
+      std::max(1U, std::min(kSpans, config.frames_in_flight * (sections + 1)));
+  VKC_ASSIGN(impl->timer, core::GpuTimer::create(device, spans));
 
   Profiler profiler;
   profiler.impl_ = std::move(impl);
@@ -250,6 +310,7 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
     return;
   }
   Impl& d = *impl_;
+  d.ended_slot.reset();
   if (slot >= d.frames_in_flight) {
     // Out-of-range slot is a misuse; stay out of a frame so scopes are inert
     // rather than indexing past the slot's query range.
@@ -278,17 +339,23 @@ void Profiler::begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept {
   d.have_last_begin = true;
 
   d.current.clear();
+  d.current_loop.clear();
   d.current_slot = slot;
   d.current_cmd = cmd;
   d.gpu_count = 0;
+  d.tile = 0;
   d.frame_start = now;
   d.in_frame = true;
 
-  // Reset the slot's whole timestamp range up front (outside any render pass)
-  // so each gpu_scope can write into it.
-  if (cmd != VK_NULL_HANDLE && d.query_pool.valid()) {
-    const uint32_t base = d.slot_query_base(slot);
-    d.query_pool.cmd_reset(cmd, base, d.max_gpu_sections * 2);
+  // A frame begun but never ended -- its command buffer never ran -- returns
+  // its range first, so this frame finds room. Then take the frame's range up
+  // front, with its reset and first mark, outside any render pass. Tile 0
+  // holds what the frame records before its first GPU scope.
+  d.current_tiles = core::GpuTiles{};
+  if (cmd != VK_NULL_HANDLE) {
+    d.current_tiles =
+        core::GpuTiles::begin(d.timer, cmd, 2 * d.max_gpu_sections + 1);
+    d.current_tiles.mark(cmd, d.tile_names[0].c_str());
   }
 }
 
@@ -308,26 +375,41 @@ void Profiler::end_frame() noexcept {
     }
   }
 
-  // Finalize any stage whose Scope is still open (close its label, write its
-  // end timestamp) so the submitted command buffer never carries an unbalanced
-  // debug-utils region and no GPU end timestamp is left unwritten. Idempotent:
-  // a stage its Scope already closed is skipped via Section::finished.
+  // Finalize any stage whose Scope is still open (close its label, mark its
+  // close) so the submitted command buffer never carries an unbalanced
+  // debug-utils region and every stage's device time ends. Idempotent: a stage
+  // its Scope already closed is skipped via Section::finished.
   for (uint32_t i = 0; i < static_cast<uint32_t>(d.current.size()); ++i) {
     d.finalize(i);
   }
+  d.current_tiles.end(d.current_cmd);
 
   Impl::SlotFrame& f = d.slots[d.current_slot];
   f.sections = std::move(d.current);
+  f.loop = std::move(d.current_loop);
+  f.tiles = std::move(d.current_tiles);
   f.cpu_frame_ms = ms_since(d.frame_start);
   f.fps = d.fps;
   f.mem_used = used;
   f.mem_budget = budget;
-  f.query_base = d.slot_query_base(d.current_slot);
-  f.gpu_count = d.gpu_count;
   f.pending = true;
 
-  d.current.clear();  // re-empty the moved-from accumulator
+  d.current.clear();  // re-empty the moved-from accumulators
+  d.current_loop.clear();
   d.in_frame = false;
+  d.ended_slot = d.current_slot;
+}
+
+void Profiler::add_rows(const core::StageMetrics& rows) {
+  if (!impl_) {
+    return;
+  }
+  Impl& d = *impl_;
+  if (d.in_frame) {
+    d.current_loop.merge(rows);
+  } else if (d.ended_slot && d.slots[*d.ended_slot].pending) {
+    d.slots[*d.ended_slot].loop.merge(rows);
+  }
 }
 
 Profiler::Scope Profiler::cpu_scope(const char* name) {
@@ -337,9 +419,9 @@ Profiler::Scope Profiler::cpu_scope(const char* name) {
   Impl& d = *impl_;
   Impl::Section s;
   s.name = name != nullptr ? name : kUnnamedStage;
-  s.cpu_start = Clock::now();
+  Impl::open(s);
   const uint32_t index = static_cast<uint32_t>(d.current.size());
-  d.current.push_back(s);
+  d.current.push_back(std::move(s));
   return Scope(impl_.get(), index);
 }
 
@@ -350,14 +432,14 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   Impl& d = *impl_;
   Impl::Section s;
   s.name = name != nullptr ? name : kUnnamedStage;
-  s.cpu_start = Clock::now();
+  Impl::open(s);
   s.cmd = cmd;
+  s.untimed = d.untimed_state();
 
-  // GPU work (label + timestamps) records into the frame's command buffer — the
-  // one begin_frame reset the query range on. A cmd that does not match it (a
+  // GPU work (label + marks) records into the frame's command buffer — the
+  // one begin_frame took the tiles on. A cmd that does not match it (a
   // CPU-only frame begun with VK_NULL_HANDLE, or simply a different buffer)
-  // leaves the stage CPU-timed only, so a timestamp is never written into an
-  // unreset query.
+  // leaves the stage CPU-timed only, so no mark lands in another buffer.
   const bool records_gpu = (cmd == d.current_cmd);
 
   // A label is independent of timestamp timing. The device emits it where
@@ -368,16 +450,15 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
     s.label = true;
   }
 
-  // Write the begin timestamp when timing is available and the per-frame GPU
-  // budget is not yet exhausted; otherwise this stage is CPU-only.
-  if (records_gpu && d.query_pool.valid()) {
+  // Mark the stage's open while the per-frame bound holds; past it the stage
+  // is CPU-only. On a timer that cannot time the marks write nothing, and the
+  // tiles read Unavailable.
+  if (records_gpu) {
     if (d.gpu_count < d.max_gpu_sections) {
-      s.begin_query = d.slot_query_base(d.current_slot) + d.gpu_count * 2;
-      s.has_gpu = true;
-      d.query_pool.cmd_write_timestamp(
-          cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.begin_query);
+      s.tiled = true;
+      s.first_tile = d.boundary(cmd);
       ++d.gpu_count;
-    } else if (!d.warned_overflow) {
+    } else if (d.timer.available() && !d.warned_overflow) {
       d.warned_overflow = true;
       log_message(
           core::LogLevel::Warning,
@@ -387,7 +468,7 @@ Profiler::Scope Profiler::gpu_scope(VkCommandBuffer cmd, const char* name) {
   }
 
   const uint32_t index = static_cast<uint32_t>(d.current.size());
-  d.current.push_back(s);
+  d.current.push_back(std::move(s));
   return Scope(impl_.get(), index);
 }
 
@@ -397,7 +478,7 @@ const FrameMetrics& Profiler::metrics() const noexcept {
 }
 
 bool Profiler::gpu_timing() const noexcept {
-  return impl_ && impl_->query_pool.valid();
+  return impl_ && impl_->timer.available();
 }
 
 }  // namespace volumetric_kit::gfx

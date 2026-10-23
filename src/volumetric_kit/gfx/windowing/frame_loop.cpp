@@ -3,9 +3,11 @@
 
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 
+#include <chrono>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
@@ -16,6 +18,21 @@
 namespace volumetric_kit::gfx::windowing {
 
 namespace {
+
+// Run `call`, one the host may block in that no core wait reports -- the
+// acquire, the present -- and report its span to the scopes open on this
+// thread as blocked time (core::note_blocked), with a profiler attached or
+// not. Inside the loop's own wait rows the report stops at them, as their
+// span already holds it.
+template <class Call>
+auto blocking(Call&& call) {
+  const auto start = std::chrono::steady_clock::now();
+  auto result = call();
+  core::note_blocked(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count());
+  return result;
+}
 
 // The semaphores one of the loop's submits waits for and sets, as the parallel
 // arrays VkSubmitInfo and VkTimelineSemaphoreSubmitInfo take. A binary
@@ -240,36 +257,47 @@ core::Result<Frame> FrameLoop::begin_frame() {
   const uint64_t number = submitted_ + 1;
   const uint32_t slot = slot_of(number);
 
-  // Keep the CPU at most N frames ahead: wait until this slot's previous frame
-  // has retired before reusing its command buffer / semaphore / queries. On
-  // its fence, not its number: through MoltenVK the number is reached before
-  // the submission's completion handler has run, which is what makes its
-  // timestamp queries readable (DECISIONS.md, "Frames are numbered on a
-  // timeline").
-  VKC_TRY(in_flight_[slot].wait());
+  // The loop's rows, for an attached profiler only: null measures nothing.
+  core::StageMetrics* const rows = profiler_ != nullptr ? &rows_ : nullptr;
+  rows_.clear();
+  uint32_t image_index = 0;
+  {
+    // Every wait before the frame records, one row: where a loop paced by
+    // the display waits, in the fence or in the acquire.
+    const core::WaitScope waiting(rows, "frame wait");
 
-  core::Result<uint32_t> acquired =
-      swapchain_.acquire_next_image(image_available_[slot].handle());
-  if (!acquired.ok()) {
-    // OUT_OF_DATE (or another error) flows to the caller, which recreates the
-    // swapchain and retries; nothing was consumed, so the retry is this same
-    // frame. The slot fence is reset only right before a submit that
-    // re-signals it, so it is still signalled here and the retry does not
-    // deadlock.
-    return acquired.status();
-  }
-  const uint32_t image_index = acquired.value();
+    // Keep the CPU at most N frames ahead: wait until this slot's previous
+    // frame has retired before reusing its command buffer / semaphore /
+    // queries. On its fence, not its number: through MoltenVK the number is
+    // reached before the submission's completion handler has run, which is
+    // what makes its timestamp queries readable (DECISIONS.md, "Frames are
+    // numbered on a timeline").
+    VKC_TRY(in_flight_[slot].wait());
 
-  // The acquired image may still be in use by an earlier frame on another
-  // slot when there are more images than in-flight frames; wait for it too.
-  if (image_frames_[image_index] != 0) {
-    const core::Status waited = timeline_.wait(image_frames_[image_index]);
-    if (!waited.ok()) {
-      // The acquire above left this slot's semaphore with a pending signal;
-      // stand in for the frame before surfacing the error (best-effort: the
-      // original error outranks a recovery failure).
-      (void)recover_slot(slot, {});
-      return waited;
+    core::Result<uint32_t> acquired = blocking([&] {
+      return swapchain_.acquire_next_image(image_available_[slot].handle());
+    });
+    if (!acquired.ok()) {
+      // OUT_OF_DATE (or another error) flows to the caller, which recreates
+      // the swapchain and retries; nothing was consumed, so the retry is this
+      // same frame. The slot fence is reset only right before a submit that
+      // re-signals it, so it is still signalled here and the retry does not
+      // deadlock.
+      return acquired.status();
+    }
+    image_index = acquired.value();
+
+    // The acquired image may still be in use by an earlier frame on another
+    // slot when there are more images than in-flight frames; wait for it too.
+    if (image_frames_[image_index] != 0) {
+      const core::Status waited = timeline_.wait(image_frames_[image_index]);
+      if (!waited.ok()) {
+        // The acquire above left this slot's semaphore with a pending signal;
+        // stand in for the frame before surfacing the error (best-effort: the
+        // original error outranks a recovery failure).
+        (void)recover_slot(slot, {});
+        return waited;
+      }
     }
   }
 
@@ -299,9 +327,10 @@ core::Result<Frame> FrameLoop::begin_frame() {
   // Drive the profiler's frame lifecycle (no-op when none is attached). The
   // slot's previous frame was waited for above, so its timestamps are now
   // readable; the command buffer is recording and outside any render pass,
-  // where the slot's query-range reset is legal.
+  // where the frame's query-range reset is legal. The frame's wait joins it.
   if (profiler_ != nullptr) {
     profiler_->begin_frame(slot, cmd);
+    profiler_->add_rows(rows_);
   }
 
   Frame frame;
@@ -395,57 +424,72 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   if (profiler_ != nullptr) {
     profiler_->end_frame();
   }
+  // The loop's rows from here join the frame end_frame just closed.
+  core::StageMetrics* const rows = profiler_ != nullptr ? &rows_ : nullptr;
+  rows_.clear();
 
-  // Transition the rendered image to PRESENT_SRC.
-  ImageBarrierDesc to_present;
-  to_present.image = swapchain_.image(frame.image_index);
-  to_present.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  to_present.dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-  to_present.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  to_present.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-  cmd_image_barrier(frame.cmd, to_present);
-
-  const core::Status ended = command_buffers_[slot].end();
-  if (!ended.ok()) {
-    (void)recover_slot(slot, frame.signals);
-    return ended;
-  }
-
-  // The acquire and the present keep their binary semaphores; the frame's
-  // number and the caller's values ride the same submit.
   const VkSemaphore rendered = render_finished_[frame.image_index].handle();
-  SubmitSync sync;
-  sync.wait(image_available_[slot].handle(),
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-  for (const FrameWait& wait : frame.waits) {
-    sync.wait(wait.point.semaphore->handle(), wait.stages, wait.point.value);
-  }
-  sync.signal(rendered);
-  sync.signal(timeline_.handle(), frame.number);
-  for (const core::TimelinePoint& signal : frame.signals) {
-    sync.signal(signal.semaphore->handle(), signal.value);
-  }
-  // Reset the in-flight fence immediately before the submit that re-signals it,
-  // so every earlier failure leaves it signalled and the slot's next
-  // begin_frame never blocks on a fence nothing will signal.
-  const core::Status fence_ready = in_flight_[slot].reset();
-  if (!fence_ready.ok()) {
-    (void)recover_slot(slot, frame.signals);
-    return fence_ready;
-  }
-  const VkResult submitted =
-      sync.submit(device_, &frame.cmd, in_flight_[slot].handle());
-  if (submitted != VK_SUCCESS) {
-    // The failed submit consumed nothing: the acquire signal is still pending
-    // and the fence was just reset, so recover_slot restores both.
-    (void)recover_slot(slot, frame.signals);
-    return core::vk_error(submitted, "vkQueueSubmit");
-  }
-  record_submit(frame.number, frame.signals);
-  image_frames_[frame.image_index] = frame.number;
+  {
+    const core::StageScope submitting(rows, "submit");
 
-  core::Status present = swapchain_.present(frame.image_index, rendered);
+    // Transition the rendered image to PRESENT_SRC.
+    ImageBarrierDesc to_present;
+    to_present.image = swapchain_.image(frame.image_index);
+    to_present.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    to_present.dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    to_present.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to_present.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    cmd_image_barrier(frame.cmd, to_present);
+
+    const core::Status ended = command_buffers_[slot].end();
+    if (!ended.ok()) {
+      (void)recover_slot(slot, frame.signals);
+      return ended;
+    }
+
+    // The acquire and the present keep their binary semaphores; the frame's
+    // number and the caller's values ride the same submit.
+    SubmitSync sync;
+    sync.wait(image_available_[slot].handle(),
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    for (const FrameWait& wait : frame.waits) {
+      sync.wait(wait.point.semaphore->handle(), wait.stages, wait.point.value);
+    }
+    sync.signal(rendered);
+    sync.signal(timeline_.handle(), frame.number);
+    for (const core::TimelinePoint& signal : frame.signals) {
+      sync.signal(signal.semaphore->handle(), signal.value);
+    }
+    // Reset the in-flight fence immediately before the submit that re-signals
+    // it, so every earlier failure leaves it signalled and the slot's next
+    // begin_frame never blocks on a fence nothing will signal.
+    const core::Status fence_ready = in_flight_[slot].reset();
+    if (!fence_ready.ok()) {
+      (void)recover_slot(slot, frame.signals);
+      return fence_ready;
+    }
+    const VkResult submitted =
+        sync.submit(device_, &frame.cmd, in_flight_[slot].handle());
+    if (submitted != VK_SUCCESS) {
+      // The failed submit consumed nothing: the acquire signal is still
+      // pending and the fence was just reset, so recover_slot restores both.
+      (void)recover_slot(slot, frame.signals);
+      return core::vk_error(submitted, "vkQueueSubmit");
+    }
+    record_submit(frame.number, frame.signals);
+    image_frames_[frame.image_index] = frame.number;
+  }
+
+  core::Status present;
+  {
+    const core::WaitScope presenting(rows, "present");
+    present = blocking(
+        [&] { return swapchain_.present(frame.image_index, rendered); });
+  }
+  if (profiler_ != nullptr) {
+    profiler_->add_rows(rows_);
+  }
   if (swapchain_stale(present)) {
     // Arm the managed protocol's rebuild, as recover_slot does; raw callers
     // see the status as ever (they never read needs_recreate_). The protocol

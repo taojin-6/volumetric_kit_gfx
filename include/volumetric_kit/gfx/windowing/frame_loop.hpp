@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
@@ -35,6 +36,19 @@ class Swapchain;
 
 /// @brief A timeline value a frame's submission waits for, and the stages
 ///        that wait for it (@ref Frame::waits).
+///
+/// A live mesh another queue wrote: its producer published it once its
+/// writes completed, so the value is reached, as @ref FrameLoop::end_frame
+/// requires. The GPU wait then stalls nothing; it makes the writes visible
+/// to the draw, and only the draw's stages wait.
+///
+/// @code
+/// // `ready`: the core::TimelinePoint the producer's writes set.
+/// frame.waits.push_back({ready, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+///                                   VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT});
+/// // ... record the mesh's indirect draw into frame.cmd ...
+/// const core::Status ended = loop->end_frame(frame);
+/// @endcode
 struct FrameWait {
   /// The timeline and the value to reach. Its semaphore is borrowed: it must
   /// outlive the frame's execution.
@@ -254,6 +268,16 @@ class VG_WINDOWING_API FrameLoop {
 
   /// @brief Attach a profiler the loop drives automatically, or detach with
   ///        `nullptr`.
+  ///
+  /// The loop adds its own rows to each frame, after the caller's stages
+  /// (`Profiler::add_rows`): `frame wait`, its waits for the slot's previous
+  /// frame, the acquire and the image's previous frame, where a loop paced by
+  /// the display waits; `submit`, ending and submitting the command buffer;
+  /// and `present`, the present call. `frame wait` and `present` are wait
+  /// rows (`cpu_ms == wait_ms`), which reach the scopes the caller has open
+  /// around them as blocked time (`core::WaitScope`). Without a profiler the
+  /// loop adds no rows, and its waits, the acquire and the present included,
+  /// still reach those scopes (`core::note_blocked`).
   /// @param profiler  Borrowed and nullable. When set, the loop calls the
   ///                  profiler's `begin_frame` (for the slot, after waiting for
   ///                  its previous frame, with the frame's command buffer) and
@@ -331,6 +355,8 @@ class VG_WINDOWING_API FrameLoop {
   // it back; end_frame refuses any other Frame.
   std::optional<uint32_t> acquired_image_;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
+  // The loop's own rows for the attached profiler, reused frame to frame.
+  core::StageMetrics rows_;
   // Managed-protocol state (the extent-taking begin_frame): the rebuild hook
   // and whether a stale acquire/present, a frame that failed after its
   // acquire, or a resize armed a rebuild. Resize is detected against

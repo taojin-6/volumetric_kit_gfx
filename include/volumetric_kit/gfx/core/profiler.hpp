@@ -9,12 +9,13 @@
 ///
 /// One concrete @ref Profiler unifies the timestamp/CPU collector and the
 /// debug-utils marker emitter behind a single surface. A @ref Scope times a CPU
-/// span; its GPU form (given a command buffer) additionally writes a timestamp
-/// pair and a `VK_EXT_debug_utils` region label, so one render pass is a single
-/// stage with both a CPU-record time and a GPU-execute time. CPU spans are
-/// buffered per in-flight slot and published together with that slot's resolved
-/// GPU timings, so each stage's CPU and GPU halves come from the same frame
-/// (the whole snapshot lags the in-flight depth). Consumers read the plain
+/// span; its GPU form (given a command buffer) additionally marks the frame's
+/// device time at its open and close, on the core's `GpuTiles`, and writes a
+/// `VK_EXT_debug_utils` region label, so one render pass is a single stage
+/// with both a CPU-record time and a GPU-execute time. CPU spans are buffered
+/// per in-flight slot and published together with that slot's resolved GPU
+/// timings, so each stage's CPU and GPU halves come from the same frame (the
+/// whole snapshot lags the in-flight depth). Consumers read the plain
 /// @ref FrameMetrics — never a backend type — so the `ui` overlay and a
 /// headless harness read it identically.
 
@@ -41,9 +42,13 @@ struct ProfilerConfig {
   /// retired). Must be >= 1.
   uint32_t frames_in_flight = 2;
   /// Upper bound on @ref Profiler::gpu_scope calls per frame; sizes the
-  /// timestamp pool (`frames_in_flight * this * 2` queries, which must fit in
-  /// 32 bits). Scopes beyond it in a frame are still CPU-timed and still
-  /// labelled, but carry no GPU timing. Must be >= 1.
+  /// timestamp pool: a timestamp at each scope's open and close, and one at
+  /// each end of the frame, for every in-flight frame. Scopes beyond it in a
+  /// frame are still CPU-timed and still labelled, their device half
+  /// `core::DeviceTime::NotTimed`. The core's timer holds at most
+  /// `2 * core::GpuTimer::kMaxSpans` timestamps, the most a Metal-backed pool
+  /// holds, so where the frames in flight need more the bound is lowered to
+  /// fit (logged). Must be >= 1.
   uint32_t max_gpu_sections_per_frame = 32;
 };
 
@@ -53,13 +58,26 @@ struct ProfilerConfig {
 /// Built from a `core::Device`'s capabilities once: GPU timing is available
 /// only where the graphics queue reports non-zero `timestampValidBits`
 /// (MoltenVK may report zero — then GPU scopes degrade to CPU-only timing plus
-/// their label, never an error), and labels emit only where
+/// their label, never an error, and their rows read
+/// `core::DeviceTime::Unavailable`), and labels emit only where
 /// `VK_EXT_debug_utils` is enabled (`core::Device::debug_labels_available`).
 /// Drive it once per frame: @ref begin_frame at the top (after the slot's
 /// in-flight fence has signalled, not only its frame's timeline value: see
 /// @ref windowing::FrameLoop::timeline), @ref cpu_scope / @ref gpu_scope
 /// around work, @ref end_frame at the bottom; read the latest resolved
 /// snapshot from @ref metrics.
+///
+/// A GPU scope's device time runs from its open to its close, the scopes
+/// nested in it included. Each row's `device` says what its device half
+/// holds: measured; not timed (`NotTimed`) past the per-frame bound, for a
+/// command buffer other than the frame's, or where the frame's timestamps
+/// were not readable when its slot recurred; unavailable where the queue
+/// cannot time; none for a CPU scope.
+///
+/// A scope's host time splits as a `core::StageScope`'s does, as each open
+/// scope is one on its thread: the core's blocking waits inside it -- a fence,
+/// a timeline semaphore, a blocking submit -- are its `wait_ms`
+/// (`core::note_blocked`), so its busy time never holds a wait.
 ///
 /// @warning The @p device passed to @ref create must outlive the profiler (it
 ///          owns a timestamp pool freed through that device, and borrows the
@@ -91,14 +109,17 @@ class VG_CORE_API Profiler {
   struct Impl;  // pImpl: seals the timestamp pool and chrono
 
  public:
-  /// @brief A timed stage: a CPU span, optionally paired with a GPU timestamp
-  ///        region and a debug-utils label, finalized on destruction.
+  /// @brief A timed stage: a CPU span, optionally paired with a GPU span and a
+  ///        debug-utils label, finalized on destruction.
   ///
   /// Returned by @ref Profiler::cpu_scope / @ref Profiler::gpu_scope.
-  /// Destroying it stops the CPU clock and — for a GPU scope — records the end
-  /// timestamp and closes the label, so scope it to exactly the work it should
-  /// measure. A default-constructed (or moved-from) `Scope` is inert and
-  /// finalizes nothing.
+  /// Destroying it stops the CPU clock and — for a GPU scope — marks the end
+  /// of its device time and closes the label, so scope it to exactly the work
+  /// it should measure. A default-constructed (or moved-from) `Scope` is inert
+  /// and finalizes nothing.
+  ///
+  /// @warning Close it, or end its frame, on the thread that opened it: it is
+  ///          a core scope on that thread's stack (`VKC_CHECK`).
   class Scope {
    public:
     /// @brief An inert scope: times and finalizes nothing.
@@ -128,13 +149,13 @@ class VG_CORE_API Profiler {
   ///                It must have enabled the renderer's requirements
   ///                (@ref device_requirements).
   /// @param config  In-flight depth and the per-frame GPU-scope bound.
-  /// @return The profiler on success, or a non-OK `core::Status`:
-  ///         `core::Status::Code::InvalidArgument` when @p config has a zero
-  ///         `frames_in_flight` or `max_gpu_sections_per_frame`, or a
-  ///         `frames_in_flight * max_gpu_sections_per_frame * 2` past 32 bits;
+  /// @return The profiler on success -- with @ref gpu_timing false, logged,
+  ///         where the timestamp pool will not allocate -- or a non-OK
+  ///         `core::Status`: `core::Status::Code::InvalidArgument` when
+  ///         @p config has a zero `frames_in_flight` or
+  ///         `max_gpu_sections_per_frame`;
   ///         `core::Status::Code::Unsupported` for a @p device without the
-  ///         renderer's requirements; otherwise a propagated failure from
-  ///         creating the timestamp pool.
+  ///         renderer's requirements.
   static core::Result<Profiler> create(const core::Device& device,
                                        const ProfilerConfig& config = {});
 
@@ -151,8 +172,9 @@ class VG_CORE_API Profiler {
   ///                   the profiler.
   void set_memory_source(const core::Allocator* allocator) noexcept;
 
-  /// @brief Begin a frame: publish the frame this slot last held, reset its
-  ///        timestamp range, and start the frame's CPU clock.
+  /// @brief Begin a frame: publish the frame this slot last held, take the
+  ///        frame's timestamps from the core's timer, and start the frame's
+  ///        CPU clock.
   /// @param slot  The in-flight slot index in `[0, frames_in_flight)`. The
   ///              caller must already have waited this slot's in-flight fence
   ///              (not only its frame's timeline value), so the prior
@@ -163,9 +185,22 @@ class VG_CORE_API Profiler {
   ///              for a CPU-only frame; GPU scopes then record no timestamps.
   void begin_frame(uint32_t slot, VkCommandBuffer cmd) noexcept;
 
-  /// @brief End the frame: stamp its total CPU time and fps and sample memory,
-  ///        buffering them for this slot to publish when the slot recurs.
+  /// @brief End the frame: mark the end of its device time, stamp its total
+  ///        CPU time and fps and sample memory, buffering them for this slot
+  ///        to publish when the slot recurs.
   void end_frame() noexcept;
+
+  /// @brief Add rows of host time the frame spent outside its scopes, shown
+  ///        after its own stages: what a render loop adds for its own waits,
+  ///        submit and present (@ref windowing::FrameLoop does).
+  ///
+  /// Between @ref begin_frame and @ref end_frame they join the frame being
+  /// recorded; after @ref end_frame, until the next @ref begin_frame, the
+  /// frame it ended, which is published only when its slot recurs. Rows of
+  /// one name accumulate. Outside both, nothing is added.
+  /// @param rows  The rows; their names must outlive every read of the
+  ///              snapshot, as string literals do.
+  void add_rows(const core::StageMetrics& rows);
 
   /// @brief Open a CPU-only timed stage.
   /// @param name  Stage label; must have string-literal lifetime (stored by
@@ -180,9 +215,10 @@ class VG_CORE_API Profiler {
   ///        region label.
   /// @param cmd   The recording command buffer the timestamps and label record
   ///              into; must be the same buffer passed to @ref begin_frame
-  ///              (which reset the query range). A differing cmd — including
-  ///              when begin_frame got `VK_NULL_HANDLE` for a CPU-only frame —
-  ///              leaves the stage CPU-timed only, with no timestamps or label.
+  ///              (which took the frame's timestamps). A differing cmd —
+  ///              including when begin_frame got `VK_NULL_HANDLE` for a
+  ///              CPU-only frame — leaves the stage CPU-timed only, with no
+  ///              timestamps or label.
   /// @param name  Stage label and label text; string-literal lifetime. A null
   ///              name records and labels the stage as `"(unnamed)"`, as a
   ///              row's name is never null.
@@ -200,9 +236,9 @@ class VG_CORE_API Profiler {
   const FrameMetrics& metrics() const noexcept;
 
   /// @return Whether GPU timestamp timing is available (the graphics queue
-  ///         reports non-zero `timestampValidBits`). When false, GPU scopes
-  ///         time CPU only and every `core::StageRow` reports
-  ///         `has_gpu` false.
+  ///         reports non-zero `timestampValidBits`, and the timestamp pool
+  ///         allocated). When false, GPU scopes time CPU only and their rows
+  ///         read `core::DeviceTime::Unavailable`.
   bool gpu_timing() const noexcept;
 
   /// @return `true` if this owns profiler resources (false when moved-from).

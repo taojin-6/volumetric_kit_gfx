@@ -38,6 +38,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `ui`: `StageWindow`, the line `draw_stage_table` draws above its table:
+  the frames its figures cover, their unit, how many were device-timed, and
+  the application's note (its timing mode and clock calibration).
+- `core`: `Profiler::add_rows` adds a render loop's host rows to the frame,
+  after its own stages, while it records or once it has ended.
+- `windowing`: `FrameWait` shows a live mesh's wait.
 - `core`: **pipelines build through the device's pipeline cache.**
   `GraphicsPipelineDesc::cache` (default none) passes a `VkPipelineCache` to
   `GraphicsPipeline::create`. `DepthCloudPipeline`, `HybridMeshPipeline`,
@@ -216,9 +222,33 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- build: gfx pins volumetric_kit_core at `ff44a98` (core 0.19.0, #49's
-  merge). `VG_VKC_MIN_VERSION` is 0.18.0, for `Device::pipeline_cache`: an
-  application that declares the core first pins it at 0.18.0 or newer.
+- build: gfx pins volumetric_kit_core at `0daced5` (core 0.20.0, the core's
+  #50 merge).
+  `VG_VKC_MIN_VERSION` is 0.20.0, for `GpuTiles` and a row's wait and device
+  halves: an application that declares the core first pins it at 0.20.0 or
+  newer.
+- `ui`: **the stage table says what each cell holds.** Its columns are host
+  ms (busy: `cpu_ms - wait_ms`), wait ms (drawn only when a row waited) and
+  GPU ms, which reads a time, `n/t`, `n/a` or blank, per the row's
+  `core::DeviceTime`, where `-` stood for all three; a row that only waited
+  is dimmed. `draw_metrics_panel`'s first line gives the fps, the frame
+  period and the recording time apart: its "ms/frame" was the recording time.
+- `core`: **`Profiler` times on the core's `GpuTimer` ranges**
+  (`core::GpuTiles`). A row's `device` says what its GPU half holds:
+  measured, `NotTimed` (past the bound, another command buffer, or not
+  readable yet) or `Unavailable` (no timestamps); `has_gpu` still means
+  measured. A timestamp pool that will not allocate leaves `gpu_timing()`
+  false rather than failing `create`, and a bound past what the core's timer
+  holds is lowered, never refused, however large. Each open scope is a
+  `core::StageScope`, so a core wait inside it is its row's `wait_ms`.
+  Migrating: read `device` to tell n/t from n/a; close a scope, or end its
+  frame, on the thread that opened it.
+- `windowing`: **`FrameLoop` reports its own blocking** to an attached
+  profiler: rows `frame wait`, `submit` and `present` follow the caller's
+  stages. Its waits, the acquire and the present included, reach the
+  caller's open `core::StageScope`s as blocked time, profiler or not.
+  Migrating: code that counts `FrameMetrics::sections` or indexes past the
+  caller's stages finds three more rows; find rows by name.
 - `core`: **depth is not stored by default.** `RenderTargetBeginInfo` has
   its own `depth_store_op`, `DONT_CARE` by default, so a tile-based GPU
   (Apple, Android) no longer writes depth back to memory every frame. Color
