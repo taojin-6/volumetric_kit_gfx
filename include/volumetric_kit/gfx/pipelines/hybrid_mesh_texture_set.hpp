@@ -44,8 +44,8 @@ struct HybridMeshTextureSetOptions {
 /// which the pipeline samples at each fragment's `uv0`. The image is in
 /// `SHADER_READ_ONLY_OPTIMAL` whenever a frame that binds the set runs, and
 /// its format can be sampled with the filter set in @ref Options. When the
-/// caller recreates its image -- at a new size, say -- @ref rebind points the
-/// same set at the new view.
+/// caller recreates its image, @ref rebind points the same set at the new
+/// view.
 ///
 /// @warning The @p device and @p pipeline passed to @ref create must outlive
 ///          the set, and the GPU must be done with every frame that bound it

@@ -39,10 +39,10 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 ### Added
 
 - `pipelines`: `HybridMeshTextureSet` (`pipelines/hybrid_mesh_texture_set.hpp`)
-  is a `HybridMeshPipeline` set 0 over an image view the caller owns, with its
-  own descriptor pool and sampler (`Options`: filter, address mode,
-  `max_lod`); `rebind` points it at a new view after the caller recreates its
-  image.
+  is a `HybridMeshPipeline`'s set-0 descriptor set over an image view the
+  caller owns, with its own descriptor pool and sampler (`Options`: filter,
+  address mode, `max_lod`); `rebind` points it at a new view after the caller
+  recreates its image.
 - `ui`: `StageWindow`, the line `draw_stage_table` draws above its table:
   the frames its figures cover, their unit, how many were device-timed, and
   the application's note (its timing mode and clock calibration).

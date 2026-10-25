@@ -5,9 +5,9 @@
 // owns. Each draw is an unlit quad over the whole target whose uv0 is its own
 // position in [0, 1]^2, so on a target the image's size each pixel samples the
 // centre of the image pixel it lies over, and the readback is the image. The
-// images are sRGB, which the shader decodes and the UNORM target stores
-// encoded again. Runs under the validation layer with synchronization
-// validation, tracking what shaders read through descriptors.
+// images are sRGB: the shader decodes what it samples and, on the UNORM
+// target, encodes what it writes. Runs under the validation layer with
+// synchronization validation, tracking what shaders read through descriptors.
 
 #include <gtest/gtest.h>
 
