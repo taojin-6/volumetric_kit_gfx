@@ -222,8 +222,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
-- CI: **the iOS build targets iOS 27.0**, the family's iOS floor
-  (`-DCMAKE_OSX_DEPLOYMENT_TARGET=27.0`).
+- CI: **the iOS build targets iOS 26.0**, the family's iOS floor
+  (`-DCMAKE_OSX_DEPLOYMENT_TARGET=26.0`).
 - build: gfx pins volumetric_kit_core at `0daced5` (core 0.20.0, the core's
   #50 merge).
   `VG_VKC_MIN_VERSION` is 0.20.0, for `GpuTiles` and a row's wait and device
