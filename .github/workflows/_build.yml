@@ -445,7 +445,7 @@ jobs:
           fi
           rm -rf build-ios
           cmake -S . -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
             -DVG_BUILD_TESTS=OFF -DVG_BUILD_EXAMPLES=OFF -DVG_WITH_GLFW=OFF \
             "${flags[@]}"
           cmake --build build-ios --config Debug \
