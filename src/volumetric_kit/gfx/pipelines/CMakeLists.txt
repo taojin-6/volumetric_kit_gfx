@@ -19,6 +19,7 @@ target_sources(
   PRIVATE depth_cloud_pipeline.cpp
           gpu_mesh.cpp
           hybrid_mesh_pipeline.cpp
+          hybrid_mesh_texture_set.cpp
           ibl.cpp
           image_pipeline.cpp
           live_mesh.cpp
