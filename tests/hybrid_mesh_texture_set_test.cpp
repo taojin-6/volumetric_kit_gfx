@@ -280,6 +280,40 @@ TEST_F(HybridMeshTextureSetTest, OptionsChooseTheFilterAndAddressing) {
   }
 }
 
+// A 4x4 image on a 2x2 target is minified to mip level 1. Level 0 is black and
+// levels 1 and 2 white, so the default max_lod of 0 draws black and the whole
+// chain white.
+TEST_F(HybridMeshTextureSetTest, MaxLodBoundsTheLevelsSampled) {
+  const Rgba black{0, 0, 0, 255};
+  const Rgba white{255, 255, 255, 255};
+  std::vector<Rgba> levels(4 * 4, black);
+  levels.insert(levels.end(), 2 * 2 + 1, white);
+  vg::ImageUploadDesc desc;
+  desc.extent = {4, 4};
+  desc.format = kImageFormat;
+  desc.pixels = levels.data();
+  desc.size = levels.size() * sizeof(Rgba);
+  desc.mip_levels = 3;
+  auto image = vg::upload_texture(device(), allocator(), desc);
+  ASSERT_TRUE(image.ok()) << image.status().message();
+
+  Options whole_chain;
+  whole_chain.max_lod = VK_LOD_CLAMP_NONE;
+  const struct {
+    const char* name;
+    Options options;
+    Rgba expected;
+  } cases[] = {{"defaults", Options{}, black},
+               {"whole chain", whole_chain, white}};
+  for (const auto& c : cases) {
+    SCOPED_TRACE(c.name);
+    auto texture = make_set(image.value().view(), c.options);
+    ASSERT_TRUE(texture.ok()) << texture.status().message();
+    expect_near(draw(texture.value()->set(), 2),
+                std::vector<Rgba>(4, c.expected), 2);
+  }
+}
+
 TEST_F(HybridMeshTextureSetTest, CreateRefusesWhatItCannotBind) {
   auto image = upload(kFirst);
   ASSERT_TRUE(image.ok()) << image.status().message();
