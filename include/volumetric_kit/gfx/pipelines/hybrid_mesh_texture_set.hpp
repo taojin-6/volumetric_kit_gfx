@@ -23,13 +23,27 @@ namespace volumetric_kit::gfx::pipelines {
 
 class HybridMeshPipeline;
 
+/// @brief How a @ref HybridMeshTextureSet's sampler reads the image:
+///        `HybridMeshTextureSet::Options`.
+struct HybridMeshTextureSetOptions {
+  /// Magnification and minification filter, and the blend between mip
+  /// levels: `VK_FILTER_NEAREST` or `VK_FILTER_LINEAR`.
+  VkFilter filter = VK_FILTER_LINEAR;
+  /// Addressing on every axis: `REPEAT`, `MIRRORED_REPEAT`, `CLAMP_TO_EDGE`
+  /// or `CLAMP_TO_BORDER` (opaque black).
+  VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  /// The highest mip level sampled; 0 samples the base level alone, and
+  /// `VK_LOD_CLAMP_NONE` the whole chain.
+  float max_lod = 0.0f;
+};
+
 /// @brief A @ref HybridMeshPipeline's set-0 descriptor set over an image view
 ///        the caller owns, with its own descriptor pool and sampler.
 ///
 /// The caller makes, writes and destroys the image; the set names its view,
 /// which the pipeline samples at each fragment's `uv0`. The image is in
 /// `SHADER_READ_ONLY_OPTIMAL` whenever a frame that binds the set runs, and
-/// its format can be sampled with the @ref Options::filter chosen. When the
+/// its format can be sampled with the filter @ref Options choose. When the
 /// caller recreates its image -- at a new size, say -- @ref rebind points the
 /// same set at the new view.
 ///
@@ -52,18 +66,9 @@ class HybridMeshPipeline;
 /// @endcode
 class VG_PIPELINES_API HybridMeshTextureSet {
  public:
-  /// @brief How the pipeline samples the image.
-  struct Options {
-    /// Magnification and minification filter, and the blend between mip
-    /// levels: `VK_FILTER_NEAREST` or `VK_FILTER_LINEAR`.
-    VkFilter filter = VK_FILTER_LINEAR;
-    /// Addressing on every axis: `REPEAT`, `MIRRORED_REPEAT`, `CLAMP_TO_EDGE`
-    /// or `CLAMP_TO_BORDER` (opaque black).
-    VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    /// The highest mip level sampled; 0 samples the base level alone, and
-    /// `VK_LOD_CLAMP_NONE` the whole chain.
-    float max_lod = 0.0f;
-  };
+  /// @brief How the pipeline samples the image. Declared outside the class,
+  ///        so its defaults are complete where @ref create takes it.
+  using Options = HybridMeshTextureSetOptions;
 
   /// @brief Build the set over @p view, with its own pool and sampler.
   /// @param device    The device @p pipeline was created on.
