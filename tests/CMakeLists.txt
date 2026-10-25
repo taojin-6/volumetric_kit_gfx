@@ -201,6 +201,7 @@ add_executable(
   depth_cloud_pipeline_test.cpp
   gpu_mesh_test.cpp
   hybrid_mesh_pipeline_test.cpp
+  hybrid_mesh_texture_set_test.cpp
   ibl_test.cpp
   image_pipeline_test.cpp
   image_write_test.cpp

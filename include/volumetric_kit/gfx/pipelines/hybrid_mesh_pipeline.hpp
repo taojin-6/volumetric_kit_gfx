@@ -90,7 +90,8 @@ enum HybridMeshFlags : uint32_t {
 /// so a consumer gets the technique from @ref create alone. The reflected
 /// layout exposes **one** descriptor set -- **set 0, binding 0**: the atlas as
 /// a combined image sampler. A @ref StreamedAtlas made for the pipeline streams
-/// one; a consumer may also bind a set of its own. The fragment shader samples
+/// one, a @ref HybridMeshTextureSet binds an image the consumer owns, and a
+/// consumer may also bind a set of its own. The fragment shader samples
 /// the set unconditionally, so the pipeline owns a fallback -- a 1x1 image and
 /// its set -- which @ref submit binds for a frame with no atlas, drawing every
 /// triangle in its vertex color. Per-frame constants (the view-projection,
