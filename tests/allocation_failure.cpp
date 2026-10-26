@@ -30,6 +30,7 @@ thread_local bool record_upload = false;
 thread_local bool target_upload = false;
 thread_local vg_test::AllocationSite upload_sites[512];
 thread_local std::size_t upload_count = 0;
+thread_local std::size_t exclusions = 0;
 
 bool upload_owned_allocation() noexcept {
   Dl_info executable{};
@@ -66,7 +67,7 @@ thread_local std::size_t remaining = 0;
 thread_local std::size_t attempts = 0;
 
 void fail_if_armed() {
-  if (!armed) return;
+  if (!armed || exclusions != 0) return;
   ++attempts;
   if (remaining != 0) {
     --remaining;
@@ -99,6 +100,9 @@ void* allocate_aligned(std::size_t size, std::align_val_t alignment) {
 }  // namespace
 
 namespace vg_test {
+
+AllocationExclusion::AllocationExclusion() noexcept { ++exclusions; }
+AllocationExclusion::~AllocationExclusion() { --exclusions; }
 
 void record_upload_allocations() noexcept {
   // Warm stack unwinding before collection.
@@ -180,6 +184,7 @@ bool AllocationFailure::stop() noexcept {
 // parameter names; application definitions use ordinary portable names.
 // NOLINTBEGIN(readability-inconsistent-declaration-parameter-name)
 void* operator new(std::size_t size) {
+  if (exclusions != 0) return allocate(size);
   const void* caller = __builtin_return_address(0);
   if (size == target_size && target_caller != nullptr &&
       target_caller == caller &&
