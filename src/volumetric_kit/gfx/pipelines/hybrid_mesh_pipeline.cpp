@@ -11,6 +11,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "hybrid_mesh_set0.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
@@ -170,34 +171,49 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
 
   // The fallback is only ever bound with kHybridMeshVertexColor set, so its
   // texel is never shown; it exists so that the shader's sample reads a
-  // defined image.
+  // defined image. RGBA sets bind it again as their unread chroma, and the
+  // uniform that marks a set RGBA, which never changes, goes up with it.
   const uint8_t white[4] = {255, 255, 255, 255};
   ImageUploadDesc fallback_desc;
   fallback_desc.extent = {1, 1};
   fallback_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
   fallback_desc.pixels = white;
   fallback_desc.size = sizeof(white);
-  VKC_ASSIGN(core::Image fallback,
-             upload_texture(device, allocator, fallback_desc));
+  const detail::PictureUniform rgba{};
+  BufferUploadDesc rgba_desc;
+  rgba_desc.data = &rgba;
+  rgba_desc.size = sizeof(rgba);
+  rgba_desc.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+  VKC_ASSIGN(UploadBatch batch, UploadBatch::begin(device, allocator));
+  VKC_ASSIGN(core::Image fallback, batch.add(fallback_desc));
+  VKC_ASSIGN(core::Buffer rgba_picture, batch.add_buffer(rgba_desc));
+  VKC_TRY(batch.finish());
+  fallback.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  const VkDescriptorPoolSize pool_size{
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  VKC_ASSIGN(core::DescriptorPool pool,
-             core::DescriptorPool::create(vk, &pool_size, 1, 1));
+  const auto pool_sizes = detail::set0_pool_sizes(1);
+  VKC_ASSIGN(
+      core::DescriptorPool pool,
+      core::DescriptorPool::create(
+          vk, pool_sizes.data(), static_cast<uint32_t>(pool_sizes.size()), 1));
   VKC_ASSIGN(core::DescriptorSet fallback_set,
              pool.allocate(pipeline.descriptor_set_layout(0)));
-  fallback_set.write_combined_image_sampler(
-      0, fallback.view(), sampler.handle(),
-      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   HybridMeshPipeline hybrid;
   hybrid.device_ = &device;
   hybrid.pipeline_ = std::move(pipeline);
   hybrid.sampler_.emplace(std::move(sampler));
   hybrid.fallback_ = std::move(fallback);
+  hybrid.rgba_picture_ = std::move(rgba_picture);
   hybrid.pool_ = std::move(pool);
   hybrid.fallback_set_ = std::move(fallback_set);
+  hybrid.write_rgba_set(hybrid.fallback_set_, hybrid.fallback_.view());
   return hybrid;
+}
+
+void HybridMeshPipeline::write_rgba_set(const core::DescriptorSet& set,
+                                        VkImageView view) const {
+  detail::write_set0(set, sampler_->handle(), {view}, {fallback_.view()},
+                     rgba_picture_.handle());
 }
 
 HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept
@@ -205,6 +221,7 @@ HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept
       pipeline_(std::move(other.pipeline_)),
       sampler_(std::move(other.sampler_)),
       fallback_(std::move(other.fallback_)),
+      rgba_picture_(std::move(other.rgba_picture_)),
       pool_(std::move(other.pool_)),
       fallback_set_(std::move(other.fallback_set_)) {
   other.device_ = nullptr;
@@ -216,9 +233,11 @@ HybridMeshPipeline& HybridMeshPipeline::operator=(
     HybridMeshPipeline&& other) noexcept {
   if (this != &other) {
     // Release in reverse declaration order -- the set, the pool that frees it,
-    // the image it names, the sampler -- before adopting other's.
+    // the uniform and the image it names, the sampler -- before adopting
+    // other's.
     fallback_set_ = {};
     pool_ = {};
+    rgba_picture_ = {};
     fallback_ = {};
     sampler_.reset();
     pipeline_ = {};
@@ -227,6 +246,7 @@ HybridMeshPipeline& HybridMeshPipeline::operator=(
     pipeline_ = std::move(other.pipeline_);
     sampler_ = std::move(other.sampler_);
     fallback_ = std::move(other.fallback_);
+    rgba_picture_ = std::move(other.rgba_picture_);
     pool_ = std::move(other.pool_);
     fallback_set_ = std::move(other.fallback_set_);
     other.device_ = nullptr;
@@ -246,9 +266,9 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
   set_full_viewport_scissor(cmd, frame.extent);
 
-  // Set 0 (the atlas combined-image-sampler) binds once for the frame. The
-  // fragment shader samples it unconditionally, so a frame without an atlas
-  // binds the fallback and draws in vertex color instead.
+  // Set 0 (the atlas) binds once for the frame. The fragment shader samples
+  // it unconditionally, so a frame without an atlas binds the fallback and
+  // draws in vertex color instead.
   const bool has_atlas = frame.atlas != VK_NULL_HANDLE;
   const VkDescriptorSet atlas =
       has_atlas ? frame.atlas : fallback_set_.handle();

@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -33,15 +34,14 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 
 namespace {
@@ -263,15 +263,12 @@ pipelines::LiveMesh make_live_mesh(vkc::Allocator& allocator,
   return make_live_mesh(allocator, mesh, pad, draw_command(mesh), out);
 }
 
-// A set-0 combined-image-sampler plus the objects it points at (texture,
-// sampler, pool). The set handle is bound at draw time; the owning objects live
-// in a test-body vector so they outlive the render() calls yet are destroyed
-// before the allocator that produced them.
+// An atlas texture and the set-0 set over it. The set handle is bound at draw
+// time; the owning objects live in a test-body vector so they outlive the
+// render() calls yet are destroyed before the allocator that produced them.
 struct AtlasResources {
   vkc::Image texture;
-  vg::Sampler sampler;
-  vkc::DescriptorPool pool;
-  VkDescriptorSet set = VK_NULL_HANDLE;
+  std::unique_ptr<pipelines::HybridMeshTextureSet> set;
 };
 
 // --- Creation validation: no device needed -----------------------------------
@@ -299,7 +296,7 @@ TEST_F(HybridMeshPipelineDeviceTest, CreatesWithReflectedAtlasSet) {
   EXPECT_TRUE(pipeline.value().valid());
   EXPECT_NE(pipeline.value().handle(), VK_NULL_HANDLE);
   EXPECT_NE(pipeline.value().layout(), VK_NULL_HANDLE);
-  // The embedded shaders declare exactly one set: set 0, the atlas sampler.
+  // The embedded shaders declare exactly one set: set 0, the atlas.
   EXPECT_EQ(pipeline.value().descriptor_set_count(), 1u);
   EXPECT_NE(pipeline.value().descriptor_set_layout(0), VK_NULL_HANDLE);
 }
@@ -345,7 +342,7 @@ TEST_F(HybridMeshPipelineDeviceTest, SelfMoveAssignStaysValid) {
   ASSERT_TRUE(created.ok()) << created.status().message();
   pipelines::HybridMeshPipeline pipeline = std::move(created).value();
   const VkPipeline before = pipeline.handle();
-  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);  // set 0, the atlas sampler
+  ASSERT_EQ(pipeline.descriptor_set_count(), 1u);  // set 0, the atlas
   const VkDescriptorSetLayout layout_before = pipeline.descriptor_set_layout(0);
   ASSERT_NE(layout_before, VK_NULL_HANDLE);
 
@@ -455,10 +452,9 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
   }
 
   // Uploads `pixels` (`extent`, kColorFormat, `size` bytes) as a NEAREST atlas
-  // and writes it into a fresh set-0 combined-image-sampler. Appends the
-  // texture, sampler, and pool to `keep` (a caller-owned local that must
-  // outlive the render, but be destroyed before its allocator) and returns the
-  // set handle (VK_NULL_HANDLE on failure).
+  // and makes a set-0 set over it. Appends both to `keep` (a caller-owned
+  // local that must outlive the render, but be destroyed before its
+  // allocator) and returns the set handle (VK_NULL_HANDLE on failure).
   VkDescriptorSet make_atlas(vkc::Allocator& allocator,
                              const pipelines::HybridMeshPipeline& pipeline,
                              const void* pixels, VkExtent2D extent,
@@ -475,40 +471,18 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
       return VK_NULL_HANDLE;
     }
 
-    vg::SamplerDesc sdesc;
-    sdesc.mag_filter = VK_FILTER_NEAREST;
-    sdesc.min_filter = VK_FILTER_NEAREST;
-    sdesc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sdesc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sdesc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sdesc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    auto sampler = vg::Sampler::create(device().handle(), sdesc);
-    if (!sampler.ok()) {
-      ADD_FAILURE() << sampler.status().message();
-      return VK_NULL_HANDLE;
-    }
-
-    const VkDescriptorPoolSize pool_size{
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool =
-        vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
-    if (!pool.ok()) {
-      ADD_FAILURE() << pool.status().message();
-      return VK_NULL_HANDLE;
-    }
-    auto set = pool.value().allocate(pipeline.descriptor_set_layout(0));
+    pipelines::HybridMeshTextureSet::Options nearest;
+    nearest.filter = VK_FILTER_NEAREST;
+    auto set = pipelines::HybridMeshTextureSet::create(
+        device(), allocator, pipeline, texture.value().view(), nearest);
     if (!set.ok()) {
       ADD_FAILURE() << set.status().message();
       return VK_NULL_HANDLE;
     }
-    set.value().write_combined_image_sampler(
-        0, texture.value().view(), sampler.value().handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     keep.push_back(
-        AtlasResources{std::move(texture).value(), std::move(sampler).value(),
-                       std::move(pool).value(), set.value().handle()});
-    return keep.back().set;
+        AtlasResources{std::move(texture).value(), std::move(set).value()});
+    return keep.back().set->set();
   }
 };
 

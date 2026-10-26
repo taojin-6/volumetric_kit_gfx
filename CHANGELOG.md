@@ -38,6 +38,13 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `pipelines`: **a mesh samples a camera's 4:2:0 picture where it is.**
+  `HybridMeshTextureSet::create` and `rebind` take a `YcbcrPicture`
+  (`pipelines/ycbcr.hpp`): its luma (`R8_UNORM`) and chroma (`R8G8_UNORM`)
+  images, its extent at their corner, and its `YcbcrCoding` (matrix, range,
+  chroma siting). The fragment shader filters both planes and converts, with
+  no copy to an RGBA image; odd and padded planes work, and `rebind` switches
+  a set between an RGBA image and a picture either way.
 - `pipelines`: `HybridMeshTextureSet` (`pipelines/hybrid_mesh_texture_set.hpp`)
   is a `HybridMeshPipeline`'s set-0 descriptor set over an image view the
   caller owns, with its own descriptor pool and sampler (`Options`: filter,
@@ -227,6 +234,16 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `pipelines`: **`HybridMeshTextureSet::create` takes an allocator**, after
+  the device, for the uniform a Y'CbCr picture's coding goes in. It takes
+  host-mapped device memory; on a device without it, a set binds RGBA images
+  alone. `HybridMeshPipeline`'s set 0 now holds two planes and a uniform, so
+  build it with `HybridMeshTextureSet` or `StreamedAtlas`, not by hand.
+- `pipelines`: `ChromaSiting` is in `pipelines/ycbcr.hpp`, and
+  `ImageConversion` derives from `YcbcrCoding`, which now holds its `kr`,
+  `kb`, `full_range` and `chroma_siting`; code that sets them is unchanged.
+  `ImagePipeline::record_convert` refuses a siting `ChromaSiting` does not
+  name. Its NV12 convert and the mesh share `shaders/common/ycbcr.glsl`.
 - CI: **the iOS build targets iOS 26.0**, the family's iOS floor
   (`-DCMAKE_OSX_DEPLOYMENT_TARGET=26.0`).
 - build: gfx pins volumetric_kit_core at `0daced5` (core 0.20.0, the core's

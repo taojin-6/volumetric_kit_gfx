@@ -27,6 +27,7 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/ycbcr.hpp"
 
 namespace volumetric_kit::core {
 class Allocator;
@@ -59,15 +60,6 @@ enum class ImageEncoding : uint32_t {
   Srgb = 0,
   /// Linear light.
   Linear = 1,
-};
-
-/// @brief Where an NV12 picture's chroma samples sit relative to its luma.
-enum class ChromaSiting : uint32_t {
-  /// Between the luma samples on both axes: JPEG (and so MJPEG).
-  Center = 0,
-  /// Level with the left luma sample of each pair, between the rows: H.264
-  /// and H.265.
-  Left = 1,
 };
 
 /// @brief How a draw magnifies its image: when zoomed in past one texel per
@@ -143,6 +135,7 @@ struct ImagePlane {
 ///
 /// One conversion serves every region of the picture, so the regions share
 /// one coding: one transfer function, ramp, Y'CbCr matrix, range and siting.
+/// The @ref YcbcrCoding it derives from is @ref ImageMapping::Nv12 's.
 ///
 /// @code
 /// pipelines::ImageConversion mjpeg;  // BT.601, full range, centered chroma
@@ -150,7 +143,7 @@ struct ImagePlane {
 /// mjpeg.kb = 0.114f;
 /// mjpeg.chroma_siting = pipelines::ChromaSiting::Center;
 /// @endcode
-struct ImageConversion {
+struct ImageConversion : YcbcrCoding {
   /// What the values encode, for @ref ImageMapping::Color,
   /// @ref ImageMapping::Grey and @ref ImageMapping::Nv12 (whose matrix gives
   /// encoded R'G'B'). Must be @ref ImageEncoding::Srgb for an `_SRGB` format.
@@ -166,15 +159,6 @@ struct ImageConversion {
   /// "no data" in a depth map. An `R32_SFLOAT` NaN is shown black either way
   /// (and so is one shown through @ref ImageMapping::Grey).
   bool zero_is_empty = true;
-  /// The Y'CbCr matrix's red weight: BT.601 0.299, BT.709 0.2126.
-  float kr = 0.299f;
-  /// The Y'CbCr matrix's blue weight: BT.601 0.114, BT.709 0.0722.
-  float kb = 0.114f;
-  /// Y in 0..255 rather than 16..235 (and chroma in 0..255 rather than
-  /// 16..240): JPEG is full range, broadcast video limited.
-  bool full_range = true;
-  /// Where the chroma samples sit.
-  ChromaSiting chroma_siting = ChromaSiting::Center;
 };
 
 /// @brief One update of an @ref ImageTexture: the whole picture's planes, and
@@ -556,8 +540,9 @@ class VG_PIPELINES_API ImagePipeline {
   ///         empty pipeline or texture, a texture not written since
   ///         @ref ImageTexture::create or @ref ImageTexture::discard,
   ///         @ref ImageEncoding::Linear for an `_SRGB` format, ramp bounds
-  ///         that are equal or not finite, or matrix weights outside
-  ///         `kr > 0, kb > 0, kr + kb < 1`.
+  ///         that are equal or not finite, or, for NV12, matrix weights
+  ///         outside `kr > 0, kb > 0, kr + kb < 1` or a siting
+  ///         @ref ChromaSiting does not name.
   core::Status record_convert(VkCommandBuffer cmd, ImageTexture& texture,
                               const ImageConversion& conversion) const;
 

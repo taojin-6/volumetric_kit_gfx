@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "hybrid_mesh_set0.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -68,10 +69,11 @@ core::Result<StreamedAtlas> StreamedAtlas::create(
   }
 
   const VkDevice vk = device.handle();
-  const VkDescriptorPoolSize pool_size{
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, desc.slots};
+  const auto pool_sizes = detail::set0_pool_sizes(desc.slots);
   VKC_ASSIGN(core::DescriptorPool pool,
-             core::DescriptorPool::create(vk, &pool_size, 1, desc.slots));
+             core::DescriptorPool::create(
+                 vk, pool_sizes.data(),
+                 static_cast<std::uint32_t>(pool_sizes.size()), desc.slots));
 
   // TRANSFER_SRC keeps a picture copyable (a screenshot, a readback).
   core::ImageDesc image_desc;
@@ -86,9 +88,7 @@ core::Result<StreamedAtlas> StreamedAtlas::create(
     VKC_ASSIGN(slot.set,
                pool.allocate(pipeline.pipeline_.descriptor_set_layout(0)));
     // Written once: an update rewrites the image, never the set.
-    slot.set.write_combined_image_sampler(
-        0, slot.image.view(), pipeline.sampler_->handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    pipeline.write_rgba_set(slot.set, slot.image.view());
   }
 
   StreamedAtlas atlas;

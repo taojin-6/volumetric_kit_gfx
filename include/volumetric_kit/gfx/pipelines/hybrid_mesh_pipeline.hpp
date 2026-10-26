@@ -16,6 +16,7 @@
 #include <glm/vec3.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -33,6 +34,7 @@ class Device;
 namespace volumetric_kit::gfx::pipelines {
 
 class GpuMesh;
+class HybridMeshTextureSet;
 class StreamedAtlas;
 struct HybridMeshFrame;
 
@@ -82,16 +84,18 @@ enum HybridMeshFlags : uint32_t {
 /// is the `(0, 0)` case. See @ref LiveMesh. Lighting is toggled by
 /// @ref kHybridMeshLit; @ref kHybridMeshNormals swaps the albedo for a
 /// normal-as-color debug view. Vertex colors and atlas texels are linear light
-/// (an `_SRGB` atlas decodes when sampled); a target that takes linear light
+/// (an `_SRGB` atlas decodes when sampled), as is a camera picture's R'G'B',
+/// decoded as sRGB once converted; a target that takes linear light
 /// (`_SRGB` or float) is given the shaded color as is, and a UNORM target
 /// sRGB-encoded, so a color shows alike on each.
 ///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
-/// layout exposes **one** descriptor set -- **set 0, binding 0**: the atlas as
-/// a combined image sampler. A @ref StreamedAtlas made for the pipeline streams
-/// one, a @ref HybridMeshTextureSet binds an image the consumer owns, and a
-/// consumer may also bind a set of its own. The fragment shader samples
+/// layout exposes **one** descriptor set, **set 0**: an RGBA atlas -- one a
+/// @ref StreamedAtlas made for the pipeline streams, or an image the consumer
+/// owns -- or a camera picture's two Y'CbCr 4:2:0 planes, which only a
+/// @ref HybridMeshTextureSet binds; a uniform says which, and those two types
+/// write its bindings. The fragment shader samples
 /// the set unconditionally, so the pipeline owns a fallback -- a 1x1 image and
 /// its set -- which @ref submit binds for a frame with no atlas, drawing every
 /// triangle in its vertex color. Per-frame constants (the view-projection,
@@ -132,12 +136,12 @@ class VG_PIPELINES_API HybridMeshPipeline {
   /// @brief Build the hybrid-mesh pipeline for a render-target layout, and its
   ///        fallback atlas.
   ///
-  /// Uploads the fallback's one texel with @ref upload_texture, which blocks
-  /// on the device's queue: a setup-time call.
+  /// Uploads the fallback's one texel and its uniform with an
+  /// @ref UploadBatch, which blocks on the device's queue: a setup-time call.
   /// @param device     The device; it must have enabled the renderer's
   ///                   requirements (@ref device_requirements).
-  /// @param allocator  Allocates the fallback image; it may be destroyed
-  ///                   before the pipeline.
+  /// @param allocator  Allocates the fallback's image and uniform; it may be
+  ///                   destroyed before the pipeline.
   /// @param layout     The target's format/sample signature; must carry a
   ///                   depth format (the pipeline is depth-tested).
   /// @pre @p layout carries at least one color attachment with a defined
@@ -173,8 +177,7 @@ class VG_PIPELINES_API HybridMeshPipeline {
     return pipeline_.descriptor_set_count();
   }
 
-  /// @brief The reflected layout for descriptor @p set (0 = the atlas sampler)
-  ///        -- pass to `core::DescriptorPool::allocate`.
+  /// @brief The reflected layout for descriptor @p set (0 = the albedo's).
   /// @param set  The set index.
   /// @return The set's `VkDescriptorSetLayout`, or `VK_NULL_HANDLE` if @p set
   /// is
@@ -190,9 +193,10 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///               scope whose target matches the layout @ref create was given.
   /// @param frame  The atlas set, the draw list, the view-projection, and the
   ///               lighting (see @ref HybridMeshFrame).
-  /// @pre `valid()`; an empty pipeline records nothing. `frame.atlas` is a set
-  ///      built against @ref descriptor_set_layout `(0)`, or `VK_NULL_HANDLE`:
-  ///      the pipeline then binds its fallback and sets
+  /// @pre `valid()`; an empty pipeline records nothing. `frame.atlas` is a
+  ///      @ref StreamedAtlas or @ref HybridMeshTextureSet set made for this
+  ///      pipeline, or `VK_NULL_HANDLE`: the pipeline then binds its fallback
+  ///      and sets
   ///      @ref kHybridMeshVertexColor, so every triangle draws in its vertex
   ///      color. Draws whose geometry is empty -- a null static @ref GpuMesh,
   ///      or a live @ref LiveMesh with any of its three handles unbound -- are
@@ -202,15 +206,25 @@ class VG_PIPELINES_API HybridMeshPipeline {
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
-  friend class StreamedAtlas;  // reads device_ and sampler_
+  friend class StreamedAtlas;         // reads device_, writes RGBA sets
+  friend class HybridMeshTextureSet;  // reads fallback_ and rgba_picture_
+
+  // Writes `set`, allocated against set 0's layout, for the RGBA image
+  // `view`: through sampler_, with fallback_ as the unread chroma and
+  // rgba_picture_ as the uniform.
+  void write_rgba_set(const core::DescriptorSet& set, VkImageView view) const;
 
   const core::Device* device_ = nullptr;  // borrowed; outlives this
   GraphicsPipeline pipeline_;
   // The atlas sampler: bilinear, clamped to the edge, one level. Shared by
   // the fallback and every StreamedAtlas made for the pipeline.
   std::optional<Sampler> sampler_;
-  // The fallback: one white texel, its pool, and the set binding it.
+  // The fallback: one white texel, which every RGBA set also binds as its
+  // unread chroma; the uniform that says "RGBA", which every RGBA set binds
+  // (the fallback's, StreamedAtlas's and HybridMeshTextureSet's); their pool;
+  // and the fallback's set.
   core::Image fallback_;
+  core::Buffer rgba_picture_;
   core::DescriptorPool pool_;
   core::DescriptorSet fallback_set_;
 };
@@ -250,9 +264,9 @@ struct HybridMeshFrame {
   /// `max(dot(normal, light_dir), 0)`.
   glm::vec3 light_dir{0.5f, 0.8f, 0.6f};
   uint32_t flags = kHybridMeshLit;  ///< @ref HybridMeshFlags bitmask.
-  /// Set 0: the atlas combined-image-sampler -- @ref StreamedAtlas::use, or a
-  /// set of the caller's. `VK_NULL_HANDLE` draws every triangle in its vertex
-  /// color (see @ref HybridMeshPipeline::submit).
+  /// Set 0: @ref StreamedAtlas::use or @ref HybridMeshTextureSet::set.
+  /// `VK_NULL_HANDLE` draws every triangle in its vertex color (see
+  /// @ref HybridMeshPipeline::submit).
   VkDescriptorSet atlas = VK_NULL_HANDLE;
   const HybridMeshDraw* draws = nullptr;  ///< The draw list.
   uint32_t draw_count = 0;                ///< Number of @ref draws.
