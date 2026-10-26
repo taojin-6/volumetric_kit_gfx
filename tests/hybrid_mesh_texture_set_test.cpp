@@ -584,6 +584,9 @@ TEST_F(HybridMeshTextureSetTest, CreateRefusesWhatItCannotBind) {
 // be a code off before the matrix scales it (by up to 2.1, limited range's B');
 // there the reference's chroma may be anywhere within a code of the blend.
 TEST_F(HybridMeshTextureSetTest, TwoPlanePictureMatchesTheReference) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   auto float_pipeline = pipelines::HybridMeshPipeline::create(
       device(), allocator(), target_layout(kFloatFormat));
   ASSERT_TRUE(float_pipeline.ok()) << float_pipeline.status().message();
@@ -671,6 +674,9 @@ TEST_F(HybridMeshTextureSetTest, TwoPlanePictureMatchesTheReference) {
 // At texel centres the mesh draws what ImagePipeline's NV12 convert shows:
 // the same planes, read 1:1, agree within one code on every size.
 TEST_F(HybridMeshTextureSetTest, TwoPlaneAgreesWithImagePipeline) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   const pipelines::ImagePipeline images = make_pipeline();
   ASSERT_TRUE(images.valid());
   const pipelines::YcbcrCoding codings[] = {
@@ -733,6 +739,9 @@ TEST_F(HybridMeshTextureSetTest, TwoPlaneAgreesWithImagePipeline) {
 // bottom edges. Left-sited chroma reaches past an odd picture's last chroma
 // centre too.
 TEST_F(HybridMeshTextureSetTest, MagnifiedPictureNeverReadsThePadding) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   auto float_pipeline = pipelines::HybridMeshPipeline::create(
       device(), allocator(), target_layout(kFloatFormat));
   ASSERT_TRUE(float_pipeline.ok()) << float_pipeline.status().message();
@@ -825,6 +834,9 @@ TEST_F(HybridMeshTextureSetTest, APictureAloneNeedsHostMappedMemory) {
 // rebind, keeping its handle: the RGBA image, then BT.601 full-range red from
 // a 2x2 picture (as image_pipeline_test's NV12 red), then the image again.
 TEST_F(HybridMeshTextureSetTest, RebindSwitchesTheFormBothWays) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   auto image = upload(kFirst);
   ASSERT_TRUE(image.ok()) << image.status().message();
   PlaneBytes red{{2, 2}, {2, 2}, {1, 1}, {76, 76, 76, 76}, {85, 255}};
@@ -860,6 +872,9 @@ TEST_F(HybridMeshTextureSetTest, RebindSwitchesTheFormBothWays) {
 // Planes left in GENERAL, as a camera picture's imported planes are, are
 // sampled in it.
 TEST_F(HybridMeshTextureSetTest, PlanesInGeneralAreSampledThere) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   PlaneBytes red{{2, 2}, {2, 2}, {1, 1}, {76, 76, 76, 76}, {85, 255}};
   Planes planes = upload_planes(red);
   ASSERT_TRUE(planes.luma.valid() && planes.chroma.valid());
@@ -887,6 +902,9 @@ TEST_F(HybridMeshTextureSetTest, PlanesInGeneralAreSampledThere) {
 }
 
 TEST_F(HybridMeshTextureSetTest, TwoPlaneCreateAndRebindRefuseBadPictures) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
   const PlaneBytes bytes = make_planes({64, 36}, {64, 36}, {32, 18});
   const Planes planes = upload_planes(bytes);
   ASSERT_TRUE(planes.luma.valid() && planes.chroma.valid());

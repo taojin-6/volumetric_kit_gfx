@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include "../src/volumetric_kit/gfx/pipelines/ycbcr_check.hpp"
 #include "allocation_failure.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
@@ -16,6 +17,22 @@
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 
 namespace pipelines = volumetric_kit::gfx::pipelines;
+
+TEST(YcbcrCodingAllocationTest, ValidCodingNeedsNoHostAllocation) {
+  for (auto siting :
+       {pipelines::ChromaSiting::Center, pipelines::ChromaSiting::Left}) {
+    pipelines::YcbcrCoding coding;
+    coding.chroma_siting = siting;
+    // The successful NV12 conversion check must not allocate its call name.
+    // This host-only check keeps injection out of the driver and layer.
+    vg_test::AllocationFailure failure(0, true);
+    const vkc::Status checked = pipelines::detail::check_ycbcr_coding(
+        "ImagePipeline::record_convert", coding);
+    const bool failed = failure.stop();
+    EXPECT_FALSE(failed);
+    EXPECT_TRUE(checked.ok()) << checked.message();
+  }
+}
 
 class TextureAllocationTest : public vg_test::RendererDeviceTest {
  protected:
