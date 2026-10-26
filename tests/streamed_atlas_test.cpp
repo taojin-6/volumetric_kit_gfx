@@ -29,17 +29,16 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/image_update.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 #include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
 namespace {
@@ -307,12 +306,10 @@ class StreamedAtlasTest : public vg_test::RendererDeviceTest {
   // record_image_update itself rewrites, outside any atlas.
   struct SampledImage {
     vkc::Image image;
-    std::optional<vg::Sampler> sampler;
-    vkc::DescriptorPool pool;
-    vkc::DescriptorSet set;
+    std::unique_ptr<pipelines::HybridMeshTextureSet> set;
   };
 
-  // Uploads `picture` into `out.image` and writes the set that binds it.
+  // Uploads `picture` into `out.image` and makes the set that binds it.
   void make_sampled_image(const Picture& picture, SampledImage& out) {
     vg::ImageUploadDesc upload;
     upload.extent = {kSide, kSide};
@@ -322,21 +319,10 @@ class StreamedAtlasTest : public vg_test::RendererDeviceTest {
     auto image = vg::upload_texture(device(), allocator(), upload);
     ASSERT_TRUE(image.ok()) << image.status().message();
     out.image = std::move(image).value();
-    auto sampler = vg::Sampler::create(device().handle());
-    ASSERT_TRUE(sampler.ok()) << sampler.status().message();
-    out.sampler.emplace(std::move(sampler).value());
-    const VkDescriptorPoolSize pool_size{
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool =
-        vkc::DescriptorPool::create(device().handle(), &pool_size, 1, 1);
-    ASSERT_TRUE(pool.ok()) << pool.status().message();
-    out.pool = std::move(pool).value();
-    auto set = out.pool.allocate(pipeline_->descriptor_set_layout(0));
+    auto set = pipelines::HybridMeshTextureSet::create(
+        device(), allocator(), *pipeline_, out.image.view());
     ASSERT_TRUE(set.ok()) << set.status().message();
     out.set = std::move(set).value();
-    out.set.write_combined_image_sampler(
-        0, out.image.view(), out.sampler->handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
   // A buffer a copy reads `picture` from, tightly packed.
@@ -1040,11 +1026,11 @@ TEST_F(StreamedAtlasTest, ImageUpdateWaitsForEarlierReadsInTheFrame) {
   ASSERT_TRUE(target.ok()) << target.status().message();
   again.target = std::move(target).value();
 
-  draw(*frame, sampled.set.handle());
+  draw(*frame, sampled.set->set());
   const vkc::Status updated = vg::record_image_update(
       frame->cmd.handle(), source.value(), sampled.image, &whole, 1);
   EXPECT_TRUE(updated.ok()) << updated.message();
-  draw(frame->cmd.handle(), again.target, sampled.set.handle());
+  draw(frame->cmd.handle(), again.target, sampled.set->set());
   submit(*frame);
   EXPECT_EQ(drawn(*frame), solid(kRed));
   EXPECT_EQ(drawn(again), solid(kGreen));
@@ -1068,7 +1054,7 @@ TEST_F(StreamedAtlasTest, ImageUpdateWaitsForReadsInAnEarlierFrame) {
 
   Frame* one = begin_frame(1);
   ASSERT_NE(one, nullptr);
-  draw(*one, sampled.set.handle());
+  draw(*one, sampled.set->set());
   submit(*one, true);
 
   Frame* two = begin_frame(2);
@@ -1076,7 +1062,7 @@ TEST_F(StreamedAtlasTest, ImageUpdateWaitsForReadsInAnEarlierFrame) {
   const vkc::Status updated = vg::record_image_update(
       two->cmd.handle(), source.value(), sampled.image, &whole, 1);
   EXPECT_TRUE(updated.ok()) << updated.message();
-  draw(*two, sampled.set.handle());
+  draw(*two, sampled.set->set());
   submit(*two);
   open_gate(*gate_);
   EXPECT_EQ(drawn(*one), solid(kRed));

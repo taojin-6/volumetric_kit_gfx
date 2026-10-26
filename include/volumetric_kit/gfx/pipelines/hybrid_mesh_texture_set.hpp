@@ -4,18 +4,22 @@
 #pragma once
 
 /// @file hybrid_mesh_texture_set.hpp
-/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over an image view
-///        the caller owns, with its own descriptor pool and sampler.
+/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over a picture the
+///        caller owns -- an RGBA image, or a Y'CbCr 4:2:0 picture's two
+///        planes -- with its own descriptor pool, sampler and uniform.
 
 #include <memory>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/export.hpp"
+#include "volumetric_kit/gfx/pipelines/ycbcr.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
@@ -23,68 +27,114 @@ namespace volumetric_kit::gfx::pipelines {
 
 class HybridMeshPipeline;
 
-/// @brief How a @ref HybridMeshTextureSet's sampler reads the image:
+/// @brief How a @ref HybridMeshTextureSet's sampler reads the picture:
 ///        `HybridMeshTextureSet::Options`.
 struct HybridMeshTextureSetOptions {
   /// Magnification and minification filter, and the blend between mip
-  /// levels: `VK_FILTER_NEAREST` or `VK_FILTER_LINEAR`.
+  /// levels: `VK_FILTER_NEAREST` or `VK_FILTER_LINEAR`. A Y'CbCr picture's
+  /// two planes both take it; with `NEAREST`, left-sited chroma lies midway
+  /// between two samples at every other column, and a device may read either.
   VkFilter filter = VK_FILTER_LINEAR;
   /// Addressing on every axis: `REPEAT`, `MIRRORED_REPEAT`, `CLAMP_TO_EDGE`
-  /// or `CLAMP_TO_BORDER` (opaque black).
+  /// or `CLAMP_TO_BORDER` (opaque black). A set that binds a Y'CbCr picture
+  /// takes `CLAMP_TO_EDGE` alone.
   VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   /// The highest mip level sampled; 0 samples the base level alone, and
-  /// `VK_LOD_CLAMP_NONE` the whole chain.
+  /// `VK_LOD_CLAMP_NONE` the whole chain. A Y'CbCr picture's planes are
+  /// sampled at level 0 whatever it says.
   float max_lod = 0.0f;
 };
 
-/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over an image view
-///        the caller owns, with its own descriptor pool and sampler.
+/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over a picture the
+///        caller owns, with its own descriptor pool, sampler and uniform.
 ///
-/// The caller makes, writes and destroys the image; the set names its view,
-/// which the pipeline samples at each fragment's `uv0`. The image is in
-/// `SHADER_READ_ONLY_OPTIMAL` whenever a frame that binds the set runs, and
-/// its format can be sampled with the filter set in @ref Options. When the
-/// caller recreates its image, @ref rebind points the same set at the new
-/// view.
+/// The picture is either of two forms, and the set records which in its
+/// uniform, so one pipeline draws both:
+/// - **RGBA**: an image's view, sampled as @ref Options says; an `_SRGB`
+///   format decodes to linear light as it is sampled.
+/// - **Y'CbCr 4:2:0** (@ref YcbcrPicture): a camera picture's two planes,
+///   sampled where they are, with no copy and no RGBA image. Each plane is
+///   filtered at level 0, clamped to the picture; the fragment shader then
+///   converts with the picture's @ref YcbcrCoding and decodes the R'G'B' as
+///   sRGB.
+///
+/// The pipeline samples the picture at each fragment's `uv0`, which spans it
+/// from 0 to 1. @ref rebind points the same set at another picture, of either
+/// form.
+///
+/// A Y'CbCr picture's coding is a uniform the host writes in place, in
+/// device-local memory the host maps
+/// (`PhysicalDeviceInfo::device_mapped_memory`), which unified memory and
+/// most discrete GPUs have. On a device without it a set binds RGBA images
+/// alone, and a picture is `Unsupported`.
+///
+/// **The picture's lifetime is the caller's.** The set names the views, so the
+/// image or the planes stay alive, and in the layout the set was given,
+/// until the last frame that sampled them has retired: keep one set per slot
+/// of a ring, each holding its picture until its slot comes round and it is
+/// rebound, or push the replaced picture to a @ref RetireQueue at the last
+/// such frame's number.
 ///
 /// @warning The @p device and @p pipeline passed to @ref create must outlive
 ///          the set, and the GPU must be done with every frame that bound it
 ///          before it is destroyed: retire it through a @ref RetireQueue or
-///          after `core::Device::wait_idle`. The view must stay alive while
-///          a frame that binds the set runs.
+///          after `core::Device::wait_idle`.
 ///
 /// @code
 /// VKC_ASSIGN(std::unique_ptr<pipelines::HybridMeshTextureSet> texture,
-///            pipelines::HybridMeshTextureSet::create(device, pipeline,
-///                                                    image.view()));
+///            pipelines::HybridMeshTextureSet::create(device, allocator,
+///                                                    pipeline, picture));
 /// // each frame, inside the rendering scope, with texture->set() in the
 /// // frame's set-0 field:
 /// pipeline.submit(cmd, frame);
-/// // once the caller has recreated its image and no frame that bound the
-/// // set is pending:
-/// texture->rebind(image.view());
+/// // once no frame that bound the set is pending, another picture:
+/// VKC_TRY(texture->rebind(other_picture));
 /// @endcode
 class VG_PIPELINES_API HybridMeshTextureSet {
  public:
-  /// @brief How the pipeline samples the image. Declared outside the class,
+  /// @brief How the pipeline samples the picture. Declared outside the class,
   ///        so its defaults are complete where @ref create takes it.
   using Options = HybridMeshTextureSetOptions;
 
-  /// @brief Build the set over @p view, with its own pool and sampler.
-  /// @param device    The device @p pipeline was created on.
-  /// @param pipeline  The pipeline that draws with the set; its set-0 layout
-  ///                  is allocated against.
-  /// @param view      A 2D view of the caller's image, made with
-  ///                  `SAMPLED` usage.
-  /// @param options   The sampler's filter, addressing and mip range.
+  /// @brief Build the set over the RGBA image @p view, with its own pool and
+  ///        sampler.
+  /// @param device     The device @p pipeline was created on.
+  /// @param allocator  Allocates the uniform a later Y'CbCr picture takes,
+  ///                   where the device has the memory; it may be destroyed
+  ///                   before the set.
+  /// @param pipeline   The pipeline that draws with the set; its set-0 layout
+  ///                   is allocated against.
+  /// @param view       A 2D view of the caller's image, made with `SAMPLED`
+  ///                   usage, in `SHADER_READ_ONLY_OPTIMAL` whenever a frame
+  ///                   that binds the set runs, of a format the device can
+  ///                   sample with the filter in @ref Options.
+  /// @param options    The sampler's filter, addressing and mip range.
   /// @return The set; or `core::Status::Code::InvalidArgument` for an empty
   ///         @p pipeline, a null @p view, a filter or address mode other than
   ///         those @ref Options names, or a `max_lod` below 0 or NaN; or a
   ///         backend failure. Host allocation failures return `OutOfMemory`,
   ///         including diagnostic construction; a failed create owns no set.
   static core::Result<std::unique_ptr<HybridMeshTextureSet>> create(
-      const core::Device& device, const HybridMeshPipeline& pipeline,
-      VkImageView view, const Options& options = {});
+      const core::Device& device, core::Allocator& allocator,
+      const HybridMeshPipeline& pipeline, VkImageView view,
+      const Options& options = {});
+
+  /// @brief Build the set over the Y'CbCr 4:2:0 @p picture, with its own pool,
+  ///        sampler and uniform.
+  /// @param device     As the RGBA @ref create.
+  /// @param allocator  As the RGBA @ref create.
+  /// @param pipeline   As the RGBA @ref create.
+  /// @param picture    The planes, their extent and their coding, as
+  ///                   @ref YcbcrPicture describes them.
+  /// @param options    The sampler's filter; its address mode is
+  ///                   `CLAMP_TO_EDGE`.
+  /// @return The set; or what the RGBA @ref create refuses, a picture
+  ///         @ref rebind refuses, or `core::Status::Code::InvalidArgument`
+  ///         for an address mode other than `CLAMP_TO_EDGE`.
+  static core::Result<std::unique_ptr<HybridMeshTextureSet>> create(
+      const core::Device& device, core::Allocator& allocator,
+      const HybridMeshPipeline& pipeline, const YcbcrPicture& picture,
+      const Options& options = {});
 
   ~HybridMeshTextureSet();
   HybridMeshTextureSet(const HybridMeshTextureSet&) = delete;
@@ -96,20 +146,61 @@ class VG_PIPELINES_API HybridMeshTextureSet {
   ///         across @ref rebind.
   VkDescriptorSet set() const noexcept { return set_.handle(); }
 
-  /// @brief Points the set at @p view, after the caller recreates its image.
+  /// @brief Points the set at the RGBA image @p view, after the caller
+  ///        recreates its image or in place of a Y'CbCr picture.
   ///
   /// Rewrites the set in place, so no frame that bound it may still be
-  /// pending -- as for destroying the old image, the GPU is done with every
+  /// pending -- as for destroying the old picture, the GPU is done with every
   /// such frame -- and no command buffer being recorded may have bound it.
   /// @param view  The new image's view, as @ref create takes it; non-null,
   ///              which the write checks with `VKC_CHECK`.
   void rebind(VkImageView view);
 
+  /// @brief Points the set at the Y'CbCr 4:2:0 @p picture, in place of the
+  ///        picture or the RGBA image it holds.
+  ///
+  /// Rewrites the set and its uniform in place, under the RGBA
+  /// @ref rebind 's conditions. On an error the set is unchanged.
+  /// @param picture  The planes, their extent and their coding.
+  /// @return OK once rewritten; `core::Status::Code::InvalidArgument` for a
+  ///         set whose address mode is not `CLAMP_TO_EDGE`; a missing plane;
+  ///         a plane that is not a single-sample, one-layer 2D image with
+  ///         `SAMPLED` usage and a view; a luma not `R8_UNORM` or a chroma not
+  ///         `R8G8_UNORM`; a plane in a layout other than `GENERAL` or
+  ///         `SHADER_READ_ONLY_OPTIMAL`; a zero extent, a luma smaller than
+  ///         it or a chroma smaller than half of it, rounded up; or matrix
+  ///         weights outside `kr > 0, kb > 0, kr + kb < 1` or a siting
+  ///         @ref ChromaSiting does not name. `core::Status::Code::Unsupported`
+  ///         for a plane the device cannot sample, with the set's filter, in
+  ///         its tiling, or on a device without host-mapped device memory.
+  ///         Host allocation failures, including diagnostic construction,
+  ///         return `OutOfMemory`.
+  core::Status rebind(const YcbcrPicture& picture);
+
  private:
-  HybridMeshTextureSet(Sampler sampler, core::DescriptorPool pool,
+  HybridMeshTextureSet(const core::Device& device, const Options& options,
+                       VkImageView placeholder, VkBuffer rgba_uniform,
+                       Sampler sampler, core::Buffer uniform,
+                       core::DescriptorPool pool,
                        core::DescriptorSet set) noexcept;
 
+  // Builds a set of either form, bound to nothing yet; `call` names the
+  // caller in a refusal.
+  static core::Result<std::unique_ptr<HybridMeshTextureSet>> make(
+      const char* call, const core::Device& device, core::Allocator& allocator,
+      const HybridMeshPipeline& pipeline, const Options& options);
+
+  const core::Device& device_;
+  Options options_;
+  // The pipeline's fallback texel: an RGBA picture's chroma binding, which
+  // the shader does not read.
+  VkImageView placeholder_;
+  // The pipeline's uniform saying "RGBA", which an RGBA picture binds.
+  VkBuffer rgba_uniform_;
   Sampler sampler_;
+  // A Y'CbCr picture's form and coding, mapped; empty on a device without
+  // host-mapped device memory.
+  core::Buffer uniform_;
   core::DescriptorPool pool_;  // frees set_
   core::DescriptorSet set_;
 };

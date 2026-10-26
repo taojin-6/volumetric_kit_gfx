@@ -27,10 +27,20 @@ class TextureAllocationTest : public vg_test::RendererDeviceTest {
 TEST_F(TextureAllocationTest,
        InvalidArgumentsContainPersistentDiagnosticFailure) {
   const pipelines::HybridMeshPipeline pipeline;
+  const pipelines::YcbcrPicture no_picture{};
+  vkc::Allocator& alloc = allocator();
   {
     vg_test::AllocationFailure failure(0, true);
     const auto result = pipelines::HybridMeshTextureSet::create(
-        device(), pipeline, VK_NULL_HANDLE);
+        device(), alloc, pipeline, VK_NULL_HANDLE);
+    const bool failed = failure.stop();
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(result.status().domain(), vkc::Status::Code::OutOfMemory);
+  }
+  {
+    vg_test::AllocationFailure failure(0, true);
+    const auto result = pipelines::HybridMeshTextureSet::create(
+        device(), alloc, pipeline, no_picture);
     const bool failed = failure.stop();
     EXPECT_TRUE(failed);
     EXPECT_EQ(result.status().domain(), vkc::Status::Code::OutOfMemory);
@@ -42,8 +52,13 @@ TEST_F(TextureAllocationTest,
     EXPECT_TRUE(failed);
     EXPECT_EQ(result.status().domain(), vkc::Status::Code::OutOfMemory);
   }
-  EXPECT_EQ(pipelines::HybridMeshTextureSet::create(device(), pipeline,
+  EXPECT_EQ(pipelines::HybridMeshTextureSet::create(device(), alloc, pipeline,
                                                     VK_NULL_HANDLE)
+                .status()
+                .domain(),
+            vkc::Status::Code::InvalidArgument);
+  EXPECT_EQ(pipelines::HybridMeshTextureSet::create(device(), alloc, pipeline,
+                                                    no_picture)
                 .status()
                 .domain(),
             vkc::Status::Code::InvalidArgument);
@@ -71,7 +86,7 @@ TEST_F(TextureAllocationTest, WrapperAllocationFailureCleansUpAndAllowsRetry) {
   // and the driver allocate objects of the same size.
   vg_test::record_allocations(sizeof(pipelines::HybridMeshTextureSet));
   auto original = pipelines::HybridMeshTextureSet::create(
-      device(), pipeline.value(), image.value().view());
+      device(), allocator(), pipeline.value(), image.value().view());
   ASSERT_TRUE(original.ok()) << original.status().message();
   const void* site = vg_test::allocation_site(original.value().get());
   ASSERT_NE(site, nullptr);
@@ -79,16 +94,29 @@ TEST_F(TextureAllocationTest, WrapperAllocationFailureCleansUpAndAllowsRetry) {
 
   vg_test::fail_allocation_at(sizeof(pipelines::HybridMeshTextureSet), site);
   const auto refused = pipelines::HybridMeshTextureSet::create(
-      device(), pipeline.value(), image.value().view());
+      device(), allocator(), pipeline.value(), image.value().view());
   const bool failed = vg_test::stop_targeted_failure();
   ASSERT_TRUE(failed);
   EXPECT_EQ(refused.status().domain(), vkc::Status::Code::OutOfMemory);
 
   auto retried = pipelines::HybridMeshTextureSet::create(
-      device(), pipeline.value(), image.value().view());
+      device(), allocator(), pipeline.value(), image.value().view());
   ASSERT_TRUE(retried.ok()) << retried.status().message();
   EXPECT_NE(retried.value()->set(), VK_NULL_HANDLE);
   retried.value()->rebind(image.value().view());
+
+  // A picture's refusal, too, reports a failed diagnostic as OutOfMemory.
+  const pipelines::YcbcrPicture no_picture{};
+  vkc::Status rebound;
+  {
+    vg_test::AllocationFailure failure(0, true);
+    rebound = retried.value()->rebind(no_picture);
+    const bool rebind_failed = failure.stop();
+    EXPECT_TRUE(rebind_failed);
+  }
+  EXPECT_EQ(rebound.domain(), vkc::Status::Code::OutOfMemory);
+  EXPECT_EQ(retried.value()->rebind(no_picture).domain(),
+            vkc::Status::Code::InvalidArgument);
 }
 
 TEST_F(TextureAllocationTest,

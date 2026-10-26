@@ -20,13 +20,29 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "common/srgb.glsl"
+#include "common/ycbcr.glsl"
 
 layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
 layout(location = 3) flat in uint frag_use_vertex_color;
 
-layout(set = 0, binding = 0) uniform sampler2D atlas_tex;
+// Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
+// write it (hybrid_mesh_set0.hpp): an RGBA image, or a camera picture's two
+// Y'CbCr 4:2:0 planes, as the Picture uniform says.
+layout(set = 0, binding = 0) uniform sampler2D plane0;  // RGBA, or the luma
+layout(set = 0, binding = 1) uniform sampler2D plane1;  // the chroma, or unused
+// Mirrors PictureUniform in hybrid_mesh_set0.hpp (std140, 32 bytes).
+layout(set = 0, binding = 2) uniform Picture {
+  uint two_plane;      // 0: plane0 is RGBA; 1: Y'CbCr 4:2:0 planes
+  uint full_range;     // two-plane: Y' in 0..255 rather than 16..235
+  float kr;            // two-plane: the matrix's red weight
+  float kb;            // two-plane: the matrix's blue weight
+  vec2 extent;         // two-plane: the picture's size in luma texels
+  uint chroma_siting;  // two-plane: ChromaSiting
+  uint padding;        // to std140's 16-byte multiple
+}
+picture;
 
 layout(push_constant) uniform Push {
   mat4 view_proj;
@@ -53,6 +69,30 @@ vec3 safe_normalize(vec3 v) {
   return dot(v, v) > 0.0 ? normalize(v) : vec3(0.0);
 }
 
+// Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
+// sampler says (an _SRGB one decodes); a camera picture's two planes are
+// filtered at level 0 where they are, converted, then decoded from sRGB.
+// `two_plane` is the same for the whole draw, so the branch does not diverge.
+vec3 atlas_albedo(vec2 uv) {
+  if (picture.two_plane == 0u) {
+    return texture(plane0, uv).rgb;
+  }
+  vec2 p = uv * picture.extent;
+  float y = textureLod(plane0,
+                       ycbcr_luma_uv(p, picture.extent,
+                                     vec2(textureSize(plane0, 0))),
+                       0.0)
+                .r;
+  vec2 cbcr = textureLod(plane1,
+                         ycbcr_chroma_uv(p, picture.chroma_siting,
+                                         picture.extent,
+                                         vec2(textureSize(plane1, 0))),
+                         0.0)
+                  .rg;
+  return srgb_to_linear(ycbcr_to_rgb(y, cbcr, picture.kr, picture.kb,
+                                     picture.full_range != 0u));
+}
+
 void main() {
   // Normal debug view: the mesh's own normal, deliberately NOT flipped for back
   // faces, so a region whose normals point the wrong way reads as a color jump
@@ -71,10 +111,10 @@ void main() {
   // Sample the atlas unconditionally (uniform control flow keeps the LOD
   // derivatives defined), then select the source the vertex stage resolved,
   // or the vertex color everywhere when the frame asks for it.
-  vec3 atlas_albedo = texture(atlas_tex, frag_uv).rgb;
+  vec3 atlas = atlas_albedo(frag_uv);
   bool use_vertex_color =
       frag_use_vertex_color != 0u || (pc.flags & kFlagVertexColor) != 0u;
-  vec3 albedo = use_vertex_color ? frag_color.rgb : atlas_albedo;
+  vec3 albedo = use_vertex_color ? frag_color.rgb : atlas;
 
   // The lit flag requests lit shading; otherwise pass the albedo through flat.
   if ((pc.flags & kFlagLit) != 0u) {

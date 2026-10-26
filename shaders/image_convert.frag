@@ -17,23 +17,23 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "common/srgb.glsl"
+#include "common/ycbcr.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D plane0;  // color, grey, ramp or luma
 layout(set = 0, binding = 1) uniform sampler2D plane1;  // NV12 CbCr; else plane0, nearest
 
-// Mirrors ConvertPush in image_pipeline.cpp (std430, 48 bytes).
+// Mirrors ConvertPush in image_pipeline.cpp (std430, 40 bytes).
 layout(push_constant) uniform Push {
-  uint mapping;          // ImageMapping: 0 color, 1 grey, 2 ramp, 3 NV12
-  uint srgb_encoded;     // color / grey / NV12: the values are sRGB-encoded
-  float value_scale;     // ramp: the stored value is texel * value_scale
-  float ramp_min;        // ramp: the stored value at the ramp's first color
-  float ramp_max;        // ramp: the stored value at the ramp's last color
-  uint zero_is_empty;    // ramp: a stored 0 is "no data", shown black
-  float kr;              // NV12: the matrix's red weight
-  float kb;              // NV12: the matrix's blue weight
-  uint full_range;       // NV12: Y in 0..255 rather than 16..235
-  float chroma_shift_x;  // NV12: chroma siting, in chroma texels
-  vec2 chroma_size;      // NV12: the chroma plane's size in texels
+  uint mapping;        // ImageMapping: 0 color, 1 grey, 2 ramp, 3 NV12
+  uint srgb_encoded;   // color / grey / NV12: the values are sRGB-encoded
+  float value_scale;   // ramp: the stored value is texel * value_scale
+  float ramp_min;      // ramp: the stored value at the ramp's first color
+  float ramp_max;      // ramp: the stored value at the ramp's last color
+  uint zero_is_empty;  // ramp: a stored 0 is "no data", shown black
+  float kr;            // NV12: the matrix's red weight
+  float kb;            // NV12: the matrix's blue weight
+  uint full_range;     // NV12: Y in 0..255 rather than 16..235
+  uint chroma_siting;  // NV12: ChromaSiting
 }
 pc;
 
@@ -58,24 +58,6 @@ vec3 ramp(float t) {
   return mix(stops[i], stops[i + 1], x - float(i));
 }
 
-// NV12 to R'G'B': the planes' range expanded, then the Kr/Kb matrix.
-vec3 ycbcr_to_rgb(float y, vec2 cbcr) {
-  float luma;
-  vec2 chroma;
-  if (pc.full_range != 0u) {
-    luma = y;
-    chroma = cbcr - 128.0 / 255.0;
-  } else {
-    luma = (y * 255.0 - 16.0) / 219.0;
-    chroma = (cbcr * 255.0 - 128.0) / 224.0;
-  }
-  float kg = 1.0 - pc.kr - pc.kb;
-  float r = luma + 2.0 * (1.0 - pc.kr) * chroma.y;
-  float b = luma + 2.0 * (1.0 - pc.kb) * chroma.x;
-  float g = (luma - pc.kr * r - pc.kb * b) / kg;
-  return clamp(vec3(r, g, b), 0.0, 1.0);
-}
-
 void main() {
   ivec2 texel = ivec2(gl_FragCoord.xy);
   vec4 sample0 = texelFetch(plane0, texel, 0);
@@ -94,12 +76,13 @@ void main() {
 
   vec3 rgb;
   if (pc.mapping == kNv12) {
-    // A luma texel's center x + 0.5 lies at chroma coordinate (x + 0.5) / 2
-    // for chroma sited between the luma samples (JPEG); left-sited chroma
-    // (H.264 / H.265) sits a quarter of a chroma texel further on.
-    vec2 at = (gl_FragCoord.xy * 0.5 + vec2(pc.chroma_shift_x, 0.0)) /
-              pc.chroma_size;
-    rgb = ycbcr_to_rgb(sample0.r, textureLod(plane1, at, 0.0).rg);
+    // The planes are the picture's own size, the luma's center at the
+    // fragment's.
+    vec2 at = ycbcr_chroma_uv(gl_FragCoord.xy, pc.chroma_siting,
+                              vec2(textureSize(plane0, 0)),
+                              vec2(textureSize(plane1, 0)));
+    rgb = ycbcr_to_rgb(sample0.r, textureLod(plane1, at, 0.0).rg, pc.kr,
+                       pc.kb, pc.full_range != 0u);
   } else if (pc.mapping == kGrey) {
     // NaN, which only R32_SFLOAT holds, shows black: its clamp is undefined.
     rgb = vec3(isnan(sample0.r) ? 0.0 : clamp(sample0.r, 0.0, 1.0));

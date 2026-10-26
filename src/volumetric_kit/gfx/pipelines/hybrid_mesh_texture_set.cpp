@@ -3,12 +3,19 @@
 
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 
+#include <cstdint>
+#include <cstring>
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "hybrid_mesh_set0.hpp"
 #include "volumetric_kit/core/base/exception_status.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "ycbcr_check.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -28,38 +35,117 @@ bool core_address_mode(VkSamplerAddressMode address) {
   }
 }
 
+// Checks plane `name` of a picture: an image the set can sample, of `format`,
+// covering `extent`.
+core::Status check_plane(const std::string& call, const char* name,
+                         const core::Image* plane, VkFormat format,
+                         VkExtent2D extent, const core::Device& device,
+                         VkFilter filter) {
+  const std::string which = call + ": the " + name;
+  if (plane == nullptr || !plane->valid()) {
+    return core::Status::invalid_argument(which + " plane is missing");
+  }
+  if (plane->type() != VK_IMAGE_TYPE_2D ||
+      plane->samples() != VK_SAMPLE_COUNT_1_BIT || plane->array_layers() != 1) {
+    return core::Status::invalid_argument(
+        which + " plane is not a single-sample, one-layer 2D image");
+  }
+  if ((plane->usage() & VK_IMAGE_USAGE_SAMPLED_BIT) == 0 ||
+      plane->view() == VK_NULL_HANDLE) {
+    return core::Status::invalid_argument(
+        which + " plane lacks SAMPLED usage or a view");
+  }
+  if (plane->format() != format) {
+    return core::Status::invalid_argument(
+        which + (format == VK_FORMAT_R8_UNORM ? " plane is not R8_UNORM"
+                                              : " plane is not R8G8_UNORM"));
+  }
+  if (plane->layout() != VK_IMAGE_LAYOUT_GENERAL &&
+      plane->layout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    return core::Status::invalid_argument(
+        which + " plane is not in GENERAL or SHADER_READ_ONLY_OPTIMAL");
+  }
+  if (plane->width() < extent.width || plane->height() < extent.height) {
+    return core::Status::invalid_argument(
+        which + " plane is smaller than the picture's");
+  }
+  VkFormatFeatureFlags features = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+  if (filter == VK_FILTER_LINEAR) {
+    features |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  }
+  if (!device.caps().format_supports(format, plane->tiling(), features)) {
+    return core::Status::unsupported(
+        which +
+        " plane's format cannot be sampled, with the set's filter, "
+        "in its tiling");
+  }
+  return core::Status{};
+}
+
+// Checks `picture` for a set sampling with `options`.
+core::Status check_picture(const std::string& call, const YcbcrPicture& picture,
+                           const core::Device& device,
+                           const HybridMeshTextureSet::Options& options) {
+  if (options.address != VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) {
+    return core::Status::invalid_argument(
+        call + ": a Y'CbCr picture is sampled CLAMP_TO_EDGE alone");
+  }
+  const VkExtent2D extent = picture.extent;
+  if (extent.width == 0 || extent.height == 0) {
+    return core::Status::invalid_argument(call +
+                                          ": the picture's extent is zero");
+  }
+  // The chroma is half the luma on each axis, rounded up.
+  const VkExtent2D chroma{(extent.width + 1) / 2, (extent.height + 1) / 2};
+  VKC_TRY(check_plane(call, "luma", picture.luma, VK_FORMAT_R8_UNORM, extent,
+                      device, options.filter));
+  VKC_TRY(check_plane(call, "chroma", picture.chroma, VK_FORMAT_R8G8_UNORM,
+                      chroma, device, options.filter));
+  return detail::check_ycbcr_coding(call, picture.coding);
+}
+
+// A picture's uniform takes device-local memory the host maps.
+core::Status no_picture_uniform(const std::string& call) {
+  return core::Status::unsupported(
+      call +
+      ": the device has no host-mapped device memory for a picture's "
+      "uniform");
+}
+
 }  // namespace
 
-HybridMeshTextureSet::HybridMeshTextureSet(Sampler sampler,
-                                           core::DescriptorPool pool,
-                                           core::DescriptorSet set) noexcept
-    : sampler_(std::move(sampler)),
+HybridMeshTextureSet::HybridMeshTextureSet(
+    const core::Device& device, const Options& options, VkImageView placeholder,
+    VkBuffer rgba_uniform, Sampler sampler, core::Buffer uniform,
+    core::DescriptorPool pool, core::DescriptorSet set) noexcept
+    : device_(device),
+      options_(options),
+      placeholder_(placeholder),
+      rgba_uniform_(rgba_uniform),
+      sampler_(std::move(sampler)),
+      uniform_(std::move(uniform)),
       pool_(std::move(pool)),
       set_(std::move(set)) {}
 
 HybridMeshTextureSet::~HybridMeshTextureSet() = default;
 
-core::Result<std::unique_ptr<HybridMeshTextureSet>>
-HybridMeshTextureSet::create(const core::Device& device,
-                             const HybridMeshPipeline& pipeline,
-                             VkImageView view, const Options& options) try {
+core::Result<std::unique_ptr<HybridMeshTextureSet>> HybridMeshTextureSet::make(
+    const char* call, const core::Device& device, core::Allocator& allocator,
+    const HybridMeshPipeline& pipeline, const Options& options) {
+  const std::string name = call;
   if (!pipeline.valid()) {
-    return core::Status::invalid_argument(
-        "HybridMeshTextureSet::create: empty pipeline");
-  }
-  if (view == VK_NULL_HANDLE) {
-    return core::Status::invalid_argument(
-        "HybridMeshTextureSet::create: the view is null");
+    return core::Status::invalid_argument(name + ": empty pipeline");
   }
   if (options.filter != VK_FILTER_NEAREST &&
       options.filter != VK_FILTER_LINEAR) {
     return core::Status::invalid_argument(
-        "HybridMeshTextureSet::create: the filter is not NEAREST or LINEAR");
+        name + ": the filter is not NEAREST or LINEAR");
   }
   if (!core_address_mode(options.address)) {
     return core::Status::invalid_argument(
-        "HybridMeshTextureSet::create: the address mode is not REPEAT, "
-        "MIRRORED_REPEAT, CLAMP_TO_EDGE or CLAMP_TO_BORDER");
+        name +
+        ": the address mode is not REPEAT, MIRRORED_REPEAT, CLAMP_TO_EDGE "
+        "or CLAMP_TO_BORDER");
   }
 
   // One filter for both directions and between levels, one address mode on
@@ -77,16 +163,47 @@ HybridMeshTextureSet::create(const core::Device& device,
   const VkDevice vk = device.handle();
   VKC_ASSIGN(Sampler sampler, Sampler::create(vk, sampler_desc));
 
-  const VkDescriptorPoolSize pool_size{
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  VKC_ASSIGN(core::DescriptorPool pool,
-             core::DescriptorPool::create(vk, &pool_size, 1, 1));
+  // A picture's form and coding, which the host writes at each rebind that no
+  // pending frame has bound, so one mapped copy serves. Made wherever the
+  // device has that memory, so a set made over an RGBA image may take a
+  // picture later; an RGBA image binds the pipeline's device-only uniform.
+  core::Buffer uniform;
+  if (device.caps().device_mapped_memory()) {
+    core::BufferDesc uniform_desc;
+    uniform_desc.size = sizeof(detail::PictureUniform);
+    uniform_desc.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    uniform_desc.memory = core::MemoryUsage::DeviceMapped;
+    uniform_desc.host_access = core::HostAccess::SequentialWrite;
+    VKC_ASSIGN(uniform, allocator.create_buffer(uniform_desc));
+  }
+
+  const auto pool_sizes = detail::set0_pool_sizes(1);
+  VKC_ASSIGN(
+      core::DescriptorPool pool,
+      core::DescriptorPool::create(
+          vk, pool_sizes.data(), static_cast<uint32_t>(pool_sizes.size()), 1));
   VKC_ASSIGN(core::DescriptorSet set,
              pool.allocate(pipeline.descriptor_set_layout(0)));
 
   // The constructor is private, so no std::make_unique.
-  std::unique_ptr<HybridMeshTextureSet> texture(new HybridMeshTextureSet(
-      std::move(sampler), std::move(pool), std::move(set)));
+  return std::unique_ptr<HybridMeshTextureSet>(new HybridMeshTextureSet(
+      device, options, pipeline.fallback_.view(),
+      pipeline.rgba_picture_.handle(), std::move(sampler), std::move(uniform),
+      std::move(pool), std::move(set)));
+}
+
+core::Result<std::unique_ptr<HybridMeshTextureSet>>
+HybridMeshTextureSet::create(const core::Device& device,
+                             core::Allocator& allocator,
+                             const HybridMeshPipeline& pipeline,
+                             VkImageView view, const Options& options) try {
+  constexpr const char* kCall = "HybridMeshTextureSet::create";
+  if (view == VK_NULL_HANDLE) {
+    return core::Status::invalid_argument(std::string(kCall) +
+                                          ": the view is null");
+  }
+  VKC_ASSIGN(std::unique_ptr<HybridMeshTextureSet> texture,
+             make(kCall, device, allocator, pipeline, options));
   texture->rebind(view);
   return texture;
 } catch (...) {
@@ -94,10 +211,54 @@ HybridMeshTextureSet::create(const core::Device& device,
                                 core::Status::Code::OutOfMemory);
 }
 
+core::Result<std::unique_ptr<HybridMeshTextureSet>>
+HybridMeshTextureSet::create(const core::Device& device,
+                             core::Allocator& allocator,
+                             const HybridMeshPipeline& pipeline,
+                             const YcbcrPicture& picture,
+                             const Options& options) try {
+  constexpr const char* kCall = "HybridMeshTextureSet::create";
+  // Checked before anything is made, so a refused picture costs nothing.
+  VKC_TRY(check_picture(kCall, picture, device, options));
+  if (!device.caps().device_mapped_memory()) {
+    return no_picture_uniform(kCall);
+  }
+  VKC_ASSIGN(std::unique_ptr<HybridMeshTextureSet> texture,
+             make(kCall, device, allocator, pipeline, options));
+  VKC_TRY(texture->rebind(picture));
+  return texture;
+} catch (...) {
+  return core::exception_status("HybridMeshTextureSet::create",
+                                core::Status::Code::OutOfMemory);
+}
+
 void HybridMeshTextureSet::rebind(VkImageView view) {
-  // Binding 0 of set 0: hybrid_mesh.frag's sampler2D.
-  set_.write_combined_image_sampler(0, view, sampler_.handle(),
-                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  detail::write_set0(set_, sampler_.handle(), {view}, {placeholder_},
+                     rgba_uniform_);
+}
+
+core::Status HybridMeshTextureSet::rebind(const YcbcrPicture& picture) try {
+  constexpr const char* kCall = "HybridMeshTextureSet::rebind";
+  VKC_TRY(check_picture(kCall, picture, device_, options_));
+  if (!uniform_.valid()) {
+    return no_picture_uniform(kCall);
+  }
+  detail::PictureUniform coded{};
+  coded.two_plane = 1;
+  coded.full_range = picture.coding.full_range ? 1u : 0u;
+  coded.kr = picture.coding.kr;
+  coded.kb = picture.coding.kb;
+  coded.extent[0] = static_cast<float>(picture.extent.width);
+  coded.extent[1] = static_cast<float>(picture.extent.height);
+  coded.chroma_siting = static_cast<uint32_t>(picture.coding.chroma_siting);
+  std::memcpy(uniform_.mapped(), &coded, sizeof(coded));
+  detail::write_set0(
+      set_, sampler_.handle(), {picture.luma->view(), picture.luma->layout()},
+      {picture.chroma->view(), picture.chroma->layout()}, uniform_.handle());
+  return core::Status{};
+} catch (...) {
+  return core::exception_status("HybridMeshTextureSet::rebind",
+                                core::Status::Code::OutOfMemory);
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

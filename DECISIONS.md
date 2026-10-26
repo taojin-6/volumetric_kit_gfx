@@ -94,7 +94,8 @@ what has landed since then. Record amendments when a contract changes.
   draw + pixel readback under validation. A vertex-color/atlas mesh pipeline is a broadly-useful
   renderer feature, so the siblings stay independent — gfx gains a capability, not a dependency on
   recon. *Amended 2026-10-08:* the pipeline owns a fallback atlas, so a frame needs none ("A
-  streamed atlas", below).
+  streamed atlas", below). *Amended 2026-10-26:* set 0 may instead hold a camera picture's two
+  Y'CbCr 4:2:0 planes, with a uniform saying which ("A mesh samples a 4:2:0 picture", below).
 - **2026-10-05 — 2D images are converted, then mip-mapped, then drawn.**
   `pipelines::ImagePipeline` copies a picture's planes into an `ImageTexture`, renders them to
   display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
@@ -132,6 +133,58 @@ what has landed since then. Record amendments when a contract changes.
   time into busy and blocked and says what each GPU cell holds; the frame loop reports its own
   waits, submit and present; the profiler times on the core's per-frame ranges. See the dated
   entry below.
+- **2026-10-26 — A mesh samples a 4:2:0 picture where it is.** `HybridMeshTextureSet` binds
+  a `YcbcrPicture`'s two plane images, or an RGBA image, and the fragment shader converts:
+  no sampler Y'CbCr conversion, and nothing in the core. See the dated entry below.
+
+## 2026-10-26 — A mesh samples a 4:2:0 picture where it is
+
+**The contract.** `HybridMeshTextureSet` binds an RGBA image's view or a
+`YcbcrPicture`: an 8-bit 4:2:0 picture's luma (`R8_UNORM`) and chroma
+(`R8G8_UNORM`) images, its extent at their corner, and its `YcbcrCoding`.
+`rebind` moves a set between the two forms. Set 0 holds two planes and a
+32-byte uniform with the form and the coding. An RGBA set binds the
+pipeline's fallback texel as its unread chroma, and the pipeline's
+device-only uniform. A picture's uniform is the set's own, in host-mapped
+device memory, as `rebind` has no command buffer to record an update in; a
+device without that memory takes RGBA sets alone. For a picture,
+`hybrid_mesh.frag` filters each plane at level 0, held to the picture,
+converts, then decodes sRGB. The pipeline, `HybridMeshFrame` and
+`StreamedAtlas`'s API do not change; the set's `create` takes an allocator
+for its uniform.
+
+**Why.** A camera picture arrives as two planes -- ARKit's `capturedImage`
+is '420f' -- and `ImagePipeline` already draws NV12. Sampling the planes where
+they are spares a staging copy and an RGBA image. The iOS scanner's keyframe
+textures are the caller.
+
+**Why two plane images, not a sampler Y'CbCr conversion.** The conversion
+needs a device feature, immutable samplers and a pipeline per range and
+siting. On MoltenVK, a CoreVideo picture becomes one multi-planar image only
+through behaviour it calls undefined, and its linear chroma reconstruction is
+wrong. A multi-planar format refuses odd sizes, which two images take, each
+addressed by its own size. Off texel centres the planes are filtered, then
+converted; Vulkan's explicit model converts, then filters, which differs at
+hard chroma edges.
+
+**Where the form lives.** In the set, so one pipeline draws both forms. The
+form is the same across a draw, so the shader's branch does not diverge.
+
+**One home for the conversion in gfx, none in the core.**
+`shaders/common/ycbcr.glsl` holds the chroma coordinate and the matrix, for
+the mesh and `ImagePipeline`'s NV12 convert. recon's sensor tier keeps its own
+conversion: it prepares camera input for fusion, in a library that does not
+link gfx, sharing only the published BT.601/709 formula, as each repo writes
+the sRGB curve its shaders use and pins it in its own tests; a GLSL include
+for two libraries' shaders is not core library code.
+
+**The picture's lifetime is the caller's.** The set names views, so the planes
+stay alive until the last frame that sampled them retires: one set per slot
+of a ring, rebound when its slot comes round, or the replaced picture pushed
+to a `RetireQueue`.
+
+**Not yet.** Mips for a picture: a minified mesh aliases, as it does over a
+one-level RGBA image.
 
 ## 2026-10-23 — A frame's timing says where its time went
 
