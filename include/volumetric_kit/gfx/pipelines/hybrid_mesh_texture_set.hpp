@@ -80,7 +80,8 @@ class VG_PIPELINES_API HybridMeshTextureSet {
   /// @return The set; or `core::Status::Code::InvalidArgument` for an empty
   ///         @p pipeline, a null @p view, a filter or address mode other than
   ///         those @ref Options names, or a `max_lod` below 0 or NaN; or a
-  ///         backend failure.
+  ///         backend failure. Host allocation failures return `OutOfMemory`,
+  ///         including diagnostic construction; a failed create owns no set.
   static core::Result<std::unique_ptr<HybridMeshTextureSet>> create(
       const core::Device& device, const HybridMeshPipeline& pipeline,
       VkImageView view, const Options& options = {});

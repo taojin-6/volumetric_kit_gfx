@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "upload_steps.hpp"
+#include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/format.hpp"
@@ -117,7 +118,7 @@ core::Status record_image_update(VkCommandBuffer cmd,
                                  const core::Buffer& source, core::Image& image,
                                  const VkBufferImageCopy* regions,
                                  std::uint32_t region_count,
-                                 const ImageUpdateScope& scope) {
+                                 const ImageUpdateScope& scope) try {
   std::vector<ImageCopy> copies;
   if (regions != nullptr) {
     copies.reserve(region_count);
@@ -128,11 +129,14 @@ core::Status record_image_update(VkCommandBuffer cmd,
   return record_image_update(cmd, copies.data(),
                              static_cast<std::uint32_t>(copies.size()), image,
                              scope);
+} catch (...) {
+  return core::exception_status("record_image_update",
+                                core::Status::Code::OutOfMemory);
 }
 
 core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
                                  std::uint32_t copy_count, core::Image& image,
-                                 const ImageUpdateScope& scope) {
+                                 const ImageUpdateScope& scope) try {
   const std::string name = "record_image_update";
   VKC_ASSIGN(const VkDeviceSize texel, check_image(name, cmd, image, scope));
   if (copies == nullptr || copy_count == 0) {
@@ -157,8 +161,11 @@ core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
   // The contents are discarded, but not the order: the copy waits for the
   // earlier reads the scope names. Each run of copies from one buffer is one
   // copy command.
-  detail::record_discard_for_copy(cmd, image.handle(), scope.src_stages);
   std::vector<VkBufferImageCopy> run;
+  // Complete host allocation before recording the first barrier: a refused
+  // update leaves the command buffer and the image layout unchanged.
+  run.reserve(copy_count);
+  detail::record_discard_for_copy(cmd, image.handle(), scope.src_stages);
   for (std::uint32_t i = 0; i < copy_count; ++i) {
     run.push_back(copies[i].region);
     if (i + 1 == copy_count || copies[i + 1].source != copies[i].source) {
@@ -172,6 +179,9 @@ core::Status record_image_update(VkCommandBuffer cmd, const ImageCopy* copies,
   detail::record_copied_to_shader_read(cmd, image.handle(), scope.dst_stages);
   image.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return core::Status{};
+} catch (...) {
+  return core::exception_status("record_image_update",
+                                core::Status::Code::OutOfMemory);
 }
 
 core::Status record_image_upload(VkCommandBuffer cmd,
@@ -179,7 +189,7 @@ core::Status record_image_upload(VkCommandBuffer cmd,
                                  RetireQueue& retire, std::uint64_t retire_at,
                                  core::Image& image, const void* pixels,
                                  VkDeviceSize size,
-                                 const ImageUpdateScope& scope) {
+                                 const ImageUpdateScope& scope) try {
   constexpr const char* kCall = "record_image_upload";
   VkBufferImageCopy region{};
   region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -202,9 +212,19 @@ core::Status record_image_upload(VkCommandBuffer cmd,
   // Shared, as the RetireQueue's deleter must be copyable.
   auto staging = std::make_shared<core::Buffer>(std::move(buffer));
 
-  VKC_TRY(record_image_update(cmd, *staging, image, &region, 1, scope));
+  // Complete host ownership before recording. The image/region and exact
+  // byte count were checked above, and make_staging supplies a TRANSFER_SRC
+  // buffer of that size. Nothing fallible remains after enrollment.
   retire.push(retire_at, [staging]() mutable { staging.reset(); });
+  detail::record_discard_for_copy(cmd, image.handle(), scope.src_stages);
+  vkCmdCopyBufferToImage(cmd, staging->handle(), image.handle(),
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  detail::record_copied_to_shader_read(cmd, image.handle(), scope.dst_stages);
+  image.set_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   return core::Status{};
+} catch (...) {
+  return core::exception_status("record_image_upload",
+                                core::Status::Code::OutOfMemory);
 }
 
 }  // namespace volumetric_kit::gfx

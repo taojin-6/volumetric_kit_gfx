@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
@@ -41,7 +42,7 @@ HybridMeshTextureSet::~HybridMeshTextureSet() = default;
 core::Result<std::unique_ptr<HybridMeshTextureSet>>
 HybridMeshTextureSet::create(const core::Device& device,
                              const HybridMeshPipeline& pipeline,
-                             VkImageView view, const Options& options) {
+                             VkImageView view, const Options& options) try {
   if (!pipeline.valid()) {
     return core::Status::invalid_argument(
         "HybridMeshTextureSet::create: empty pipeline");
@@ -88,6 +89,9 @@ HybridMeshTextureSet::create(const core::Device& device,
       std::move(sampler), std::move(pool), std::move(set)));
   texture->rebind(view);
   return texture;
+} catch (...) {
+  return core::exception_status("HybridMeshTextureSet::create",
+                                core::Status::Code::OutOfMemory);
 }
 
 void HybridMeshTextureSet::rebind(VkImageView view) {

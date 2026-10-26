@@ -135,6 +135,24 @@ target_compile_definitions(
 
 vg_discover_tests(vg_core_test)
 
+# Compile the production retirement queue with host-only timeline substitutes.
+# The normal core suite still covers real timeline semaphore integration.
+add_executable(
+  vg_retire_failure_test
+  retire_queue_failure_test.cpp allocation_failure.cpp
+  allocation_failure_test.cpp
+  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/gfx/core/retire_queue.cpp")
+target_include_directories(
+  vg_retire_failure_test
+  PRIVATE $<TARGET_PROPERTY:gfx_core,INTERFACE_INCLUDE_DIRECTORIES>)
+target_compile_definitions(vg_retire_failure_test PRIVATE VG_CORE_STATIC_DEFINE)
+target_link_libraries(
+  vg_retire_failure_test
+  PRIVATE volumetric_kit::core_vulkan volumetric_kit::core_test_main
+          ${CMAKE_DL_LIBS})
+vg_target_warnings(vg_retire_failure_test)
+vg_discover_tests(vg_retire_failure_test)
+
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface), which skips wholesale where that surface or
 # a present-capable device is unavailable; and the surface sources, whose
@@ -238,6 +256,24 @@ vkc_compile_shaders(
 target_compile_definitions(
   vg_pipelines_test PRIVATE VG_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
 vg_discover_tests(vg_pipelines_test TEST_PREFIX "pipelines.")
+
+# Allocation injection is isolated from all other test executables.
+add_executable(
+  vg_texture_allocation_test texture_allocation_test.cpp allocation_failure.cpp
+                             allocation_image_update.cpp)
+target_compile_definitions(vg_texture_allocation_test
+                           PRIVATE VG_CORE_STATIC_DEFINE)
+target_link_libraries(
+  vg_texture_allocation_test
+  PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::core_test_support
+          GTest::gtest_main)
+# Compile the production upload through the staging-exclusion wrapper so its
+# dependency boundary does not rely on symbol visibility. Export its own frames
+# for dladdr's driver/layer filter; other suites test normal library linkage.
+set_target_properties(vg_texture_allocation_test PROPERTIES ENABLE_EXPORTS ON)
+target_link_libraries(vg_texture_allocation_test PRIVATE ${CMAKE_DL_LIBS})
+vg_target_warnings(vg_texture_allocation_test)
+vg_discover_tests(vg_texture_allocation_test)
 
 # assets tier: the format-neutral model is header-only, so its test (PointCloud)
 # links gfx_assets alone -- no loader, no parser, no fixture -- which proves the

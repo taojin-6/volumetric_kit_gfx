@@ -78,7 +78,8 @@ class VG_CORE_API Sampler {
   /// @return The sampler on success, or a non-OK `core::Status`:
   ///         `core::Status::Code::InvalidArgument` for a null @p device or a
   ///         `desc.max_lod < desc.min_lod`; otherwise a backend Status
-  ///         carrying the `VkResult` if `vkCreateSampler` fails.
+  ///         carrying the `VkResult` if `vkCreateSampler` fails. Host
+  ///         allocation failures, including diagnostics, return `OutOfMemory`.
   static core::Result<Sampler> create(VkDevice device,
                                       const SamplerDesc& desc = {});
 

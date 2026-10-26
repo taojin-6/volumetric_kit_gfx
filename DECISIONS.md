@@ -1088,3 +1088,19 @@ since moved: the device, then memory, then descriptors, sync and the query pool
 previously committed constraints available to both agents without copying the
 local-only design document. Update shared rules here and in AGENTS.md as
 appropriate when a decision changes; keep tool-specific configuration separate.
+
+## 2026-10-26 — Deferred release requires established completion
+
+`RetireQueue::drain` returns a `Status`. A successful wait releases the guarded
+entry; device loss releases the remaining entries and is still returned to the
+caller. Other wait failures preserve the unresolved entries for an explicit
+retry. Destruction and move assignment cannot report that failure, so they
+preserve the complete pending owner, including closure captures, without an
+allocation. This deliberate leak is preferable to destroying a resource whose
+GPU use remains unknown. `reclaim` remains an explicit operation for resources
+known complete or a device known idle/lost.
+
+Image upload enrolls staging with the retirement queue before recording its
+copy. All image-update host allocation finishes before the first command, so
+an allocation failure reports `OutOfMemory` without partial recording or a
+changed image layout.

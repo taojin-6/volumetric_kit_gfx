@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/core/export.hpp"
@@ -32,8 +33,11 @@ namespace volumetric_kit::gfx {
 /// @warning The timeline is borrowed by address: it must outlive this queue
 ///          and stay where it is (@ref windowing::FrameLoop::timeline does).
 ///          The `core::Device` a queued deleter frees through must outlive it
-///          too: destruction drains (waits for + runs) every pending deleter.
-///          Compose so the queue is destroyed first. A
+///          too: destruction attempts to drain every pending deleter.
+///          If completion cannot be established, pending closures and their
+///          captures are intentionally leaked rather than freed while the GPU
+///          may use them. Call @ref drain explicitly to observe and retry a
+///          failure before teardown. Compose so the queue is destroyed first. A
 ///          `core::Buffer` or `core::Image` keeps its allocator's state alive
 ///          itself, so the `core::Allocator` need not outlive the queue.
 ///
@@ -62,7 +66,9 @@ class VG_CORE_API RetireQueue {
   ///        idle-at-teardown case -- return at once, so a queue drain
   ///        beforehand is not required to free safely. A value nothing will
   ///        set blocks here (see @ref push); call @ref reclaim first for a
-  ///        no-wait teardown when the device is already idle or lost.
+  ///        no-wait teardown when the device is already idle or lost. Other
+  ///        wait failures preserve the unresolved closures and their captures
+  ///        without invoking or destroying them (an intentional leak).
   ~RetireQueue();
 
   /// @brief Take over @p other's timeline and pending deleters; @p other is
@@ -70,7 +76,8 @@ class VG_CORE_API RetireQueue {
   RetireQueue(RetireQueue&& other) noexcept;
   /// @brief Drains this queue (waits for + runs its own pending deleters, as
   ///        in @ref drain), then takes over @p other's timeline and pending
-  ///        deleters.
+  ///        deleters. If draining cannot establish completion, the old
+  ///        closures and their captures are preserved as in destruction.
   RetireQueue& operator=(RetireQueue&& other) noexcept;
   RetireQueue(const RetireQueue&) = delete;
   RetireQueue& operator=(const RetireQueue&) = delete;
@@ -80,7 +87,7 @@ class VG_CORE_API RetireQueue {
   ///                 touches the resource completes, such as that frame's
   ///                 `windowing::Frame::number`. Work that sets it must be
   ///                 submitted before the queue is drained.
-  /// @param deleter  Invoked exactly once, from @ref poll, @ref drain,
+  /// @param deleter  Invoked at most once, from @ref poll, @ref drain,
   ///                 @ref reclaim or destruction. Must not throw: it may run
   ///                 from a `noexcept` context (destruction or
   ///                 move-assignment), where an escaping exception calls
@@ -94,19 +101,22 @@ class VG_CORE_API RetireQueue {
   /// @brief Run the deleters whose value the timeline has reached; keep the
   ///        rest. Reads the timeline once, and only when a deleter is
   ///        pending.
-  /// @return The number of deleters run: none when the read fails (device
-  ///         lost), which leaves them to @ref drain or @ref reclaim.
+  /// @return The number of deleters run: none when the read or host allocation
+  ///         fails, which preserves the pending entries for a later attempt.
   /// @note Not thread-safe: serialize @ref push against @ref poll /
   ///       @ref drain.
   std::size_t poll();
 
-  /// @brief Wait for the timeline to reach every pending value, then run all
-  ///        deleters. Logs a warning (and frees anyway) if a wait fails, e.g.
-  ///        on device loss. Blocks indefinitely on a value nothing sets --
-  ///        use @ref reclaim instead when the device is idle or lost.
+  /// @brief Wait for pending values and release completed entries in order.
+  /// @return OK once drained; a failed wait otherwise. Device loss reclaims
+  ///         every remaining entry and returns that failure. Any other failure
+  ///         leaves the failed entry and all later entries intact for retry.
+  ///         Host allocation failures return `OutOfMemory`.
+  /// @note Blocks indefinitely on a value nothing sets. Use @ref reclaim
+  ///       instead only when the device is known idle or lost.
   /// @note Not thread-safe: serialize @ref push against @ref poll /
   ///       @ref drain.
-  void drain();
+  core::Status drain() noexcept;
 
   /// @brief Run every pending deleter immediately WITHOUT waiting for its
   ///        value, then clear -- a no-wait forced reclaim for teardown.
@@ -119,11 +129,15 @@ class VG_CORE_API RetireQueue {
   void reclaim();
 
   /// @return The number of deleters still pending.
-  std::size_t pending() const noexcept { return list_.pending(); }
+  std::size_t pending() const noexcept { return list_ ? list_->pending() : 0; }
 
  private:
+  void drain_or_preserve() noexcept;
+
   const core::TimelineSemaphore* timeline_ = nullptr;  // borrowed
-  RetireList<std::uint64_t> list_;
+  // Allocated on first push, so unresolved teardown can preserve the entire
+  // owner with release(), without allocating under memory pressure.
+  std::unique_ptr<RetireList<std::uint64_t>> list_;
 };
 
 }  // namespace volumetric_kit::gfx

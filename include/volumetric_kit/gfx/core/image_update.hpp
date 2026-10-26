@@ -88,7 +88,7 @@ struct ImageUpdateScope {
 ///         above `2^31 - 1` bytes, or a stage mask that is empty or not shader
 ///         stages;
 ///         `core::Status::Code::Unsupported` for a compressed, multi-planar
-///         or depth/stencil format.
+///         or depth/stencil format; `OutOfMemory` on host allocation failure.
 ///
 /// @code
 /// VkBufferImageCopy tile{};  // one camera's tile of an atlas
@@ -169,7 +169,8 @@ VG_CORE_API core::Status record_image_update(
 ///         `core::Status::Code::InvalidArgument` for null @p pixels, a
 ///         @p size other than the first level's, or what
 ///         @ref record_image_update refuses; or the allocator's failure.
-///         On an error nothing is recorded or queued.
+///         Host allocation failures return `OutOfMemory`. On an error
+///         nothing is recorded or queued, and the image is unchanged.
 ///
 /// @code
 /// RetireQueue retire(loop.timeline());

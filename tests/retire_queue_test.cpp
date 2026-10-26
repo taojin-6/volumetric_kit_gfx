@@ -97,7 +97,7 @@ TEST_F(RetireQueueTest, DrainWaitsForThePendingValue) {
     signalled.store(true);
     reach(1);
   });
-  retire.drain();
+  EXPECT_TRUE(retire.drain().ok());
   setter.join();
   EXPECT_TRUE(ran_after_signal);
   EXPECT_EQ(retire.pending(), 0u);
