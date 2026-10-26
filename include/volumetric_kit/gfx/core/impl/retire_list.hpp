@@ -28,6 +28,9 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
   // corrupt the one this call is iterating.
   std::vector<std::function<void()>> ready = std::move(ready_scratch_);
   ready.clear();
+  // Allocate before moving any closures or compacting the pending entries.
+  // An allocation failure then leaves every pending owner intact for retry.
+  ready.reserve(entries_.size());
   std::size_t keep = 0;
   for (std::size_t i = 0; i < entries_.size(); ++i) {
     if (is_ready(entries_[i].key)) {
@@ -51,22 +54,38 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
 template <class Key>
 template <class WaitFn>
 void RetireList<Key>::drain(WaitFn wait) {
-  // Process in rounds until nothing remains: a deleter may re-enter push() to
-  // enqueue a follow-up resource, and drain() promises to run *every* deleter
-  // (matching poll(), which re-checks each iteration). Detaching each round's
-  // entries before running them keeps a throwing deleter from leaving a run
-  // entry to be re-run at destruction; unrun deleters still release via their
-  // captures.
-  while (!entries_.empty()) {
-    std::vector<Entry> pending = std::move(entries_);
-    entries_.clear();
-    for (Entry& entry : pending) {
-      wait(entry.key);
-      if (entry.deleter) {
-        entry.deleter();
+  drain_until([&wait](const Key& key) {
+    wait(key);
+    return true;
+  });
+}
+
+template <class Key>
+template <class WaitFn>
+bool RetireList<Key>::drain_until(WaitFn wait) {
+  std::size_t released = 0;
+  const auto compact = [&] {
+    entries_.erase(entries_.begin(), entries_.begin() + released);
+  };
+  try {
+    while (released < entries_.size()) {
+      if (!wait(entries_[released].key)) {
+        compact();
+        return false;
       }
+      // Moving out clears the completed owner before user code runs. Indices
+      // survive a reentrant push() and no references span that call. Compact
+      // the prefix once, including when a wait throws, so draining is linear.
+      std::function<void()> deleter = std::move(entries_[released].deleter);
+      ++released;
+      if (deleter) deleter();
     }
+  } catch (...) {
+    compact();
+    throw;
   }
+  compact();
+  return true;
 }
 
 template <class Key>

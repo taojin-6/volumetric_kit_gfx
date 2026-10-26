@@ -5,6 +5,7 @@
 
 #include <cmath>
 
+#include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 
 namespace volumetric_kit::gfx {
@@ -13,7 +14,7 @@ namespace volumetric_kit::gfx {
 // here we only validate, create the handle, and adopt it.
 
 core::Result<Sampler> Sampler::create(VkDevice device,
-                                      const SamplerDesc& desc) {
+                                      const SamplerDesc& desc) try {
   if (device == VK_NULL_HANDLE) {
     return core::Status::invalid_argument("Sampler::create: device is null");
   }
@@ -49,6 +50,9 @@ core::Result<Sampler> Sampler::create(VkDevice device,
   sampler.handle_ =
       core::UniqueHandle<VkSampler, vkDestroySampler>(device, handle);
   return sampler;
+} catch (...) {
+  return core::exception_status("Sampler::create",
+                                core::Status::Code::OutOfMemory);
 }
 
 }  // namespace volumetric_kit::gfx

@@ -80,6 +80,16 @@ class RetireList {
   template <class WaitFn>
   void drain(WaitFn wait);
 
+  /// @brief Wait and release entries in order, stopping at the first failure.
+  /// @param wait  Callable `bool(const Key&)`: true only when the entry may
+  ///              be freed. Must not modify the list.
+  /// @return True if all entries were released; false leaves the failed
+  ///         entry and every later entry intact for a retry. A throwing wait
+  ///         likewise preserves the unresolved entries.
+  /// @note A deleter may enqueue more work, which this call also processes.
+  template <class WaitFn>
+  bool drain_until(WaitFn wait);
+
   /// @brief Run every pending deleter unconditionally (no readiness check),
   /// then clear.
   /// @pre Every guarding key is already ready (e.g. the device is idle); the

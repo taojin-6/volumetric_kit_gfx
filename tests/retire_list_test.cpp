@@ -188,3 +188,35 @@ TEST(RetireList, DeleterMayEnqueueDuringPoll) {
   EXPECT_EQ(ran, 2);
   EXPECT_EQ(list.pending(), 0u);
 }
+
+TEST(RetireList, FailedWaitRetainsUnresolvedEntriesAndReentrantWork) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&] {
+    ++ran;
+    list.push(3, [&] { ++ran; });
+  });
+  list.push(2, [&] { ++ran; });
+  EXPECT_FALSE(list.drain_until([](int key) { return key < 2; }));
+  EXPECT_EQ(ran, 1);
+  EXPECT_EQ(list.pending(), 2u);
+  EXPECT_TRUE(list.drain_until([](int) { return true; }));
+  EXPECT_EQ(ran, 3);
+}
+
+TEST(RetireList, ThrowingWaitCompactsCompletedPrefixAndRetainsTheRest) {
+  vg::RetireList<int> list;
+  int ran = 0;
+  list.push(1, [&] { ++ran; });
+  list.push(2, [&] { ++ran; });
+  list.push(3, [&] { ++ran; });
+  EXPECT_THROW(list.drain_until([](int key) {
+    if (key == 2) throw std::bad_alloc();
+    return true;
+  }),
+               std::bad_alloc);
+  EXPECT_EQ(ran, 1);
+  EXPECT_EQ(list.pending(), 2u);
+  EXPECT_TRUE(list.drain_until([](int) { return true; }));
+  EXPECT_EQ(ran, 3);
+}
