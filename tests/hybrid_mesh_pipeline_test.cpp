@@ -1060,9 +1060,10 @@ TEST_F(HybridMeshRenderTest, DrawWithoutSecondViewShowsTheFirstViewOnly) {
   }
 }
 
-// Each draw of a frame takes the pipeline its own flag names: three thirds of
-// the target, each carrying a full-weight second view, drawn without, with,
-// then without the flag show tile A, tile B, then tile A again.
+// Each draw of a frame takes the pipeline its own flag names, the first one
+// included: three thirds of the target, each carrying a full-weight second
+// view, drawn without, with, then without the flag show tile A, tile B, then
+// tile A again, and the other way round tile B, A, B.
 TEST_F(HybridMeshRenderTest, EachDrawTakesThePipelineItsMeshNeeds) {
   auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
                                                         color_depth_layout());
@@ -1085,19 +1086,22 @@ TEST_F(HybridMeshRenderTest, EachDrawTakesThePipelineItsMeshNeeds) {
     ASSERT_TRUE(mesh.ok()) << mesh.status().message();
     meshes.push_back(std::move(mesh).value());
   }
-  const std::vector<pipelines::HybridMeshDraw> draws = {
-      {&meshes[0], false}, {&meshes[1], true}, {&meshes[2], false}};
-  const std::vector<uint8_t> px =
-      render(allocator(), pipeline.value(), draws, atlas, 0u);
-  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+  for (const bool first : {false, true}) {
+    SCOPED_TRACE(first ? "with, without, with" : "without, with, without");
+    const std::vector<pipelines::HybridMeshDraw> draws = {
+        {&meshes[0], first}, {&meshes[1], !first}, {&meshes[2], first}};
+    const std::vector<uint8_t> px =
+        render(allocator(), pipeline.value(), draws, atlas, 0u);
+    ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
 
-  const uint8_t* tiles[3] = {kTileA, kTileB, kTileA};
-  for (uint32_t i = 0; i < 3; ++i) {
-    SCOPED_TRACE(i);
-    const uint8_t* p = pixel_at(px, (2 * i + 1) * kSize / 6, kSize / 2);
-    for (int ch = 0; ch < 3; ++ch) {
-      EXPECT_LE(std::abs(int{p[ch]} - int{tiles[i][ch]}), 1)
-          << "channel " << ch << " drew " << int{p[ch]};
+    for (uint32_t i = 0; i < 3; ++i) {
+      SCOPED_TRACE(i);
+      const uint8_t* tile = draws[i].second_view ? kTileB : kTileA;
+      const uint8_t* p = pixel_at(px, (2 * i + 1) * kSize / 6, kSize / 2);
+      for (int ch = 0; ch < 3; ++ch) {
+        EXPECT_LE(std::abs(int{p[ch]} - int{tile[ch]}), 1)
+            << "channel " << ch << " drew " << int{p[ch]};
+      }
     }
   }
 }

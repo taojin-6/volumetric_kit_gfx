@@ -163,9 +163,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.fragment_specialization = &spec;
   desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(vk, desc));
-  // The same stages, reading the second view. Without it the fragment stage
-  // never reads the slot's interpolant, which the driver then drops: on Apple
-  // GPUs it costs every vertex drawn (DECISIONS.md, 2026-10-27).
+  // The same stages with kSecondView set, for draws whose mesh carries one.
   spec_data.second_view = VK_TRUE;
   VKC_ASSIGN(GraphicsPipeline second_view, GraphicsPipeline::create(vk, desc));
 
@@ -277,7 +275,14 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
     return;
   }
 
-  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
+  // Each draw goes through the pipeline its mesh needs: the first draw's
+  // binds here, and a later draw switches only where its flag differs. The
+  // two layouts are alike, so the set and the push constant serve both.
+  bool second_view_bound = frame.draws != nullptr && frame.draw_count > 0 &&
+                           frame.draws[0].second_view;
+  vkCmdBindPipeline(
+      cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+      second_view_bound ? second_view_.handle() : pipeline_.handle());
   set_full_viewport_scissor(cmd, frame.extent);
 
   // Set 0 (the atlas) binds once for the frame. The fragment shader samples
@@ -310,13 +315,10 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   // Each geometry source binds its own vertex/index buffers, so the draws are
   // independent; RecordGeometry decides what a given source records. The
   // push constant above is still worth recording without a draw list, so this
-  // guards only the loop. A draw whose mesh carries a second view switches to
-  // that view's pipeline, and the next one without switches back; the two
-  // layouts are alike, so the set and the push constant stay bound.
+  // guards only the loop.
   if (frame.draws == nullptr) {
     return;
   }
-  bool second_view_bound = false;
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
     const HybridMeshDraw& draw = frame.draws[i];
     if (draw.second_view != second_view_bound) {
