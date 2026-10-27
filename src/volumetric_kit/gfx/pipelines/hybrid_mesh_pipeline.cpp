@@ -49,16 +49,18 @@ static_assert(offsetof(PushConstants, light_dir) == 64,
 static_assert(offsetof(PushConstants, flags) == 76,
               "PushConstants layout drift");
 
-// hybrid_mesh.frag's specialization constants, constant_ids 0..3 in order. The
+// hybrid_mesh.frag's specialization constants, constant_ids 0..4 in order. The
 // flag bits it tests come from HybridMeshFlags here, so the enum is their one
 // definition (the shader's defaults are 0, which switches a mode off);
 // linear_target says whether the target takes linear light, which decides
-// what the shader writes.
+// what the shader writes; second_view, whether the pipeline reads the tangent
+// slot's second view.
 struct FragmentSpecialization {
   uint32_t flag_lit;
   uint32_t flag_normals;
   VkBool32 linear_target;
   uint32_t flag_vertex_color;
+  VkBool32 second_view;
 };
 
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
@@ -118,8 +120,9 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
                  vg_hybrid_mesh_frag_spv_size));
 
   // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), color
-  // (3) and tangent (4) -- the layout hybrid_mesh.vert declares. This pipeline
-  // reads tangent as the second atlas view, (uv_B, w_B, unused).
+  // (3) and tangent (4) -- the layout hybrid_mesh.vert declares, so both
+  // pipelines bind all five. The second view's pipeline reads tangent as the
+  // second atlas view, (uv_B, w_B, unused).
   const VkVertexInputBindingDescription binding{0, sizeof(assets::Vertex),
                                                 VK_VERTEX_INPUT_RATE_VERTEX};
   const VkVertexInputAttributeDescription attrs[5] = {
@@ -132,18 +135,19 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
 
   // The fragment stage writes color attachment 0 only, so its format alone
   // decides the encoding.
-  const FragmentSpecialization spec_data{
+  FragmentSpecialization spec_data{
       kHybridMeshLit, kHybridMeshNormals,
       takes_linear_light(layout.color_formats[0]) ? VK_TRUE : VK_FALSE,
-      kHybridMeshVertexColor};
-  const VkSpecializationMapEntry spec_entries[4] = {
+      kHybridMeshVertexColor, VK_FALSE};
+  const VkSpecializationMapEntry spec_entries[5] = {
       {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
       {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},
       {2, offsetof(FragmentSpecialization, linear_target), sizeof(VkBool32)},
       {3, offsetof(FragmentSpecialization, flag_vertex_color),
        sizeof(uint32_t)},
+      {4, offsetof(FragmentSpecialization, second_view), sizeof(VkBool32)},
   };
-  const VkSpecializationInfo spec{4, spec_entries, sizeof(spec_data),
+  const VkSpecializationInfo spec{5, spec_entries, sizeof(spec_data),
                                   &spec_data};
 
   GraphicsPipelineDesc desc;
@@ -159,6 +163,11 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.fragment_specialization = &spec;
   desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(vk, desc));
+  // The same stages, reading the second view. Without it the fragment stage
+  // never reads the slot's interpolant, which the driver then drops: on Apple
+  // GPUs it costs every vertex drawn (DECISIONS.md, 2026-10-27).
+  spec_data.second_view = VK_TRUE;
+  VKC_ASSIGN(GraphicsPipeline second_view, GraphicsPipeline::create(vk, desc));
 
   // Atlas tiles meet at their edges, so the sampler clamps rather than wraps
   // into the next tile; the atlas has one level.
@@ -202,6 +211,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   HybridMeshPipeline hybrid;
   hybrid.device_ = &device;
   hybrid.pipeline_ = std::move(pipeline);
+  hybrid.second_view_ = std::move(second_view);
   hybrid.sampler_.emplace(std::move(sampler));
   hybrid.fallback_ = std::move(fallback);
   hybrid.rgba_picture_ = std::move(rgba_picture);
@@ -220,6 +230,7 @@ void HybridMeshPipeline::write_rgba_set(const core::DescriptorSet& set,
 HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept
     : device_(other.device_),
       pipeline_(std::move(other.pipeline_)),
+      second_view_(std::move(other.second_view_)),
       sampler_(std::move(other.sampler_)),
       fallback_(std::move(other.fallback_)),
       rgba_picture_(std::move(other.rgba_picture_)),
@@ -234,17 +245,19 @@ HybridMeshPipeline& HybridMeshPipeline::operator=(
     HybridMeshPipeline&& other) noexcept {
   if (this != &other) {
     // Release in reverse declaration order -- the set, the pool that frees it,
-    // the uniform and the image it names, the sampler -- before adopting
-    // other's.
+    // the uniform and the image it names, the sampler, the pipelines -- before
+    // adopting other's.
     fallback_set_ = {};
     pool_ = {};
     rgba_picture_ = {};
     fallback_ = {};
     sampler_.reset();
+    second_view_ = {};
     pipeline_ = {};
 
     device_ = other.device_;
     pipeline_ = std::move(other.pipeline_);
+    second_view_ = std::move(other.second_view_);
     sampler_ = std::move(other.sampler_);
     fallback_ = std::move(other.fallback_);
     rgba_picture_ = std::move(other.rgba_picture_);
@@ -297,12 +310,22 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   // Each geometry source binds its own vertex/index buffers, so the draws are
   // independent; RecordGeometry decides what a given source records. The
   // push constant above is still worth recording without a draw list, so this
-  // guards only the loop.
+  // guards only the loop. A draw whose mesh carries a second view switches to
+  // that view's pipeline, and the next one without switches back; the two
+  // layouts are alike, so the set and the push constant stay bound.
   if (frame.draws == nullptr) {
     return;
   }
+  bool second_view_bound = false;
   for (uint32_t i = 0; i < frame.draw_count; ++i) {
-    std::visit(RecordGeometry{cmd}, frame.draws[i].geometry);
+    const HybridMeshDraw& draw = frame.draws[i];
+    if (draw.second_view != second_view_bound) {
+      second_view_bound = draw.second_view;
+      vkCmdBindPipeline(
+          cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+          second_view_bound ? second_view_.handle() : pipeline_.handle());
+    }
+    std::visit(RecordGeometry{cmd}, draw.geometry);
   }
 }
 

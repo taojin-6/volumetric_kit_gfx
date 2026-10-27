@@ -138,22 +138,25 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-26 — A mesh samples a 4:2:0 picture where it is.** `HybridMeshTextureSet` binds
   a `YcbcrPicture`'s two plane images, or an RGBA image, and the fragment shader converts:
   no sampler Y'CbCr conversion, and nothing in the core. See the dated entry below.
-- **2026-10-27 — A hybrid mesh blends a second atlas view.** `HybridMeshPipeline` reads
-  `assets::Vertex::tangent` as `(uv_B, w_B, unused)` and mixes the two views of an RGBA atlas in
-  linear light by `w_B` and their alphas; the `(1, 0, 0, 1)` placeholder draws as before. See the
-  dated entry below.
+- **2026-10-27 — A hybrid mesh blends a second atlas view.** A `HybridMeshPipeline` draw whose
+  `HybridMeshDraw::second_view` is set reads `assets::Vertex::tangent` as `(uv_B, w_B, unused)`
+  and mixes the two views of an RGBA atlas in linear light by `w_B` and their alphas; the
+  `(1, 0, 0, 1)` placeholder draws as before, and a draw without the flag draws and costs as
+  before. See the dated entry below.
 
 ## 2026-10-27 — A hybrid mesh blends a second atlas view
 
 **The contract.** `HybridMeshPipeline` binds `assets::Vertex::tangent` at
-location 4 and reads it as `(uv_B.x, uv_B.y, w_B, unused)`: a second view of
-the same atlas, interpolated like `uv0`. Over an RGBA set, a fragment of the
-atlas class shows, in linear light,
+location 4 and, in a draw whose `HybridMeshDraw::second_view` is set, reads it
+as `(uv_B.x, uv_B.y, w_B, unused)`: a second view of the same atlas,
+interpolated like `uv0`. Over an RGBA set, a fragment of the atlas class shows,
+in linear light,
 `((1 - w) a_A c_A + w a_B c_B) / ((1 - w) a_A + w a_B)`: each view's colour
 `c` and alpha `a` (the atlas's coverage, linear in an `_SRGB` format) at
 `uv0` and `uv_B`, with `w = w_B` clamped to [0, 1]. `w = 0` and a zero
 denominator show the `uv0` view exactly. The vertex-colour class, the flags
-and a picture's two planes are unchanged, and no API changes.
+and a picture's two planes are unchanged. A draw without the flag, the
+default, shows the `uv0` view whatever its tangents hold.
 
 **Why the tangent slot.** The hybrid technique never read those 16 bytes, so
 a second view fits with the vertex at 64 bytes and the wire layout as it is.
@@ -179,14 +182,28 @@ every fragment blending: on an RTX 4090, +0.001 and +0.036 ms at 1280x720
 (a 0.32 ms frame), +0.007 and +0.040 ms at 2560x1440 (0.35 ms); on an Apple
 M4, +0.40-0.60 and +0.60-0.75 ms at 1280x720 (3.5-4.0 ms), and +2.27-2.29
 and +2.41-2.47 ms at 2560x1440 (5.1 ms). On the M4 the three floats, not the
-sample, are the cost, so a mesh with no second view pays it too, and it grows
-with the vertices drawn and the target's size. *Open:* a pipeline without the
-slot, for meshes that carry no second view, would take that back on Apple; it
-is not built.
+sample, are the cost, even where `w = 0`, and it grows with the vertices drawn
+and the target's size.
 
-**The risk.** A mesh with real tangents, a glTF model's, drawn here would
-blend its atlas at those tangents. None is drawn that way; such a mesh sets
-`tangent.z` to 0.
+**Only a draw that says its mesh carries one pays.**
+`HybridMeshDraw::second_view`, false by default, says whether the mesh's
+tangents carry a second view, and `submit` binds one of two pipelines per
+draw. They are built from the same SPIR-V and differ in one fragment
+specialization constant: in the pipeline without the second view the fragment
+stage never reads the slot's interpolant, and the driver drops it. Both bind
+the slot, since Vulkan wants an attribute for every input the vertex stage
+declares; fetching it costs nothing measurable. Measured as above, against the
+shaders before the second view: a draw without the flag costs what it did
+then, to within 0.004 ms on the M4 at 1280x720, 0.001 ms at 2560x1440 and
+0.0001 ms on the RTX 4090; one with it costs what it did with the second view.
+The flag is the caller's because the producer knows what it wrote, while the
+weights live on the GPU, where `submit` cannot read them. A second SPIR-V
+build of the same source, with the slot compiled out, was the alternative; the
+measurement leaves nothing for it to save.
+
+**The risk.** A mesh with real tangents, a glTF model's, drawn with the flag
+would blend its atlas at those tangents. None is drawn that way: without the
+flag the tangents are ignored.
 
 ## 2026-10-26 — A mesh samples a 4:2:0 picture where it is
 

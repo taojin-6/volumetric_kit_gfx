@@ -9,8 +9,9 @@
 // shading paths route correctly in one draw -- then re-renders lit to prove the
 // directional term darkens the albedo, and in the normal debug view to prove it
 // encodes the stored normal instead. The second atlas view the tangent slot
-// carries is drawn over two solid tiles, by weight and alpha. Runs under the
-// validation layer with teeth. Skips when the runner exposes no Vulkan device.
+// carries is drawn over two solid tiles, by weight and alpha, and only for a
+// draw that says its mesh carries one. Runs under the validation layer with
+// teeth. Skips when the runner exposes no Vulkan device.
 
 #include <gtest/gtest.h>
 
@@ -861,11 +862,12 @@ int worst_codes(const std::vector<uint8_t>& px, const long expected[3]) {
   return static_cast<int>(worst);
 }
 
-// Over an RGBA atlas a fragment shows the two views' mix in linear light,
-// each weighted by its alpha: ((1 - w) aA cA + w aB cB) / ((1 - w) aA + w aB),
-// w clamped to [0, 1]. A zero denominator shows tile A. The atlas is sRGB, so
-// a mix of the encoded bytes would miss by up to ~20 codes; the alphas, which
-// sRGB leaves linear, are what separate the alpha cases.
+// Over an RGBA atlas a fragment of a draw whose mesh carries a second view
+// shows the two views' mix in linear light, each weighted by its alpha:
+// ((1 - w) aA cA + w aB cB) / ((1 - w) aA + w aB), w clamped to [0, 1]. A
+// zero denominator shows tile A. The atlas is sRGB, so a mix of the encoded
+// bytes would miss by up to ~20 codes; the alphas, which sRGB leaves linear,
+// are what separate the alpha cases.
 TEST_F(HybridMeshRenderTest, SecondViewBlendsByWeightAndAlphaInLinearLight) {
   auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
                                                         color_depth_layout());
@@ -903,7 +905,7 @@ TEST_F(HybridMeshRenderTest, SecondViewBlendsByWeightAndAlphaInLinearLight) {
 
     const std::vector<uint8_t> px =
         render(allocator(), pipeline.value(),
-               pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
+               pipelines::HybridMeshDraw{&mesh.value(), true}, atlas, 0u);
     ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
 
     const double w = std::clamp(static_cast<double>(c.w), 0.0, 1.0);
@@ -985,7 +987,7 @@ TEST_F(HybridMeshRenderTest, SecondViewLeavesTheVertexColorClass) {
                  sizeof(atlas_px), atlas_res);
   ASSERT_NE(atlas, VK_NULL_HANDLE);
 
-  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  const pipelines::HybridMeshDraw draw{&mesh.value(), true};
   const std::vector<uint8_t> px =
       render(allocator(), pipeline.value(), draw, atlas, 0u);
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
