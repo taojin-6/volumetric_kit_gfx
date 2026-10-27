@@ -28,8 +28,7 @@ layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
 layout(location = 3) flat in uint frag_use_vertex_color;
-layout(location = 4) in vec2 frag_uv_b;  // the second view's atlas uv
-layout(location = 5) in float frag_w_b;  // its weight (0: none)
+layout(location = 4) in vec3 frag_second;  // (uv_B, w_B): the second view
 
 // Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
 // write it (hybrid_mesh_set0.hpp): an RGBA image, or a camera picture's two
@@ -95,8 +94,8 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
 // Over an RGBA image, uv0's view is blended with the second view's.
 vec3 atlas_albedo(vec2 uv) {
   if (picture.two_plane == 0u) {
-    return blend_views(texture(plane0, uv), texture(plane0, frag_uv_b),
-                       frag_w_b);
+    return blend_views(texture(plane0, uv), texture(plane0, frag_second.xy),
+                       frag_second.z);
   }
   vec2 p = uv * picture.extent;
   float y = textureLod(plane0,
