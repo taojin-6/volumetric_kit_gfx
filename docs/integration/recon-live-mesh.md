@@ -42,10 +42,15 @@ descriptors.
 - **Vertex layout** is `assets::Vertex`, byte for byte. Declaration order is
   `position`, `normal`, **`tangent`**, `uv0`, `color` — with glm's default
   (unaligned) types that is offsets 0 / 12 / 24 / 40 / 48 at a stride of 64. The
-  hybrid technique binds position/normal/uv0/color; **tangent is ignored** but
-  still occupies bytes 24–39. Emitting a different field order at the same
-  stride produces no size mismatch and no validation error — just every
-  attribute read from the wrong bytes. `assets/mesh.hpp` is the source of truth;
+  hybrid technique binds all five. It reads **tangent** (bytes 24–39) as a
+  second view of the RGBA atlas, `(uv_B.x, uv_B.y, w_B, unused)`, blended with
+  `uv0`'s by the weight `w_B` and each view's atlas alpha
+  (`HybridMeshPipeline`'s class comment has the formula); the placeholder
+  `(1, 0, 0, 1)`, with `w_B = 0`, draws exactly as no second view. A producer
+  with no second view writes the placeholder, never stale bytes. Emitting a
+  different field order at the same stride produces no size mismatch and no
+  validation error — just every attribute read from the wrong bytes.
+  `assets/mesh.hpp` is the source of truth;
   `hybrid_mesh_pipeline.cpp` `static_assert`s the stride and all five offsets,
   so a change on the gfx side breaks the build rather than the wire.
 - **The albedo sentinel is `uv0.x < 0`, not the exact `(-1, -1)`.** Any negative

@@ -9,9 +9,11 @@
 // the interpolated per-vertex color (the TSDF fallback) otherwise. Whenever
 // albedo is shown the atlas is sampled unconditionally -- in uniform control
 // flow, so its implicit-LOD screen derivatives are always well defined -- and
-// the unused result is simply not selected. The kHybridMeshVertexColor flag
-// selects the vertex color everywhere (HybridMeshPipeline::submit sets it when
-// it binds its fallback for a frame with no atlas). Optionally lit by a single
+// the unused result is simply not selected. Over an RGBA atlas, a second view,
+// sampled at uv_B the same way, is blended in by its weight w_B (both from the
+// tangent slot; see blend_views). The kHybridMeshVertexColor flag selects the
+// vertex color everywhere (HybridMeshPipeline::submit sets it when it binds
+// its fallback for a frame with no atlas). Optionally lit by a single
 // world-space directional light plus a constant ambient term (the
 // kHybridMeshLit flag); unlit passes the albedo straight through. Two-sided:
 // the normal is flipped for back faces since the pipeline does not cull. The
@@ -26,6 +28,8 @@ layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
 layout(location = 3) flat in uint frag_use_vertex_color;
+layout(location = 4) in vec2 frag_uv_b;  // the second view's atlas uv
+layout(location = 5) in float frag_w_b;  // its weight (0: none)
 
 // Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
 // write it (hybrid_mesh_set0.hpp): an RGBA image, or a camera picture's two
@@ -69,13 +73,30 @@ vec3 safe_normalize(vec3 v) {
   return dot(v, v) > 0.0 ? normalize(v) : vec3(0.0);
 }
 
+// Two atlas views of a fragment, `a` at uv0 and `b` at uv_B, mixed in linear
+// light by the weight `w` (clamped to [0, 1]), each also weighted by its alpha,
+// the atlas's coverage (linear in an _SRGB format, which decodes rgb alone):
+//   ((1 - w) a.a a.rgb + w b.a b.rgb) / ((1 - w) a.a + w b.a).
+// w = 0, which the tangent slot's (1, 0, 0, 1) placeholder carries, and a zero
+// denominator give a.rgb exactly, so a mesh with no second view draws as if
+// it had none.
+vec3 blend_views(vec4 a, vec4 b, float w) {
+  w = clamp(w, 0.0, 1.0);
+  float wa = (1.0 - w) * a.a;
+  float wb = w * b.a;
+  float sum = wa + wb;
+  return (w > 0.0 && sum > 0.0) ? (wa * a.rgb + wb * b.rgb) / sum : a.rgb;
+}
+
 // Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
 // sampler says (an _SRGB one decodes); a camera picture's two planes are
 // filtered at level 0 where they are, converted, then decoded from sRGB.
 // `two_plane` is the same for the whole draw, so the branch does not diverge.
+// Over an RGBA image, uv0's view is blended with the second view's.
 vec3 atlas_albedo(vec2 uv) {
   if (picture.two_plane == 0u) {
-    return texture(plane0, uv).rgb;
+    return blend_views(texture(plane0, uv), texture(plane0, frag_uv_b),
+                       frag_w_b);
   }
   vec2 p = uv * picture.extent;
   float y = textureLod(plane0,

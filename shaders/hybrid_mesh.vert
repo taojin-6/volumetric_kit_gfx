@@ -21,11 +21,17 @@
 // Sentinel vertices forward an in-range uv (0, 0) so a fragment quad straddling
 // an atlas/color seam never derives the atlas LOD from the out-of-range
 // sentinel.
+//
+// The tangent slot carries a second atlas view, (uv_B.x, uv_B.y, w_B, unused),
+// which the fragment stage blends with uv0's by the weight w_B. It is
+// forwarded as is and interpolated like uv0. The slot's placeholder,
+// (1, 0, 0, 1), has w_B = 0: no second view.
 
 layout(location = 0) in vec3 in_position;  // world space
 layout(location = 1) in vec3 in_normal;    // world space
 layout(location = 2) in vec2 in_uv0;       // atlas uv in [0,1], or x<0 = vertex color
 layout(location = 3) in vec4 in_color;     // per-vertex color (TSDF fallback)
+layout(location = 4) in vec4 in_tangent;   // (uv_B, w_B, unused): second view
 
 layout(push_constant) uniform Push {
   mat4 view_proj;  // projection * view (vertices are already world-space)
@@ -38,6 +44,8 @@ layout(location = 0) out vec3 frag_normal;
 layout(location = 1) out vec2 frag_uv;
 layout(location = 2) out vec4 frag_color;
 layout(location = 3) flat out uint frag_use_vertex_color;
+layout(location = 4) out vec2 frag_uv_b;  // the second view's atlas uv
+layout(location = 5) out float frag_w_b;  // its weight (0: none)
 
 void main() {
   gl_Position = pc.view_proj * vec4(in_position, 1.0);
@@ -67,4 +75,6 @@ void main() {
   // a decoded uv is a real atlas coordinate, not the out-of-range sentinel.
   frag_uv = use_vertex_color ? (-in_uv0 - 1.0) : in_uv0;
   frag_color = in_color;
+  frag_uv_b = in_tangent.xy;
+  frag_w_b = in_tangent.z;
 }

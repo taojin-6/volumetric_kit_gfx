@@ -117,16 +117,17 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
                  vk, reinterpret_cast<const uint32_t*>(vg_hybrid_mesh_frag_spv),
                  vg_hybrid_mesh_frag_spv_size));
 
-  // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), and
-  // color (3) -- the layout hybrid_mesh.vert declares. tangent is unused by
-  // this pipeline, so it is simply not bound.
+  // Interleaved assets::Vertex input: position (0), normal (1), uv0 (2), color
+  // (3) and tangent (4) -- the layout hybrid_mesh.vert declares. This pipeline
+  // reads tangent as the second atlas view, (uv_B, w_B, unused).
   const VkVertexInputBindingDescription binding{0, sizeof(assets::Vertex),
                                                 VK_VERTEX_INPUT_RATE_VERTEX};
-  const VkVertexInputAttributeDescription attrs[4] = {
+  const VkVertexInputAttributeDescription attrs[5] = {
       {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(assets::Vertex, position)},
       {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(assets::Vertex, normal)},
       {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(assets::Vertex, uv0)},
       {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(assets::Vertex, color)},
+      {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(assets::Vertex, tangent)},
   };
 
   // The fragment stage writes color attachment 0 only, so its format alone
@@ -152,7 +153,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.vertex_bindings = &binding;
   desc.vertex_binding_count = 1;
   desc.vertex_attributes = attrs;
-  desc.vertex_attribute_count = 4;
+  desc.vertex_attribute_count = 5;
   desc.depth_test = true;
   desc.depth_write = true;
   desc.fragment_specialization = &spec;

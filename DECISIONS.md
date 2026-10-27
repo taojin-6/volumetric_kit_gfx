@@ -96,6 +96,8 @@ what has landed since then. Record amendments when a contract changes.
   recon. *Amended 2026-10-08:* the pipeline owns a fallback atlas, so a frame needs none ("A
   streamed atlas", below). *Amended 2026-10-26:* set 0 may instead hold a camera picture's two
   Y'CbCr 4:2:0 planes, with a uniform saying which ("A mesh samples a 4:2:0 picture", below).
+  *Amended 2026-10-27:* the pipeline binds `tangent` too, as a second atlas view ("A hybrid mesh
+  blends a second atlas view", below).
 - **2026-10-05 — 2D images are converted, then mip-mapped, then drawn.**
   `pipelines::ImagePipeline` copies a picture's planes into an `ImageTexture`, renders them to
   display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
@@ -136,6 +138,44 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-26 — A mesh samples a 4:2:0 picture where it is.** `HybridMeshTextureSet` binds
   a `YcbcrPicture`'s two plane images, or an RGBA image, and the fragment shader converts:
   no sampler Y'CbCr conversion, and nothing in the core. See the dated entry below.
+- **2026-10-27 — A hybrid mesh blends a second atlas view.** `HybridMeshPipeline` reads
+  `assets::Vertex::tangent` as `(uv_B, w_B, unused)` and mixes the two views of an RGBA atlas in
+  linear light by `w_B` and their alphas; the `(1, 0, 0, 1)` placeholder draws as before. See the
+  dated entry below.
+
+## 2026-10-27 — A hybrid mesh blends a second atlas view
+
+**The contract.** `HybridMeshPipeline` binds `assets::Vertex::tangent` at
+location 4 and reads it as `(uv_B.x, uv_B.y, w_B, unused)`: a second view of
+the same atlas, interpolated like `uv0`. Over an RGBA set, a fragment of the
+atlas class shows, in linear light,
+`((1 - w) a_A c_A + w a_B c_B) / ((1 - w) a_A + w a_B)`: each view's colour
+`c` and alpha `a` (the atlas's coverage, linear in an `_SRGB` format) at
+`uv0` and `uv_B`, with `w = w_B` clamped to [0, 1]. `w = 0` and a zero
+denominator show the `uv0` view exactly. The vertex-colour class, the flags
+and a picture's two planes are unchanged, and no API changes.
+
+**Why the tangent slot.** The hybrid technique never read those 16 bytes, so
+a second view fits with the vertex at 64 bytes and the wire layout as it is.
+Their placeholder `(1, 0, 0, 1)`, which `assets::Vertex` defaults to and
+recon's mesher writes, carries `w = 0`, so every producer of today draws bit
+for bit as before. The alternatives were a wider vertex, which grows every
+mesh for one technique, or projecting each fragment into the cameras, which
+puts the producer's camera model in the renderer.
+
+**Why the alphas weigh in.** A producer may ramp an atlas's alpha toward its
+image's border. Weighting each view by it fades a view out there instead of
+cutting it at the edge, and a view with alpha 0 never shows beside one that
+covers the fragment.
+
+**The cost.** One more sample of the atlas per fragment of the atlas class,
+in the same uniform control flow as the first, so both take the same implicit
+LOD. Where `w = 0` it reads the placeholder's one texel, which stays in the
+cache.
+
+**The risk.** A mesh with real tangents, a glTF model's, drawn here would
+blend its atlas at those tangents. None is drawn that way; such a mesh sets
+`tangent.z` to 0.
 
 ## 2026-10-26 — A mesh samples a 4:2:0 picture where it is
 

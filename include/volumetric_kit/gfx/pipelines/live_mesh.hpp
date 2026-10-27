@@ -34,9 +34,10 @@ namespace volumetric_kit::gfx::pipelines {
 /// - @ref vertices -- interleaved @ref assets::Vertex, laid out byte-for-byte
 ///   as that struct declares it (the pipeline derives the stride and every
 ///   attribute offset from it, so a repacked or reordered vertex is read at the
-///   wrong offsets with no size mismatch to catch it). Only position, normal,
-///   uv0 and color are read -- the hybrid technique does not bind tangent, but
-///   the field still occupies its slot. `VK_BUFFER_USAGE_VERTEX_BUFFER_BIT`.
+///   wrong offsets with no size mismatch to catch it). Every field is read:
+///   the hybrid technique reads `tangent` as a second atlas view,
+///   `(uv_B.x, uv_B.y, w_B, unused)`, and the `(1, 0, 0, 1)` placeholder as
+///   none (see @ref HybridMeshPipeline). `VK_BUFFER_USAGE_VERTEX_BUFFER_BIT`.
 /// - @ref indices -- **32-bit** indices (`VK_INDEX_TYPE_UINT32`), created with
 ///   `VK_BUFFER_USAGE_INDEX_BUFFER_BIT`.
 /// - @ref indirect -- one `VkDrawIndexedIndirectCommand` at @ref

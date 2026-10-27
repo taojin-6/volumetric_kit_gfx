@@ -89,6 +89,20 @@ enum HybridMeshFlags : uint32_t {
 /// (`_SRGB` or float) is given the shaded color as is, and a UNORM target
 /// sRGB-encoded, so a color shows alike on each.
 ///
+/// **A second atlas view.** A vertex's `tangent` carries a second view of the
+/// same RGBA atlas, `(uv_B.x, uv_B.y, w_B, unused)`, interpolated like `uv0`.
+/// Where a triangle's class is "atlas", the albedo is the two views' mix in
+/// linear light, each weighted by its atlas alpha (the coverage; linear in an
+/// `_SRGB` format):
+/// `((1 - w_B) a_A c_A + w_B a_B c_B) / ((1 - w_B) a_A + w_B a_B)`, with
+/// `c_A, a_A` sampled at `uv0`, `c_B, a_B` at `uv_B`, and `w_B` clamped to
+/// [0, 1]. `w_B = 0` -- the `(1, 0, 0, 1)` placeholder's, which
+/// @ref assets::Vertex defaults to -- or a zero denominator shows `c_A`
+/// exactly, as a pipeline without the blend would. A camera picture's two
+/// planes take no second view. A mesh carrying real tangents (a glTF model's)
+/// drawn here would blend its atlas at those tangents: draw it with
+/// `tangent.z` = 0.
+///
 /// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
 /// so a consumer gets the technique from @ref create alone. The reflected
 /// layout exposes **one** descriptor set, **set 0**: an RGBA atlas -- one a

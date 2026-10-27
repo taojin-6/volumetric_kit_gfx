@@ -8,14 +8,17 @@
 // "use vertex color" sentinel with a green per-vertex color -- proving both
 // shading paths route correctly in one draw -- then re-renders lit to prove the
 // directional term darkens the albedo, and in the normal debug view to prove it
-// encodes the stored normal instead. Runs under the validation layer with
-// teeth. Skips when the runner exposes no Vulkan device.
+// encodes the stored normal instead. The second atlas view the tangent slot
+// carries is drawn over two solid tiles, by weight and alpha. Runs under the
+// validation layer with teeth. Skips when the runner exposes no Vulkan device.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -451,7 +454,7 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
                   color_format);
   }
 
-  // Uploads `pixels` (`extent`, kColorFormat, `size` bytes) as a NEAREST atlas
+  // Uploads `pixels` (`extent`, `format`, `size` bytes) as a NEAREST atlas
   // and makes a set-0 set over it. Appends both to `keep` (a caller-owned
   // local that must outlive the render, but be destroyed before its
   // allocator) and returns the set handle (VK_NULL_HANDLE on failure).
@@ -459,10 +462,11 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
                              const pipelines::HybridMeshPipeline& pipeline,
                              const void* pixels, VkExtent2D extent,
                              VkDeviceSize size,
-                             std::vector<AtlasResources>& keep) {
+                             std::vector<AtlasResources>& keep,
+                             VkFormat format = kColorFormat) {
     vg::ImageUploadDesc adesc;
     adesc.extent = extent;
-    adesc.format = kColorFormat;
+    adesc.format = format;
     adesc.pixels = pixels;
     adesc.size = size;
     auto texture = vg::upload_texture(device(), allocator, adesc);
@@ -808,6 +812,200 @@ TEST_F(HybridMeshRenderTest, VertexColorFlagIgnoresABoundAtlas) {
   EXPECT_EQ(left[0], 255) << "the flag shows the magenta vertex color";
   EXPECT_EQ(left[1], 0);
   EXPECT_EQ(left[2], 255);
+}
+
+// --- A second atlas view in the tangent slot ---------------------------------
+
+// The two solid tiles of the 2x1 sRGB atlas the blend tests sample: tile A is
+// texel (0, 0), at uv0; tile B is texel (1, 0), at the tangent slot's uv_B.
+// Each test gives each tile its own alpha.
+constexpr uint8_t kTileA[3] = {200, 40, 90};
+constexpr uint8_t kTileB[3] = {30, 180, 220};
+const glm::vec2 kUvA{0.25f, 0.5f};
+const glm::vec2 kUvB{0.75f, 0.5f};
+
+// The tangent slot's (1, 0, 0, 1) placeholder: no second view.
+const glm::vec4 kPlaceholder = assets::Vertex{}.tangent;
+
+// The second view at tile B with weight `w`.
+glm::vec4 second_view(float w) { return {kUvB.x, kUvB.y, w, 1.0f}; }
+
+// A quad over the whole target that samples tile A at uv0 and carries
+// `tangent` in every vertex.
+assets::Mesh make_two_view_quad(const glm::vec4& tangent) {
+  auto vert = [&](float x, float y) {
+    assets::Vertex v;
+    v.position = {x, y, 0.5f};
+    v.normal = {0.0f, 0.0f, 1.0f};
+    v.tangent = tangent;
+    v.uv0 = kUvA;
+    v.color = {0.0f, 1.0f, 0.0f, 1.0f};  // never shown: the class is atlas
+    return v;
+  };
+  assets::Mesh mesh;
+  mesh.vertices = {vert(-1.0f, -1.0f), vert(1.0f, -1.0f), vert(1.0f, 1.0f),
+                   vert(-1.0f, 1.0f)};
+  mesh.indices = {0, 2, 1, 0, 3, 2};  // front-facing, as make_hybrid_mesh()
+  return mesh;
+}
+
+// The largest difference, in codes, between any pixel's RGB of a kSize x
+// kSize UNORM readback and `expected`.
+int worst_codes(const std::vector<uint8_t>& px, const long expected[3]) {
+  long worst = 0;
+  for (size_t i = 0; i + 4 <= px.size(); i += 4) {
+    for (size_t c = 0; c < 3; ++c) {
+      worst = std::max(worst, std::labs(long{px[i + c]} - expected[c]));
+    }
+  }
+  return static_cast<int>(worst);
+}
+
+// Over an RGBA atlas a fragment shows the two views' mix in linear light,
+// each weighted by its alpha: ((1 - w) aA cA + w aB cB) / ((1 - w) aA + w aB),
+// w clamped to [0, 1]. A zero denominator shows tile A. The atlas is sRGB, so
+// a mix of the encoded bytes would miss by up to ~20 codes; the alphas, which
+// sRGB leaves linear, are what separate the alpha cases.
+TEST_F(HybridMeshRenderTest, SecondViewBlendsByWeightAndAlphaInLinearLight) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  struct Case {
+    const char* name;
+    float w;
+    uint8_t alpha_a;
+    uint8_t alpha_b;
+  };
+  const Case cases[] = {
+      {"w 0.25, both covered", 0.25f, 255, 255},
+      {"w 0.25, B half covered", 0.25f, 255, 128},
+      {"w 0.5, A quarter covered", 0.5f, 64, 255},
+      {"w 1 shows B", 1.0f, 255, 255},
+      {"A uncovered shows B", 0.25f, 0, 255},
+      {"neither covered shows A", 0.25f, 0, 0},
+      {"w 1, B uncovered shows A", 1.0f, 255, 0},
+      {"w above 1 is 1", 2.0f, 255, 255},
+      {"w below 0 is 0", -0.5f, 255, 255},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.name);
+    const uint8_t atlas_px[8] = {kTileA[0], kTileA[1], kTileA[2], c.alpha_a,
+                                 kTileB[0], kTileB[1], kTileB[2], c.alpha_b};
+    std::vector<AtlasResources> atlas_res;
+    const VkDescriptorSet atlas =
+        make_atlas(allocator(), pipeline.value(), atlas_px, {2, 1},
+                   sizeof(atlas_px), atlas_res, VK_FORMAT_R8G8B8A8_SRGB);
+    ASSERT_NE(atlas, VK_NULL_HANDLE);
+    auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                       make_two_view_quad(second_view(c.w)));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+    const std::vector<uint8_t> px =
+        render(allocator(), pipeline.value(),
+               pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
+    ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+    const double w = std::clamp(static_cast<double>(c.w), 0.0, 1.0);
+    const double wa = (1.0 - w) * c.alpha_a / 255.0;
+    const double wb = w * c.alpha_b / 255.0;
+    long expected[3] = {};
+    for (int ch = 0; ch < 3; ++ch) {
+      const double a = vg_test::srgb_to_linear(kTileA[ch] / 255.0);
+      const double b = vg_test::srgb_to_linear(kTileB[ch] / 255.0);
+      expected[ch] = encoded_byte(
+          w > 0.0 && wa + wb > 0.0 ? (wa * a + wb * b) / (wa + wb) : a);
+    }
+    EXPECT_LE(worst_codes(px, expected), 1)
+        << "expected (" << expected[0] << ", " << expected[1] << ", "
+        << expected[2] << "), centre drew ("
+        << int{pixel_at(px, kSize / 2, kSize / 2)[0]} << ", "
+        << int{pixel_at(px, kSize / 2, kSize / 2)[1]} << ", "
+        << int{pixel_at(px, kSize / 2, kSize / 2)[2]} << ")";
+  }
+}
+
+// w = 0 shows tile A exactly as a mesh with no second view does: the frame
+// equals the placeholder's byte for byte, however the tiles are covered (the
+// alpha divides nothing there), and shows tile A.
+TEST_F(HybridMeshRenderTest, ZeroWeightDrawsAsThePlaceholder) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+  ASSERT_EQ(kPlaceholder.z, 0.0f) << "the placeholder carries no weight";
+
+  for (const uint8_t alpha_a : {uint8_t{255}, uint8_t{100}, uint8_t{0}}) {
+    SCOPED_TRACE(int{alpha_a});
+    const uint8_t atlas_px[8] = {kTileA[0], kTileA[1], kTileA[2], alpha_a,
+                                 kTileB[0], kTileB[1], kTileB[2], 255};
+    std::vector<AtlasResources> atlas_res;
+    const VkDescriptorSet atlas =
+        make_atlas(allocator(), pipeline.value(), atlas_px, {2, 1},
+                   sizeof(atlas_px), atlas_res, VK_FORMAT_R8G8B8A8_SRGB);
+    ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+    std::vector<uint8_t> frames[2];
+    const glm::vec4 tangents[2] = {kPlaceholder, second_view(0.0f)};
+    for (int i = 0; i < 2; ++i) {
+      auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                         make_two_view_quad(tangents[i]));
+      ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+      frames[i] = render(allocator(), pipeline.value(),
+                         pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
+      ASSERT_EQ(frames[i].size(), static_cast<size_t>(kSize) * kSize * 4);
+    }
+    EXPECT_EQ(frames[1], frames[0]) << "w = 0 must draw as the placeholder";
+    const long tile_a[3] = {kTileA[0], kTileA[1], kTileA[2]};
+    EXPECT_LE(worst_codes(frames[0], tile_a), 1) << "and show tile A";
+  }
+}
+
+// The second view belongs to the atlas class alone. make_magenta_atlas_half_
+// mesh() with a full-weight second view at the 2x2 atlas's blue texel (1, 1)
+// in every vertex: the atlas half turns from red to blue, the vertex-color
+// half stays green, and kHybridMeshVertexColor still shows magenta.
+TEST_F(HybridMeshRenderTest, SecondViewLeavesTheVertexColorClass) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  assets::Mesh mesh_cpu = make_magenta_atlas_half_mesh();
+  for (assets::Vertex& v : mesh_cpu.vertices) {
+    v.tangent = {0.75f, 0.75f, 1.0f, 1.0f};
+  }
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+
+  // Texel (0, 0) red, the rest blue, as RoutesAtlasAndVertexColor's.
+  const uint8_t atlas_px[16] = {255, 0, 0,   255, 0, 0, 255, 255,
+                                0,   0, 255, 255, 0, 0, 255, 255};
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator(), pipeline.value(), atlas_px, {2, 2},
+                 sizeof(atlas_px), atlas_res);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  const std::vector<uint8_t> px =
+      render(allocator(), pipeline.value(), draw, atlas, 0u);
+  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+  const uint8_t* left = pixel_at(px, kSize / 4, kSize / 2);
+  EXPECT_EQ(left[0], 0) << "the atlas half shows the second view's blue";
+  EXPECT_EQ(left[1], 0);
+  EXPECT_EQ(left[2], 255);
+  const uint8_t* right = pixel_at(px, 3 * kSize / 4, kSize / 2);
+  EXPECT_EQ(right[0], 0) << "the vertex-color half stays green";
+  EXPECT_EQ(right[1], 255);
+  EXPECT_EQ(right[2], 0);
+
+  const std::vector<uint8_t> flagged =
+      render(allocator(), pipeline.value(), draw, atlas,
+             pipelines::kHybridMeshVertexColor);
+  ASSERT_EQ(flagged.size(), px.size());
+  const uint8_t* flagged_left = pixel_at(flagged, kSize / 4, kSize / 2);
+  EXPECT_EQ(flagged_left[0], 255) << "the flag shows the magenta vertex color";
+  EXPECT_EQ(flagged_left[1], 0);
+  EXPECT_EQ(flagged_left[2], 255);
 }
 
 // The fallback set travels with the pipeline: after a move-construct, a
