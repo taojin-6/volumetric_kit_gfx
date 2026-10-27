@@ -193,14 +193,14 @@ specialization constant: in the pipeline without the second view the fragment
 stage never reads the slot's interpolant, and the driver drops it. Both bind
 the slot, since Vulkan wants an attribute for every input the vertex stage
 declares; fetching it costs nothing measurable. Measured as above, in three
-runs against the shaders before the second view: a draw without the flag costs
-from -0.024 to +0.021 ms on the M4 at 1280x720, inside that bench's noise
-there (±0.018 ms), from -0.002 to +0.001 ms at 2560x1440, and 0.000 ms on the
-RTX 4090; with the flag it costs what it did, within 0.007 ms. The flag is the
-caller's because the producer knows what it wrote, while the weights live on
-the GPU, where `submit` cannot read them. A second SPIR-V build of the same
-source, with the slot compiled out, was the alternative; the measurement
-leaves nothing for it to save.
+runs against the shaders before the second view, a draw without the flag
+costs from -0.024 to +0.021 ms on the M4 at 1280x720 and from -0.002 to
++0.001 ms at 2560x1440 (medians; every run's 95 % interval of the mean holds
+0), and 0.000 ms on the RTX 4090; with the flag it costs what it did, within
+0.007 ms. The flag is the caller's because the producer knows what it wrote,
+while the weights live on the GPU, where `submit` cannot read them. A second
+SPIR-V build of the same source, with the slot compiled out, was the
+alternative; the measurement leaves nothing for it to save.
 
 **The risk.** A mesh with real tangents, a glTF model's, drawn with the flag
 would blend its atlas at those tangents. None is drawn that way: without the

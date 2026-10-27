@@ -48,8 +48,7 @@ descriptors.
   and each view's atlas alpha (`HybridMeshPipeline`'s class comment has the
   formula); the placeholder `(1, 0, 0, 1)`, with `w_B = 0`, draws exactly as
   no second view. A producer with no second view writes the placeholder,
-  never stale bytes, and its consumer leaves the flag clear, which on Apple
-  GPUs draws the mesh at its cost before the second view. Emitting a
+  never stale bytes, and its consumer leaves the flag clear. Emitting a
   different field order at the same stride produces no size mismatch and no
   validation error — just every attribute read from the wrong bytes.
   `assets/mesh.hpp` is the source of truth;

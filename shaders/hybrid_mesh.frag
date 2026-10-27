@@ -59,10 +59,10 @@ pc;
 // the host enum so it is their one definition (a 0 here switches the mode off),
 // and whether color attachment 0 holds linear light. An _SRGB target, which
 // encodes on write, and a float target are given linear light; a UNORM target
-// stores what is written, so it is given the encoding. kSecondView is true in
-// the pipeline for meshes that carry a second view only: false, the shader
-// never reads frag_second, and the driver drops that interpolant, which on
-// Apple GPUs costs every vertex drawn (DECISIONS.md, 2026-10-27).
+// stores what is written, so it is given the encoding. kSecondView is true
+// only in the pipeline for meshes that carry a second view; false, the shader
+// never reads frag_second, so the driver drops that interpolant (DECISIONS.md,
+// 2026-10-27).
 layout(constant_id = 0) const uint kFlagLit = 0u;      // kHybridMeshLit
 layout(constant_id = 1) const uint kFlagNormals = 0u;  // kHybridMeshNormals
 layout(constant_id = 2) const bool kLinearTarget = false;

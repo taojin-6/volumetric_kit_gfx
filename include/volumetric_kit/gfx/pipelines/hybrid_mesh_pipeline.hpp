@@ -99,11 +99,10 @@ enum HybridMeshFlags : uint32_t {
 /// `c_A, a_A` sampled at `uv0`, `c_B, a_B` at `uv_B`, and `w_B` clamped to
 /// [0, 1]. `w_B = 0` -- the `(1, 0, 0, 1)` placeholder's, which
 /// @ref assets::Vertex defaults to -- or a zero denominator shows `c_A`
-/// exactly. A draw without the flag shows `c_A` whatever its tangents hold,
-/// and costs what it did before the second view: on Apple GPUs the second
-/// view's interpolant costs every vertex drawn, `w_B` = 0 or not
-/// (DECISIONS.md, 2026-10-27). A camera picture's two planes take no second
-/// view.
+/// exactly. A draw without the flag shows `c_A` whatever its tangents hold and
+/// skips the second view's interpolant, which on Apple GPUs costs every vertex
+/// drawn, `w_B` = 0 or not (DECISIONS.md, 2026-10-27). A camera picture's two
+/// planes take no second view.
 ///
 /// Wraps two @ref GraphicsPipeline s built from the same SPIR-V, compiled into
 /// the library -- one for draws without a second view, one for draws with
@@ -270,9 +269,7 @@ struct HybridMeshDraw {
   /// `HybridMeshDraw{&gpu_mesh}` or `HybridMeshDraw{live_mesh}`.
   std::variant<const GpuMesh*, LiveMesh> geometry;
   /// Whether the mesh's `tangent` carries a second atlas view,
-  /// `(uv_B, w_B, unused)` (see @ref HybridMeshPipeline). False draws the
-  /// `uv0` view alone, whatever the tangents hold, at the cost of a pipeline
-  /// without the slot; true costs more on Apple GPUs, even where `w_B` = 0.
+  /// `(uv_B, w_B, unused)`, for the draw to blend (@ref HybridMeshPipeline).
   bool second_view = false;
 };
 
