@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "frame_loop_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -41,6 +42,10 @@
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
+
+using vg_test::record_clear;
+using vg_test::row_names;
+using vg_test::run_frames;
 
 // A present-capable device on an instance of the test's own, which a headless
 // surface needs. The fixture under it skips or fails the test without a
@@ -132,55 +137,12 @@ class WindowingTest : public vg_test::RendererTest {
     return sc.ok() ? std::move(sc).value() : win::Swapchain{};
   }
 
-  // Record a clear of the frame's image, as every frame here draws.
-  static void record_clear(const win::Frame& frame) {
-    vg::RenderTargetBeginInfo begin;
-    begin.clear_color.float32[0] = 0.1f;
-    begin.clear_color.float32[3] = 1.0f;
-    frame.target->begin(frame.cmd, begin);
-    frame.target->end(frame.cmd);
-  }
-
-  // Drive `count` clear-only frames through the loop. A fixed headless extent
-  // never goes out of date, so any non-OK status is a real failure.
-  vkc::Status run_frames(win::FrameLoop& loop, int count) {
-    for (int i = 0; i < count; ++i) {
-      auto frame = loop.begin_frame();
-      if (!frame.ok()) {
-        return frame.status();
-      }
-      record_clear(frame.value());
-      vkc::Status end = loop.end_frame(frame.value());
-      if (!end.ok()) {
-        return end;
-      }
-    }
-    return {};
-  }
-
-  // A timeline semaphore on the fixture's device, at 0.
+  // The shared helpers (frame_loop_test_support.hpp) on the fixture's device.
   vkc::TimelineSemaphore make_timeline() {
-    auto timeline = vkc::TimelineSemaphore::create(*device_);
-    EXPECT_TRUE(timeline.ok()) << timeline.status().message();
-    return timeline.ok() ? std::move(timeline).value()
-                         : vkc::TimelineSemaphore{};
+    return vg_test::make_timeline(*device_);
   }
-
-  // A 4-byte buffer for the external-work tests: device-only with transfer
-  // usage, or a host-readable readback.
   vkc::Buffer make_word_buffer(bool readback) {
-    vkc::BufferDesc desc;
-    desc.size = sizeof(uint32_t);
-    desc.usage = readback ? VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                          : VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (readback) {
-      desc.memory = vkc::MemoryUsage::Staging;
-      desc.host_access = vkc::HostAccess::Random;
-    }
-    auto buffer = allocator_->create_buffer(desc);
-    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
-    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
+    return vg_test::make_word_buffer(*allocator_, readback);
   }
 
   std::optional<vkc::Instance> headless_instance_;
@@ -198,15 +160,6 @@ class FrameTimelineTest : public WindowingTest {
     return vkc::test::Validation::Sync;
   }
 };
-
-// A published frame's rows by name, in order.
-std::vector<std::string> row_names(const vg::FrameMetrics& metrics) {
-  std::vector<std::string> names;
-  for (const vkc::StageRow& row : metrics.sections) {
-    names.emplace_back(row.name);
-  }
-  return names;
-}
 
 // A frame of one stage, "accepted", then the loop's own rows.
 const std::vector<std::string> kAcceptedFrameRows = {"accepted", "frame wait",

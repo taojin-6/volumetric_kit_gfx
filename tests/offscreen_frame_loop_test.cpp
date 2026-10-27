@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "frame_loop_test_support.hpp"
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -34,6 +35,10 @@
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
+
+using vg_test::record_clear;
+using vg_test::row_names;
+using vg_test::run_frames;
 
 using Clock = std::chrono::steady_clock;
 using std::chrono::milliseconds;
@@ -51,6 +56,7 @@ struct Bgra {
 // stores exactly, and the bytes it reads back as.
 struct Clear {
   float r, g, b;
+  VkClearColorValue value() const { return {{r, g, b, 1.0f}}; }
   Bgra bytes() const {
     const auto byte = [](float c) { return static_cast<uint8_t>(c * 255.0f); };
     return {byte(b), byte(g), byte(r), 255};
@@ -66,15 +72,6 @@ constexpr uint64_t kWaitNs = 2'000'000'000;
 
 double ms_between(Clock::time_point from, Clock::time_point to) {
   return std::chrono::duration<double, std::milli>(to - from).count();
-}
-
-// A published frame's rows by name, in order.
-std::vector<std::string> row_names(const vg::FrameMetrics& metrics) {
-  std::vector<std::string> names;
-  for (const vkc::StageRow& row : metrics.sections) {
-    names.emplace_back(row.name);
-  }
-  return names;
 }
 
 class OffscreenFrameLoopTest : public vg_test::RendererDeviceTest {
@@ -102,56 +99,12 @@ class OffscreenFrameLoopTest : public vg_test::RendererDeviceTest {
     return loop.ok() ? std::move(loop).value() : nullptr;
   }
 
-  // Record a clear of the frame's color and depth, as every frame here draws.
-  static void record_clear(const win::Frame& frame, Clear clear = {0, 0, 0}) {
-    vg::RenderTargetBeginInfo begin;
-    begin.clear_color.float32[0] = clear.r;
-    begin.clear_color.float32[1] = clear.g;
-    begin.clear_color.float32[2] = clear.b;
-    begin.clear_color.float32[3] = 1.0f;
-    frame.target->begin(frame.cmd, begin);
-    frame.target->end(frame.cmd);
-  }
-
-  // Drive `count` clear-only frames through the loop.
-  static vkc::Status run_frames(win::FrameLoop& loop, int count) {
-    for (int i = 0; i < count; ++i) {
-      auto frame = loop.begin_frame();
-      if (!frame.ok()) {
-        return frame.status();
-      }
-      record_clear(frame.value());
-      vkc::Status end = loop.end_frame(frame.value());
-      if (!end.ok()) {
-        return end;
-      }
-    }
-    return {};
-  }
-
-  // A timeline semaphore on the shared device, at 0.
+  // The shared helpers (frame_loop_test_support.hpp) on the shared device.
   vkc::TimelineSemaphore make_timeline() {
-    auto timeline = vkc::TimelineSemaphore::create(device());
-    EXPECT_TRUE(timeline.ok()) << timeline.status().message();
-    return timeline.ok() ? std::move(timeline).value()
-                         : vkc::TimelineSemaphore{};
+    return vg_test::make_timeline(device());
   }
-
-  // A 4-byte buffer: device-only with transfer usage, or a host-readable
-  // readback.
   vkc::Buffer make_word_buffer(bool readback) {
-    vkc::BufferDesc d;
-    d.size = sizeof(uint32_t);
-    d.usage = readback ? VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                       : VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (readback) {
-      d.memory = vkc::MemoryUsage::Staging;
-      d.host_access = vkc::HostAccess::Random;
-    }
-    auto buffer = allocator().create_buffer(d);
-    EXPECT_TRUE(buffer.ok()) << buffer.status().message();
-    return buffer.ok() ? std::move(buffer).value() : vkc::Buffer{};
+    return vg_test::make_word_buffer(allocator(), readback);
   }
 };
 
@@ -213,7 +166,7 @@ TEST_F(OffscreenFrameLoopTest, EachSlotReadsBackItsFrameWhenTheSlotRecurs) {
     if (drawn[f.slot] >= 0) {
       expect_every_texel(*f.offscreen, kClears[drawn[f.slot]].bytes());
     }
-    record_clear(f, kClears[n]);
+    record_clear(f, kClears[n].value());
     f.offscreen->record_readback(f.cmd);
     drawn[f.slot] = n;
     ASSERT_TRUE(loop->end_frame(f).ok());
@@ -364,12 +317,12 @@ TEST_F(OffscreenFrameLoopTest, ProfilerGetsFrameWaitAndSubmitButNoPresent) {
   loop->set_profiler(nullptr);
 }
 
-// A frame's wait for a value another submit sets is honoured: the producer
-// fills a buffer and sets `produced`; once that value is reached, the frame
-// copies the buffer out at the TRANSFER stage. Synchronization validation
-// would report a frame that ignored its wait: nothing else orders its copy
-// after the fill. What the frame signals is set once it completes, and
-// joins the core's record of submitted values.
+// A frame waits for a value another submit sets: the producer fills a buffer
+// and sets `produced`; once that value is reached, the frame copies the
+// buffer out at the TRANSFER stage. end_frame takes only reached values, so
+// the frame's wait adds the memory dependency, not an order the copy could
+// observe. What the frame signals is set once it completes, and joins the
+// core's record of submitted values.
 TEST_F(OffscreenFrameLoopTest, FrameWaitsForAndSignalsTimelineValues) {
   std::unique_ptr<win::FrameLoop> loop = make_loop();
   ASSERT_NE(loop, nullptr);
