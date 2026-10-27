@@ -831,9 +831,10 @@ const glm::vec4 kPlaceholder = assets::Vertex{}.tangent;
 // The second view at tile B with weight `w`.
 glm::vec4 second_view(float w) { return {kUvB.x, kUvB.y, w, 1.0f}; }
 
-// A quad over the whole target that samples tile A at uv0 and carries
-// `tangent` in every vertex.
-assets::Mesh make_two_view_quad(const glm::vec4& tangent) {
+// A quad over the target's columns x0..x1 (clip space; the whole target by
+// default) that samples tile A at uv0 and carries `tangent` in every vertex.
+assets::Mesh make_two_view_quad(const glm::vec4& tangent, float x0 = -1.0f,
+                                float x1 = 1.0f) {
   auto vert = [&](float x, float y) {
     assets::Vertex v;
     v.position = {x, y, 0.5f};
@@ -844,8 +845,8 @@ assets::Mesh make_two_view_quad(const glm::vec4& tangent) {
     return v;
   };
   assets::Mesh mesh;
-  mesh.vertices = {vert(-1.0f, -1.0f), vert(1.0f, -1.0f), vert(1.0f, 1.0f),
-                   vert(-1.0f, 1.0f)};
+  mesh.vertices = {vert(x0, -1.0f), vert(x1, -1.0f), vert(x1, 1.0f),
+                   vert(x0, 1.0f)};
   mesh.indices = {0, 2, 1, 0, 3, 2};  // front-facing, as make_hybrid_mesh()
   return mesh;
 }
@@ -927,10 +928,11 @@ TEST_F(HybridMeshRenderTest, SecondViewBlendsByWeightAndAlphaInLinearLight) {
   }
 }
 
-// w = 0 shows tile A exactly as a mesh with no second view does: the frame
-// equals the placeholder's byte for byte, however the tiles are covered (the
-// alpha divides nothing there), and shows tile A.
-TEST_F(HybridMeshRenderTest, ZeroWeightDrawsAsThePlaceholder) {
+// w = 0 shows tile A exactly as a mesh with no second view does: drawn as
+// carrying a second view, the placeholder and a second view at w = 0 each
+// draw the frame the placeholder draws without one, byte for byte, however
+// the tiles are covered (the alpha divides nothing there), and show tile A.
+TEST_F(HybridMeshRenderTest, ZeroWeightDrawsAsNoSecondView) {
   auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
                                                         color_depth_layout());
   ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
@@ -946,17 +948,22 @@ TEST_F(HybridMeshRenderTest, ZeroWeightDrawsAsThePlaceholder) {
                    sizeof(atlas_px), atlas_res, VK_FORMAT_R8G8B8A8_SRGB);
     ASSERT_NE(atlas, VK_NULL_HANDLE);
 
-    std::vector<uint8_t> frames[2];
-    const glm::vec4 tangents[2] = {kPlaceholder, second_view(0.0f)};
-    for (int i = 0; i < 2; ++i) {
+    std::vector<uint8_t> frames[3];
+    const glm::vec4 tangents[3] = {kPlaceholder, kPlaceholder,
+                                   second_view(0.0f)};
+    const bool carries[3] = {false, true, true};
+    for (int i = 0; i < 3; ++i) {
       auto mesh = pipelines::upload_mesh(device(), allocator(),
                                          make_two_view_quad(tangents[i]));
       ASSERT_TRUE(mesh.ok()) << mesh.status().message();
       frames[i] = render(allocator(), pipeline.value(),
-                         pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u);
+                         pipelines::HybridMeshDraw{&mesh.value(), carries[i]},
+                         atlas, 0u);
       ASSERT_EQ(frames[i].size(), static_cast<size_t>(kSize) * kSize * 4);
     }
-    EXPECT_EQ(frames[1], frames[0]) << "w = 0 must draw as the placeholder";
+    EXPECT_EQ(frames[1], frames[0])
+        << "the placeholder must draw as with no second view";
+    EXPECT_EQ(frames[2], frames[0]) << "w = 0 must draw as no second view";
     const long tile_a[3] = {kTileA[0], kTileA[1], kTileA[2]};
     EXPECT_LE(worst_codes(frames[0], tile_a), 1) << "and show tile A";
   }
@@ -1010,10 +1017,95 @@ TEST_F(HybridMeshRenderTest, SecondViewLeavesTheVertexColorClass) {
   EXPECT_EQ(flagged_left[2], 255);
 }
 
+// A draw whose mesh carries no second view shows the uv0 view alone, whatever
+// its tangents hold: the quad with a second view at w = 0.5 and 1, drawn
+// without the flag, draws the placeholder's frame byte for byte. Drawn with
+// the flag the same quad shows the blend, so the comparison bites.
+TEST_F(HybridMeshRenderTest, DrawWithoutSecondViewShowsTheFirstViewOnly) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const uint8_t atlas_px[8] = {kTileA[0], kTileA[1], kTileA[2], 255,
+                               kTileB[0], kTileB[1], kTileB[2], 255};
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator(), pipeline.value(), atlas_px, {2, 1},
+                 sizeof(atlas_px), atlas_res, VK_FORMAT_R8G8B8A8_SRGB);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  auto placeholder_mesh = pipelines::upload_mesh(
+      device(), allocator(), make_two_view_quad(kPlaceholder));
+  ASSERT_TRUE(placeholder_mesh.ok()) << placeholder_mesh.status().message();
+  const std::vector<uint8_t> placeholder =
+      render(allocator(), pipeline.value(),
+             pipelines::HybridMeshDraw{&placeholder_mesh.value()}, atlas, 0u);
+  ASSERT_EQ(placeholder.size(), static_cast<size_t>(kSize) * kSize * 4);
+  const long tile_a[3] = {kTileA[0], kTileA[1], kTileA[2]};
+  ASSERT_LE(worst_codes(placeholder, tile_a), 1);
+
+  for (const float w : {0.5f, 1.0f}) {
+    SCOPED_TRACE(w);
+    auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                       make_two_view_quad(second_view(w)));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+    EXPECT_EQ(render(allocator(), pipeline.value(),
+                     pipelines::HybridMeshDraw{&mesh.value()}, atlas, 0u),
+              placeholder)
+        << "without the flag the tangent slot must not show";
+    EXPECT_NE(render(allocator(), pipeline.value(),
+                     pipelines::HybridMeshDraw{&mesh.value(), true}, atlas, 0u),
+              placeholder)
+        << "with it the same quad blends";
+  }
+}
+
+// Each draw of a frame takes the pipeline its own flag names: three thirds of
+// the target, each carrying a full-weight second view, drawn without, with,
+// then without the flag show tile A, tile B, then tile A again.
+TEST_F(HybridMeshRenderTest, EachDrawTakesThePipelineItsMeshNeeds) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+
+  const uint8_t atlas_px[8] = {kTileA[0], kTileA[1], kTileA[2], 255,
+                               kTileB[0], kTileB[1], kTileB[2], 255};
+  std::vector<AtlasResources> atlas_res;
+  const VkDescriptorSet atlas =
+      make_atlas(allocator(), pipeline.value(), atlas_px, {2, 1},
+                 sizeof(atlas_px), atlas_res, VK_FORMAT_R8G8B8A8_SRGB);
+  ASSERT_NE(atlas, VK_NULL_HANDLE);
+
+  const float edges[4] = {-1.0f, -1.0f / 3.0f, 1.0f / 3.0f, 1.0f};
+  std::vector<pipelines::GpuMesh> meshes;
+  for (int i = 0; i < 3; ++i) {
+    auto mesh = pipelines::upload_mesh(
+        device(), allocator(),
+        make_two_view_quad(second_view(1.0f), edges[i], edges[i + 1]));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+    meshes.push_back(std::move(mesh).value());
+  }
+  const std::vector<pipelines::HybridMeshDraw> draws = {
+      {&meshes[0], false}, {&meshes[1], true}, {&meshes[2], false}};
+  const std::vector<uint8_t> px =
+      render(allocator(), pipeline.value(), draws, atlas, 0u);
+  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+
+  const uint8_t* tiles[3] = {kTileA, kTileB, kTileA};
+  for (uint32_t i = 0; i < 3; ++i) {
+    SCOPED_TRACE(i);
+    const uint8_t* p = pixel_at(px, (2 * i + 1) * kSize / 6, kSize / 2);
+    for (int ch = 0; ch < 3; ++ch) {
+      EXPECT_LE(std::abs(int{p[ch]} - int{tiles[i][ch]}), 1)
+          << "channel " << ch << " drew " << int{p[ch]};
+    }
+  }
+}
+
 // The fallback set travels with the pipeline: after a move-construct, a
 // move-assign over a live pipeline and a self-move, a frame with no atlas
-// still draws, against a defined set (validation with teeth), and the
-// moved-from pipeline records nothing.
+// still draws, against a defined set (validation with teeth), through either
+// pipeline, and the moved-from pipeline records nothing.
 TEST_F(HybridMeshRenderTest, MovesKeepTheFallback) {
   const assets::Mesh mesh_cpu = make_magenta_atlas_half_mesh();
   auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
@@ -1038,6 +1130,11 @@ TEST_F(HybridMeshRenderTest, MovesKeepTheFallback) {
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_EQ(pixel_at(px, kSize / 4, kSize / 2)[2], 255)
       << "the moved pipeline draws with its fallback";
+  EXPECT_EQ(render(allocator(), assigned,
+                   pipelines::HybridMeshDraw{&mesh.value(), true},
+                   VK_NULL_HANDLE, 0u),
+            px)
+      << "and so does its second view's pipeline";
   // NOLINTNEXTLINE(bugprone-use-after-move)
   const std::vector<uint8_t> empty =
       render(allocator(), moved, draw, VK_NULL_HANDLE, 0u);
