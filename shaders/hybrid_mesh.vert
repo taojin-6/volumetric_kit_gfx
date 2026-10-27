@@ -27,9 +27,8 @@
 // interpolated like uv0, as one vec3: a mesh of small triangles draws
 // measurably faster on Apple GPUs with one interpolant than with a vec2 and a
 // float. The slot's placeholder, (1, 0, 0, 1), has w_B = 0: no second view.
-// TODO: on Apple GPUs those three floats cost every mesh drawn here, second
-// view or not (DECISIONS.md, 2026-10-27); a pipeline without the slot would
-// spare the meshes that carry none.
+// Only the pipeline for meshes that carry one reads frag_second
+// (hybrid_mesh.frag's kSecondView).
 
 layout(location = 0) in vec3 in_position;  // world space
 layout(location = 1) in vec3 in_normal;    // world space

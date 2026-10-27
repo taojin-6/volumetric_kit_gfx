@@ -47,14 +47,15 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   loop's, so a renderer draws the same frames where no display exists.
   `FrameLoop::layout()` gives either loop's target signature. Its tests run
   on every GPU leg, NVIDIA's included.
-- `pipelines`: **a hybrid mesh blends a second atlas view.**
-  `HybridMeshPipeline` reads a vertex's `tangent` as `(uv_B.x, uv_B.y, w_B,
-  unused)` and, over an RGBA atlas, shows the `uv0` and `uv_B` views mixed in
-  linear light by `w_B` and their alphas. The `(1, 0, 0, 1)` placeholder
-  carries `w_B = 0` and draws exactly as before; a picture's two planes take
-  no second view. A mesh with real tangents drawn by this pipeline should
-  set `tangent.z` to 0. On Apple GPUs every mesh drawn here costs more,
-  second view or not (DECISIONS.md has the numbers).
+- `pipelines`: **a hybrid mesh blends a second atlas view.** A
+  `HybridMeshPipeline` draw whose `HybridMeshDraw::second_view` is set reads
+  a vertex's `tangent` as `(uv_B.x, uv_B.y, w_B, unused)` and, over an RGBA
+  atlas, shows the `uv0` and `uv_B` views mixed in linear light by `w_B` and
+  their alphas. The `(1, 0, 0, 1)` placeholder carries `w_B = 0` and draws
+  exactly as before; a picture's two planes take no second view. A draw
+  without the flag, the default, ignores the slot and costs what it did
+  before; with it, a mesh costs more on Apple GPUs even where `w_B = 0`
+  (DECISIONS.md has the numbers).
 - `pipelines`: **a mesh samples a camera's 4:2:0 picture where it is.**
   `HybridMeshTextureSet::create` and `rebind` take a `YcbcrPicture`
   (`pipelines/ycbcr.hpp`): its luma (`R8_UNORM`) and chroma (`R8G8_UNORM`)

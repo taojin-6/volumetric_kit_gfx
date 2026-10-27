@@ -384,7 +384,7 @@ class HybridMeshTextureSetTest : public vg_test::RendererDeviceTest,
       begin.clear_color.float32[3] = 1.0f;
       const vg::RenderTarget rt = target.value().target();
       rt.begin(raw, begin);
-      const pipelines::HybridMeshDraw quad{&*quad_};
+      const pipelines::HybridMeshDraw quad{&*quad_, second_view_};
       // In declaration order: the extent, the identity view-projection (the
       // quad is in clip space), the default light, unlit flags (the albedo
       // itself), the set under test as set 0, and the draw list.
@@ -428,6 +428,7 @@ class HybridMeshTextureSetTest : public vg_test::RendererDeviceTest,
 
   std::optional<pipelines::HybridMeshPipeline> pipeline_;
   std::optional<pipelines::GpuMesh> quad_;
+  bool second_view_ = false;  // the quad's draws' HybridMeshDraw::second_view
 };
 
 TEST_F(HybridMeshTextureSetTest, DrawReadsBackTheImage) {
@@ -870,9 +871,9 @@ TEST_F(HybridMeshTextureSetTest, RebindSwitchesTheFormBothWays) {
 }
 
 // A picture's two planes take no second view: the quad with a full-weight,
-// mirrored second view in its tangent slot draws the picture byte for byte as
-// make_quad()'s placeholder does. Over an RGBA set the same quad shows the
-// mirrored image, so the comparison bites.
+// mirrored second view in its tangent slot, drawn as carrying it, draws the
+// picture byte for byte as make_quad()'s placeholder does. Over an RGBA set
+// the same quad shows the mirrored image, so the comparison bites.
 TEST_F(HybridMeshTextureSetTest, TwoPlanePictureTakesNoSecondView) {
   if (!device().caps().device_mapped_memory()) {
     GTEST_SKIP() << "pictures require host-mapped device memory";
@@ -896,6 +897,7 @@ TEST_F(HybridMeshTextureSetTest, TwoPlanePictureTakesNoSecondView) {
   auto mesh = pipelines::upload_mesh(device(), allocator(), mirrored);
   ASSERT_TRUE(mesh.ok()) << mesh.status().message();
   quad_.emplace(std::move(mesh).value());  // the last draw has completed
+  second_view_ = true;
   EXPECT_EQ(draw_bytes(*pipeline_, texture.value()->set(), size.extent,
                        kTargetFormat),
             placeholder);
