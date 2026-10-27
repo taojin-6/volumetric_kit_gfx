@@ -24,6 +24,8 @@ namespace volumetric_kit::gfx::assets {
 /// vertex's attributes share a cache line during draw. @ref color is always
 /// present; when the source has no vertex colors a loader fills opaque white,
 /// so a shader can read the slot unconditionally.
+/// `pipelines::HybridMeshPipeline` reads @ref tangent as a second atlas view,
+/// (u, v, weight, unused); its default carries weight 0.
 struct Vertex {
   glm::vec3 position{0.0f};                   ///< Object-space position.
   glm::vec3 normal{0.0f, 0.0f, 1.0f};         ///< Object-space unit normal.

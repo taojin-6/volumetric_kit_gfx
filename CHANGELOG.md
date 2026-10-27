@@ -38,6 +38,14 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `pipelines`: **a hybrid mesh blends a second atlas view.**
+  `HybridMeshPipeline` reads a vertex's `tangent` as `(uv_B.x, uv_B.y, w_B,
+  unused)` and, over an RGBA atlas, shows the `uv0` and `uv_B` views mixed in
+  linear light by `w_B` and their alphas. The `(1, 0, 0, 1)` placeholder
+  carries `w_B = 0` and draws exactly as before; a picture's two planes take
+  no second view. A mesh with real tangents drawn by this pipeline should
+  set `tangent.z` to 0. On Apple GPUs every mesh drawn here costs more,
+  second view or not (DECISIONS.md has the numbers).
 - `pipelines`: **a mesh samples a camera's 4:2:0 picture where it is.**
   `HybridMeshTextureSet::create` and `rebind` take a `YcbcrPicture`
   (`pipelines/ycbcr.hpp`): its luma (`R8_UNORM`) and chroma (`R8G8_UNORM`)
