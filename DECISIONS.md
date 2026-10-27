@@ -170,8 +170,16 @@ covers the fragment.
 
 **The cost.** One more sample of the atlas per fragment of the atlas class,
 in the same uniform control flow as the first, so both take the same implicit
-LOD. Where `w = 0` it reads the placeholder's one texel, which stays in the
-cache.
+LOD; where `w = 0` it reads the placeholder's one texel, which stays in the
+cache. And three more interpolated floats per vertex, sent as one vec3, which
+on an Apple GPU took 0.04-0.06 ms less than a vec2 and a float. Measured A/B
+against the shaders before, 1.84 M triangles at 2560x1440 over a 7680x4320
+atlas, 600 interleaved iterations, Release: with no second view, +0.019 ms on
+an RTX 4090 (a 0.18 ms frame) and +0.48-0.52 ms on an Apple M4 (a 2.5 ms
+frame); with every fragment blending, +0.029 and +0.57-0.59 ms. On the M4 the
+interpolants, not the sample, are the cost, and it grows with the triangle
+count: at 2560x1440, 115 k triangles add 0.02 ms (0.19 ms blending); at
+1280x720, 1.84 M add 0.41 ms.
 
 **The risk.** A mesh with real tangents, a glTF model's, drawn here would
 blend its atlas at those tangents. None is drawn that way; such a mesh sets
