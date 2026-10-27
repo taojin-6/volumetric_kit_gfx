@@ -171,15 +171,18 @@ covers the fragment.
 **The cost.** One more sample of the atlas per fragment of the atlas class,
 in the same uniform control flow as the first, so both take the same implicit
 LOD; where `w = 0` it reads the placeholder's one texel, which stays in the
-cache. And three more interpolated floats per vertex, sent as one vec3, which
-on an Apple GPU took 0.04-0.06 ms less than a vec2 and a float. Measured A/B
-against the shaders before, 1.84 M triangles at 2560x1440 over a 7680x4320
-atlas, 600 interleaved iterations, Release: with no second view, +0.019 ms on
-an RTX 4090 (a 0.18 ms frame) and +0.48-0.52 ms on an Apple M4 (a 2.5 ms
-frame); with every fragment blending, +0.029 and +0.57-0.59 ms. On the M4 the
-interpolants, not the sample, are the cost, and it grows with the triangle
-count: at 2560x1440, 115 k triangles add 0.02 ms (0.19 ms blending); at
-1280x720, 1.84 M add 0.41 ms.
+cache. And three more floats from the vertex to the fragment stage. Measured
+A/B against the shaders before, Release, 600 interleaved iterations over a
+7680x4320 atlas, on an unshared mesh (three vertices per triangle, as a
+multi-view texturer writes) of 1.26 M triangles, with no second view and with
+every fragment blending: on an RTX 4090, +0.001 and +0.036 ms at 1280x720
+(a 0.32 ms frame), +0.007 and +0.040 ms at 2560x1440 (0.35 ms); on an Apple
+M4, +0.40-0.60 and +0.60-0.75 ms at 1280x720 (3.5-4.0 ms), and +2.27-2.29
+and +2.41-2.47 ms at 2560x1440 (5.1 ms). On the M4 the three floats, not the
+sample, are the cost, so a mesh with no second view pays it too, and it grows
+with the vertices drawn and the target's size. *Open:* a pipeline without the
+slot, for meshes that carry no second view, would take that back on Apple; it
+is not built.
 
 **The risk.** A mesh with real tangents, a glTF model's, drawn here would
 blend its atlas at those tangents. None is drawn that way; such a mesh sets
