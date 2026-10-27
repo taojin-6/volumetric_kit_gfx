@@ -270,6 +270,17 @@ TEST_F(WindowingTest, FrameLoopRendersAndPresents) {
   auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
   ASSERT_TRUE(loop.ok()) << loop.status().message();
   EXPECT_EQ(loop.value()->frames_in_flight(), 2u);
+  // A pipeline built for the loop's layout draws into the swapchain.
+  EXPECT_TRUE(loop.value()->layout().compatible_with(sc.layout()));
+
+  // A swapchain frame renders into its acquired image and has no offscreen
+  // target.
+  auto frame = loop.value()->begin_frame();
+  ASSERT_TRUE(frame.ok()) << frame.status().message();
+  EXPECT_EQ(frame.value().target, &sc.render_target(frame.value().image_index));
+  EXPECT_EQ(frame.value().offscreen, nullptr);
+  record_clear(frame.value());
+  ASSERT_TRUE(loop.value()->end_frame(frame.value()).ok());
 
   const vkc::Status status = run_frames(*loop.value(), /*count=*/8);
   EXPECT_TRUE(status.ok()) << status.message();
