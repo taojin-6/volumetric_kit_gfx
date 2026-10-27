@@ -60,6 +60,10 @@ struct Clear {
 constexpr std::array<Clear, 6> kClears = {
     {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}, {0, 1, 1}, {1, 0, 1}}};
 
+// A bound on a test's waits for values a frame sets, so a frame that drops
+// one fails the test rather than hanging it.
+constexpr uint64_t kWaitNs = 2'000'000'000;
+
 double ms_between(Clock::time_point from, Clock::time_point to) {
   return std::chrono::duration<double, std::milli>(to - from).count();
 }
@@ -263,7 +267,7 @@ TEST_F(OffscreenFrameLoopTest, FramesCompleteInOrderAndRetireOnTheTimeline) {
     ASSERT_TRUE(loop->end_frame(frame.value()).ok());
     EXPECT_EQ(loop->submitted(), n);
   }
-  ASSERT_TRUE(loop->timeline().wait(8).ok());
+  ASSERT_TRUE(loop->timeline().wait(8, kWaitNs).ok());
   EXPECT_EQ(loop->completed().value(), 8u);
   retire.poll();
   EXPECT_EQ(released, (std::vector<uint64_t>{1, 2, 3, 4, 5, 6, 7, 8}));
@@ -410,8 +414,8 @@ TEST_F(OffscreenFrameLoopTest, FrameWaitsForAndSignalsTimelineValues) {
                 .domain(),
             vkc::Status::Code::InvalidArgument);
 
-  ASSERT_TRUE(loop->timeline().wait(f.number).ok());
-  ASSERT_TRUE(done.wait(10).ok());
+  ASSERT_TRUE(loop->timeline().wait(f.number, kWaitNs).ok());
+  ASSERT_TRUE(done.wait(10, kWaitNs).ok());
   ASSERT_TRUE(producer.value().wait().ok());
   uint32_t copied = 0;
   std::memcpy(&copied, readback.mapped(), sizeof(copied));
@@ -478,7 +482,7 @@ TEST_F(OffscreenFrameLoopTest, EndFrameRefusesPointsItCannotHonour) {
     const vkc::Status ended = loop->end_frame(f);
     EXPECT_EQ(ended.domain(), vkc::Status::Code::InvalidArgument);
     EXPECT_EQ(loop->submitted(), f.number);
-    EXPECT_TRUE(own.wait(f.number).ok());
+    EXPECT_TRUE(own.wait(f.number, kWaitNs).ok());
   }
 
   auto frame = loop->begin_frame();
