@@ -869,6 +869,45 @@ TEST_F(HybridMeshTextureSetTest, RebindSwitchesTheFormBothWays) {
   EXPECT_EQ(b.set(), b_set);
 }
 
+// A picture's two planes take no second view: the quad with a full-weight,
+// mirrored second view in its tangent slot draws the picture byte for byte as
+// make_quad()'s placeholder does. Over an RGBA set the same quad shows the
+// mirrored image, so the comparison bites.
+TEST_F(HybridMeshTextureSetTest, TwoPlanePictureTakesNoSecondView) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
+  const Size& size = kSizes[0];
+  const PlaneBytes bytes =
+      make_planes(size.extent, size.luma_size, size.chroma_size);
+  const Planes planes = upload_planes(bytes);
+  ASSERT_TRUE(planes.luma.valid() && planes.chroma.valid());
+  auto texture = pipelines::HybridMeshTextureSet::create(
+      device(), allocator(), *pipeline_, picture_of(planes, size.extent));
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  const std::vector<uint8_t> placeholder = draw_bytes(
+      *pipeline_, texture.value()->set(), size.extent, kTargetFormat);
+  ASSERT_FALSE(placeholder.empty());
+
+  assets::Mesh mirrored = make_quad();
+  for (assets::Vertex& v : mirrored.vertices) {
+    v.tangent = {1.0f - v.uv0.x, 1.0f - v.uv0.y, 1.0f, 1.0f};
+  }
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mirrored);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  quad_.emplace(std::move(mesh).value());  // the last draw has completed
+  EXPECT_EQ(draw_bytes(*pipeline_, texture.value()->set(), size.extent,
+                       kTargetFormat),
+            placeholder);
+
+  auto image = upload(kFirst);
+  ASSERT_TRUE(image.ok()) << image.status().message();
+  auto rgba = make_set(image.value().view());
+  ASSERT_TRUE(rgba.ok()) << rgba.status().message();
+  const std::vector<Rgba> reversed(kFirst.rbegin(), kFirst.rend());
+  expect_near(draw(rgba.value()->set(), 2), reversed, 1);
+}
+
 // Planes left in GENERAL, as a camera picture's imported planes are, are
 // sampled in it.
 TEST_F(HybridMeshTextureSetTest, PlanesInGeneralAreSampledThere) {
