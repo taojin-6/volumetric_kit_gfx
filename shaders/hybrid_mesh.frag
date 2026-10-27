@@ -9,7 +9,8 @@
 // the interpolated per-vertex color (the TSDF fallback) otherwise. Whenever
 // albedo is shown the atlas is sampled unconditionally -- in uniform control
 // flow, so its implicit-LOD screen derivatives are always well defined -- and
-// the unused result is simply not selected. Over an RGBA atlas, a second view,
+// the unused result is simply not selected. Over an RGBA atlas, in the
+// pipeline for meshes that carry a second view (kSecondView), that view,
 // sampled at uv_B the same way, is blended in by its weight w_B (both from the
 // tangent slot; see blend_views). The kHybridMeshVertexColor flag selects the
 // vertex color everywhere (HybridMeshPipeline::submit sets it when it binds
@@ -58,11 +59,15 @@ pc;
 // the host enum so it is their one definition (a 0 here switches the mode off),
 // and whether color attachment 0 holds linear light. An _SRGB target, which
 // encodes on write, and a float target are given linear light; a UNORM target
-// stores what is written, so it is given the encoding.
+// stores what is written, so it is given the encoding. kSecondView is true
+// only in the pipeline for meshes that carry a second view; false, the shader
+// never reads frag_second, so the driver drops that interpolant (DECISIONS.md,
+// 2026-10-27).
 layout(constant_id = 0) const uint kFlagLit = 0u;      // kHybridMeshLit
 layout(constant_id = 1) const uint kFlagNormals = 0u;  // kHybridMeshNormals
 layout(constant_id = 2) const bool kLinearTarget = false;
 layout(constant_id = 3) const uint kFlagVertexColor = 0u;  // kHybridMeshVertexColor
+layout(constant_id = 4) const bool kSecondView = false;
 
 layout(location = 0) out vec4 out_color;
 
@@ -91,11 +96,15 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
 // sampler says (an _SRGB one decodes); a camera picture's two planes are
 // filtered at level 0 where they are, converted, then decoded from sRGB.
 // `two_plane` is the same for the whole draw, so the branch does not diverge.
-// Over an RGBA image, uv0's view is blended with the second view's.
+// Over an RGBA image, uv0's view is blended with the second view's, if the
+// mesh carries one.
 vec3 atlas_albedo(vec2 uv) {
   if (picture.two_plane == 0u) {
-    return blend_views(texture(plane0, uv), texture(plane0, frag_second.xy),
-                       frag_second.z);
+    vec4 a = texture(plane0, uv);
+    if (kSecondView) {
+      return blend_views(a, texture(plane0, frag_second.xy), frag_second.z);
+    }
+    return a.rgb;
   }
   vec2 p = uv * picture.extent;
   float y = textureLod(plane0,

@@ -89,27 +89,29 @@ enum HybridMeshFlags : uint32_t {
 /// (`_SRGB` or float) is given the shaded color as is, and a UNORM target
 /// sRGB-encoded, so a color shows alike on each.
 ///
-/// **A second atlas view.** A vertex's `tangent` carries a second view of the
-/// same RGBA atlas, `(uv_B.x, uv_B.y, w_B, unused)`, interpolated like `uv0`.
-/// Where a triangle's class is "atlas", the albedo is the two views' mix in
-/// linear light, each weighted by its atlas alpha (the coverage; linear in an
-/// `_SRGB` format):
+/// **A second atlas view.** A draw whose @ref HybridMeshDraw::second_view is
+/// set reads its vertices' `tangent` as a second view of the same RGBA atlas,
+/// `(uv_B.x, uv_B.y, w_B, unused)`, interpolated like `uv0`. Where a
+/// triangle's class is "atlas", the albedo is the two views' mix in linear
+/// light, each weighted by its atlas alpha (the coverage; linear in an `_SRGB`
+/// format):
 /// `((1 - w_B) a_A c_A + w_B a_B c_B) / ((1 - w_B) a_A + w_B a_B)`, with
 /// `c_A, a_A` sampled at `uv0`, `c_B, a_B` at `uv_B`, and `w_B` clamped to
 /// [0, 1]. `w_B = 0` -- the `(1, 0, 0, 1)` placeholder's, which
 /// @ref assets::Vertex defaults to -- or a zero denominator shows `c_A`
-/// exactly, as a pipeline without the blend would. A camera picture's two
-/// planes take no second view. A mesh carrying real tangents (a glTF model's)
-/// drawn here would blend its atlas at those tangents: draw it with
-/// `tangent.z` = 0.
+/// exactly. A draw without the flag shows `c_A` whatever its tangents hold and
+/// skips the second view's interpolant, which on Apple GPUs costs every vertex
+/// drawn, `w_B` = 0 or not (DECISIONS.md, 2026-10-27). A camera picture's two
+/// planes take no second view.
 ///
-/// Wraps a @ref GraphicsPipeline built from SPIR-V compiled into the library,
-/// so a consumer gets the technique from @ref create alone. The reflected
-/// layout exposes **one** descriptor set, **set 0**: an RGBA atlas -- one a
-/// @ref StreamedAtlas made for the pipeline streams, or an image the consumer
-/// owns -- or a camera picture's two Y'CbCr 4:2:0 planes, which only a
-/// @ref HybridMeshTextureSet binds; a uniform says which, and those two types
-/// write its bindings. The fragment shader samples
+/// Wraps two @ref GraphicsPipeline s built from the same SPIR-V, compiled into
+/// the library -- one for draws without a second view, one for draws with
+/// one -- so a consumer gets the technique from @ref create alone. Their
+/// reflected layouts are alike and expose **one** descriptor set, **set 0**:
+/// an RGBA atlas -- one a @ref StreamedAtlas made for the pipeline streams, or
+/// an image the consumer owns -- or a camera picture's two Y'CbCr 4:2:0
+/// planes, which only a @ref HybridMeshTextureSet binds; a uniform says which,
+/// and those two types write its bindings. The fragment shader samples
 /// the set unconditionally, so the pipeline owns a fallback -- a 1x1 image and
 /// its set -- which @ref submit binds for a frame with no atlas, drawing every
 /// triangle in its vertex color. Per-frame constants (the view-projection,
@@ -176,10 +178,12 @@ class VG_PIPELINES_API HybridMeshPipeline {
   HybridMeshPipeline(const HybridMeshPipeline&) = delete;
   HybridMeshPipeline& operator=(const HybridMeshPipeline&) = delete;
 
-  /// @return The underlying `VkPipeline` (`VK_NULL_HANDLE` when empty).
+  /// @return The `VkPipeline` for draws without a second view
+  ///         (`VK_NULL_HANDLE` when empty).
   VkPipeline handle() const noexcept { return pipeline_.handle(); }
 
-  /// @return The `VkPipelineLayout` (for push constants + descriptor binding).
+  /// @return The `VkPipelineLayout` (for push constants + descriptor binding);
+  ///         the second view's pipeline's is alike, so it serves both.
   VkPipelineLayout layout() const noexcept { return pipeline_.layout(); }
 
   /// @return `true` if this owns a pipeline.
@@ -202,7 +206,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
 
   /// @brief Record one frame's draws into @p cmd: bind the pipeline + a
   ///        full-target viewport, bind the atlas set once (set 0), push the
-  ///        camera + lighting constants, then draw each mesh.
+  ///        camera + lighting constants, then draw each mesh through the
+  ///        pipeline its @ref HybridMeshDraw::second_view names.
   /// @param cmd    A recording-state command buffer, inside a dynamic-rendering
   ///               scope whose target matches the layout @ref create was given.
   /// @param frame  The atlas set, the draw list, the view-projection, and the
@@ -229,7 +234,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
   void write_rgba_set(const core::DescriptorSet& set, VkImageView view) const;
 
   const core::Device* device_ = nullptr;  // borrowed; outlives this
-  GraphicsPipeline pipeline_;
+  GraphicsPipeline pipeline_;             // draws without a second view
+  GraphicsPipeline second_view_;          // draws whose mesh carries one
   // The atlas sampler: bilinear, clamped to the edge, one level. Shared by
   // the fallback and every StreamedAtlas made for the pipeline.
   std::optional<Sampler> sampler_;
@@ -262,6 +268,9 @@ struct HybridMeshDraw {
   /// The geometry source. Aggregate-initializes from either alternative:
   /// `HybridMeshDraw{&gpu_mesh}` or `HybridMeshDraw{live_mesh}`.
   std::variant<const GpuMesh*, LiveMesh> geometry;
+  /// Whether the mesh's `tangent` carries a second atlas view,
+  /// `(uv_B, w_B, unused)`, for the draw to blend (@ref HybridMeshPipeline).
+  bool second_view = false;
 };
 
 /// @brief Everything @ref HybridMeshPipeline::submit records for one frame: the
