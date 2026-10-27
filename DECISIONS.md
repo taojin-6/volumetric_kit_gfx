@@ -161,7 +161,7 @@ refused frame, the profiler's `frame wait` and `submit` rows (there is no
 `layout()` gives either kind's target signature, so a renderer builds its
 pipelines once and draws the same frames with or without a window. It reads
 chosen frames back by recording `OffscreenTarget::record_readback` into the
-frame and reading `pixels()` once the slot recurs.
+frame and reading `pixels()` when the slot recurs, before that frame ends.
 
 **Why the same class.** A renderer with no display needs the loop's
 protocol, not a second one: what its consumers key on -- `Frame::slot`,

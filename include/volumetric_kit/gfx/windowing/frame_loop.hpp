@@ -117,9 +117,10 @@ struct Frame {
   std::vector<core::TimelinePoint> signals;
   /// An offscreen loop's frame: its slot's target, which @ref target
   /// renders into. Record its `record_readback` into @ref cmd after the
-  /// render to read the frame back: `pixels()` holds it once the slot recurs
-  /// (@ref FrameLoop::begin_frame waited for its fence) or the device has
-  /// idled. Null for a swapchain frame.
+  /// render to read the frame back: `pixels()` holds it from the slot's next
+  /// @ref FrameLoop::begin_frame, which waited for its fence, until that
+  /// frame is ended, as its own readback may then overwrite it; or once the
+  /// device has idled. Null for a swapchain frame.
   const OffscreenTarget* offscreen = nullptr;
 };
 
@@ -224,7 +225,8 @@ class VG_WINDOWING_API FrameLoop {
   /// // ... draw into frame.value().target, then
   /// // frame.value().offscreen->record_readback(frame.value().cmd) ...
   /// core::Status ended = loop.value()->end_frame(frame.value());
-  /// // pixels() holds the frame once its slot recurs.
+  /// // pixels() holds the frame from its slot's next begin_frame until that
+  /// // frame is ended (Frame::offscreen).
   /// @endcode
   static core::Result<std::unique_ptr<FrameLoop>> create(
       const core::Device& device, core::Allocator& allocator,
