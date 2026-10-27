@@ -5,8 +5,10 @@
 
 /// @file frame_loop.hpp
 /// @brief The frames-in-flight render loop: per-frame command buffers + sync
-///        that drive a @ref Swapchain's acquire → render → present cycle.
+///        that drive a @ref Swapchain's acquire → render → present cycle, or
+///        a ring of offscreen targets where there is no display.
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -19,10 +21,12 @@
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/windowing/export.hpp"
 
 namespace volumetric_kit::core {
+class Allocator;
 class Device;
 }  // namespace volumetric_kit::core
 
@@ -61,17 +65,40 @@ struct FrameWait {
   VkPipelineStageFlags stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 };
 
+/// @brief What an offscreen @ref FrameLoop renders into -- one target per
+///        frame-in-flight slot -- and the pace a display would set.
+///
+/// @code
+/// windowing::OffscreenLoopDesc desc;
+/// desc.target.extent = {1280, 720};
+/// desc.target.color_format = VK_FORMAT_B8G8R8A8_SRGB;
+/// desc.target.depth_format = VK_FORMAT_D32_SFLOAT;
+/// desc.frame_interval = std::chrono::nanoseconds(1000000000 / 60);
+/// auto loop = windowing::FrameLoop::create(device, allocator, desc);
+/// @endcode
+struct OffscreenLoopDesc {
+  /// Every slot's target: its extent, formats, and whether it reads back.
+  OffscreenTargetDesc target;
+  /// The least time between two frames' @ref FrameLoop::begin_frame, as a
+  /// display's refresh paces a FIFO swapchain's presents; not negative. 0
+  /// begins a frame as soon as its slot is free.
+  std::chrono::nanoseconds frame_interval{0};
+};
+
 /// @brief One in-flight frame handed to the caller by @ref
 /// FrameLoop::begin_frame.
 ///
 /// Record draws into @ref cmd between `target->begin()` and `target->end()`;
-/// the image is already in `COLOR_ATTACHMENT_OPTIMAL`. Add any timeline
-/// values the frame waits for or sets, then pass the same `Frame` back to
-/// @ref FrameLoop::end_frame to submit + present it.
+/// the image is already in `COLOR_ATTACHMENT_OPTIMAL` (an offscreen target's
+/// depth, in `DEPTH_ATTACHMENT_OPTIMAL`). Add any timeline values the frame
+/// waits for or sets, then pass the same `Frame` back to @ref
+/// FrameLoop::end_frame to submit + present it (an offscreen loop's, to
+/// submit it).
 struct Frame {
   VkCommandBuffer cmd = VK_NULL_HANDLE;  ///< Recording command buffer.
-  const RenderTarget* target = nullptr;  ///< The acquired image's target.
-  uint32_t image_index = 0;              ///< Swapchain image index.
+  const RenderTarget* target = nullptr;  ///< The frame's image's target.
+  /// Swapchain image index; an offscreen loop's frame carries its @ref slot.
+  uint32_t image_index = 0;
   /// The frame-in-flight slot, below @ref FrameLoop::frames_in_flight. The
   /// slot's previous frame has completed when @ref FrameLoop::begin_frame
   /// returns it, so per-slot consumers such as recon's `MeshExchange` key on
@@ -88,6 +115,12 @@ struct Frame {
   /// completes, one per semaphore. Each semaphore is borrowed: it must
   /// outlive the frame's execution.
   std::vector<core::TimelinePoint> signals;
+  /// An offscreen loop's frame: its slot's target, which @ref target
+  /// renders into. Record its `record_readback` into @ref cmd after the
+  /// render to read the frame back: `pixels()` holds it once the slot recurs
+  /// (@ref FrameLoop::begin_frame waited for its fence) or the device has
+  /// idled. Null for a swapchain frame.
+  const OffscreenTarget* offscreen = nullptr;
 };
 
 /// @brief Drives a @ref Swapchain with a ring of `N` in-flight frames so the
@@ -111,8 +144,20 @@ struct Frame {
 /// themselves; it and @ref end_frame surface stale results as statuses
 /// classified by @ref swapchain_stale.
 ///
+/// An offscreen loop, made from an @ref OffscreenLoopDesc where there is no
+/// display, owns one @ref OffscreenTarget per slot in place of the
+/// swapchain, its image-available semaphores and its per-image objects. Its
+/// frames have no acquire, present or rebuild: @ref begin_frame waits out the
+/// desc's pace where a display's refresh would hold a FIFO acquire, then
+/// prepares the slot's target. Every other rule -- the numbering, the waits
+/// and signals with their refusals and stand-in submit, the profiler's rows,
+/// the timeline, teardown -- is the swapchain loop's, so a renderer draws the
+/// same frames with or without a window, and reads chosen ones back
+/// (@ref Frame::offscreen).
+///
 /// @warning The @p device and @p swapchain passed to @ref create must outlive
-///          the loop (it borrows both). Destruction drains the renderer's
+///          the loop (it borrows both; an offscreen loop borrows only the
+///          device). Destruction drains the renderer's
 ///          queues (`core::Device::wait_idle`) to finish in-flight frames, so
 ///          teardown is safe mid-flight; on a shared adopted device that waits
 ///          only on the renderer's queues, not a sibling library's. A profiler
@@ -152,6 +197,39 @@ class VG_WINDOWING_API FrameLoop {
       const core::Device& device, Swapchain& swapchain,
       uint32_t frames_in_flight = 2);
 
+  /// @brief Create an offscreen loop: @p frames_in_flight slots, each with an
+  ///        @ref OffscreenTarget made to `desc.target`, paced by
+  ///        `desc.frame_interval`.
+  /// @param device            A device with a graphics queue that enabled the
+  ///                          renderer's requirements
+  ///                          (@ref device_requirements); it needs no
+  ///                          present queue.
+  /// @param allocator         Allocates the targets on @p device; it need not
+  ///                          outlive the loop.
+  /// @param desc              The targets and the pace.
+  /// @param frames_in_flight  CPU-ahead depth (>= 1; 2 is the common default).
+  /// @return The loop on success, or a non-OK `core::Status` (invalid argument
+  ///         for a zero count or a negative interval;
+  ///         `core::Status::Code::Unsupported` for a @p device without the
+  ///         renderer's requirements; what `OffscreenTarget::create` refuses,
+  ///         such as a zero extent or an undefined color format; otherwise a
+  ///         propagated failure).
+  ///
+  /// @code
+  /// windowing::OffscreenLoopDesc desc;
+  /// desc.target = {extent, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_D32_SFLOAT};
+  /// auto loop = windowing::FrameLoop::create(device, allocator, desc);
+  /// // ... build pipelines for loop.value()->layout() ...
+  /// auto frame = loop.value()->begin_frame();
+  /// // ... draw into frame.value().target, then
+  /// // frame.value().offscreen->record_readback(frame.value().cmd) ...
+  /// core::Status ended = loop.value()->end_frame(frame.value());
+  /// // pixels() holds the frame once its slot recurs.
+  /// @endcode
+  static core::Result<std::unique_ptr<FrameLoop>> create(
+      const core::Device& device, core::Allocator& allocator,
+      const OffscreenLoopDesc& desc, uint32_t frames_in_flight = 2);
+
   ~FrameLoop();
   FrameLoop(const FrameLoop&) = delete;
   FrameLoop& operator=(const FrameLoop&) = delete;
@@ -172,11 +250,15 @@ class VG_WINDOWING_API FrameLoop {
   ///         events and call again; a non-OK `core::Status` only for hard
   ///         failures (device loss, a failed rebuild or recreate hook) — do not
   ///         retry those.
+  /// @note An offscreen loop has no window to follow: it ignores
+  ///       @p current_extent, never skips, and returns the raw
+  ///       @ref begin_frame's frame or failure.
   core::Result<std::optional<Frame>> begin_frame(VkExtent2D current_extent);
 
   /// @brief Register a hook run after every internal swapchain rebuild by the
   ///        extent-taking @ref begin_frame, before the next acquire — rebuild
-  ///        swapchain-sized resources here (e.g. a depth attachment).
+  ///        swapchain-sized resources here (e.g. a depth attachment). An
+  ///        offscreen loop never rebuilds, so never runs it.
   /// @param callback  Receives the rebuilt swapchain's extent; a non-OK return
   ///                  aborts the frame and surfaces from @ref begin_frame.
   ///                  Whatever it captures must outlive the loop. Pass an empty
@@ -202,25 +284,32 @@ class VG_WINDOWING_API FrameLoop {
   ///       acquired image is released as @ref end_frame's note says.
   /// @note Adapts automatically when @ref Swapchain::recreate changes the image
   ///       count: the per-image sync objects are rebuilt to match on entry.
+  /// @note On an offscreen loop: wait for the frame that last used this slot,
+  ///       wait out the pace (@ref OffscreenLoopDesc::frame_interval), begin
+  ///       the slot's command buffer, and prepare the slot's target
+  ///       (`OffscreenTarget::prepare`). It fails only as a Vulkan call does
+  ///       (device loss); its frame, too, is ended exactly once.
   core::Result<Frame> begin_frame();
 
   /// @brief End the frame from @ref begin_frame: transition the image to
   ///        `PRESENT_SRC`, end its command buffer and submit it -- waiting for
   ///        `frame.waits` and setting its number on @ref timeline and
   ///        `frame.signals` once it completes -- present it, and advance to
-  ///        the next slot.
+  ///        the next slot. An offscreen loop's frame is submitted as it was
+  ///        recorded, with no transition and no present.
   ///
   /// A value in `frame.waits` must already be reached. A submitted producer
   /// may still depend on an unresolved host signal, directly or through
   /// earlier queue work. Such a dependency would invalidate the present's
   /// waits (`VUID-vkQueuePresentKHR-pWaitSemaphores-03268`) and could hold a
-  /// later @ref begin_frame or queue drain forever. Wait for the producer on
-  /// the host before ending the frame; the GPU wait still supplies the
-  /// memory dependency. `core::check_timeline_points` checks the values with
-  /// `core::TimelineWaits::Reached`. A value in `frame.signals` must exceed
-  /// its semaphore's current value, every recorded signal value, and any
-  /// value the frame waits for on it. The core's submits, every frame's
-  /// submit and `core::note_timeline_signals` record the signal values.
+  /// later @ref begin_frame, offscreen or not, or a queue drain forever.
+  /// Wait for the producer on the host before ending the frame; the GPU wait
+  /// still supplies the memory dependency. `core::check_timeline_points`
+  /// checks the values with `core::TimelineWaits::Reached`. A value in
+  /// `frame.signals` must exceed its semaphore's current value, every
+  /// recorded signal value, and any value the frame waits for on it. The
+  /// core's submits, every frame's submit and `core::note_timeline_signals`
+  /// record the signal values.
   /// @param frame  The frame returned by @ref begin_frame this iteration.
   /// @return OK on success; a non-OK `core::Status` carrying
   ///         `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` (classify with
@@ -233,11 +322,12 @@ class VG_WINDOWING_API FrameLoop {
   ///         timeline, or `core::check_timeline_points` refuses the values.
   /// @note On a failure *before* the submit reaches the queue -- a refusal
   ///       included -- the frame's commands never run: an empty submit in its
-  ///       place consumes the acquire and sets its number -- and
-  ///       `frame.signals`, unless they were refused -- so the *slot* stays
-  ///       reusable and nothing waiting for them hangs. The image the frame
-  ///       acquired was never presented, and only a present or a swapchain
-  ///       rebuild releases an acquired image: the next extent-taking @ref
+  ///       place consumes the acquire (a swapchain frame's) and sets its
+  ///       number -- and `frame.signals`, unless they were refused -- so the
+  ///       *slot* stays reusable and nothing waiting for them hangs. A
+  ///       swapchain frame's image was never presented, and only a present or
+  ///       a swapchain rebuild releases an acquired image: the next
+  ///       extent-taking @ref
   ///       begin_frame rebuilds, and a caller of the raw @ref begin_frame
   ///       calls @ref Swapchain::recreate before its next one, or repeated
   ///       failures exhaust the acquirable images. A failed present already
@@ -272,12 +362,13 @@ class VG_WINDOWING_API FrameLoop {
   /// The loop adds its own rows to each frame, after the caller's stages
   /// (`Profiler::add_rows`): `frame wait`, its waits for the slot's previous
   /// frame, the acquire and the image's previous frame, where a loop paced by
-  /// the display waits; `submit`, ending and submitting the command buffer;
-  /// and `present`, the present call. `frame wait` and `present` are wait
+  /// the display waits, or an offscreen loop's pace; `submit`, ending and
+  /// submitting the command buffer; and `present`, the present call, which an
+  /// offscreen loop has none of. `frame wait` and `present` are wait
   /// rows (`cpu_ms == wait_ms`), which reach the scopes the caller has open
   /// around them as blocked time (`core::WaitScope`). Without a profiler the
-  /// loop adds no rows, and its waits, the acquire and the present included,
-  /// still reach those scopes (`core::note_blocked`).
+  /// loop adds no rows, and its waits, the acquire, the pace and the present
+  /// included, still reach those scopes (`core::note_blocked`).
   /// @param profiler  Borrowed and nullable. When set, the loop calls the
   ///                  profiler's `begin_frame` (for the slot, after waiting for
   ///                  its previous frame, with the frame's command buffer) and
@@ -292,12 +383,29 @@ class VG_WINDOWING_API FrameLoop {
     return static_cast<uint32_t>(command_buffers_.size());
   }
 
+  /// @return The format + sample signature of what the frames render into --
+  ///         the swapchain's (@ref Swapchain::layout) or the offscreen
+  ///         targets' -- for building a compatible pipeline either way.
+  RenderTargetLayout layout() const;
+
  private:
-  FrameLoop(const core::Device& device, Swapchain& swapchain,
-            core::TimelineSemaphore timeline, core::CommandPool pool,
-            std::vector<core::CommandBuffer> command_buffers,
-            std::vector<core::Semaphore> image_available,
-            std::vector<core::Fence> in_flight);
+  // What a create builds before the loop, so that a failure frees objects no
+  // submit has used and only a whole loop's destructor drains the queues
+  // (frame_loop.cpp).
+  struct Owned;
+
+  // Build the slots' command buffers and fences, a swapchain loop's
+  // image-available semaphores (`presents`), and the timeline.
+  static core::Result<Owned> own_slots(const core::Device& device,
+                                       uint32_t frames_in_flight,
+                                       bool presents);
+
+  // `swapchain` is null for an offscreen loop.
+  FrameLoop(const core::Device& device, Swapchain* swapchain, Owned owned);
+
+  // An offscreen loop's pace: wait until its next frame may begin, as a
+  // blocked span, and set when the one after may.
+  void pace();
 
   // Build the per-image sync state (render_finished_ / image_frames_)
   // for the first chain, and rebuild them when the swapchain handle changed —
@@ -318,17 +426,19 @@ class VG_WINDOWING_API FrameLoop {
   void record_submit(uint64_t number,
                      const std::vector<core::TimelinePoint>& signals);
 
-  // Stand in for the next frame when it failed between its acquire and its
-  // submit: an empty submit waits image_available_[slot], whose pending
-  // signal only a queue submit may consume, and sets the frame's number and
-  // `signals` as the frame would have, so the slot's next use (ordered after
-  // that number like any frame's) finds the semaphore free and nothing
-  // waiting for the values hangs. Error path only.
+  // Stand in for the next frame when it failed between its acquire (an
+  // offscreen loop: its fence wait) and its submit: an empty submit waits
+  // image_available_[slot], whose pending signal only a queue submit may
+  // consume, and sets the frame's number and `signals` as the frame would
+  // have, so the slot's next use (ordered after that number like any
+  // frame's) finds the semaphore free and nothing waiting for the values
+  // hangs. Error path only.
   core::Status recover_slot(uint32_t slot,
                             const std::vector<core::TimelinePoint>& signals);
 
   const core::Device& device_;  // borrowed; outlives this
-  Swapchain& swapchain_;        // borrowed; outlives this
+  // Borrowed; outlives this. Null for an offscreen loop.
+  Swapchain* swapchain_ = nullptr;
   // The frame numbers.
   core::TimelineSemaphore timeline_;
   // The newest frame number submitted; the next frame is one more.
@@ -337,9 +447,17 @@ class VG_WINDOWING_API FrameLoop {
   // destroyed.
   core::CommandPool pool_;
   std::vector<core::CommandBuffer> command_buffers_;  // per slot (N)
-  std::vector<core::Semaphore> image_available_;      // per slot (N)
-  std::vector<core::Fence> in_flight_;                // per slot (N)
-  std::vector<core::Semaphore> render_finished_;      // per swapchain image (M)
+  std::vector<core::Semaphore> image_available_;  // per slot (N); swapchain's
+  std::vector<core::Fence> in_flight_;            // per slot (N)
+  // An offscreen loop's targets, per slot (N), and the RenderTarget over each
+  // that its frames carry; empty for a swapchain loop.
+  std::vector<OffscreenTarget> targets_;
+  std::vector<RenderTarget> render_targets_;
+  // An offscreen loop's pace (OffscreenLoopDesc::frame_interval), and the
+  // time its next frame may begin.
+  std::chrono::nanoseconds frame_interval_{0};
+  std::chrono::steady_clock::time_point next_begin_{};
+  std::vector<core::Semaphore> render_finished_;  // per swapchain image (M)
   // Per image (M): the number of the last submitted frame that rendered to
   // it (0 for none), so a re-acquired image still in use is waited on before
   // reuse.
@@ -351,8 +469,9 @@ class VG_WINDOWING_API FrameLoop {
   // old images and can leave a semaphore signaled); in end_frame, that the
   // frame's chain is gone.
   VkSwapchainKHR last_swapchain_ = VK_NULL_HANDLE;
-  // The image of the Frame begin_frame last handed out, until end_frame takes
-  // it back; end_frame refuses any other Frame.
+  // The image (an offscreen loop: the slot) of the Frame begin_frame last
+  // handed out, until end_frame takes it back; end_frame refuses any other
+  // Frame.
   std::optional<uint32_t> acquired_image_;
   Profiler* profiler_ = nullptr;  // borrowed, nullable; optional turnkey driver
   // The loop's own rows for the attached profiler, reused frame to frame.
