@@ -124,18 +124,18 @@ glm::mat4 perspective_by_z() {
   return m;
 }
 
-// `cells` x `cells` squares over the target, each two triangles that share no
+// `side` x `side` squares over the target, each two triangles that share no
 // vertex, drawn through perspective_by_z(): every vertex has its own w, from
 // 1 to 4, so each triangle's uv0 interpolates in perspective. uv0.x is the
 // vertex's place across the target; triangle t's three vertices, its first
 // (the provoking one) first, take uv0.y from `ys[t % ys.size()]`.
 assets::Mesh make_perspective_grid(
-    uint32_t cells, const std::vector<std::array<float, 3>>& ys) {
+    uint32_t side, const std::vector<std::array<float, 3>>& ys) {
   assets::Mesh mesh;
   uint32_t triangle = 0;
   const auto corner = [&](uint32_t i, uint32_t j, float y) {
-    const float nx = -1.0f + 2.0f * static_cast<float>(i) / cells;
-    const float ny = -1.0f + 2.0f * static_cast<float>(j) / cells;
+    const float nx = -1.0f + 2.0f * static_cast<float>(i) / side;
+    const float ny = -1.0f + 2.0f * static_cast<float>(j) / side;
     const auto k = static_cast<uint32_t>(mesh.vertices.size());
     const float w =
         1.0f + 3.0f * static_cast<float>((k * 2654435761u) % 997u) / 996.0f;
@@ -147,8 +147,8 @@ assets::Mesh make_perspective_grid(
     mesh.indices.push_back(k);
     mesh.vertices.push_back(v);
   };
-  for (uint32_t j = 0; j < cells; ++j) {
-    for (uint32_t i = 0; i < cells; ++i) {
+  for (uint32_t j = 0; j < side; ++j) {
+    for (uint32_t i = 0; i < side; ++i) {
       for (const auto& tri : {std::array<std::array<uint32_t, 2>, 3>{
                                   {{i, j}, {i + 1, j}, {i + 1, j + 1}}},
                               std::array<std::array<uint32_t, 2>, 3>{
