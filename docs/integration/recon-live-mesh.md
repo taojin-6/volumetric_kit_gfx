@@ -60,7 +60,12 @@ descriptors.
   the kind `CLAMP_TO_EDGE` would otherwise absorb — silently drops that triangle
   to flat vertex color. Clamp `uv0.x` to `[0, 1]` before emitting it.
   `uv0.y` spans `[0, 1]` too, or `[0, N)` over a `HybridMeshTextureSet` of N
-  pictures, whose class comment maps it.
+  pictures, whose class comment maps it. Over N pictures, keep each of a
+  picture-`p` triangle's three `uv0.y` in `[p, p + 1)`. A triangle draws its
+  provoking vertex's picture, so a vertex on its picture's bottom edge
+  (`p + 1.0`, as a `[0, 1]` clamp of `y / height` gives) names picture `p + 1`,
+  and the whole triangle moves there when that vertex is the provoking one.
+  Hold `y` below `height` (half a texel inside is enough) before adding `p`.
 - **A negative `uv0` may carry a coordinate: it is decoded as `-uv0 - 1`.** The
   vertex stage recovers a real atlas coordinate from a negative `uv0` rather
   than substituting `(0, 0)`, so a producer holding a genuine coordinate for a

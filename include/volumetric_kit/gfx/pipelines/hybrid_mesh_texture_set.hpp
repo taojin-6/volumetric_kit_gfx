@@ -65,10 +65,13 @@ struct HybridMeshTextureSetOptions {
 /// `(x, y)`, in texels, is at `uv0 = (x / width, p + y / height)`. A triangle
 /// takes its provoking vertex's picture `p`, as it takes its albedo class,
 /// and samples it at `(uv0.x, uv0.y - p)`, held to its edge: where the
-/// triangle's `uv0.y` leaves `[p, p + 1)`, it draws picture `p`'s edge. A
-/// provoking `uv0.y` outside the pictures takes the nearest: picture 0 below
-/// 0, the last picture from the count up. Each picture has its own extent and
-/// coding. @ref rebind points the same set at other pictures, or at an image.
+/// triangle's `uv0.y` leaves `[p, p + 1)`, it draws picture `p`'s edge. So a
+/// producer keeps all three `uv0.y` in `[p, p + 1)`: a vertex at `p + 1`
+/// names the next picture, and moves the whole triangle there when it is the
+/// provoking one. A provoking `uv0.y` outside the pictures takes the nearest:
+/// picture 0 below 0, the last picture from the count up. Each picture has its
+/// own extent and coding. @ref rebind points the same set at other pictures, or
+/// at an image.
 ///
 /// A Y'CbCr picture's coding is a uniform the host writes in place, in
 /// device-local memory the host maps
