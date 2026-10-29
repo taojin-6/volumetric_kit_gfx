@@ -474,8 +474,9 @@ TEST_F(TextureViewTest, MagnifiedEachPictureIsSharpSquares) {
 // pyramid pixel the footprint's edge cuts is taken as a whole, which shows
 // only at sharp edges, and more at the picture's edge, where the pyramid holds
 // a footprint to its own edge pixels. Each case's bounds sit a little above
-// the view's error on an Apple M5 Max and below a view's one level too
-// coarse; the edge's, below a view's whose reads past the edge are not held.
+// the view's error on CI's devices (lavapipe rounds the pyramid a little
+// differently); off the pyramid's grid, below a view's one level too coarse,
+// and at the edge, below a view's whose reads past the edge are not held.
 TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
   constexpr VkExtent2D kSize{512, 256};
   const Rgb card = make_card(kSize.width, kSize.height);
@@ -499,16 +500,11 @@ TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
     const glm::vec2 whole{0.0f, 0.0f};
     const glm::vec2 off{0.3f, 0.6f};
     const Case cases[] = {
-        {1.0f / 2, whole, 1, 0.1, 1, 0.1},
-        {1.0f / 4, whole, 1, 0.1, 1, 0.1},
-        {1.0f / 8, whole, 1, 0.25, 1, 0.25},
-        {1.0f / 16, whole, 1, 0.25, 1, 0.25},
-        {1.0f / 2, off, 2, 0.1, 2, 0.1},
-        {1.0f / 3, off, 2, 0.1, 2, 0.1},
-        {1.0f / 4, off, 2, 0.1, 2, 0.1},
-        {1.0f / 5, off, 32, 1.8, 32, 2.8},
-        {1.0f / 8, off, 18, 1.0, 40, 3.4},
-        {1.0f / 12, off, 15, 1.1, 20, 1.6},
+        {1.0f / 2, whole, 1, 0.1, 1, 0.1},  {1.0f / 4, whole, 1, 0.1, 1, 0.1},
+        {1.0f / 8, whole, 1, 0.25, 1, 0.4}, {1.0f / 16, whole, 1, 0.25, 1, 0.4},
+        {1.0f / 2, off, 2, 0.1, 2, 0.1},    {1.0f / 3, off, 2, 0.1, 2, 0.1},
+        {1.0f / 4, off, 2, 0.1, 2, 0.1},    {1.0f / 5, off, 32, 1.8, 32, 2.8},
+        {1.0f / 8, off, 18, 1.0, 40, 3.4},  {1.0f / 12, off, 15, 1.1, 20, 1.6},
     };
     for (const Case& c : cases) {
       SCOPED_TRACE(::testing::Message()
