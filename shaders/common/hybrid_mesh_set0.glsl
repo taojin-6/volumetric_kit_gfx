@@ -22,7 +22,7 @@ struct Coding {
   float kr;            // the matrix's red weight
   float kb;            // the matrix's blue weight
   uint chroma_siting;  // ChromaSiting
-  vec2 extent;         // the picture's size in luma texels
+  vec2 extent;         // the picture's size in luma pixels
 };
 // Mirrors PictureUniform in hybrid_mesh_set0.hpp (std140, 80 bytes).
 layout(set = 0, binding = 2) uniform Picture {

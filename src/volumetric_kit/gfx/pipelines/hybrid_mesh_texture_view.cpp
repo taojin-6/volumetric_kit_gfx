@@ -177,7 +177,7 @@ HybridMeshTextureView::create(const core::Device& device,
   VKC_ASSIGN(Sampler sampler, Sampler::create(vk, sampler_desc));
 
   // Set 1 for a draw without a pyramid, and for the build, which reads none:
-  // the mesh pipeline's fallback texel, in SHADER_READ_ONLY_OPTIMAL.
+  // the mesh pipeline's fallback pixel, in SHADER_READ_ONLY_OPTIMAL.
   const VkDescriptorPoolSize pool_size{
       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
       HybridMeshTextureSet::kMaxPictures};

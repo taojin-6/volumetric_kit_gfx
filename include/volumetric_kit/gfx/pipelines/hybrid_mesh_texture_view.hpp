@@ -183,7 +183,7 @@ class VG_PIPELINES_API HybridMeshTextureView {
   GraphicsPipeline build_;  // into a pyramid's level 1
   Sampler sampler_;         // a pyramid's: bilinear, clamped
   core::DescriptorPool pool_;
-  // Set 1 without a pyramid: the mesh pipeline's fallback texel at both
+  // Set 1 without a pyramid: the mesh pipeline's fallback pixel at both
   // pictures; layouts alike in draw_ and build_.
   core::DescriptorSet placeholder_;
 };

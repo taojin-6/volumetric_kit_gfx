@@ -195,7 +195,7 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
     return t;
   }
 
-  // `rgbs` as Y'CbCr pictures, each in planes padded by `pad` texels, their
+  // `rgbs` as Y'CbCr pictures, each in planes padded by `pad` pixels, their
   // set over them.
   struct PictureTexture {
     std::vector<vkc::Image> planes;
@@ -272,11 +272,11 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
     if (!submitted.ok()) {
       return {};
     }
-    const uint32_t texel = format == kFloat ? 16 : 4;
+    const uint32_t stride = format == kFloat ? 16 : 4;
     const auto* px = static_cast<const uint8_t*>(target.value().pixels());
     return {std::vector<uint8_t>(px, px + static_cast<size_t>(extent.width) *
-                                              extent.height * texel),
-            extent.width, texel};
+                                              extent.height * stride),
+            extent.width, stride};
   }
 
   // The mesh's draw of picture `p` of `set`, a quad on a target the

@@ -61,7 +61,7 @@ inline Rgb make_card(uint32_t width, uint32_t height, uint32_t seed = 0) {
 }
 
 // `rgb`'s BT.709 full-range Y'CbCr 4:2:0 planes in planes of `luma_size`
-// (at least the picture), each chroma sample the mean of its 2 x 2; texels
+// (at least the picture), each chroma sample the mean of its 2 x 2; pixels
 // past the picture alternate between the extremes, so a read of them shows.
 struct PlaneBytes {
   VkExtent2D luma_size{};
