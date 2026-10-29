@@ -204,8 +204,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
     return pipeline_.descriptor_set_layout(set);
   }
 
-  /// @brief Record one frame's draws into @p cmd: bind the pipeline + a
-  ///        full-target viewport, bind the atlas set once (set 0), push the
+  /// @brief Record one frame's draws into @p cmd: bind the pipeline and the
+  ///        frame's viewport, bind the atlas set once (set 0), push the
   ///        camera + lighting constants, then draw each mesh through the
   ///        pipeline its @ref HybridMeshDraw::second_view names.
   /// @param cmd    A recording-state command buffer, inside a dynamic-rendering
@@ -217,7 +217,9 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///      pipeline, or `VK_NULL_HANDLE`: the pipeline then binds its fallback
   ///      and sets
   ///      @ref kHybridMeshVertexColor, so every triangle draws in its vertex
-  ///      color. Draws whose geometry is empty -- a null static @ref GpuMesh,
+  ///      color. A @ref HybridMeshFrame::viewport wholly outside the target
+  ///      records nothing. Draws whose geometry is empty -- a null static
+  ///      @ref GpuMesh,
   ///      or a live @ref LiveMesh with any of its three handles unbound -- are
   ///      skipped. A *bound* @ref LiveMesh is always drawn: its index count
   ///      lives in the producer's indirect command, which this pipeline never
@@ -225,8 +227,9 @@ class VG_PIPELINES_API HybridMeshPipeline {
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
-  friend class StreamedAtlas;         // reads device_, writes RGBA sets
-  friend class HybridMeshTextureSet;  // reads fallback_ and rgba_picture_
+  friend class StreamedAtlas;          // reads device_, writes RGBA sets
+  friend class HybridMeshTextureSet;   // reads fallback_ and rgba_picture_
+  friend class HybridMeshTextureView;  // reads device_ and fallback_
 
   // Writes `set`, allocated against set 0's layout, for the RGBA image
   // `view`: through sampler_, with fallback_ at the planes it does not read
@@ -293,6 +296,10 @@ struct HybridMeshFrame {
   VkDescriptorSet atlas = VK_NULL_HANDLE;
   const HybridMeshDraw* draws = nullptr;  ///< The draw list.
   uint32_t draw_count = 0;                ///< Number of @ref draws.
+  /// The rectangle drawn into, in target pixels; it may extend past the
+  /// target, which clips it. Empty, the whole target. The view-projection's
+  /// aspect is the caller's: the rectangle's, for an undistorted view.
+  VkRect2D viewport{};
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

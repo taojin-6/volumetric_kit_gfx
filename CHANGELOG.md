@@ -38,6 +38,19 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `pipelines`: **a mesh's texture drawn flat.** `HybridMeshTextureView` draws
+  a `HybridMeshPipeline` set-0 texture -- an RGBA image, or one or two Y'CbCr
+  pictures, read where they are through the mesh shader's own sampling --
+  into a rectangle, placed by a `camera::ImageView2D` (`texture_view_draw`).
+  Magnified, each picture pixel is a sharp square; minified, each target
+  pixel is the area-weighted mean, in linear light, of the pixels under it,
+  read from a `PicturePyramid` (levels 1 and up, rebuilt when the pictures
+  change) below 1/4.
+- `pipelines`: `HybridMeshFrame::viewport` draws a mesh into a rectangle of
+  the target; empty, the whole target, as before.
+- `ui`: **`ImagePanel`**, pictures docked at the right or the bottom of a
+  window beside its scene, through one pan-and-zoom view, with a header (Fit,
+  1:1, close) and a handle that resizes it, inside the safe area.
 - `pipelines`: **a mesh samples two pictures where they are.**
   `HybridMeshTextureSet::create` and `rebind` take up to `kMaxPictures` (2)
   `YcbcrPicture`s, each bound in its own images, with its own extent and

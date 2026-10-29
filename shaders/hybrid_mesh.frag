@@ -22,36 +22,14 @@
 // normal encoded as a color.
 
 #extension GL_GOOGLE_include_directive : require
+#include "common/hybrid_mesh_set0.glsl"
 #include "common/srgb.glsl"
-#include "common/ycbcr.glsl"
 
 layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
 layout(location = 3) flat in uint frag_select;  // as hybrid_mesh.vert sets it
 layout(location = 4) in vec3 frag_second;  // (uv_B, w_B): the second view
-
-// Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
-// write it (hybrid_mesh_set0.hpp): an RGBA image, or one or two Y'CbCr 4:2:0
-// pictures' planes, as the Picture uniform says.
-layout(set = 0, binding = 0) uniform sampler2D plane0;  // RGBA, or 0's luma
-layout(set = 0, binding = 1) uniform sampler2D plane1;  // 0's chroma, or unused
-layout(set = 0, binding = 3) uniform sampler2D luma1;    // 1's luma, or unused
-layout(set = 0, binding = 4) uniform sampler2D chroma1;  // 1's chroma, or unused
-// One picture's coding; mirrors PictureCoding in hybrid_mesh_set0.hpp.
-struct Coding {
-  uint full_range;     // Y' in 0..255 rather than 16..235
-  float kr;            // the matrix's red weight
-  float kb;            // the matrix's blue weight
-  uint chroma_siting;  // ChromaSiting
-  vec2 extent;         // the picture's size in luma texels
-};
-// Mirrors PictureUniform in hybrid_mesh_set0.hpp (std140, 80 bytes).
-layout(set = 0, binding = 2) uniform Picture {
-  uint pictures;  // 0: plane0 is RGBA; n: n Y'CbCr 4:2:0 pictures
-  Coding coding[2];
-}
-picture;
 
 layout(push_constant) uniform Push {
   mat4 view_proj;
@@ -95,22 +73,6 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
   float wb = w * b.a;
   float sum = wa + wb;
   return (w > 0.0 && sum > 0.0) ? (wa * a.rgb + wb * b.rgb) / sum : a.rgb;
-}
-
-// R'G'B' of the picture `luma` and `chroma` hold, coded as `c`, at `uv`: its
-// two planes filtered at level 0 where they are, then converted.
-vec3 picture_rgb(sampler2D luma, sampler2D chroma, Coding c, vec2 uv) {
-  vec2 p = uv * c.extent;
-  float y =
-      textureLod(luma, ycbcr_luma_uv(p, c.extent, vec2(textureSize(luma, 0))),
-                 0.0)
-          .r;
-  vec2 cbcr = textureLod(chroma,
-                         ycbcr_chroma_uv(p, c.chroma_siting, c.extent,
-                                         vec2(textureSize(chroma, 0))),
-                         0.0)
-                  .rg;
-  return ycbcr_to_rgb(y, cbcr, c.kr, c.kb, c.full_range != 0u);
 }
 
 // Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
