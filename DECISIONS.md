@@ -163,13 +163,14 @@ mixes codes before the conversion, which is not linear. Against the exact box
 mean in linear light, on a test card at a sub-pixel origin, `ceil(F)` x
 `ceil(F)` bilinear taps were 45 codes off at the most (11.2 on average) at
 1/2 and 37 (7.4) at 1/3; reading whole pixels at their centres, each by its
-area inside the footprint, is within 1 (0.05). An RGBA image's taps were already exact, as
-the hardware filters an `_SRGB` image in linear light.
+area inside the footprint, is within 1 (0.05). An RGBA image's taps were
+already exact, as the hardware filters an `_SRGB` image in linear light.
 
-**A pyramid below 1/4.** The box reads at most 5 x 5 pixels of a level, so a
-smaller draw reads the level where its footprint spans 4 pixels at most. A
-pyramid pixel the footprint's edge cuts counts whole: off the pyramid's grid,
-at 1/5 to 1/12, that is within 1.5 codes on average and 26 at a sharp edge.
+**A pyramid below 1/4.** The box's reads grow with the footprint, so a
+smaller draw reads the level where its footprint spans 4 pixels at most,
+about 5 x 5 reads. A pyramid pixel the footprint's edge cuts counts whole:
+off the pyramid's grid, at 1/5 to 1/12, that is 0.4-1.4 codes off on average
+and 26 at a sharp edge.
 
 **One `_SRGB` RGBA image a picture.** The view sees a set, not its form, so
 the pyramid holds what a draw shows, in one form: level 1 drawn by the view
@@ -177,9 +178,7 @@ at 1/2, then linear blits. It takes about 4/3 of a byte a picture pixel, and
 is rebuilt only when the pictures change, so a paused picture costs no build.
 
 **Docked, not floating.** The panel and the scene split the drawable, so
-nothing covers the mesh. It docks where the pictures show more than 25 %
-larger at the default share, else at the end of the long axis: right on a
-landscape window, at the bottom on a portrait one.
+nothing covers the mesh; `ImagePanel` says which side it docks at.
 
 ## 2026-10-28 — A mesh samples two pictures in place
 

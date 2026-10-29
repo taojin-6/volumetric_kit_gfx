@@ -102,21 +102,24 @@ struct Linear {
 };
 
 // The mean of `lin` over [x0, x1) x [y0, y1), in its pixels, each pixel
-// weighted by its area inside.
+// weighted by its area inside; past the picture, its nearest edge pixel.
 std::array<double, 3> box_mean(const Linear& lin, double x0, double y0,
                                double x1, double y1) {
   std::array<double, 3> sum{0.0, 0.0, 0.0};
   double area = 0.0;
-  for (auto y = static_cast<uint32_t>(std::floor(y0));
-       y < static_cast<uint32_t>(std::ceil(y1)); ++y) {
+  const auto held = [](int at, uint32_t size) {
+    return static_cast<uint32_t>(std::clamp(at, 0, static_cast<int>(size) - 1));
+  };
+  for (auto y = static_cast<int>(std::floor(y0));
+       y < static_cast<int>(std::ceil(y1)); ++y) {
     const double wy =
         std::min(y1, y + 1.0) - std::max(y0, static_cast<double>(y));
-    for (auto x = static_cast<uint32_t>(std::floor(x0));
-         x < static_cast<uint32_t>(std::ceil(x1)); ++x) {
+    for (auto x = static_cast<int>(std::floor(x0));
+         x < static_cast<int>(std::ceil(x1)); ++x) {
       const double w =
           wy * (std::min(x1, x + 1.0) - std::max(x0, static_cast<double>(x)));
       for (int c = 0; c < 3; ++c) {
-        sum[c] += w * lin.at(x, y)[c];
+        sum[c] += w * lin.at(held(x, lin.width), held(y, lin.height))[c];
       }
       area += w;
     }
@@ -238,11 +241,8 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
     return pyramid.ok() ? std::move(pyramid).value() : nullptr;
   }
 
-  // Records `before` (outside the rendering scope), then `inside` into a
-  // fresh `extent` target of `format`, cleared to kClear, and reads it back.
-  Pixels render(VkExtent2D extent, VkFormat format,
-                const std::function<void(VkCommandBuffer)>& before,
-                const std::function<void(VkCommandBuffer)>& inside) {
+  std::optional<vg::OffscreenTarget> make_target(VkExtent2D extent,
+                                                 VkFormat format) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = format;
@@ -250,33 +250,58 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     if (!target.ok()) {
+      return std::nullopt;
+    }
+    return std::move(target).value();
+  }
+
+  // Records `inside` into `target`, cleared to kClear; the readback is the
+  // caller's.
+  static void record_into(VkCommandBuffer cmd, vg::OffscreenTarget& target,
+                          const std::function<void(VkCommandBuffer)>& inside) {
+    target.prepare(cmd);
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color.float32[0] = kClear[0] / 255.0f;
+    begin.clear_color.float32[1] = kClear[1] / 255.0f;
+    begin.clear_color.float32[2] = kClear[2] / 255.0f;
+    begin.clear_color.float32[3] = 1.0f;
+    const vg::RenderTarget rt = target.target();
+    rt.begin(cmd, begin);
+    inside(cmd);
+    rt.end(cmd);
+  }
+
+  // `target`'s pixels, read back, of `format`.
+  static Pixels pixels_of(const vg::OffscreenTarget& target, VkExtent2D extent,
+                          VkFormat format) {
+    const uint32_t stride = format == kFloat ? 16 : 4;
+    const auto* px = static_cast<const uint8_t*>(target.pixels());
+    return {std::vector<uint8_t>(px, px + static_cast<size_t>(extent.width) *
+                                              extent.height * stride),
+            extent.width, stride};
+  }
+
+  // Records `before` (outside the rendering scope), then `inside` into a
+  // fresh `extent` target of `format`, cleared to kClear, and reads it back.
+  Pixels render(VkExtent2D extent, VkFormat format,
+                const std::function<void(VkCommandBuffer)>& before,
+                const std::function<void(VkCommandBuffer)>& inside) {
+    std::optional<vg::OffscreenTarget> target = make_target(extent, format);
+    if (!target) {
       return {};
     }
     const vkc::Status submitted = submit([&](VkCommandBuffer cmd) {
       if (before) {
         before(cmd);
       }
-      target.value().prepare(cmd);
-      vg::RenderTargetBeginInfo begin;
-      begin.clear_color.float32[0] = kClear[0] / 255.0f;
-      begin.clear_color.float32[1] = kClear[1] / 255.0f;
-      begin.clear_color.float32[2] = kClear[2] / 255.0f;
-      begin.clear_color.float32[3] = 1.0f;
-      const vg::RenderTarget rt = target.value().target();
-      rt.begin(cmd, begin);
-      inside(cmd);
-      rt.end(cmd);
-      target.value().record_readback(cmd);
+      record_into(cmd, *target, inside);
+      target->record_readback(cmd);
     });
     EXPECT_TRUE(submitted.ok()) << submitted.message();
     if (!submitted.ok()) {
       return {};
     }
-    const uint32_t stride = format == kFloat ? 16 : 4;
-    const auto* px = static_cast<const uint8_t*>(target.value().pixels());
-    return {std::vector<uint8_t>(px, px + static_cast<size_t>(extent.width) *
-                                              extent.height * stride),
-            extent.width, stride};
+    return pixels_of(*target, extent, format);
   }
 
   // The mesh's draw of picture `p` of `set`, a quad on a target the
@@ -344,11 +369,17 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
   }
 
   // The view's draw at `scale` from `origin` against the box mean of `lin`
-  // under each pixel whose footprint lies a pixel or more inside the picture.
-  static Error minified_error(const Pixels& drawn, const Linear& lin,
-                              float scale, glm::vec2 origin) {
-    Error e;
-    double sum = 0.0;
+  // under each pixel drawn: inside, where the footprint lies a pixel or more
+  // inside the picture, and at the edge, the rest, where the mean holds a
+  // footprint past the picture to its edge pixels.
+  struct Errors {
+    Error inside;
+    Error edge;
+  };
+  static Errors minified_error(const Pixels& drawn, const Linear& lin,
+                               float scale, glm::vec2 origin) {
+    Errors e;
+    double sums[2] = {0.0, 0.0};
     const double f = 1.0 / scale;
     const uint32_t width = drawn.width;
     const auto height =
@@ -357,21 +388,30 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
       for (uint32_t tx = 0; tx < width; ++tx) {
         const double x0 = (tx - origin.x) * f;
         const double y0 = (ty - origin.y) * f;
-        if (x0 < 1.0 || y0 < 1.0 || x0 + f > lin.width - 1.0 ||
-            y0 + f > lin.height - 1.0) {
-          continue;
+        const double cx = x0 + 0.5 * f;
+        const double cy = y0 + 0.5 * f;
+        if (cx < 0.0 || cy < 0.0 || cx >= lin.width || cy >= lin.height) {
+          continue;  // not drawn
         }
+        const bool inside = x0 >= 1.0 && y0 >= 1.0 &&
+                            x0 + f <= lin.width - 1.0 &&
+                            y0 + f <= lin.height - 1.0;
+        Error& err = inside ? e.inside : e.edge;
+        double& sum = sums[inside ? 0 : 1];
         const std::array<double, 3> mean =
             box_mean(lin, x0, y0, x0 + f, y0 + f);
         for (int c = 0; c < 3; ++c) {
           const int d = std::abs(int{drawn.at(tx, ty)[c]} - encoded(mean[c]));
-          e.max = std::max(e.max, d);
+          err.max = std::max(err.max, d);
           sum += d;
-          ++e.compared;
+          ++err.compared;
         }
       }
     }
-    e.mean = e.compared > 0 ? sum / e.compared : 0.0;
+    for (int i = 0; i < 2; ++i) {
+      Error& err = i == 0 ? e.inside : e.edge;
+      err.mean = err.compared > 0 ? sums[i] / err.compared : 0.0;
+    }
     return e;
   }
 
@@ -427,12 +467,15 @@ TEST_F(TextureViewTest, MagnifiedEachPictureIsSharpSquares) {
 // --- Minified: the mean of the footprint ------------------------------------
 
 // Each pixel against the exact box mean, in linear light, of the picture
-// pixels under it. On the picture itself (to 1/4) the view's mean is that
-// mean, at any origin; so it is on the pyramid where the footprint's edges
-// fall between its pixels, at 1/8 and 1/16 from a whole origin, to the
-// pyramid's 8-bit rounding. Elsewhere a pyramid pixel the footprint's edge
-// cuts is taken as a whole, which shows only at sharp edges: within 1.6
-// codes on average, and 32 at the most.
+// pixels under it, held to the picture's edge pixels past it. On the picture
+// itself (to 1/4) the view's mean is that mean, at any origin; so it is on
+// the pyramid where the footprint's edges fall between its pixels, at 1/8 and
+// 1/16 from a whole origin, to the pyramid's 8-bit rounding. Elsewhere a
+// pyramid pixel the footprint's edge cuts is taken as a whole, which shows
+// only at sharp edges, and more at the picture's edge, where the pyramid holds
+// a footprint to its own edge pixels. Each case's bounds sit a little above
+// the view's error on an Apple M5 Max and below a view's one level too
+// coarse; the edge's, below a view's whose reads past the edge are not held.
 TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
   constexpr VkExtent2D kSize{512, 256};
   const Rgb card = make_card(kSize.width, kSize.height);
@@ -450,15 +493,22 @@ TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
       glm::vec2 origin;
       int max;
       double mean;
+      int edge_max;
+      double edge_mean;
     };
     const glm::vec2 whole{0.0f, 0.0f};
     const glm::vec2 off{0.3f, 0.6f};
     const Case cases[] = {
-        {1.0f / 2, whole, 1, 0.1},  {1.0f / 4, whole, 1, 0.1},
-        {1.0f / 8, whole, 1, 0.25}, {1.0f / 16, whole, 1, 0.25},
-        {1.0f / 2, off, 2, 0.1},    {1.0f / 3, off, 2, 0.1},
-        {1.0f / 5, off, 32, 1.6},   {1.0f / 8, off, 32, 1.6},
-        {1.0f / 12, off, 32, 1.6},
+        {1.0f / 2, whole, 1, 0.1, 1, 0.1},
+        {1.0f / 4, whole, 1, 0.1, 1, 0.1},
+        {1.0f / 8, whole, 1, 0.25, 1, 0.25},
+        {1.0f / 16, whole, 1, 0.25, 1, 0.25},
+        {1.0f / 2, off, 2, 0.1, 2, 0.1},
+        {1.0f / 3, off, 2, 0.1, 2, 0.1},
+        {1.0f / 4, off, 2, 0.1, 2, 0.1},
+        {1.0f / 5, off, 32, 1.8, 32, 2.8},
+        {1.0f / 8, off, 18, 1.0, 40, 3.4},
+        {1.0f / 12, off, 15, 1.1, 20, 1.6},
     };
     for (const Case& c : cases) {
       SCOPED_TRACE(::testing::Message()
@@ -470,10 +520,13 @@ TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
       const Pixels drawn = draw_view(
           extent, draw_of(set, {kSize.width, kSize.height}, c.zoom, c.origin),
           pyramid.get());
-      const Error e = minified_error(drawn, lin, c.zoom, c.origin);
-      EXPECT_GT(e.compared, 0u);
-      EXPECT_LE(e.max, c.max);
-      EXPECT_LE(e.mean, c.mean);
+      const Errors e = minified_error(drawn, lin, c.zoom, c.origin);
+      EXPECT_GT(e.inside.compared, 0u);
+      EXPECT_GT(e.edge.compared, 0u);
+      EXPECT_LE(e.inside.max, c.max);
+      EXPECT_LE(e.inside.mean, c.mean);
+      EXPECT_LE(e.edge.max, c.edge_max);
+      EXPECT_LE(e.edge.mean, c.edge_mean);
     }
   }
 }
@@ -551,6 +604,62 @@ TEST_F(TextureViewTest, TwoPicturesEachDrawsItsOwn) {
   }
 }
 
+// One pyramid serves frames in flight: a draw that reads it, its rebuild from
+// other pictures and a draw of those, in one command buffer, each draw its
+// own pictures, as a pyramid of each alone draws them. Synchronization
+// validation sees the rebuild's writes right after the first draw's reads,
+// with no barrier between them but the rebuild's own; the readbacks come
+// last.
+TEST_F(TextureViewTest, ARebuildWaitsForTheDrawsBeforeIt) {
+  constexpr VkExtent2D kSize{128, 64};
+  constexpr float kZoom = 1.0f / 8;  // pyramid level 1
+  constexpr VkExtent2D kExtent{16, 8};
+  const Rgb first = make_card(kSize.width, kSize.height, 0);
+  const Rgb second = make_card(kSize.width, kSize.height, 5);
+  PictureTexture a = picture_texture({&first});
+  PictureTexture b = picture_texture({&second});
+  ASSERT_TRUE(a.set && b.set);
+  const glm::vec2 size{kSize.width, kSize.height};
+  std::unique_ptr<pipelines::PicturePyramid> own = make_pyramid(kSize, 1);
+  std::unique_ptr<pipelines::PicturePyramid> shared = make_pyramid(kSize, 1);
+  ASSERT_TRUE(own && shared);
+  const Pixels want[2] = {
+      draw_view(kExtent, draw_of(a.set->set(), size, kZoom), own.get()),
+      draw_view(kExtent, draw_of(b.set->set(), size, kZoom), own.get())};
+
+  std::optional<vg::OffscreenTarget> targets[2] = {
+      make_target(kExtent, kTarget), make_target(kExtent, kTarget)};
+  ASSERT_TRUE(targets[0] && targets[1]);
+  const VkDescriptorSet sets[2] = {a.set->set(), b.set->set()};
+  const vkc::Status submitted = submit([&](VkCommandBuffer cmd) {
+    for (int i = 0; i < 2; ++i) {
+      shared->record(cmd, sets[i]);
+      pipelines::TextureViewDraw draw = draw_of(sets[i], size, kZoom);
+      draw.viewport = {{0, 0}, kExtent};
+      draw.pyramid = shared.get();
+      record_into(cmd, *targets[i], [&](VkCommandBuffer c) {
+        view_->submit(c, kExtent, &draw, 1);
+      });
+    }
+    targets[0]->record_readback(cmd);
+    targets[1]->record_readback(cmd);
+  });
+  ASSERT_TRUE(submitted.ok()) << submitted.message();
+  for (int i = 0; i < 2; ++i) {
+    SCOPED_TRACE(::testing::Message() << "draw " << i);
+    const Pixels got = pixels_of(*targets[i], kExtent, kTarget);
+    ASSERT_EQ(got.bytes.size(), want[i].bytes.size());
+    for (size_t j = 0; j < got.bytes.size(); ++j) {
+      ASSERT_NEAR(got.bytes[j], want[i].bytes[j], 1) << "byte " << j;
+    }
+  }
+  bool differ = false;
+  for (size_t j = 0; j < want[0].bytes.size(); ++j) {
+    differ = differ || want[0].bytes[j] != want[1].bytes[j];
+  }
+  EXPECT_TRUE(differ) << "the two pictures draw alike";
+}
+
 // A picture in padded planes, whose padding alternates between the extremes,
 // draws minified as the same picture in exact planes: neither the taps nor
 // the pyramid read past the picture.
@@ -581,8 +690,7 @@ TEST_F(TextureViewTest, NothingPastThePictureIsRead) {
 }
 
 // A draw with no set, or a scale or size that is not positive and finite,
-// draws nothing; so does a pyramid discarded before any draw reads it, whose
-// draw reads the picture alone.
+// draws nothing.
 TEST_F(TextureViewTest, DegenerateDrawsDrawNothing) {
   constexpr VkExtent2D kSize{32, 16};
   const Rgb card = make_card(kSize.width, kSize.height);
@@ -616,17 +724,33 @@ TEST_F(TextureViewTest, DegenerateDrawsDrawNothing) {
       }
     }
   }
+}
 
+// At 1/8, a pyramid never built, or discarded after its build, draws as no
+// pyramid does, reading the picture alone; built, it draws otherwise.
+TEST_F(TextureViewTest, AnUnbuiltOrDiscardedPyramidReadsThePicture) {
+  constexpr VkExtent2D kSize{64, 32};
+  constexpr VkExtent2D kExtent{8, 4};
+  const Rgb card = make_card(kSize.width, kSize.height);
+  PictureTexture picture = picture_texture({&card});
+  ASSERT_TRUE(picture.set);
   std::unique_ptr<pipelines::PicturePyramid> pyramid = make_pyramid(kSize, 1);
   ASSERT_NE(pyramid, nullptr);
-  EXPECT_FALSE(pyramid->built());
-  pipelines::TextureViewDraw small = draw_of(picture.set->set(), size, 0.25f);
-  small.viewport = {{0, 0}, {8, 4}};
-  small.pyramid = pyramid.get();
-  const Pixels unbuilt =
-      render({8, 4}, kTarget, nullptr,
-             [&](VkCommandBuffer c) { view_->submit(c, {8, 4}, &small, 1); });
-  EXPECT_NE(unbuilt.at(4, 2)[2], kClear[2]);
+  pipelines::TextureViewDraw draw =
+      draw_of(picture.set->set(), {kSize.width, kSize.height}, 1.0f / 8);
+  draw.viewport = {{0, 0}, kExtent};
+  const auto drawn = [&](const pipelines::PicturePyramid* with) {
+    draw.pyramid = with;
+    return render(kExtent, kTarget, nullptr, [&](VkCommandBuffer c) {
+      view_->submit(c, kExtent, &draw, 1);
+    });
+  };
+  const Pixels alone = drawn(nullptr);
+  EXPECT_EQ(drawn(pyramid.get()).bytes, alone.bytes) << "never built";
+  const Pixels built = draw_view(kExtent, draw, pyramid.get());
+  EXPECT_NE(built.bytes, alone.bytes) << "built";
+  pyramid->discard();
+  EXPECT_EQ(drawn(pyramid.get()).bytes, alone.bytes) << "discarded";
 }
 
 TEST_F(TextureViewTest, CreateRefusesWhatItCannotDraw) {
@@ -665,8 +789,6 @@ TEST_F(TextureViewTest, CreateRefusesWhatItCannotDraw) {
   ASSERT_TRUE(pyramid.ok()) << pyramid.status().message();
   EXPECT_EQ(pyramid.value()->size().width, 640u);
   EXPECT_EQ(pyramid.value()->count(), 2u);
-  // Levels 1 (320 x 180) down to 1 x 1.
-  EXPECT_EQ(pyramid.value()->levels(), 9u);
 }
 
 // texture_view_draw places the part through the view: its origin, scale and

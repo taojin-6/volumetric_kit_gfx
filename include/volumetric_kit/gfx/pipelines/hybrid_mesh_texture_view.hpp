@@ -50,12 +50,13 @@ struct TextureViewDraw {
   VkDescriptorSet set = VK_NULL_HANDLE;
   /// Levels 1 and up of the set's pictures, built from them since they last
   /// changed (@ref PicturePyramid::record). Null, or not yet built, a draw
-  /// smaller than 1/4 reads the picture alone, 5 x 5 of its pixels at most,
+  /// smaller than 1/4 reads the picture alone, 6 x 6 of its pixels at most,
   /// and aliases.
   const PicturePyramid* pyramid = nullptr;
   /// The part shown, as `uv0` addresses the set: u0, v0, u1, v1, picture `p`
   /// over `v` in `[p, p + 1)`. The part lies in one picture, `floor(v0)`;
-  /// one beyond the set's pictures shows its last.
+  /// past the set's pictures it is held to the last one's edge, as the mesh
+  /// holds it.
   glm::vec4 uv{0.0f, 0.0f, 1.0f, 1.0f};
   /// The part's size in picture pixels; positive.
   glm::vec2 size{};
@@ -263,14 +264,12 @@ class VG_PIPELINES_API PicturePyramid {
   VkExtent2D size() const noexcept { return size_; }
   /// @return The number of pictures.
   uint32_t count() const noexcept { return count_; }
-  /// @return The levels held: levels 1 to `levels()` of each picture.
-  uint32_t levels() const noexcept;
-  /// @return Whether a build has been recorded since @ref create or
-  ///         @ref discard -- recorded, not executed.
-  bool built() const noexcept { return built_; }
 
  private:
   friend class HybridMeshTextureView;
+
+  // The levels held: levels 1 to levels() of each picture.
+  uint32_t levels() const noexcept;
 
   // One picture's levels, and level 1 alone, the build's color attachment.
   struct Level {
@@ -287,7 +286,7 @@ class VG_PIPELINES_API PicturePyramid {
   std::array<Level, HybridMeshTextureSet::kMaxPictures> levels_{};
   core::DescriptorPool pool_;
   core::DescriptorSet set_;  // set 1: the levels, the placeholder past count_
-  bool built_ = false;
+  bool built_ = false;       // recorded since create or discard
 };
 
 }  // namespace volumetric_kit::gfx::pipelines

@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <string>
+#include <cstdio>
 
 #include "imgui.h"
 
@@ -48,6 +48,26 @@ glm::vec2 composite(DockSide side, glm::vec2 size, uint32_t count) {
   const float gaps = (n - 1.0f) * ImagePanel::kGap;
   return side == DockSide::Right ? glm::vec2(size.x, n * size.y + gaps)
                                  : glm::vec2(n * size.x + gaps, size.y);
+}
+
+// Picture `i`'s top-left in that image.
+glm::vec2 origin_of(DockSide side, glm::vec2 size, uint32_t i) {
+  const float at = static_cast<float>(i);
+  return side == DockSide::Right
+             ? glm::vec2(0.0f, at * (size.y + ImagePanel::kGap))
+             : glm::vec2(at * (size.x + ImagePanel::kGap), 0.0f);
+}
+
+// Where `point` of the image along `from` lies in the image along `to`: the
+// same point of the picture it is in, or of the nearest.
+glm::vec2 moved(glm::vec2 point, DockSide from, DockSide to, glm::vec2 size,
+                uint32_t count) {
+  const bool right = from == DockSide::Right;
+  const float step = (right ? size.y : size.x) + ImagePanel::kGap;
+  const float at = std::floor((right ? point.y : point.x) / step);
+  const auto i = static_cast<uint32_t>(
+      std::clamp(at, 0.0f, static_cast<float>(count - 1)));
+  return point - origin_of(from, size, i) + origin_of(to, size, i);
 }
 
 // The scale `image` fits `rect` at.
@@ -192,8 +212,25 @@ const PanelLayout& ImagePanel::layout(VkExtent2D drawable) {
     const glm::vec2 image =
         composite(layout_.side, picture_size_, picture_count_);
     if (image != image_size_) {
-      view_.set_image_size(image);
+      const bool rearranged =
+          picture_size_ == view_picture_size_ && picture_count_ == view_count_;
+      const float zoom = view_.zoom();
+      const glm::vec2 centre =
+          rearranged ? moved(view_.center(), view_side_, layout_.side,
+                             picture_size_, picture_count_)
+                     : glm::vec2(0.0f, 0.0f);
+      view_.set_image_size(image);  // fitted
+      if (rearranged) {
+        // The same pictures along the other side: the zoom, and the same
+        // point of the same picture at the centre.
+        view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
+                         zoom);
+        view_.pan((view_.center() - centre) * view_.scale());
+      }
       image_size_ = image;
+      view_picture_size_ = picture_size_;
+      view_count_ = picture_count_;
+      view_side_ = layout_.side;
     }
   }
   return layout_;
@@ -207,21 +244,31 @@ void ImagePanel::draw_chrome(const char* title) {
   const ImGuiStyle& style = ImGui::GetStyle();
   const ImVec2 s = io.DisplayFramebufferScale;
   const bool right = layout_.side == DockSide::Right;
-  const std::string name = title;
+  // The windows' names, on the stack: ImGui names windows globally.
+  constexpr int kTitleChars = 64;
+  char handle_name[kTitleChars + 16];
+  char header_name[kTitleChars + 16];
+  std::snprintf(handle_name, sizeof(handle_name), "%.*s##handle", kTitleChars,
+                title);
+  std::snprintf(header_name, sizeof(header_name), "%.*s##header", kTitleChars,
+                title);
   constexpr ImGuiWindowFlags kFlags =
       ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse;
 
-  // The handle: a window a frame height across, centred on the bar, along
-  // the panel's safe length.
+  // The handle: a window a frame height across the bar, along the panel's
+  // safe length. Into the panel it reaches no further than the header's
+  // padding, so it never covers the header's buttons; the rest of it lies
+  // over the scene.
   const float bar =
       right ? std::round(kBarPoints * s.x) : std::round(kBarPoints * s.y);
   const float hit = std::max(ImGui::GetFrameHeight(), kBarPoints);
-  const float centre = edge_ + 0.5f * bar;
+  const float padding = right ? style.WindowPadding.x : style.FramePadding.y;
+  const float inward = std::min(0.5f * (hit - kBarPoints), padding);
+  const float start = (edge_ + bar) / (right ? s.x : s.y) + inward - hit;
   const ImVec2 handle_pos =
-      right ? ImVec2(centre / s.x - 0.5f * hit, safe_[1] / s.y)
-            : ImVec2(safe_[0] / s.x, centre / s.y - 0.5f * hit);
+      right ? ImVec2(start, safe_[1] / s.y) : ImVec2(safe_[0] / s.x, start);
   const ImVec2 handle_size = right ? ImVec2(hit, (safe_[3] - safe_[1]) / s.y)
                                    : ImVec2((safe_[2] - safe_[0]) / s.x, hit);
   ImGui::SetNextWindowPos(handle_pos);
@@ -229,9 +276,8 @@ void ImagePanel::draw_chrome(const char* title) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
-  const bool handle_drawn =
-      ImGui::Begin((name + "##handle").c_str(), nullptr,
-                   kFlags | ImGuiWindowFlags_NoBackground);
+  const bool handle_drawn = ImGui::Begin(
+      handle_name, nullptr, kFlags | ImGuiWindowFlags_NoBackground);
   ImGui::PopStyleVar(3);
   if (handle_drawn) {
     ImGui::SetCursorPos(ImVec2(0.0f, 0.0f));
@@ -243,13 +289,22 @@ void ImagePanel::draw_chrome(const char* title) {
     }
     const float length = right ? safe_[2] - safe_[0] : safe_[3] - safe_[1];
     if (ImGui::IsItemActive() && length > 0.0f) {
-      // The share under the pointer, of the safe length along the dock axis.
-      drag_share_ = right ? (safe_[2] - io.MousePos.x * s.x) / length
-                          : (safe_[3] - io.MousePos.y * s.y) / length;
+      // The share the press found, moved by the pointer since, of the safe
+      // length along the dock axis: the edge keeps its place under the
+      // pointer.
+      const ImVec2 travel =
+          ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.0f);
+      drag_share_ =
+          drag_from_ - (right ? travel.x * s.x : travel.y * s.y) / length;
       current = std::clamp(drag_share_, kMinShare, kMaxShare);
     }
     if (ImGui::IsItemDeactivated()) {
-      if (drag_share_ < kMinShare) {
+      // Zero within ImGui's drag threshold: a click or a tap, which changes
+      // nothing.
+      const ImVec2 dragged = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+      if (dragged.x == 0.0f && dragged.y == 0.0f) {
+        current = drag_from_;
+      } else if (drag_share_ < kMinShare) {
         state_.open = false;
         current = drag_from_;
       } else if (!config_.detents.empty()) {
@@ -285,8 +340,12 @@ void ImagePanel::draw_chrome(const char* title) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                       ImVec2(style.WindowPadding.x, style.FramePadding.y));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
-  const bool header_drawn = ImGui::Begin((name + "##header").c_str(), nullptr,
-                                         kFlags | ImGuiWindowFlags_NoScrollbar);
+  // Kept behind the handle: a press on the header never raises it over the
+  // handle's reach.
+  const bool header_drawn =
+      ImGui::Begin(header_name, nullptr,
+                   kFlags | ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_NoBringToFrontOnFocus);
   ImGui::PopStyleVar(2);
   if (header_drawn) {
     ImGui::AlignTextToFramePadding();
@@ -327,10 +386,7 @@ void ImagePanel::draw_chrome(const char* title) {
 }
 
 glm::vec2 ImagePanel::picture_origin(uint32_t i) const noexcept {
-  const float at = static_cast<float>(i);
-  return layout_.side == DockSide::Right
-             ? glm::vec2(0.0f, at * (picture_size_.y + kGap))
-             : glm::vec2(at * (picture_size_.x + kGap), 0.0f);
+  return origin_of(layout_.side, picture_size_, i);
 }
 
 bool ImagePanel::over_pictures(glm::vec2 point) const noexcept {

@@ -55,7 +55,8 @@ const Screen kPadLandscape{
 const Screen kPadPortrait{
     "iPad portrait", {834, 1210}, 2.0f, {24, 0, 20, 0}, 0.4f};
 
-// One tall picture, and two wide ones (as one picture of them, on a phone).
+// One tall picture, and wide ones: two on the larger screens, one on the
+// phones.
 const glm::vec2 kTall{1024.0f, 2048.0f};
 const glm::vec2 kWide{4096.0f, 2176.0f};
 
@@ -275,8 +276,9 @@ TEST_F(ImagePanelTest, PicturesRunAlongThePanel) {
 }
 
 // The view keeps its zoom and centre across a resize and a rotation, which
-// moves one picture to the other side, and fits again on new pictures; two
-// pictures fit again when a rotation rearranges them.
+// moves one picture to the other side, and fits again on new pictures. Where
+// a rotation rearranges two pictures, it keeps the zoom and the same point of
+// the same picture at the centre.
 TEST_F(ImagePanelTest, ZoomAndCentreSurviveResizesNotNewPictures) {
   ui::ImagePanel panel(open_at(0.4f));
   panel.set_pictures(kTall, 1);
@@ -302,11 +304,25 @@ TEST_F(ImagePanelTest, ZoomAndCentreSurviveResizesNotNewPictures) {
   frame(panel, kPhonePortrait);
   EXPECT_FLOAT_EQ(panel.view().zoom(), 1.0f);
 
+  // Zoomed in about a point of picture 1, so the centre lies in it.
   panel.set_pictures(kWide, 2);
-  frame(panel, kPadLandscape);
-  panel.view().zoom_about({2200.0f, 900.0f}, 2.0f);
-  frame(panel, kPadPortrait);  // right to bottom: side by side now
-  EXPECT_FLOAT_EQ(panel.view().zoom(), 1.0f);
+  ASSERT_EQ(frame(panel, kPadLandscape).side, ui::DockSide::Right);
+  const glm::vec2 point = panel.picture_origin(1) + glm::vec2(1000.0f, 700.0f);
+  panel.view().zoom_about(panel.view().image_to_target(point), 4.0f);
+  const float two = panel.view().zoom();
+  const glm::vec2 in_second = panel.view().center() - panel.picture_origin(1);
+  ASSERT_GT(two, 3.9f);
+  ASSERT_GE(in_second.y, 0.0f);
+  for (const Screen* screen : {&kPadPortrait, &kPadLandscape}) {
+    SCOPED_TRACE(screen->name);
+    const ui::PanelLayout layout = frame(panel, *screen);
+    EXPECT_EQ(layout.side, screen == &kPadPortrait ? ui::DockSide::Bottom
+                                                   : ui::DockSide::Right);
+    EXPECT_FLOAT_EQ(panel.view().zoom(), two);
+    const glm::vec2 kept = panel.view().center() - panel.picture_origin(1);
+    EXPECT_NEAR(kept.x, in_second.x, 0.05f);
+    EXPECT_NEAR(kept.y, in_second.y, 0.05f);
+  }
 }
 
 // Over the pictures' viewport only, open; a double tap goes from fit to one
@@ -340,9 +356,9 @@ TEST_F(ImagePanelTest, OverPicturesAndDoubleTap) {
 // --- Chrome ------------------------------------------------------------------
 
 // At framebuffer scale 1 and 2: Fit fits, 1:1 shows a picture pixel a
-// drawable pixel, a drag on the handle sets the share under the pointer, a
-// release below 25 % closes the panel and keeps the share it had, and close
-// closes it.
+// drawable pixel, a drag on the handle moves the edge by the pointer's
+// travel, wherever on the handle it starts, a drag released below 25 % closes
+// the panel and keeps the share it had, and close closes it.
 TEST_F(ImagePanelTest, TheHeaderAndTheHandleChangeTheState) {
   for (const float scale : {1.0f, 2.0f}) {
     SCOPED_TRACE(::testing::Message() << "framebuffer scale " << scale);
@@ -358,16 +374,19 @@ TEST_F(ImagePanelTest, TheHeaderAndTheHandleChangeTheState) {
     click(panel, screen, buttons().one);
     EXPECT_NEAR(panel.view().scale(), 1.0f, 1e-5f);
 
-    // The handle, from the panel's inner edge to half the width.
+    // The handle, centred on the panel's inner edge; grabbed off its centre,
+    // 120 points (10 %) to the left.
     const ImVec2 handle =
         window_rect(std::string(kTitle) + "##handle").GetCenter();
     EXPECT_NEAR(handle.x, 1200.0f * 0.6f + 3.0f, 1.0f);
-    drag(panel, screen, handle, ImVec2(600.0f, handle.y));
+    const ImVec2 grab(handle.x + 6.0f, handle.y);
+    drag(panel, screen, grab, ImVec2(grab.x - 120.0f, grab.y));
     EXPECT_NEAR(panel.state().right_share, 0.5f, 1e-3f);
     EXPECT_TRUE(panel.open());
     const ImVec2 moved =
         window_rect(std::string(kTitle) + "##handle").GetCenter();
-    drag(panel, screen, moved, ImVec2(1150.0f, moved.y));  // 4 %
+    EXPECT_NEAR(moved.x, 1200.0f * 0.5f + 3.0f, 1.0f);
+    drag(panel, screen, moved, ImVec2(moved.x + 540.0f, moved.y));  // to 5 %
     EXPECT_FALSE(panel.open());
     EXPECT_NEAR(panel.state().right_share, 0.5f, 1e-3f);
 
@@ -388,16 +407,67 @@ TEST_F(ImagePanelTest, AReleaseSnapsToTheNearestDetent) {
   panel.set_pictures(kTall, 1);
   frame(panel, kPhonePortrait, kTitle);
   ASSERT_EQ(frame(panel, kPhonePortrait, kTitle).side, ui::DockSide::Bottom);
-  // The safe height is 860 points, from 62 down: 55 % is 473 up from 922.
+  // The safe height is 860 points: 86 up from 45 % is 55 %.
   const ImVec2 handle =
       window_rect(std::string(kTitle) + "##handle").GetCenter();
-  drag(panel, kPhonePortrait, handle, ImVec2(handle.x, 922.0f - 473.0f));
+  drag(panel, kPhonePortrait, handle, ImVec2(handle.x, handle.y - 86.0f));
   EXPECT_FLOAT_EQ(panel.state().bottom_share, 0.6f);
   frame(panel, kPhonePortrait, kTitle);  // the handle at the snapped share
   const ImVec2 moved =
       window_rect(std::string(kTitle) + "##handle").GetCenter();
-  drag(panel, kPhonePortrait, moved, ImVec2(moved.x, 922.0f - 344.0f));  // 40 %
+  drag(panel, kPhonePortrait, moved,
+       ImVec2(moved.x, moved.y + 172.0f));  // 40 %
   EXPECT_FLOAT_EQ(panel.state().bottom_share, 0.45f);
+}
+
+// A click on the handle, anywhere on it, or a press that moves less than
+// ImGui's drag threshold, leaves the share as it was and the panel open, even
+// at the least share.
+TEST_F(ImagePanelTest, AClickOnTheHandleChangesNothing) {
+  const Screen screen{"desktop", {1200, 800}, 1.0f, {}, 0.4f};
+  for (const float share : {0.25f, 0.4f}) {
+    SCOPED_TRACE(::testing::Message() << "share " << share);
+    ui::ImagePanel panel(open_at(share));
+    panel.set_pictures({400.0f, 800.0f}, 1);
+    frame(panel, screen, kTitle);
+    frame(panel, screen, kTitle);
+    const ImRect handle = window_rect(std::string(kTitle) + "##handle");
+    for (const float x :
+         {handle.Min.x + 1.0f, handle.GetCenter().x, handle.Max.x - 1.0f}) {
+      click(panel, screen, ImVec2(x, handle.GetCenter().y));
+      EXPECT_TRUE(panel.open()) << x;
+      EXPECT_FLOAT_EQ(panel.state().right_share, share) << x;
+    }
+    const ImVec2 at = handle.GetCenter();
+    drag(panel, screen, at, ImVec2(at.x + 4.0f, at.y));
+    EXPECT_TRUE(panel.open());
+    EXPECT_FLOAT_EQ(panel.state().right_share, share);
+  }
+}
+
+// With touch-sized frames, docked at the bottom, the handle reaches into the
+// header no further than its padding: once the handle has been pressed, a
+// press on the top row of the header's buttons still goes to them.
+TEST_F(ImagePanelTest, TheHandleLeavesTheHeadersButtons) {
+  ImGuiStyle& style = ImGui::GetStyle();
+  style.FramePadding.y = std::ceil(0.5f * (44.0f - ImGui::GetFontSize()));
+  ui::ImagePanel panel(open_at(0.45f));
+  panel.set_pictures(kWide, 1);
+  frame(panel, kPhonePortrait, kTitle);
+  ASSERT_EQ(frame(panel, kPhonePortrait, kTitle).side, ui::DockSide::Bottom);
+  const ImRect handle = window_rect(std::string(kTitle) + "##handle");
+  EXPECT_GE(handle.GetHeight(), 44.0f);
+  click(panel, kPhonePortrait, handle.GetCenter());  // raises the handle
+
+  const ImRect header = window_rect(std::string(kTitle) + "##header");
+  const float top = header.Min.y + style.FramePadding.y;  // the buttons'
+  EXPECT_LE(handle.Max.y, top + 0.5f);
+  panel.view().zoom_about({kPhonePortrait.pixels().width * 0.5f,
+                           kPhonePortrait.pixels().height * 0.8f},
+                          3.0f);
+  ASSERT_GT(panel.view().zoom(), 2.9f);
+  click(panel, kPhonePortrait, ImVec2(buttons().fit.x, top + 1.0f));
+  EXPECT_FLOAT_EQ(panel.view().zoom(), 1.0f);
 }
 
 }  // namespace

@@ -6,17 +6,10 @@
 // HybridMeshTextureView's draw, fragment stage: one picture of a
 // HybridMeshPipeline set-0 texture, drawn flat (image_draw.vert gives the
 // rectangle and its uv, stacked as the mesh's uv0: picture p is v in
-// [p, p + 1)). Level 0 is read through the mesh shader's own sampling
-// (common/hybrid_mesh_set0.glsl), so the view shows what the mesh shows.
-//
-// The host picks the level per draw from its footprint F, the picture pixels
-// under one target pixel. Magnified (level -1), each target pixel takes the
-// picture pixel it lies over, so a pixel shows as a sharp square. Minified,
-// it is the mean, in linear light, of the pixels of one level under its
-// footprint, each weighted by its area inside: the picture while F is at
-// most 4, then the PicturePyramid level that brings the footprint within 4
-// of its pixels, so at most 5 x 5 are read. Each pixel is read at its centre,
-// where a picture's conversion is exact, and held to the picture.
+// [p, p + 1)) and filtered as hybrid_mesh_texture_view.hpp says, at the
+// level the host picks per draw. Level 0 is read through the mesh shader's
+// own sampling (common/hybrid_mesh_set0.glsl), so the view shows what the
+// mesh shows.
 
 #extension GL_GOOGLE_include_directive : require
 #include "common/hybrid_mesh_set0.glsl"

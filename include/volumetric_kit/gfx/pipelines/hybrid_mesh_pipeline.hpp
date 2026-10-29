@@ -215,21 +215,20 @@ class VG_PIPELINES_API HybridMeshPipeline {
   /// @pre `valid()`; an empty pipeline records nothing. `frame.atlas` is a
   ///      @ref StreamedAtlas or @ref HybridMeshTextureSet set made for this
   ///      pipeline, or `VK_NULL_HANDLE`: the pipeline then binds its fallback
-  ///      and sets
-  ///      @ref kHybridMeshVertexColor, so every triangle draws in its vertex
-  ///      color. A @ref HybridMeshFrame::viewport wholly outside the target
-  ///      records nothing. Draws whose geometry is empty -- a null static
-  ///      @ref GpuMesh,
-  ///      or a live @ref LiveMesh with any of its three handles unbound -- are
-  ///      skipped. A *bound* @ref LiveMesh is always drawn: its index count
-  ///      lives in the producer's indirect command, which this pipeline never
-  ///      reads (see @ref LiveMesh on saying "nothing this frame").
+  ///      and sets @ref kHybridMeshVertexColor, so every triangle draws in
+  ///      its vertex color. A @ref HybridMeshFrame::viewport wholly outside
+  ///      the target records nothing. Draws whose geometry is empty -- a null
+  ///      static @ref GpuMesh, or a live @ref LiveMesh with any of its three
+  ///      handles unbound -- are skipped. A *bound* @ref LiveMesh is always
+  ///      drawn: its index count lives in the producer's indirect command,
+  ///      which this pipeline never reads (see @ref LiveMesh on saying
+  ///      "nothing this frame").
   void submit(VkCommandBuffer cmd, const HybridMeshFrame& frame) const;
 
  private:
   friend class StreamedAtlas;          // reads device_, writes RGBA sets
   friend class HybridMeshTextureSet;   // reads fallback_ and rgba_picture_
-  friend class HybridMeshTextureView;  // reads device_ and fallback_
+  friend class HybridMeshTextureView;  // reads fallback_
 
   // Writes `set`, allocated against set 0's layout, for the RGBA image
   // `view`: through sampler_, with fallback_ at the planes it does not read

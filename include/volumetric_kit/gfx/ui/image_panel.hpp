@@ -72,8 +72,10 @@ struct PanelLayout {
 ///   least @ref ImagePanelConfig::min_points across (60 % at most).
 /// - **Pictures** run along the panel: stacked when docked right, side by
 ///   side at the bottom, @ref kGap picture pixels apart, as one image of the
-///   view. The view keeps its zoom and centre across a resize or a rotation,
-///   and fits again when the pictures' size, count or arrangement changes.
+///   view. The view keeps its zoom and centre across a resize or a rotation
+///   (where a new side rearranges the pictures, the same point of the same
+///   picture stays at the centre), and fits again when the pictures' size or
+///   count changes.
 /// - **Chrome** (@ref draw_chrome), ImGui windows that take the pointer: the
 ///   handle, a bar on the panel's inner edge, drawn 6 points and taking the
 ///   pointer over a frame height (44 points on a touch overlay); and the
@@ -126,11 +128,13 @@ class VG_UI_API ImagePanel {
   const PanelLayout& layout(VkExtent2D drawable);
 
   /// @brief Draw the handle and the header, as ImGui windows named after
-  ///        @p title. A drag on the handle resizes the panel, snapping to the
-  ///        detents on release; a release below 25 % closes it. Fit fits the
-  ///        view, 1:1 shows one picture pixel a drawable pixel, and close
-  ///        closes. Closed, it draws nothing.
-  /// @param title  The header's text, unique among windows.
+  ///        @p title. A drag on the handle moves the panel's edge with the
+  ///        pointer, snapping to the detents on release; a drag released
+  ///        below 25 % closes the panel, and a click changes nothing. Fit
+  ///        fits the view, 1:1 shows one picture pixel a drawable pixel, and
+  ///        close closes. Closed, it draws nothing.
+  /// @param title  The header's text, its first 64 characters unique among
+  ///               windows.
   /// @pre @ref layout ran this frame; a panel it found closed draws nothing.
   void draw_chrome(const char* title);
 
@@ -164,18 +168,22 @@ class VG_UI_API ImagePanel {
   uint32_t picture_count_ = 0;
   camera::ImageView2D view_;
   PanelLayout layout_;
-  // What the side was chosen for, and what the view's image was set for.
+  // What the side was chosen for, and what the view's image was set for:
+  // its size, and the pictures and side it arranges.
   VkExtent2D chosen_for_{0, 0};
   bool pictures_changed_ = true;
   glm::vec2 image_size_{0.0f, 0.0f};
+  glm::vec2 view_picture_size_{0.0f, 0.0f};
+  uint32_t view_count_ = 0;
+  DockSide view_side_ = DockSide::Right;
   // This frame's chrome, in drawable pixels: the safe area, the panel's inner
   // edge along the dock axis, and the header's height.
   float safe_[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // x0, y0, x1, y1
   float edge_ = 0.0f;
   float header_ = 0.0f;
   bool laid_out_open_ = false;  // whether the last layout was of it open
-  // A drag on the handle: the share it started from and the share under the
-  // pointer.
+  // A drag on the handle: the share it started from, and that share moved
+  // by the pointer.
   float drag_from_ = 0.0f;
   float drag_share_ = 0.0f;
 };

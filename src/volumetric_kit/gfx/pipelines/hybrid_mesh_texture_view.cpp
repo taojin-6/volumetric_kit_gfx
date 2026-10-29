@@ -44,8 +44,8 @@ constexpr VkFormatFeatureFlags kPyramidFeatures =
     VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT |
     VK_FORMAT_FEATURE_BLIT_DST_BIT;
 
-// The most pixels of the level read across a footprint, less one: a level
-// is read where the footprint spans at most this many of its pixels.
+// The most pixels of a level a footprint may span: a draw reads the lowest
+// level where it spans at most this many, so it touches at most one more.
 constexpr float kMaxSpan = 4.0f;
 
 // image_draw.vert's push block, then texture_view.frag's (std430).
@@ -247,7 +247,7 @@ void HybridMeshTextureView::submit(VkCommandBuffer cmd, VkExtent2D extent,
         v, 0.0f, static_cast<float>(HybridMeshTextureSet::kMaxPictures - 1)));
     const PicturePyramid* pyramid = draw.pyramid;
     const uint32_t levels =
-        pyramid != nullptr && pyramid->built() && picture < pyramid->count()
+        pyramid != nullptr && pyramid->built_ && picture < pyramid->count()
             ? pyramid->levels()
             : 0;
     const float footprint = 1.0f / draw.scale;
