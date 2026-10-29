@@ -60,15 +60,15 @@ struct HybridMeshTextureSetOptions {
 ///   @ref YcbcrCoding and decodes the R'G'B' as sRGB.
 ///
 /// The pipeline samples at each fragment's `uv0`. One picture, or an RGBA
-/// image, spans `uv0` from 0 to 1. Over two pictures, `uv0.y`'s integer part
-/// is the picture: a fragment samples picture `floor(uv0.y)` at
-/// `(uv0.x, fract(uv0.y))`, so picture `p`'s point `(x, y)`, in texels, is at
-/// `uv0 = (x / width, p + y / height)`. A triangle's `uv0` interpolate, so
-/// keep its three `uv0.y` within one picture's `[p, p + 1)`. A `uv0.y`
-/// outside them takes the nearest picture, clamped to its edge as one picture
-/// is: picture 0 below 0, the last picture from the count up. Each picture
-/// has its own extent and coding. @ref rebind points the same set at other
-/// pictures, or at an image.
+/// image, spans `uv0` from 0 to 1, and is sampled at `uv0` as it is. Over two
+/// pictures, `uv0.y`'s integer part is the picture, so picture `p`'s point
+/// `(x, y)`, in texels, is at `uv0 = (x / width, p + y / height)`. A triangle
+/// takes its provoking vertex's picture `p`, as it takes its albedo class,
+/// and samples it at `(uv0.x, uv0.y - p)`, held to its edge: where the
+/// triangle's `uv0.y` leaves `[p, p + 1)`, it draws picture `p`'s edge. A
+/// provoking `uv0.y` outside the pictures takes the nearest: picture 0 below
+/// 0, the last picture from the count up. Each picture has its own extent and
+/// coding. @ref rebind points the same set at other pictures, or at an image.
 ///
 /// A Y'CbCr picture's coding is a uniform the host writes in place, in
 /// device-local memory the host maps
@@ -95,8 +95,7 @@ struct HybridMeshTextureSetOptions {
 /// // each frame, inside the rendering scope, with texture->set() in the
 /// // frame's set-0 field:
 /// pipeline.submit(cmd, frame);
-/// // once no frame that bound the set is pending, two pictures, which a
-/// // vertex addresses as uv0 = (x / width, p + y / height) for picture p:
+/// // once no frame that bound the set is pending, two pictures:
 /// const pipelines::YcbcrPicture both[] = {picture, other_picture};
 /// VKC_TRY(texture->rebind(both, 2));
 /// @endcode

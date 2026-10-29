@@ -58,8 +58,9 @@ descriptors.
   x selects the per-vertex color; recon's `(-1, -1)` TSDF sentinel is simply one
   such value. So a projective-texturing uv that lands *marginally* negative —
   the kind `CLAMP_TO_EDGE` would otherwise absorb — silently drops that triangle
-  to flat vertex color. Clamp atlas coordinates to `[0, 1]` before emitting
-  them.
+  to flat vertex color. Clamp `uv0.x` to `[0, 1]` before emitting it.
+  `uv0.y` spans `[0, 1]` too, or `[0, N)` over a `HybridMeshTextureSet` of N
+  pictures, whose class comment maps it.
 - **A negative `uv0` may carry a coordinate: it is decoded as `-uv0 - 1`.** The
   vertex stage recovers a real atlas coordinate from a negative `uv0` rather
   than substituting `(0, 0)`, so a producer holding a genuine coordinate for a

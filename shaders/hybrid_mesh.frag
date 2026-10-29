@@ -28,13 +28,12 @@
 layout(location = 0) in vec3 frag_normal;  // world space
 layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
 layout(location = 2) in vec4 frag_color;
-layout(location = 3) flat in uint frag_use_vertex_color;
+layout(location = 3) flat in uint frag_select;  // as hybrid_mesh.vert sets it
 layout(location = 4) in vec3 frag_second;  // (uv_B, w_B): the second view
 
 // Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
 // write it (hybrid_mesh_set0.hpp): an RGBA image, or one or two Y'CbCr 4:2:0
-// pictures' planes, as the Picture uniform says. Each picture binds its own
-// planes, as a decoder leaves each picture in its own images.
+// pictures' planes, as the Picture uniform says.
 layout(set = 0, binding = 0) uniform sampler2D plane0;  // RGBA, or 0's luma
 layout(set = 0, binding = 1) uniform sampler2D plane1;  // 0's chroma, or unused
 layout(set = 0, binding = 3) uniform sampler2D luma1;    // 1's luma, or unused
@@ -120,12 +119,9 @@ vec3 picture_rgb(sampler2D luma, sampler2D chroma, Coding c, vec2 uv) {
 // diverge. Over an RGBA image, uv0's view is blended with the second view's,
 // if the mesh carries one.
 //
-// Over two pictures uv.y's integer part is the picture: picture 1 from 1.0 up,
-// picture 0 below, so an index out of range takes the nearest picture, whose
-// clamp holds it to its edge. The picture is sampled at (uv.x, uv.y - index):
-// at uv itself over one picture. A triangle stays in one picture, so the
-// branch diverges only where a group of fragments spans both, and each sample
-// takes an explicit level, which needs no derivatives.
+// Over two pictures the vertex stage chose the triangle's picture; picture 1
+// is sampled at (uv.x, uv.y - 1). Each picture's clamp holds a coordinate
+// outside it to its edge. Over one picture uv is used as it is.
 vec3 atlas_albedo(vec2 uv) {
   if (picture.pictures == 0u) {
     vec4 a = texture(plane0, uv);
@@ -135,7 +131,7 @@ vec3 atlas_albedo(vec2 uv) {
     return a.rgb;
   }
   vec3 rgb;
-  if (picture.pictures > 1u && uv.y >= 1.0) {
+  if (picture.pictures > 1u && (frag_select & 2u) != 0u) {
     rgb = picture_rgb(luma1, chroma1, picture.coding[1],
                       vec2(uv.x, uv.y - 1.0));
   } else {
@@ -164,7 +160,7 @@ void main() {
   // or the vertex color everywhere when the frame asks for it.
   vec3 atlas = atlas_albedo(frag_uv);
   bool use_vertex_color =
-      frag_use_vertex_color != 0u || (pc.flags & kFlagVertexColor) != 0u;
+      (frag_select & 1u) != 0u || (pc.flags & kFlagVertexColor) != 0u;
   vec3 albedo = use_vertex_color ? frag_color.rgb : atlas;
 
   // The lit flag requests lit shading; otherwise pass the albedo through flat.

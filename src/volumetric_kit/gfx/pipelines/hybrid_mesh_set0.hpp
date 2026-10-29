@@ -16,11 +16,9 @@
 
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 
 namespace volumetric_kit::gfx::pipelines::detail {
-
-// The most Y'CbCr pictures set 0 binds: HybridMeshTextureSet::kMaxPictures.
-constexpr uint32_t kSet0Pictures = 2;
 
 // One picture's coding in hybrid_mesh.frag's `Picture` block (std140, 32
 // bytes). Plain floats rather than glm types, so no glm alignment setting can
@@ -41,7 +39,7 @@ static_assert(offsetof(PictureCoding, extent) == 16,
 struct PictureUniform {
   uint32_t pictures;    // 0: binding 0 is RGBA; n: n Y'CbCr 4:2:0 pictures
   uint32_t padding[3];  // to the array's 16-byte alignment
-  PictureCoding coding[kSet0Pictures];
+  PictureCoding coding[HybridMeshTextureSet::kMaxPictures];
 };
 static_assert(sizeof(PictureUniform) == 80, "PictureUniform must match");
 static_assert(offsetof(PictureUniform, coding) == 16,
@@ -50,7 +48,7 @@ static_assert(offsetof(PictureUniform, coding) == 16,
 // The pool sizes that hold `sets` set-0 sets.
 inline std::array<VkDescriptorPoolSize, 2> set0_pool_sizes(uint32_t sets) {
   return {VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                               2 * kSet0Pictures * sets},
+                               2 * HybridMeshTextureSet::kMaxPictures * sets},
           VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, sets}};
 }
 
@@ -62,14 +60,16 @@ struct PlaneBinding {
 
 // The planes set 0 binds: picture p's luma (or an RGBA image) and chroma at
 // planes[2p] and planes[2p + 1].
-using Set0Planes = std::array<PlaneBinding, 2 * kSet0Pictures>;
+using Set0Planes =
+    std::array<PlaneBinding, 2 * HybridMeshTextureSet::kMaxPictures>;
 
 // Writes `set`, allocated against set 0's layout: every plane through
 // `sampler`, and `picture`, a buffer holding a PictureUniform.
 inline void write_set0(const core::DescriptorSet& set, VkSampler sampler,
                        const Set0Planes& planes, VkBuffer picture) {
   // Bindings 0 and 1, then 3 and 4: the uniform sits between the pictures.
-  constexpr std::array<uint32_t, 2 * kSet0Pictures> kBindings = {0, 1, 3, 4};
+  constexpr std::array<uint32_t, 2 * HybridMeshTextureSet::kMaxPictures>
+      kBindings = {0, 1, 3, 4};
   for (size_t i = 0; i < planes.size(); ++i) {
     set.write_combined_image_sampler(kBindings[i], planes[i].view, sampler,
                                      planes[i].layout);

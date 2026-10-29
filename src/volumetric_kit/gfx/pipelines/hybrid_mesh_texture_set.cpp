@@ -276,8 +276,6 @@ core::Status HybridMeshTextureSet::rebind(const YcbcrPicture& picture) {
 
 core::Status HybridMeshTextureSet::rebind(const YcbcrPicture* pictures,
                                           uint32_t count) try {
-  static_assert(kMaxPictures == detail::kSet0Pictures,
-                "set 0 binds kMaxPictures pictures");
   constexpr const char* kCall = "HybridMeshTextureSet::rebind";
   VKC_TRY(check_pictures(kCall, pictures, count, device_, options_));
   if (!uniform_.valid()) {
