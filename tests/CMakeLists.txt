@@ -155,10 +155,12 @@ vg_discover_tests(vg_retire_failure_test)
 
 # windowing tier: surface / swapchain / FrameLoop driven through a headless
 # surface (VK_EXT_headless_surface), which skips wholesale where that surface or
-# a present-capable device is unavailable; and the surface sources, whose
-# refusals need at most an instance. Links gfx_ui for ui::overlay_config's case,
-# which needs a real swapchain.
-add_executable(vg_windowing_test windowing_test.cpp surface_source_test.cpp)
+# a present-capable device is unavailable; the surface sources, whose refusals
+# need at most an instance; and FrameLoop over offscreen targets, which needs
+# only the renderer's device, so it runs where the headless surface is missing.
+# Links gfx_ui for ui::overlay_config's case, which needs a real swapchain.
+add_executable(vg_windowing_test windowing_test.cpp surface_source_test.cpp
+                                 offscreen_frame_loop_test.cpp)
 target_link_libraries(
   vg_windowing_test
   PRIVATE volumetric_kit::gfx_ui volumetric_kit::gfx_windowing

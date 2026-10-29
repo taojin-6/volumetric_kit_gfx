@@ -144,6 +144,10 @@ what has landed since then. Record amendments when a contract changes.
   and mixes the two views of an RGBA atlas in linear light by `w_B` and their alphas; the
   `(1, 0, 0, 1)` placeholder draws as before, and a draw without the flag draws and costs as
   before. See the dated entry below.
+- **2026-10-27 — The frame loop also drives offscreen targets.** `windowing::FrameLoop` takes
+  an `OffscreenLoopDesc` in place of a swapchain: one `OffscreenTarget` per slot, a frame
+  interval in place of the display's pace, and the swapchain loop's protocol otherwise. See
+  the dated entry below.
 - **2026-10-28 — A mesh samples two pictures in place.** `HybridMeshTextureSet` binds one or
   two `YcbcrPicture`s, each in its own images; a triangle takes the picture its provoking
   vertex's `uv0.y` names. One picture draws as before, byte for byte. See the dated entry
@@ -195,6 +199,51 @@ the frame to the fragment stage, at 2560x1440 and 3840x2160, it costs the M5 Max
 the mesh, two pictures, each read by its own region, cost +0.000-0.005 ms more than one. The
 worst case, a checkerboard where nearly every group of fragments reads both, costs
 +0.026-0.037 ms more than one picture on the M5 Max and +0.013-0.014 ms on the RTX 4090.
+
+## 2026-10-27 — The frame loop also drives offscreen targets
+
+**The contract.** `windowing::FrameLoop::create(device, allocator,
+OffscreenLoopDesc, n)` makes a loop with no swapchain. It owns one
+`OffscreenTarget` per frame-in-flight slot, and `Frame::offscreen` names the
+frame's. A frame has no acquire, present or rebuild: `begin_frame` prepares
+the slot's target from `UNDEFINED` after the slot's fence wait. Everything
+else is the swapchain loop's code: the numbering on the timeline, the waits
+and signals with their refusals, the empty submit that stands in for a
+refused frame, the profiler's `frame wait` and `submit` rows (there is no
+`present`), a `RetireQueue` on `timeline()`, and the drain at destruction.
+`layout()` gives either kind's target signature, so a renderer builds its
+pipelines once and draws the same frames with or without a window. It reads
+chosen frames back by recording `OffscreenTarget::record_readback` into the
+frame and reading `pixels()` when the slot recurs, before that frame ends.
+
+**Why the same class.** A renderer with no display needs the loop's
+protocol, not a second one: what its consumers key on -- `Frame::slot`,
+`Frame::number`, `timeline()`, the profiler's rows -- must mean the same in
+both. A sibling class would copy the slot ring, the submit's
+synchronization, the refusals, the stand-in submit and the profiler hookup,
+about 300 lines that would then drift apart; a base class for two would move
+the whole loop and its tests. The swapchain-only steps are a few places in
+`frame_loop.cpp`, each now behind a null swapchain, and the swapchain loop
+runs as before.
+
+**Why not a headless surface.** `VK_EXT_headless_surface` would drive the
+swapchain loop unchanged, but NVIDIA's driver does not offer it ("One surface
+source per window system", below), and a virtual display there renders in
+software. An offscreen target is a device image on every driver.
+
+**Why a pace.** A FIFO swapchain's acquire holds a loop to the display's
+refresh. With no display, frames would begin as fast as they complete --
+thousands a second for a light frame -- taking the graphics queue from a
+compute library that shares the device and skewing what it measures.
+`OffscreenLoopDesc::frame_interval` holds the frames' `begin_frame`s at least
+that far apart: on time, the next keeps the cadence; late, it begins an
+interval later, never in a catch-up burst. The wait is in `frame wait`, as an
+acquire's is, and reaches the caller's scopes as blocked time with or without
+a profiler. An interval of 0 does not pace.
+
+**Coverage.** The swapchain loop's tests need the headless surface, so they
+skip on the NVIDIA legs. The offscreen loop's tests run on the shared renderer
+device, under synchronization validation, on every leg.
 
 ## 2026-10-27 — A hybrid mesh blends a second atlas view
 

@@ -38,6 +38,15 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `windowing`: **the frame loop drives offscreen targets.**
+  `FrameLoop::create(device, allocator, OffscreenLoopDesc, n)` renders each
+  frame into its slot's `OffscreenTarget` (`Frame::offscreen`), which a
+  frame may read back, and paces frames by `OffscreenLoopDesc::frame_interval`
+  where no display does. Its numbering, timeline waits and signals,
+  refusals, profiler rows (no `present`) and teardown are the swapchain
+  loop's, so a renderer draws the same frames where no display exists.
+  `FrameLoop::layout()` gives either loop's target signature. Its tests run
+  on every GPU leg, NVIDIA's included.
 - `pipelines`: **a mesh samples two pictures where they are.**
   `HybridMeshTextureSet::create` and `rebind` take up to `kMaxPictures` (2)
   `YcbcrPicture`s, each bound in its own images, with its own extent and

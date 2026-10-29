@@ -95,7 +95,8 @@ struct RenderTargetBeginInfo {
 /// value bundle of attachment handles (like a `std::span` over images held
 /// elsewhere), so it is freely copyable and has no deleter. Producers own the
 /// images and hand out a target per frame: @ref OffscreenTarget (headless)
-/// today; a swapchain (windowing) and an OpenXR swapchain (xr) later.
+/// and the windowing tier's swapchain, either of which `windowing::FrameLoop`
+/// renders its frames into; an OpenXR swapchain (xr) later.
 ///
 /// Layout transitions are the caller's responsibility (dynamic rendering does
 /// not perform them): transition each attachment image into its attachment

@@ -3,11 +3,14 @@
 
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
@@ -85,18 +88,64 @@ class SubmitSync {
 
 }  // namespace
 
-FrameLoop::FrameLoop(const core::Device& device, Swapchain& swapchain,
-                     core::TimelineSemaphore timeline, core::CommandPool pool,
-                     std::vector<core::CommandBuffer> command_buffers,
-                     std::vector<core::Semaphore> image_available,
-                     std::vector<core::Fence> in_flight)
+struct FrameLoop::Owned {
+  core::TimelineSemaphore timeline;
+  core::CommandPool pool;
+  std::vector<core::CommandBuffer> command_buffers;
+  std::vector<core::Semaphore> image_available;  // a swapchain loop's
+  std::vector<core::Fence> in_flight;
+  std::vector<OffscreenTarget> targets;  // an offscreen loop's
+  std::chrono::nanoseconds frame_interval{0};
+};
+
+FrameLoop::FrameLoop(const core::Device& device, Swapchain* swapchain,
+                     Owned owned)
     : device_(device),
       swapchain_(swapchain),
-      timeline_(std::move(timeline)),
-      pool_(std::move(pool)),
-      command_buffers_(std::move(command_buffers)),
-      image_available_(std::move(image_available)),
-      in_flight_(std::move(in_flight)) {}
+      timeline_(std::move(owned.timeline)),
+      pool_(std::move(owned.pool)),
+      command_buffers_(std::move(owned.command_buffers)),
+      image_available_(std::move(owned.image_available)),
+      in_flight_(std::move(owned.in_flight)),
+      targets_(std::move(owned.targets)),
+      frame_interval_(owned.frame_interval) {
+  // Each slot's frames render through a RenderTarget over its target, at an
+  // address that stays put for the loop's life.
+  render_targets_.reserve(targets_.size());
+  for (const OffscreenTarget& target : targets_) {
+    render_targets_.push_back(target.target());
+  }
+}
+
+core::Result<FrameLoop::Owned> FrameLoop::own_slots(const core::Device& device,
+                                                    uint32_t frames_in_flight,
+                                                    bool presents) {
+  // Per frame-in-flight slot: a command buffer, an in-flight fence (created
+  // signaled so the first wait does not block) and, for a swapchain, an
+  // image-available semaphore. The per-image sync waits for the first
+  // begin_frame's ensure_image_sync.
+  Owned owned;
+  VKC_ASSIGN(core::CommandPool pool,
+             core::CommandPool::create(device.handle(), device.queue_family()));
+  owned.pool = std::move(pool);
+  for (uint32_t i = 0; i < frames_in_flight; ++i) {
+    VKC_ASSIGN(core::CommandBuffer cmd, owned.pool.allocate_primary());
+    owned.command_buffers.push_back(std::move(cmd));
+    if (presents) {
+      VKC_ASSIGN(core::Semaphore available,
+                 core::Semaphore::create(device.handle()));
+      owned.image_available.push_back(std::move(available));
+    }
+    VKC_ASSIGN(core::Fence fence,
+               core::Fence::create(device.handle(), /*signaled=*/true));
+    owned.in_flight.push_back(std::move(fence));
+  }
+  // The frame numbers: frame n sets n, from 1.
+  VKC_ASSIGN(core::TimelineSemaphore timeline,
+             core::TimelineSemaphore::create(device));
+  owned.timeline = std::move(timeline);
+  return owned;
+}
 
 core::Result<std::unique_ptr<FrameLoop>> FrameLoop::create(
     const core::Device& device, Swapchain& swapchain,
@@ -116,33 +165,44 @@ core::Result<std::unique_ptr<FrameLoop>> FrameLoop::create(
 
   // Build what the loop owns before the loop, so a failure here frees objects
   // no submit has used, and only a whole loop's destructor drains the queues.
-  // Per frame-in-flight slot: a command buffer, an image-available semaphore,
-  // and an in-flight fence (created signaled so the first wait does not block).
-  // The per-image sync waits for the first begin_frame's ensure_image_sync.
-  VKC_ASSIGN(core::CommandPool pool,
-             core::CommandPool::create(device.handle(), device.queue_family()));
-  std::vector<core::CommandBuffer> command_buffers;
-  std::vector<core::Semaphore> image_available;
-  std::vector<core::Fence> in_flight;
-  for (uint32_t i = 0; i < frames_in_flight; ++i) {
-    VKC_ASSIGN(core::CommandBuffer cmd, pool.allocate_primary());
-    command_buffers.push_back(std::move(cmd));
-    VKC_ASSIGN(core::Semaphore available,
-               core::Semaphore::create(device.handle()));
-    image_available.push_back(std::move(available));
-    VKC_ASSIGN(core::Fence fence,
-               core::Fence::create(device.handle(), /*signaled=*/true));
-    in_flight.push_back(std::move(fence));
-  }
-
-  // The frame numbers: frame n sets n, from 1.
-  VKC_ASSIGN(core::TimelineSemaphore timeline,
-             core::TimelineSemaphore::create(device));
+  VKC_ASSIGN(Owned owned, own_slots(device, frames_in_flight,
+                                    /*presents=*/true));
   // The constructor is private, so no std::make_unique.
   return std::unique_ptr<FrameLoop>(
-      new FrameLoop(device, swapchain, std::move(timeline), std::move(pool),
-                    std::move(command_buffers), std::move(image_available),
-                    std::move(in_flight)));
+      new FrameLoop(device, &swapchain, std::move(owned)));
+}
+
+core::Result<std::unique_ptr<FrameLoop>> FrameLoop::create(
+    const core::Device& device, core::Allocator& allocator,
+    const OffscreenLoopDesc& desc, uint32_t frames_in_flight) {
+  if (frames_in_flight == 0) {
+    return core::Status::invalid_argument(
+        "FrameLoop::create: frames_in_flight must be >= 1");
+  }
+  if (desc.frame_interval.count() < 0) {
+    return core::Status::invalid_argument(
+        "FrameLoop::create: frame_interval must not be negative");
+  }
+  VKC_TRY(device.check_enabled(device_requirements())
+              .with_context("FrameLoop::create"));
+
+  // The targets first: OffscreenTarget::create refuses a bad description
+  // before it allocates anything.
+  std::vector<OffscreenTarget> targets;
+  for (uint32_t i = 0; i < frames_in_flight; ++i) {
+    core::Result<OffscreenTarget> target =
+        OffscreenTarget::create(allocator, desc.target);
+    if (!target.ok()) {
+      return target.status().with_context("FrameLoop::create");
+    }
+    targets.push_back(std::move(target).value());
+  }
+  VKC_ASSIGN(Owned owned, own_slots(device, frames_in_flight,
+                                    /*presents=*/false));
+  owned.targets = std::move(targets);
+  owned.frame_interval = desc.frame_interval;
+  return std::unique_ptr<FrameLoop>(
+      new FrameLoop(device, nullptr, std::move(owned)));
 }
 
 core::Status FrameLoop::ensure_image_sync() {
@@ -160,8 +220,8 @@ core::Status FrameLoop::ensure_image_sync() {
   // can be recycled by the driver, so the array sizes are checked too. That
   // makes a stale-sync mismatch impossible regardless of driver behavior, since
   // the image count is recomputed from live surface caps on every build.
-  const VkSwapchainKHR current = swapchain_.handle();
-  const uint32_t image_count = swapchain_.image_count();
+  const VkSwapchainKHR current = swapchain_->handle();
+  const uint32_t image_count = swapchain_->image_count();
   if (current == last_swapchain_ && render_finished_.size() == image_count &&
       image_frames_.size() == image_count) {
     return core::Status{};
@@ -180,13 +240,21 @@ core::Status FrameLoop::ensure_image_sync() {
 
 core::Result<std::optional<Frame>> FrameLoop::begin_frame(
     VkExtent2D current_extent) {
+  if (swapchain_ == nullptr) {
+    // No window to follow: nothing to skip or rebuild.
+    core::Result<Frame> frame = begin_frame();
+    if (!frame.ok()) {
+      return frame.status();
+    }
+    return std::optional<Frame>(std::move(frame).value());
+  }
   if (current_extent.width == 0 || current_extent.height == 0) {
     // Minimized: nothing to acquire or rebuild; an armed rebuild stays armed
     // for the restore.
     return std::optional<Frame>{};
   }
-  if (current_extent.width != swapchain_.requested_extent().width ||
-      current_extent.height != swapchain_.requested_extent().height) {
+  if (current_extent.width != swapchain_->requested_extent().width ||
+      current_extent.height != swapchain_->requested_extent().height) {
     // The window resized under us; some platforms (MoltenVK in particular)
     // never report OUT_OF_DATE for it. Checked against the swapchain's last
     // *requested* extent (not its surface-clamped one), so a request the
@@ -200,10 +268,10 @@ core::Result<std::optional<Frame>> FrameLoop::begin_frame(
   bool rebuilt_this_call = false;
   for (int attempt = 0; attempt < 2; ++attempt) {
     if (needs_recreate_ && !rebuilt_this_call) {
-      const core::Status rebuilt = swapchain_.recreate(current_extent);
+      const core::Status rebuilt = swapchain_->recreate(current_extent);
       if (!rebuilt.ok()) {
         if (rebuilt.domain() == core::Status::Code::InvalidArgument &&
-            swapchain_.valid()) {
+            swapchain_->valid()) {
           // The surface reported a zero extent mid-rebuild (still minimized):
           // the old chain is intact, so skip this tick and retry later.
           return std::optional<Frame>{};
@@ -227,7 +295,7 @@ core::Result<std::optional<Frame>> FrameLoop::begin_frame(
       // (The rebuild produced a fresh swapchain handle, so the next raw
       // begin_frame's ensure_image_sync refreshes the per-image semaphores.)
       if (recreate_callback_) {
-        VKC_TRY(recreate_callback_(swapchain_.extent()));
+        VKC_TRY(recreate_callback_(swapchain_->extent()));
       }
       needs_recreate_ = false;
     }
@@ -245,14 +313,16 @@ core::Result<std::optional<Frame>> FrameLoop::begin_frame(
 }
 
 core::Result<Frame> FrameLoop::begin_frame() {
-  if (!swapchain_.valid()) {
-    return core::Status::invalid_argument(
-        "FrameLoop::begin_frame: swapchain is empty (moved from, or a failed "
-        "rebuild)");
+  if (swapchain_ != nullptr) {
+    if (!swapchain_->valid()) {
+      return core::Status::invalid_argument(
+          "FrameLoop::begin_frame: swapchain is empty (moved from, or a failed "
+          "rebuild)");
+    }
+    // A Swapchain::recreate may have changed the image count since the last
+    // frame; resize the per-image sync arrays before indexing them below.
+    VKC_TRY(ensure_image_sync());
   }
-  // A Swapchain::recreate may have changed the image count since the last
-  // frame; resize the per-image sync arrays before indexing them below.
-  VKC_TRY(ensure_image_sync());
 
   const uint64_t number = submitted_ + 1;
   const uint32_t slot = slot_of(number);
@@ -260,10 +330,12 @@ core::Result<Frame> FrameLoop::begin_frame() {
   // The loop's rows, for an attached profiler only: null measures nothing.
   core::StageMetrics* const rows = profiler_ != nullptr ? &rows_ : nullptr;
   rows_.clear();
-  uint32_t image_index = 0;
+  // A swapchain frame's acquired image; an offscreen frame carries its slot.
+  uint32_t image_index = slot;
   {
     // Every wait before the frame records, one row: where a loop paced by
-    // the display waits, in the fence or in the acquire.
+    // the display waits, in the fence or in the acquire, and where an
+    // offscreen loop waits out its pace.
     const core::WaitScope waiting(rows, "frame wait");
 
     // Keep the CPU at most N frames ahead: wait until this slot's previous
@@ -274,29 +346,34 @@ core::Result<Frame> FrameLoop::begin_frame() {
     // numbered on a timeline").
     VKC_TRY(in_flight_[slot].wait());
 
-    core::Result<uint32_t> acquired = blocking([&] {
-      return swapchain_.acquire_next_image(image_available_[slot].handle());
-    });
-    if (!acquired.ok()) {
-      // OUT_OF_DATE (or another error) flows to the caller, which recreates
-      // the swapchain and retries; nothing was consumed, so the retry is this
-      // same frame. The slot fence is reset only right before a submit that
-      // re-signals it, so it is still signalled here and the retry does not
-      // deadlock.
-      return acquired.status();
-    }
-    image_index = acquired.value();
+    if (swapchain_ == nullptr) {
+      pace();
+    } else {
+      core::Result<uint32_t> acquired = blocking([&] {
+        return swapchain_->acquire_next_image(image_available_[slot].handle());
+      });
+      if (!acquired.ok()) {
+        // OUT_OF_DATE (or another error) flows to the caller, which recreates
+        // the swapchain and retries; nothing was consumed, so the retry is
+        // this same frame. The slot fence is reset only right before a submit
+        // that re-signals it, so it is still signalled here and the retry
+        // does not deadlock.
+        return acquired.status();
+      }
+      image_index = acquired.value();
 
-    // The acquired image may still be in use by an earlier frame on another
-    // slot when there are more images than in-flight frames; wait for it too.
-    if (image_frames_[image_index] != 0) {
-      const core::Status waited = timeline_.wait(image_frames_[image_index]);
-      if (!waited.ok()) {
-        // The acquire above left this slot's semaphore with a pending signal;
-        // stand in for the frame before surfacing the error (best-effort: the
-        // original error outranks a recovery failure).
-        (void)recover_slot(slot, {});
-        return waited;
+      // The acquired image may still be in use by an earlier frame on
+      // another slot when there are more images than in-flight frames; wait
+      // for it too.
+      if (image_frames_[image_index] != 0) {
+        const core::Status waited = timeline_.wait(image_frames_[image_index]);
+        if (!waited.ok()) {
+          // The acquire above left this slot's semaphore with a pending
+          // signal; stand in for the frame before surfacing the error
+          // (best-effort: the original error outranks a recovery failure).
+          (void)recover_slot(slot, {});
+          return waited;
+        }
       }
     }
   }
@@ -309,20 +386,27 @@ core::Result<Frame> FrameLoop::begin_frame() {
     return begun;
   }
 
-  // Dynamic rendering does not transition images; move it into the attachment
-  // layout. UNDEFINED discards the previous (presented) contents, which is fine
-  // since the render clears. srcStage is COLOR_ATTACHMENT_OUTPUT (not
-  // TOP_OF_PIPE) so the transition is ordered *after* the image-available
-  // semaphore — end_frame's submit waits it at that same stage — instead of
-  // racing the presentation engine's last read of the image.
-  ImageBarrierDesc to_color;
-  to_color.image = swapchain_.image(image_index);
-  to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  cmd_image_barrier(cmd, to_color);
+  if (swapchain_ == nullptr) {
+    // Both attachments from UNDEFINED, ordered after the slot's previous
+    // frame -- its render and any readback -- in the queue.
+    targets_[slot].prepare(cmd);
+  } else {
+    // Dynamic rendering does not transition images; move it into the
+    // attachment layout. UNDEFINED discards the previous (presented)
+    // contents, which is fine since the render clears. srcStage is
+    // COLOR_ATTACHMENT_OUTPUT (not TOP_OF_PIPE) so the transition is ordered
+    // *after* the image-available semaphore — end_frame's submit waits it at
+    // that same stage — instead of racing the presentation engine's last read
+    // of the image.
+    ImageBarrierDesc to_color;
+    to_color.image = swapchain_->image(image_index);
+    to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    cmd_image_barrier(cmd, to_color);
+  }
 
   // Drive the profiler's frame lifecycle (no-op when none is attached). The
   // slot's previous frame was waited for above, so its timestamps are now
@@ -335,12 +419,43 @@ core::Result<Frame> FrameLoop::begin_frame() {
 
   Frame frame;
   frame.cmd = cmd;
-  frame.target = &swapchain_.render_target(image_index);
+  if (swapchain_ == nullptr) {
+    frame.target = &render_targets_[slot];
+    frame.offscreen = &targets_[slot];
+  } else {
+    frame.target = &swapchain_->render_target(image_index);
+  }
   frame.image_index = image_index;
   frame.slot = slot;
   frame.number = number;
   acquired_image_ = image_index;
   return frame;
+}
+
+void FrameLoop::pace() {
+  if (frame_interval_.count() == 0) {
+    return;
+  }
+  // No display holds the frames back: wait out the interval its refresh
+  // would, so the loop does not take the queue from other work at whatever
+  // rate frames complete. Blocked time, like an acquire.
+  const auto now = std::chrono::steady_clock::now();
+  if (now < next_begin_) {
+    blocking([&] {
+      std::this_thread::sleep_until(next_begin_);
+      return true;
+    });
+  }
+  // On time, the next frame keeps the cadence; late, it begins an interval
+  // from now, as at a display's next refresh, never in a catch-up burst.
+  next_begin_ = std::max(now, next_begin_) +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    frame_interval_);
+}
+
+RenderTargetLayout FrameLoop::layout() const {
+  return swapchain_ != nullptr ? swapchain_->layout()
+                               : targets_.front().layout();
 }
 
 core::Status FrameLoop::check_points(const Frame& frame) const {
@@ -394,7 +509,8 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   // Check both before closing the profiler's frame: discarded commands never
   // write their queries, so their timestamps must not be read on slot reuse.
   const core::Status points = check_points(frame);
-  const bool changed_swapchain = swapchain_.handle() != last_swapchain_;
+  const bool changed_swapchain =
+      swapchain_ != nullptr && swapchain_->handle() != last_swapchain_;
   if (changed_swapchain || !points.ok()) {
     if (changed_swapchain) {
       // A destroyed chain invalidated the command buffer; only a reset or
@@ -405,8 +521,9 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
       // A recording command buffer cannot be begun again: end it.
       (void)command_buffers_[slot].end();
     }
-    // Consume the acquire and complete this frame's number. Only accepted
-    // signals may be set; the refusal outranks a recovery failure.
+    // Consume the acquire (a swapchain frame's) and complete this frame's
+    // number. Only accepted signals may be set; the refusal outranks a
+    // recovery failure.
     if (points.ok()) {
       (void)recover_slot(slot, frame.signals);
     } else {
@@ -428,19 +545,24 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
   core::StageMetrics* const rows = profiler_ != nullptr ? &rows_ : nullptr;
   rows_.clear();
 
-  const VkSemaphore rendered = render_finished_[frame.image_index].handle();
+  // A swapchain frame's present waits for this; an offscreen frame has none.
+  const VkSemaphore rendered =
+      swapchain_ != nullptr ? render_finished_[frame.image_index].handle()
+                            : VK_NULL_HANDLE;
   {
     const core::StageScope submitting(rows, "submit");
 
-    // Transition the rendered image to PRESENT_SRC.
-    ImageBarrierDesc to_present;
-    to_present.image = swapchain_.image(frame.image_index);
-    to_present.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    to_present.dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    to_present.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    to_present.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    cmd_image_barrier(frame.cmd, to_present);
+    if (swapchain_ != nullptr) {
+      // Transition the rendered image to PRESENT_SRC.
+      ImageBarrierDesc to_present;
+      to_present.image = swapchain_->image(frame.image_index);
+      to_present.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      to_present.dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+      to_present.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+      to_present.old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+      cmd_image_barrier(frame.cmd, to_present);
+    }
 
     const core::Status ended = command_buffers_[slot].end();
     if (!ended.ok()) {
@@ -451,12 +573,16 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
     // The acquire and the present keep their binary semaphores; the frame's
     // number and the caller's values ride the same submit.
     SubmitSync sync;
-    sync.wait(image_available_[slot].handle(),
-              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    if (swapchain_ != nullptr) {
+      sync.wait(image_available_[slot].handle(),
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    }
     for (const FrameWait& wait : frame.waits) {
       sync.wait(wait.point.semaphore->handle(), wait.stages, wait.point.value);
     }
-    sync.signal(rendered);
+    if (swapchain_ != nullptr) {
+      sync.signal(rendered);
+    }
     sync.signal(timeline_.handle(), frame.number);
     for (const core::TimelinePoint& signal : frame.signals) {
       sync.signal(signal.semaphore->handle(), signal.value);
@@ -478,14 +604,16 @@ core::Status FrameLoop::end_frame(const Frame& frame) {
       return core::vk_error(submitted, "vkQueueSubmit");
     }
     record_submit(frame.number, frame.signals);
-    image_frames_[frame.image_index] = frame.number;
+    if (swapchain_ != nullptr) {
+      image_frames_[frame.image_index] = frame.number;
+    }
   }
 
   core::Status present;
-  {
+  if (swapchain_ != nullptr) {
     const core::WaitScope presenting(rows, "present");
     present = blocking(
-        [&] { return swapchain_.present(frame.image_index, rendered); });
+        [&] { return swapchain_->present(frame.image_index, rendered); });
   }
   if (profiler_ != nullptr) {
     profiler_->add_rows(rows_);
@@ -514,12 +642,15 @@ core::Status FrameLoop::recover_slot(
   // The frame's acquired image will not be presented, and only a present or
   // a swapchain rebuild releases an acquired image: arm the extent-taking
   // begin_frame's rebuild, or failed frames exhaust the chain.
-  needs_recreate_ = true;
+  if (swapchain_ != nullptr) {
+    needs_recreate_ = true;
+  }
   // A successful acquire left image_available_[slot] with a pending signal that
   // only a queue submit may consume. An empty submit consumes it, sets the
   // frame's number, as the frame would have, and signals the slot fence, so
   // the slot's next begin_frame finds the semaphore free and the numbers stay
-  // contiguous. Reached only on a failed frame; `signals` are ones
+  // contiguous. An offscreen frame acquired nothing: the submit only sets its
+  // number and fence. Reached only on a failed frame; `signals` are ones
   // check_points accepted.
   // TODO: a refused frame or changed swapchain runs this, but the other
   // failures and the failed submit below lack test coverage -- no queue/command
@@ -527,8 +658,10 @@ core::Status FrameLoop::recover_slot(
   // exercise them; today they ship verified only by inspection.
   const uint64_t number = submitted_ + 1;
   SubmitSync sync;
-  sync.wait(image_available_[slot].handle(),
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+  if (swapchain_ != nullptr) {
+    sync.wait(image_available_[slot].handle(),
+              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+  }
   sync.signal(timeline_.handle(), number);
   for (const core::TimelinePoint& signal : signals) {
     sync.signal(signal.semaphore->handle(), signal.value);
