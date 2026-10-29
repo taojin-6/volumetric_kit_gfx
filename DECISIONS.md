@@ -177,8 +177,17 @@ edge is what one picture has always drawn past its own edge.
 added when a caller needs it.
 
 **One picture is unchanged.** Over one picture `uv0` is used as it is, so the arithmetic is
-the one before. Its tests are unchanged, and a draw over an 8192x4352 picture is byte for
-byte the shaders' before on the M5 Max.
+the one before, and its tests are unchanged.
+
+**The cost.** Measured A/B against the shaders before, Release, 600 interleaved iterations
+in 3 runs, a 1.26 M-triangle unshared mesh over 8192x4352 pictures, paired medians. One
+picture draws byte for byte the frame before. It costs +0.000-0.003 ms on an Apple M5 Max,
+a 0.68-0.88 ms frame at 1280x720 and 2560x1440, and +0.000 ms on an RTX 4090, a 0.30-0.33
+ms frame. Two pictures, each read by its own region of the mesh, cost +0.000-0.002 ms more.
+The worst case, a checkerboard where nearly every group of fragments reads both, costs
++0.026-0.032 ms on the M5 Max and +0.013-0.014 ms on the RTX 4090.
+
+## 2026-10-27 — A hybrid mesh blends a second atlas view
 
 **The contract.** `HybridMeshPipeline` binds `assets::Vertex::tangent` at
 location 4 and, in a draw whose `HybridMeshDraw::second_view` is set, reads it
