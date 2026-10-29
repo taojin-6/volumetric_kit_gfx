@@ -86,10 +86,6 @@ core::Status check_plane(const std::string& call, const char* name,
 core::Status check_picture(const std::string& call, const YcbcrPicture& picture,
                            const core::Device& device,
                            const HybridMeshTextureSet::Options& options) {
-  if (options.address != VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) {
-    return core::Status::invalid_argument(
-        call + ": a Y'CbCr picture is sampled CLAMP_TO_EDGE alone");
-  }
   const VkExtent2D extent = picture.extent;
   if (extent.width == 0 || extent.height == 0) {
     return core::Status::invalid_argument(call +
@@ -102,6 +98,32 @@ core::Status check_picture(const std::string& call, const YcbcrPicture& picture,
   VKC_TRY(check_plane(call, "chroma", picture.chroma, VK_FORMAT_R8G8_UNORM,
                       chroma, device, options.filter));
   return detail::check_ycbcr_coding(call, picture.coding);
+}
+
+// Checks `count` pictures at `pictures` for a set sampling with `options`;
+// a refusal names the picture when there are several.
+core::Status check_pictures(const char* call, const YcbcrPicture* pictures,
+                            uint32_t count, const core::Device& device,
+                            const HybridMeshTextureSet::Options& options) {
+  const std::string name = call;
+  if (pictures == nullptr) {
+    return core::Status::invalid_argument(name + ": the pictures are null");
+  }
+  if (count == 0 || count > HybridMeshTextureSet::kMaxPictures) {
+    return core::Status::invalid_argument(
+        name + ": " + std::to_string(count) + " pictures, not 1 to " +
+        std::to_string(HybridMeshTextureSet::kMaxPictures));
+  }
+  if (options.address != VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) {
+    return core::Status::invalid_argument(
+        name + ": a Y'CbCr picture is sampled CLAMP_TO_EDGE alone");
+  }
+  for (uint32_t p = 0; p < count; ++p) {
+    VKC_TRY(check_picture(
+        count == 1 ? name : name + ": picture " + std::to_string(p),
+        pictures[p], device, options));
+  }
+  return core::Status{};
 }
 
 // A picture's uniform takes device-local memory the host maps.
@@ -216,16 +238,25 @@ HybridMeshTextureSet::create(const core::Device& device,
                              core::Allocator& allocator,
                              const HybridMeshPipeline& pipeline,
                              const YcbcrPicture& picture,
+                             const Options& options) {
+  return create(device, allocator, pipeline, &picture, 1, options);
+}
+
+core::Result<std::unique_ptr<HybridMeshTextureSet>>
+HybridMeshTextureSet::create(const core::Device& device,
+                             core::Allocator& allocator,
+                             const HybridMeshPipeline& pipeline,
+                             const YcbcrPicture* pictures, uint32_t count,
                              const Options& options) try {
   constexpr const char* kCall = "HybridMeshTextureSet::create";
   // Checked before anything is made, so a refused picture costs nothing.
-  VKC_TRY(check_picture(kCall, picture, device, options));
+  VKC_TRY(check_pictures(kCall, pictures, count, device, options));
   if (!device.caps().device_mapped_memory()) {
     return no_picture_uniform(kCall);
   }
   VKC_ASSIGN(std::unique_ptr<HybridMeshTextureSet> texture,
              make(kCall, device, allocator, pipeline, options));
-  VKC_TRY(texture->rebind(picture));
+  VKC_TRY(texture->rebind(pictures, count));
   return texture;
 } catch (...) {
   return core::exception_status("HybridMeshTextureSet::create",
@@ -233,28 +264,41 @@ HybridMeshTextureSet::create(const core::Device& device,
 }
 
 void HybridMeshTextureSet::rebind(VkImageView view) {
-  detail::write_set0(set_, sampler_.handle(), {view}, {placeholder_},
-                     rgba_uniform_);
+  detail::Set0Planes planes;
+  planes.fill({placeholder_});
+  planes[0] = {view};
+  detail::write_set0(set_, sampler_.handle(), planes, rgba_uniform_);
 }
 
-core::Status HybridMeshTextureSet::rebind(const YcbcrPicture& picture) try {
+core::Status HybridMeshTextureSet::rebind(const YcbcrPicture& picture) {
+  return rebind(&picture, 1);
+}
+
+core::Status HybridMeshTextureSet::rebind(const YcbcrPicture* pictures,
+                                          uint32_t count) try {
   constexpr const char* kCall = "HybridMeshTextureSet::rebind";
-  VKC_TRY(check_picture(kCall, picture, device_, options_));
+  VKC_TRY(check_pictures(kCall, pictures, count, device_, options_));
   if (!uniform_.valid()) {
     return no_picture_uniform(kCall);
   }
   detail::PictureUniform coded{};
-  coded.two_plane = 1;
-  coded.full_range = picture.coding.full_range ? 1u : 0u;
-  coded.kr = picture.coding.kr;
-  coded.kb = picture.coding.kb;
-  coded.extent[0] = static_cast<float>(picture.extent.width);
-  coded.extent[1] = static_cast<float>(picture.extent.height);
-  coded.chroma_siting = static_cast<uint32_t>(picture.coding.chroma_siting);
+  coded.pictures = count;
+  detail::Set0Planes planes;
+  planes.fill({placeholder_});
+  for (uint32_t p = 0; p < count; ++p) {
+    const YcbcrPicture& picture = pictures[p];
+    detail::PictureCoding& c = coded.coding[p];
+    c.full_range = picture.coding.full_range ? 1u : 0u;
+    c.kr = picture.coding.kr;
+    c.kb = picture.coding.kb;
+    c.chroma_siting = static_cast<uint32_t>(picture.coding.chroma_siting);
+    c.extent[0] = static_cast<float>(picture.extent.width);
+    c.extent[1] = static_cast<float>(picture.extent.height);
+    planes[2 * p] = {picture.luma->view(), picture.luma->layout()};
+    planes[2 * p + 1] = {picture.chroma->view(), picture.chroma->layout()};
+  }
   std::memcpy(uniform_.mapped(), &coded, sizeof(coded));
-  detail::write_set0(
-      set_, sampler_.handle(), {picture.luma->view(), picture.luma->layout()},
-      {picture.chroma->view(), picture.chroma->layout()}, uniform_.handle());
+  detail::write_set0(set_, sampler_.handle(), planes, uniform_.handle());
   return core::Status{};
 } catch (...) {
   return core::exception_status("HybridMeshTextureSet::rebind",

@@ -101,24 +101,24 @@ enum HybridMeshFlags : uint32_t {
 /// @ref assets::Vertex defaults to -- or a zero denominator shows `c_A`
 /// exactly. A draw without the flag shows `c_A` whatever its tangents hold and
 /// skips the second view's interpolant, which on Apple GPUs costs every vertex
-/// drawn, `w_B` = 0 or not (DECISIONS.md, 2026-10-27). A camera picture's two
-/// planes take no second view.
+/// drawn, `w_B` = 0 or not (DECISIONS.md, 2026-10-27). A Y'CbCr picture
+/// takes no second view.
 ///
 /// Wraps two @ref GraphicsPipeline s built from the same SPIR-V, compiled into
 /// the library -- one for draws without a second view, one for draws with
 /// one -- so a consumer gets the technique from @ref create alone. Their
 /// reflected layouts are alike and expose **one** descriptor set, **set 0**:
 /// an RGBA atlas -- one a @ref StreamedAtlas made for the pipeline streams, or
-/// an image the consumer owns -- or a camera picture's two Y'CbCr 4:2:0
-/// planes, which only a @ref HybridMeshTextureSet binds; a uniform says which,
-/// and those two types write its bindings. The fragment shader samples
-/// the set unconditionally, so the pipeline owns a fallback -- a 1x1 image and
-/// its set -- which @ref submit binds for a frame with no atlas, drawing every
-/// triangle in its vertex color. Per-frame constants (the view-projection,
-/// light direction, and flags) ride a push constant, so there is no per-frame
-/// UBO to manage. Record a frame's draws with @ref submit. A
-/// default-constructed pipeline is empty (`valid()` is false) and safe to
-/// move-assign into.
+/// an image the consumer owns -- or one or two Y'CbCr 4:2:0 pictures' planes,
+/// which only a @ref HybridMeshTextureSet binds (it says how `uv0` addresses
+/// two); a uniform says which, and those two types write its bindings. The
+/// fragment shader samples the set unconditionally, so the pipeline owns a
+/// fallback -- a 1x1 image and its set -- which @ref submit binds for a frame
+/// with no atlas, drawing every triangle in its vertex color. Per-frame
+/// constants (the view-projection, light direction, and flags) ride a push
+/// constant, so there is no per-frame UBO to manage. Record a frame's draws
+/// with @ref submit. A default-constructed pipeline is empty (`valid()` is
+/// false) and safe to move-assign into.
 ///
 /// Vertices are consumed in world space -- the reconstruction mesh tier already
 /// emits world-space positions and normals -- so the pipeline applies only the
@@ -229,8 +229,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
   friend class HybridMeshTextureSet;  // reads fallback_ and rgba_picture_
 
   // Writes `set`, allocated against set 0's layout, for the RGBA image
-  // `view`: through sampler_, with fallback_ as the unread chroma and
-  // rgba_picture_ as the uniform.
+  // `view`: through sampler_, with fallback_ at the planes it does not read
+  // and rgba_picture_ as the uniform.
   void write_rgba_set(const core::DescriptorSet& set, VkImageView view) const;
 
   const core::Device* device_ = nullptr;  // borrowed; outlives this
@@ -239,10 +239,10 @@ class VG_PIPELINES_API HybridMeshPipeline {
   // The atlas sampler: bilinear, clamped to the edge, one level. Shared by
   // the fallback and every StreamedAtlas made for the pipeline.
   std::optional<Sampler> sampler_;
-  // The fallback: one white texel, which every RGBA set also binds as its
-  // unread chroma; the uniform that says "RGBA", which every RGBA set binds
-  // (the fallback's, StreamedAtlas's and HybridMeshTextureSet's); their pool;
-  // and the fallback's set.
+  // The fallback: one white texel, which every RGBA set also binds at the
+  // planes it does not read; the uniform that says "RGBA", which every RGBA
+  // set binds (the fallback's, StreamedAtlas's and HybridMeshTextureSet's);
+  // their pool; and the fallback's set.
   core::Image fallback_;
   core::Buffer rgba_picture_;
   core::DescriptorPool pool_;
