@@ -72,10 +72,12 @@ struct PanelLayout {
 ///   least @ref ImagePanelConfig::min_points across (60 % at most).
 /// - **Pictures** run along the panel: stacked when docked right, side by
 ///   side at the bottom, @ref kGap picture pixels apart, as one image of the
-///   view. The view keeps its zoom and centre across a resize or a rotation
-///   (where a new side rearranges the pictures, the same point of the same
-///   picture stays at the centre), and fits again when the pictures' size or
-///   count changes.
+///   view. The view keeps its zoom and centre across a resize or a rotation,
+///   and fits again when the pictures' size or count changes. Where a new
+///   side rearranges the pictures, a fitted view (zoom 1) fits again; a
+///   zoomed one keeps its zoom and the same point of the same picture at the
+///   centre, or, from a gap or beyond the pictures, the nearest point of the
+///   nearest picture.
 /// - **Chrome** (@ref draw_chrome), ImGui windows that take the pointer: the
 ///   handle, a bar on the panel's inner edge, drawn 6 points and taking the
 ///   pointer over a frame height (44 points on a touch overlay); and the

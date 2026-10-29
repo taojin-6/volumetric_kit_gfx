@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include <glm/common.hpp>
+
 #include "imgui.h"
 
 namespace volumetric_kit::gfx::ui {
@@ -59,15 +61,26 @@ glm::vec2 origin_of(DockSide side, glm::vec2 size, uint32_t i) {
 }
 
 // Where `point` of the image along `from` lies in the image along `to`: the
-// same point of the picture it is in, or of the nearest.
+// same point of the picture it is in, or the nearest point of the nearest
+// picture (from a gap, the picture on its side of the gap's middle), so it
+// lies inside the new image.
 glm::vec2 moved(glm::vec2 point, DockSide from, DockSide to, glm::vec2 size,
                 uint32_t count) {
   const bool right = from == DockSide::Right;
   const float step = (right ? size.y : size.x) + ImagePanel::kGap;
-  const float at = std::floor((right ? point.y : point.x) / step);
+  const float at = std::floor(
+      ((right ? point.y : point.x) + 0.5f * ImagePanel::kGap) / step);
   const auto i = static_cast<uint32_t>(
       std::clamp(at, 0.0f, static_cast<float>(count - 1)));
-  return point - origin_of(from, size, i) + origin_of(to, size, i);
+  const glm::vec2 in =
+      glm::clamp(point - origin_of(from, size, i), glm::vec2(0.0f, 0.0f), size);
+  return in + origin_of(to, size, i);
+}
+
+// Whether `view` fits its image: zoom 1, give or take rounding.
+bool fitted(const camera::ImageView2D& view) {
+  constexpr float kFitted = 1e-3f;
+  return std::abs(view.zoom() - 1.0f) <= kFitted;
 }
 
 // The scale `image` fits `rect` at.
@@ -212,17 +225,18 @@ const PanelLayout& ImagePanel::layout(VkExtent2D drawable) {
     const glm::vec2 image =
         composite(layout_.side, picture_size_, picture_count_);
     if (image != image_size_) {
-      const bool rearranged =
-          picture_size_ == view_picture_size_ && picture_count_ == view_count_;
+      // New pictures, or a fitted view of the same ones, fit again.
+      const bool kept = picture_size_ == view_picture_size_ &&
+                        picture_count_ == view_count_ && !fitted(view_);
       const float zoom = view_.zoom();
       const glm::vec2 centre =
-          rearranged ? moved(view_.center(), view_side_, layout_.side,
-                             picture_size_, picture_count_)
-                     : glm::vec2(0.0f, 0.0f);
+          kept ? moved(view_.center(), view_side_, layout_.side, picture_size_,
+                       picture_count_)
+               : glm::vec2(0.0f, 0.0f);
       view_.set_image_size(image);  // fitted
-      if (rearranged) {
-        // The same pictures along the other side: the zoom, and the same
-        // point of the same picture at the centre.
+      if (kept) {
+        // The same pictures along the other side, zoomed: the zoom, and the
+        // centre's point moved with its picture.
         view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
                          zoom);
         view_.pan((view_.center() - centre) * view_.scale());
@@ -402,8 +416,7 @@ bool ImagePanel::over_pictures(glm::vec2 point) const noexcept {
 }
 
 void ImagePanel::double_tap(glm::vec2 point) noexcept {
-  constexpr float kFitted = 1e-3f;
-  if (std::abs(view_.zoom() - 1.0f) <= kFitted && view_.scale() > 0.0f) {
+  if (fitted(view_) && view_.scale() > 0.0f) {
     view_.zoom_about(point, 1.0f / view_.scale());
   } else {
     view_.fit();

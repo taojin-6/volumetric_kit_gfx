@@ -325,6 +325,71 @@ TEST_F(ImagePanelTest, ZoomAndCentreSurviveResizesNotNewPictures) {
   }
 }
 
+// Two pictures on an iPad turned back and forth. A fitted view, whose centre
+// is the middle of the gap between them, fits again each time. A zoomed one
+// whose centre lies in the gap, nearer picture 0, from either way up, keeps
+// its zoom and moves its centre to the nearest point of picture 0, inside
+// the new image.
+TEST_F(ImagePanelTest, ARotationRefitsAFittedViewAndKeepsAZoomedCentreInside) {
+  const Screen* const turns[] = {&kPadLandscape, &kPadPortrait, &kPadLandscape,
+                                 &kPadPortrait};
+  const auto side_on = [](const Screen* screen) {
+    return screen == &kPadPortrait ? ui::DockSide::Bottom : ui::DockSide::Right;
+  };
+  {
+    ui::ImagePanel panel(open_at(0.4f));
+    panel.set_pictures(kWide, 2);
+    for (const Screen* screen : turns) {
+      SCOPED_TRACE(screen->name);
+      const ui::PanelLayout layout = frame(panel, *screen);
+      ASSERT_EQ(layout.side, side_on(screen));
+      const auto& view = panel.view();
+      EXPECT_FLOAT_EQ(view.zoom(), 1.0f);
+      EXPECT_NEAR(view.center().x, 0.5f * view.image_size().x, 0.5f);
+      EXPECT_NEAR(view.center().y, 0.5f * view.image_size().y, 0.5f);
+      // Both pictures lie in the viewport.
+      const glm::vec2 lo = view.image_to_target({0.0f, 0.0f});
+      const glm::vec2 hi = view.image_to_target(view.image_size());
+      EXPECT_GE(lo.x, static_cast<float>(layout.pictures.offset.x) - 0.5f);
+      EXPECT_GE(lo.y, static_cast<float>(layout.pictures.offset.y) - 0.5f);
+      EXPECT_LE(hi.x, right_of(layout.pictures) + 0.5f);
+      EXPECT_LE(hi.y, bottom_of(layout.pictures) + 0.5f);
+    }
+  }
+
+  // Zoomed 4x about the fitted centre, then panned 4 picture pixels towards
+  // picture 0; the nearest point of picture 0 is on its edge at the gap.
+  for (const Screen* start : {&kPadLandscape, &kPadPortrait}) {
+    SCOPED_TRACE(start->name);
+    ui::ImagePanel panel(open_at(0.4f));
+    panel.set_pictures(kWide, 2);
+    const bool right = frame(panel, *start).side == ui::DockSide::Right;
+    auto& view = panel.view();
+    view.zoom_about(view.viewport_origin() + 0.5f * view.viewport_size(), 4.0f);
+    const float zoom = view.zoom();
+    ASSERT_GT(zoom, 3.9f);
+    const float s = view.scale();
+    view.pan(right ? glm::vec2(0.0f, 4.0f * s) : glm::vec2(4.0f * s, 0.0f));
+    const glm::vec2 gap = right ? glm::vec2(2048.0f, kWide.y + 4.0f)
+                                : glm::vec2(kWide.x + 4.0f, 1088.0f);
+    ASSERT_NEAR(view.center().x, gap.x, 0.05f);
+    ASSERT_NEAR(view.center().y, gap.y, 0.05f);
+    const glm::vec2 nearest =
+        right ? glm::vec2(2048.0f, kWide.y) : glm::vec2(kWide.x, 1088.0f);
+    const Screen* other = right ? &kPadPortrait : &kPadLandscape;
+    for (const Screen* screen : {other, start, other}) {
+      SCOPED_TRACE(screen->name);
+      ASSERT_EQ(frame(panel, *screen).side, side_on(screen));
+      EXPECT_FLOAT_EQ(view.zoom(), zoom);
+      const glm::vec2 kept = view.center() - panel.picture_origin(0);
+      EXPECT_NEAR(kept.x, nearest.x, 0.05f);
+      EXPECT_NEAR(kept.y, nearest.y, 0.05f);
+      EXPECT_LE(view.center().x, view.image_size().x);
+      EXPECT_LE(view.center().y, view.image_size().y);
+    }
+  }
+}
+
 // Over the pictures' viewport only, open; a double tap goes from fit to one
 // picture pixel a drawable pixel about the point, and back.
 TEST_F(ImagePanelTest, OverPicturesAndDoubleTap) {
