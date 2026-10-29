@@ -65,7 +65,7 @@ descriptors.
   provoking vertex's picture, so a vertex on its picture's bottom edge
   (`p + 1.0`, as a `[0, 1]` clamp of `y / height` gives) names picture `p + 1`,
   and the whole triangle moves there when that vertex is the provoking one.
-  Hold `y` below `height` (half a texel inside is enough) before adding `p`.
+  Hold `y` below `height` (half a pixel inside is enough) before adding `p`.
 - **A negative `uv0` may carry a coordinate: it is decoded as `-uv0 - 1`.** The
   vertex stage recovers a real atlas coordinate from a negative `uv0` rather
   than substituting `(0, 0)`, so a producer holding a genuine coordinate for a
