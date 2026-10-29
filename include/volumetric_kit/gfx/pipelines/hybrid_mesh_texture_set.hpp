@@ -4,10 +4,11 @@
 #pragma once
 
 /// @file hybrid_mesh_texture_set.hpp
-/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over a picture the
-///        caller owns -- an RGBA image, or a Y'CbCr 4:2:0 picture's two
+/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over pictures the
+///        caller owns -- an RGBA image, or one or two Y'CbCr 4:2:0 pictures'
 ///        planes -- with its own descriptor pool, sampler and uniform.
 
+#include <cstdint>
 #include <memory>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -45,22 +46,29 @@ struct HybridMeshTextureSetOptions {
   float max_lod = 0.0f;
 };
 
-/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over a picture the
+/// @brief A @ref HybridMeshPipeline's set-0 descriptor set over pictures the
 ///        caller owns, with its own descriptor pool, sampler and uniform.
 ///
-/// The picture is either of two forms, and the set records which in its
-/// uniform, so one pipeline draws both:
+/// The set binds either of two forms, and records which in its uniform, so
+/// one pipeline draws both:
 /// - **RGBA**: an image's view, sampled as @ref Options says; an `_SRGB`
 ///   format decodes to linear light as it is sampled.
-/// - **Y'CbCr 4:2:0** (@ref YcbcrPicture): a camera picture's two planes,
-///   sampled where they are, with no copy and no RGBA image. Each plane is
-///   filtered at level 0, clamped to the picture; the fragment shader then
-///   converts with the picture's @ref YcbcrCoding and decodes the R'G'B' as
-///   sRGB.
+/// - **Y'CbCr 4:2:0** (@ref YcbcrPicture): one picture's two planes, or up to
+///   @ref kMaxPictures pictures', each sampled where it is, with no copy and
+///   no RGBA image. Each plane is filtered at level 0, clamped to its
+///   picture; the fragment shader then converts with that picture's
+///   @ref YcbcrCoding and decodes the R'G'B' as sRGB.
 ///
-/// The pipeline samples the picture at each fragment's `uv0`, which spans it
-/// from 0 to 1. @ref rebind points the same set at another picture, of either
-/// form.
+/// The pipeline samples at each fragment's `uv0`. One picture, or an RGBA
+/// image, spans `uv0` from 0 to 1. Over two pictures, `uv0.y`'s integer part
+/// is the picture: a fragment samples picture `floor(uv0.y)` at
+/// `(uv0.x, fract(uv0.y))`, so picture `p`'s point `(x, y)`, in texels, is at
+/// `uv0 = (x / width, p + y / height)`. A triangle's `uv0` interpolate, so
+/// keep its three `uv0.y` within one picture's `[p, p + 1)`. A `uv0.y`
+/// outside them takes the nearest picture, clamped to its edge as one picture
+/// is: picture 0 below 0, the last picture from the count up. Each picture
+/// has its own extent and coding. @ref rebind points the same set at other
+/// pictures, or at an image.
 ///
 /// A Y'CbCr picture's coding is a uniform the host writes in place, in
 /// device-local memory the host maps
@@ -87,14 +95,19 @@ struct HybridMeshTextureSetOptions {
 /// // each frame, inside the rendering scope, with texture->set() in the
 /// // frame's set-0 field:
 /// pipeline.submit(cmd, frame);
-/// // once no frame that bound the set is pending, another picture:
-/// VKC_TRY(texture->rebind(other_picture));
+/// // once no frame that bound the set is pending, two pictures, which a
+/// // vertex addresses as uv0 = (x / width, p + y / height) for picture p:
+/// const pipelines::YcbcrPicture both[] = {picture, other_picture};
+/// VKC_TRY(texture->rebind(both, 2));
 /// @endcode
 class VG_PIPELINES_API HybridMeshTextureSet {
  public:
   /// @brief How the pipeline samples the picture. Declared outside the class,
   ///        so its defaults are complete where @ref create takes it.
   using Options = HybridMeshTextureSetOptions;
+
+  /// The most Y'CbCr pictures a set binds at once.
+  static constexpr uint32_t kMaxPictures = 2;
 
   /// @brief Build the set over the RGBA image @p view, with its own pool and
   ///        sampler.
@@ -136,6 +149,24 @@ class VG_PIPELINES_API HybridMeshTextureSet {
       const HybridMeshPipeline& pipeline, const YcbcrPicture& picture,
       const Options& options = {});
 
+  /// @brief Build the set over @p count Y'CbCr 4:2:0 pictures, picture `p`
+  ///        at `pictures[p]`, with its own pool, sampler and uniform.
+  /// @param device     As the RGBA @ref create.
+  /// @param allocator  As the RGBA @ref create.
+  /// @param pipeline   As the RGBA @ref create.
+  /// @param pictures   @p count pictures, each as @ref YcbcrPicture describes
+  ///                   it; read during the call only.
+  /// @param count      From 1 to @ref kMaxPictures.
+  /// @param options    As the one-picture @ref create.
+  /// @return The set; or what the one-picture @ref create refuses, for any
+  ///         picture, naming it; or `core::Status::Code::InvalidArgument`
+  ///         for a null @p pictures or a @p count outside 1 to
+  ///         @ref kMaxPictures.
+  static core::Result<std::unique_ptr<HybridMeshTextureSet>> create(
+      const core::Device& device, core::Allocator& allocator,
+      const HybridMeshPipeline& pipeline, const YcbcrPicture* pictures,
+      uint32_t count, const Options& options = {});
+
   ~HybridMeshTextureSet();
   HybridMeshTextureSet(const HybridMeshTextureSet&) = delete;
   HybridMeshTextureSet& operator=(const HybridMeshTextureSet&) = delete;
@@ -157,7 +188,7 @@ class VG_PIPELINES_API HybridMeshTextureSet {
   void rebind(VkImageView view);
 
   /// @brief Points the set at the Y'CbCr 4:2:0 @p picture, in place of the
-  ///        picture or the RGBA image it holds.
+  ///        pictures or the RGBA image it holds.
   ///
   /// Rewrites the set and its uniform in place, under the RGBA
   /// @ref rebind 's conditions. On an error the set is unchanged.
@@ -177,6 +208,19 @@ class VG_PIPELINES_API HybridMeshTextureSet {
   ///         return `OutOfMemory`.
   core::Status rebind(const YcbcrPicture& picture);
 
+  /// @brief Points the set at @p count Y'CbCr 4:2:0 pictures, picture `p` at
+  ///        `pictures[p]`, in place of the pictures or the RGBA image it
+  ///        holds.
+  ///
+  /// As the one-picture @ref rebind, for each picture. On an error the set is
+  /// unchanged.
+  /// @param pictures  @p count pictures; read during the call only.
+  /// @param count     From 1 to @ref kMaxPictures.
+  /// @return What the one-picture @ref rebind returns, its refusal naming the
+  ///         picture; or `core::Status::Code::InvalidArgument` for a null
+  ///         @p pictures or a @p count outside 1 to @ref kMaxPictures.
+  core::Status rebind(const YcbcrPicture* pictures, uint32_t count);
+
  private:
   HybridMeshTextureSet(const core::Device& device, const Options& options,
                        VkImageView placeholder, VkBuffer rgba_uniform,
@@ -192,8 +236,8 @@ class VG_PIPELINES_API HybridMeshTextureSet {
 
   const core::Device& device_;
   Options options_;
-  // The pipeline's fallback texel: an RGBA picture's chroma binding, which
-  // the shader does not read.
+  // The pipeline's fallback texel, at the planes the set's form does not
+  // read: an RGBA image's chroma and picture 1, and one picture's picture 1.
   VkImageView placeholder_;
   // The pipeline's uniform saying "RGBA", which an RGBA picture binds.
   VkBuffer rgba_uniform_;

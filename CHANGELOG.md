@@ -38,6 +38,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `pipelines`: **a mesh samples two pictures where they are.**
+  `HybridMeshTextureSet::create` and `rebind` take up to `kMaxPictures` (2)
+  `YcbcrPicture`s, each bound in its own images, with its own extent and
+  coding. A fragment samples picture `floor(uv0.y)` at
+  `(uv0.x, fract(uv0.y))`; a `uv0.y` outside them takes the nearest picture's
+  edge. One picture draws exactly as before.
 - `pipelines`: **a hybrid mesh blends a second atlas view.** A
   `HybridMeshPipeline` draw whose `HybridMeshDraw::second_view` is set reads
   a vertex's `tangent` as `(uv_B.x, uv_B.y, w_B, unused)` and, over an RGBA

@@ -143,8 +143,42 @@ what has landed since then. Record amendments when a contract changes.
   and mixes the two views of an RGBA atlas in linear light by `w_B` and their alphas; the
   `(1, 0, 0, 1)` placeholder draws as before, and a draw without the flag draws and costs as
   before. See the dated entry below.
+- **2026-10-28 — A mesh samples two pictures in place.** `HybridMeshTextureSet` binds one or
+  two `YcbcrPicture`s, each in its own images; `uv0.y`'s integer part picks the picture. One
+  picture draws as before, byte for byte. See the dated entry below.
 
-## 2026-10-27 — A hybrid mesh blends a second atlas view
+## 2026-10-28 — A mesh samples two pictures in place
+
+**The contract.** `HybridMeshTextureSet::create` and `rebind` take 1 to `kMaxPictures` (2)
+`YcbcrPicture`s. A fragment samples picture `floor(uv0.y)` at `(uv0.x, fract(uv0.y))`, so
+picture `p`'s point `(x, y)` in texels is at `uv0 = (x / width, p + y / height)`. Each
+picture has its own extent and coding. A `uv0.y` outside the pictures takes the nearest,
+clamped to its edge: picture 0 below 0, the last from the count up. Set 0 gains bindings 3
+and 4, picture 1's luma and chroma, and its uniform grows to 80 bytes: the form or count,
+then a coding per picture. A plane the form does not read binds the pipeline's fallback
+texel. The pipeline, `HybridMeshFrame` and `StreamedAtlas`'s API do not change.
+
+**Why separate images.** A hardware decoder (VideoToolbox, NVDEC) leaves each picture in its
+own surfaces, and a set binds them where they are. A layered image or one tall image would
+take a copy per picture.
+
+**Why two fixed bindings, not an array.** Neighbouring triangles may name different
+pictures, so indexing an array of samplers would need
+`shaderSampledImageArrayNonUniformIndexing`, which gfx's device requirements do not include.
+The shader branches between two fixed pairs of bindings instead. Each branch samples at an
+explicit level, so it needs no derivatives, and a group of fragments takes both branches
+only where it spans triangles of both pictures. Four combined image samplers fit every
+target's per-stage limits.
+
+**Why clamped, not refused.** A shader cannot refuse a coordinate, and the nearest picture's
+edge is what one picture has always drawn past its own edge.
+
+**Why two.** It meets the caller's need. A third picture is two more bindings and a branch,
+added when a caller needs it.
+
+**One picture is unchanged.** Over one picture `uv0` is used as it is, so the arithmetic is
+the one before. Its tests are unchanged, and a draw over an 8192x4352 picture is byte for
+byte the shaders' before on the M5 Max.
 
 **The contract.** `HybridMeshPipeline` binds `assets::Vertex::tangent` at
 location 4 and, in a draw whose `HybridMeshDraw::second_view` is set, reads it

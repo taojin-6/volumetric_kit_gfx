@@ -32,19 +32,25 @@ layout(location = 3) flat in uint frag_use_vertex_color;
 layout(location = 4) in vec3 frag_second;  // (uv_B, w_B): the second view
 
 // Set 0, as HybridMeshTextureSet, StreamedAtlas and the pipeline's fallback
-// write it (hybrid_mesh_set0.hpp): an RGBA image, or a camera picture's two
-// Y'CbCr 4:2:0 planes, as the Picture uniform says.
-layout(set = 0, binding = 0) uniform sampler2D plane0;  // RGBA, or the luma
-layout(set = 0, binding = 1) uniform sampler2D plane1;  // the chroma, or unused
-// Mirrors PictureUniform in hybrid_mesh_set0.hpp (std140, 32 bytes).
+// write it (hybrid_mesh_set0.hpp): an RGBA image, or one or two Y'CbCr 4:2:0
+// pictures' planes, as the Picture uniform says. Each picture binds its own
+// planes, as a decoder leaves each picture in its own images.
+layout(set = 0, binding = 0) uniform sampler2D plane0;  // RGBA, or 0's luma
+layout(set = 0, binding = 1) uniform sampler2D plane1;  // 0's chroma, or unused
+layout(set = 0, binding = 3) uniform sampler2D luma1;    // 1's luma, or unused
+layout(set = 0, binding = 4) uniform sampler2D chroma1;  // 1's chroma, or unused
+// One picture's coding; mirrors PictureCoding in hybrid_mesh_set0.hpp.
+struct Coding {
+  uint full_range;     // Y' in 0..255 rather than 16..235
+  float kr;            // the matrix's red weight
+  float kb;            // the matrix's blue weight
+  uint chroma_siting;  // ChromaSiting
+  vec2 extent;         // the picture's size in luma texels
+};
+// Mirrors PictureUniform in hybrid_mesh_set0.hpp (std140, 80 bytes).
 layout(set = 0, binding = 2) uniform Picture {
-  uint two_plane;      // 0: plane0 is RGBA; 1: Y'CbCr 4:2:0 planes
-  uint full_range;     // two-plane: Y' in 0..255 rather than 16..235
-  float kr;            // two-plane: the matrix's red weight
-  float kb;            // two-plane: the matrix's blue weight
-  vec2 extent;         // two-plane: the picture's size in luma texels
-  uint chroma_siting;  // two-plane: ChromaSiting
-  uint padding;        // to std140's 16-byte multiple
+  uint pictures;  // 0: plane0 is RGBA; n: n Y'CbCr 4:2:0 pictures
+  Coding coding[2];
 }
 picture;
 
@@ -92,34 +98,50 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
   return (w > 0.0 && sum > 0.0) ? (wa * a.rgb + wb * b.rgb) / sum : a.rgb;
 }
 
+// R'G'B' of the picture `luma` and `chroma` hold, coded as `c`, at `uv`: its
+// two planes filtered at level 0 where they are, then converted.
+vec3 picture_rgb(sampler2D luma, sampler2D chroma, Coding c, vec2 uv) {
+  vec2 p = uv * c.extent;
+  float y =
+      textureLod(luma, ycbcr_luma_uv(p, c.extent, vec2(textureSize(luma, 0))),
+                 0.0)
+          .r;
+  vec2 cbcr = textureLod(chroma,
+                         ycbcr_chroma_uv(p, c.chroma_siting, c.extent,
+                                         vec2(textureSize(chroma, 0))),
+                         0.0)
+                  .rg;
+  return ycbcr_to_rgb(y, cbcr, c.kr, c.kb, c.full_range != 0u);
+}
+
 // Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
-// sampler says (an _SRGB one decodes); a camera picture's two planes are
-// filtered at level 0 where they are, converted, then decoded from sRGB.
-// `two_plane` is the same for the whole draw, so the branch does not diverge.
-// Over an RGBA image, uv0's view is blended with the second view's, if the
-// mesh carries one.
+// sampler says (an _SRGB one decodes); a picture is converted, then decoded
+// from sRGB. The form is the same for the whole draw, so that branch does not
+// diverge. Over an RGBA image, uv0's view is blended with the second view's,
+// if the mesh carries one.
+//
+// Over two pictures uv.y's integer part is the picture: picture 1 from 1.0 up,
+// picture 0 below, so an index out of range takes the nearest picture, whose
+// clamp holds it to its edge. The picture is sampled at (uv.x, uv.y - index):
+// at uv itself over one picture. A triangle stays in one picture, so the
+// branch diverges only where a group of fragments spans both, and each sample
+// takes an explicit level, which needs no derivatives.
 vec3 atlas_albedo(vec2 uv) {
-  if (picture.two_plane == 0u) {
+  if (picture.pictures == 0u) {
     vec4 a = texture(plane0, uv);
     if (kSecondView) {
       return blend_views(a, texture(plane0, frag_second.xy), frag_second.z);
     }
     return a.rgb;
   }
-  vec2 p = uv * picture.extent;
-  float y = textureLod(plane0,
-                       ycbcr_luma_uv(p, picture.extent,
-                                     vec2(textureSize(plane0, 0))),
-                       0.0)
-                .r;
-  vec2 cbcr = textureLod(plane1,
-                         ycbcr_chroma_uv(p, picture.chroma_siting,
-                                         picture.extent,
-                                         vec2(textureSize(plane1, 0))),
-                         0.0)
-                  .rg;
-  return srgb_to_linear(ycbcr_to_rgb(y, cbcr, picture.kr, picture.kb,
-                                     picture.full_range != 0u));
+  vec3 rgb;
+  if (picture.pictures > 1u && uv.y >= 1.0) {
+    rgb = picture_rgb(luma1, chroma1, picture.coding[1],
+                      vec2(uv.x, uv.y - 1.0));
+  } else {
+    rgb = picture_rgb(plane0, plane1, picture.coding[0], uv);
+  }
+  return srgb_to_linear(rgb);
 }
 
 void main() {

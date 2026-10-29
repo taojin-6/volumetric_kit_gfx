@@ -179,7 +179,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
 
   // The fallback is only ever bound with kHybridMeshVertexColor set, so its
   // texel is never shown; it exists so that the shader's sample reads a
-  // defined image. RGBA sets bind it again as their unread chroma, and the
+  // defined image. RGBA sets bind it again at their unread planes, and the
   // uniform that marks a set RGBA, which never changes, goes up with it.
   const uint8_t white[4] = {255, 255, 255, 255};
   ImageUploadDesc fallback_desc;
@@ -221,8 +221,10 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
 
 void HybridMeshPipeline::write_rgba_set(const core::DescriptorSet& set,
                                         VkImageView view) const {
-  detail::write_set0(set, sampler_->handle(), {view}, {fallback_.view()},
-                     rgba_picture_.handle());
+  detail::Set0Planes planes;
+  planes.fill({fallback_.view()});
+  planes[0] = {view};
+  detail::write_set0(set, sampler_->handle(), planes, rgba_picture_.handle());
 }
 
 HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept

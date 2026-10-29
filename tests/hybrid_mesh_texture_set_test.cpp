@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// HybridMeshTextureSet: a HybridMeshPipeline's set 0 over a picture the test
-// owns -- an RGBA image, or a Y'CbCr 4:2:0 picture's two planes. Each draw is
-// an unlit quad over the whole target whose uv0 is its own position in
+// HybridMeshTextureSet: a HybridMeshPipeline's set 0 over pictures the test
+// owns -- an RGBA image, or one or two Y'CbCr 4:2:0 pictures' planes. Each draw
+// is an unlit quad over the whole target whose uv0 is its own position in
 // [0, 1]^2, so on a target the picture's size each pixel samples the centre
 // of the picture texel it lies over, and the readback is the picture. The RGBA
 // images are sRGB: the shader decodes what it samples and, on the UNORM
 // target, encodes what it writes. A two-plane picture is checked texel for
 // texel against a double-precision reference, across matrices, ranges,
 // sitings and odd and padded planes, and against ImagePipeline's NV12
-// convert. Runs under the validation layer with synchronization validation,
-// tracking what shaders read through descriptors.
+// convert; two pictures, against each drawn alone. Runs under the validation
+// layer with synchronization validation, tracking what shaders read through
+// descriptors.
 
 #include <gtest/gtest.h>
 
@@ -78,20 +79,37 @@ vg::RenderTargetLayout target_layout(VkFormat color = kTargetFormat) {
   return layout;
 }
 
-// A quad over the whole target, uv0 its own position in [0, 1]^2.
-assets::Mesh make_quad() {
-  auto vert = [](float x, float y) {
-    assets::Vertex v;
-    v.position = {x, y, 0.5f};
-    v.normal = {0.0f, 0.0f, 1.0f};
-    v.uv0 = {(x + 1.0f) * 0.5f, (y + 1.0f) * 0.5f};
-    v.color = {1.0f, 1.0f, 1.0f, 1.0f};
-    return v;
-  };
+// A vertex at clip-space (x, y), its uv0 its own position in [0, 1]^2, with
+// `dv` added to uv0.y.
+assets::Vertex quad_vertex(float x, float y, float dv = 0.0f) {
+  assets::Vertex v;
+  v.position = {x, y, 0.5f};
+  v.normal = {0.0f, 0.0f, 1.0f};
+  v.uv0 = {(x + 1.0f) * 0.5f, (y + 1.0f) * 0.5f + dv};
+  v.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  return v;
+}
+
+// A quad over the whole target, uv0 its own position in [0, 1]^2, plus `dv`
+// on uv0.y.
+assets::Mesh make_quad(float dv = 0.0f) {
   assets::Mesh mesh;
-  mesh.vertices = {vert(-1.0f, -1.0f), vert(1.0f, -1.0f), vert(1.0f, 1.0f),
-                   vert(-1.0f, 1.0f)};
+  mesh.vertices = {quad_vertex(-1.0f, -1.0f, dv), quad_vertex(1.0f, -1.0f, dv),
+                   quad_vertex(1.0f, 1.0f, dv), quad_vertex(-1.0f, 1.0f, dv)};
   mesh.indices = {0, 2, 1, 0, 3, 2};
+  return mesh;
+}
+
+// The quad as two triangles split along the target's diagonal from its
+// top-left corner, sharing no vertex: the upper-right one, above the
+// diagonal, with uv0.y + `upper`, the lower-left one with uv0.y + `lower`.
+assets::Mesh make_split_quad(float upper, float lower) {
+  assets::Mesh mesh;
+  mesh.vertices = {
+      quad_vertex(-1.0f, -1.0f, upper), quad_vertex(1.0f, -1.0f, upper),
+      quad_vertex(1.0f, 1.0f, upper),   quad_vertex(-1.0f, -1.0f, lower),
+      quad_vertex(1.0f, 1.0f, lower),   quad_vertex(-1.0f, 1.0f, lower)};
+  mesh.indices = {0, 1, 2, 3, 4, 5};
   return mesh;
 }
 
@@ -196,6 +214,17 @@ PlaneBytes make_flat_planes(VkExtent2D extent, VkExtent2D luma_size,
       const size_t at = (size_t{j} * chroma_size.width + i) * 2;
       p.chroma[at] = cb;
       p.chroma[at + 1] = cr;
+    }
+  }
+  return p;
+}
+
+// `p` with every byte replaced by 255 minus it: another picture, whose every
+// sample differs from p's.
+PlaneBytes inverted(PlaneBytes p) {
+  for (std::vector<uint8_t>* plane : {&p.luma, &p.chroma}) {
+    for (uint8_t& b : *plane) {
+      b = static_cast<uint8_t>(255 - b);
     }
   }
   return p;
@@ -424,6 +453,43 @@ class HybridMeshTextureSetTest : public vg_test::RendererDeviceTest,
   }
   std::vector<Rgba> draw(VkDescriptorSet set, uint32_t side) {
     return draw(set, {side, side});
+  }
+
+  // Draws `mesh` from now on, in place of the quad; the last draw has
+  // completed, so no frame reads the quad.
+  void use_mesh(const assets::Mesh& mesh) {
+    auto uploaded = pipelines::upload_mesh(device(), allocator(), mesh);
+    ASSERT_TRUE(uploaded.ok()) << uploaded.status().message();
+    quad_.emplace(std::move(uploaded).value());
+  }
+
+  // Two pictures of one extent that differ in every sample and in their
+  // coding: make_planes's, BT.601 full range with centred chroma, and its
+  // inverse, BT.709 limited range with left-sited chroma. `pictures` point
+  // into `planes`, so the struct stays where it is made.
+  struct TwoPictures {
+    Planes planes[2];
+    pipelines::YcbcrPicture pictures[2];
+  };
+  void make_two(TwoPictures& two, VkExtent2D extent) {
+    const PlaneBytes first = make_planes(extent, extent, half_up(extent));
+    two.planes[0] = upload_planes(first);
+    two.planes[1] = upload_planes(inverted(first));
+    two.pictures[0] = picture_of(
+        two.planes[0], extent,
+        coding_of(0.299, 0.114, true, pipelines::ChromaSiting::Center));
+    two.pictures[1] = picture_of(
+        two.planes[1], extent,
+        coding_of(0.2126, 0.0722, false, pipelines::ChromaSiting::Left));
+  }
+
+  // `picture` drawn alone, through a one-picture set, on a target its size.
+  std::vector<Rgba> draw_alone(const pipelines::YcbcrPicture& picture) {
+    auto alone = pipelines::HybridMeshTextureSet::create(device(), allocator(),
+                                                         *pipeline_, picture);
+    EXPECT_TRUE(alone.ok()) << alone.status().message();
+    return alone.ok() ? draw(alone.value()->set(), picture.extent)
+                      : std::vector<Rgba>{};
   }
 
   std::optional<pipelines::HybridMeshPipeline> pipeline_;
@@ -1053,6 +1119,185 @@ TEST_F(HybridMeshTextureSetTest, TwoPlaneCreateAndRebindRefuseBadPictures) {
   const pipelines::HybridMeshPipeline empty;
   EXPECT_EQ(pipelines::HybridMeshTextureSet::create(device(), allocator(),
                                                     empty, good)
+                .status()
+                .domain(),
+            vkc::Status::Code::InvalidArgument);
+}
+
+// --- Several pictures --------------------------------------------------------
+
+// Two pictures bound in place, each drawn by its own triangle: the target's
+// upper-right triangle samples picture 0, at uv0.y in [0, 1], and its
+// lower-left one picture 1, at uv0.y in [1, 2]. Each pixel is the same pixel
+// of its picture drawn alone through a one-picture set, within a code: picture
+// 1 is read at fract(uv0.y), from its own planes, with its own coding. The
+// pictures differ in every sample, and the target is not square, so no pixel
+// centre lies on the diagonal.
+TEST_F(HybridMeshTextureSetTest, TwoPicturesDrawEachTriangleFromItsOwn) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
+  const VkExtent2D extent{64, 36};
+  TwoPictures two;
+  make_two(two, extent);
+  ASSERT_TRUE(two.planes[0].luma.valid() && two.planes[1].chroma.valid());
+  const std::vector<Rgba> alone[2] = {draw_alone(two.pictures[0]),
+                                      draw_alone(two.pictures[1])};
+  const size_t pixels = size_t{extent.width} * extent.height;
+  ASSERT_EQ(alone[0].size(), pixels);
+  ASSERT_EQ(alone[1].size(), pixels);
+
+  auto both = pipelines::HybridMeshTextureSet::create(
+      device(), allocator(), *pipeline_, two.pictures, 2);
+  ASSERT_TRUE(both.ok()) << both.status().message();
+  use_mesh(make_split_quad(0.0f, 1.0f));
+  const std::vector<Rgba> drawn = draw(both.value()->set(), extent);
+  ASSERT_EQ(drawn.size(), pixels);
+
+  size_t counted[2] = {};
+  size_t apart = 0;  // pixels whose pictures, drawn alone, differ visibly
+  int worst = 0;
+  int reported = 0;
+  for (uint32_t y = 0; y < extent.height; ++y) {
+    for (uint32_t x = 0; x < extent.width; ++x) {
+      // Above the diagonal: (y + 1/2) / height < (x + 1/2) / width.
+      const int p =
+          (2 * y + 1) * extent.width < (2 * x + 1) * extent.height ? 0 : 1;
+      ++counted[p];
+      const size_t i = size_t{y} * extent.width + x;
+      int far = 0;
+      for (int c = 0; c < 3; ++c) {
+        const int codes = std::abs(int{drawn[i][c]} - int{alone[p][i][c]});
+        if (codes > 1 && reported++ < 5) {
+          ADD_FAILURE() << "pixel (" << x << ", " << y << ") of picture " << p
+                        << ", channel " << c << ": drew " << int{drawn[i][c]}
+                        << ", alone " << int{alone[p][i][c]};
+        }
+        worst = std::max(worst, codes);
+        far =
+            std::max(far, std::abs(int{alone[0][i][c]} - int{alone[1][i][c]}));
+      }
+      apart += far > 8 ? 1 : 0;
+    }
+  }
+  EXPECT_LE(worst, 1);
+  EXPECT_GT(counted[0], pixels / 3);
+  EXPECT_GT(counted[1], pixels / 3);
+  // The comparison bites: either picture in the other's place shows.
+  EXPECT_GT(apart, pixels * 9 / 10);
+  RecordProperty("max_codes", worst);
+}
+
+// A uv0.y outside the pictures takes the nearest one, clamped to its edge as
+// one picture is: over two pictures, uv0.y in [2, 3] draws picture 1's last
+// row on every row, and uv0.y in [-1, 0] picture 0's first. Rebound to
+// picture 0 alone, the same set draws uv0.y in [1, 2] as picture 0's last
+// row, as one picture always has.
+TEST_F(HybridMeshTextureSetTest, APictureIndexOutOfRangeTakesTheNearest) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
+  const VkExtent2D extent{64, 36};
+  TwoPictures two;
+  make_two(two, extent);
+  ASSERT_TRUE(two.planes[0].luma.valid() && two.planes[1].chroma.valid());
+  const std::vector<Rgba> alone[2] = {draw_alone(two.pictures[0]),
+                                      draw_alone(two.pictures[1])};
+  ASSERT_EQ(alone[0].size(), size_t{extent.width} * extent.height);
+  ASSERT_EQ(alone[1].size(), alone[0].size());
+  auto texture = pipelines::HybridMeshTextureSet::create(
+      device(), allocator(), *pipeline_, two.pictures, 2);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+
+  // Draws the quad at uv0.y + `dv` and expects every row to be `row` of
+  // `picture` drawn alone, within a code.
+  const auto expect_rows = [&](float dv, int picture, uint32_t row) {
+    use_mesh(make_quad(dv));
+    const std::vector<Rgba> drawn = draw(texture.value()->set(), extent);
+    ASSERT_EQ(drawn.size(), alone[picture].size());
+    int worst = 0;
+    for (uint32_t y = 0; y < extent.height; ++y) {
+      for (uint32_t x = 0; x < extent.width; ++x) {
+        const Rgba& got = drawn[size_t{y} * extent.width + x];
+        const Rgba& want = alone[picture][size_t{row} * extent.width + x];
+        for (int c = 0; c < 3; ++c) {
+          worst = std::max(worst, std::abs(int{got[c]} - int{want[c]}));
+        }
+      }
+    }
+    EXPECT_LE(worst, 1);
+  };
+  {
+    SCOPED_TRACE("past the last picture");
+    expect_rows(2.0f, 1, extent.height - 1);
+  }
+  {
+    SCOPED_TRACE("before the first picture");
+    expect_rows(-1.0f, 0, 0);
+  }
+  ASSERT_TRUE(texture.value()->rebind(two.pictures[0]).ok());
+  {
+    SCOPED_TRACE("one picture, past it");
+    expect_rows(1.0f, 0, extent.height - 1);
+  }
+}
+
+// A set binds 1 to kMaxPictures pictures, and refuses any one of them as a
+// one-picture set does, naming it. A refused rebind leaves the set drawing
+// what it drew.
+TEST_F(HybridMeshTextureSetTest, SeveralPicturesRefuseWhatTheyCannotBind) {
+  if (!device().caps().device_mapped_memory()) {
+    GTEST_SKIP() << "pictures require host-mapped device memory";
+  }
+  const VkExtent2D extent{64, 36};
+  TwoPictures two;
+  make_two(two, extent);
+  ASSERT_TRUE(two.planes[0].luma.valid() && two.planes[1].chroma.valid());
+  static_assert(pipelines::HybridMeshTextureSet::kMaxPictures == 2,
+                "the cases below take two as the most");
+  const pipelines::YcbcrPicture three[] = {two.pictures[0], two.pictures[1],
+                                           two.pictures[0]};
+  pipelines::YcbcrPicture bad_second[] = {two.pictures[0], two.pictures[1]};
+  bad_second[1].extent = {0, extent.height};
+
+  struct Case {
+    const char* name;
+    const pipelines::YcbcrPicture* pictures;
+    uint32_t count;
+    const char* says;  // in the refusal
+  };
+  const Case cases[] = {
+      {"none", two.pictures, 0, "0 pictures"},
+      {"three", three, 3, "3 pictures"},
+      {"null", nullptr, 1, "null"},
+      {"a bad second picture", bad_second, 2, "picture 1"},
+  };
+
+  auto texture = pipelines::HybridMeshTextureSet::create(
+      device(), allocator(), *pipeline_, two.pictures, 2);
+  ASSERT_TRUE(texture.ok()) << texture.status().message();
+  use_mesh(make_split_quad(0.0f, 1.0f));
+  const std::vector<Rgba> before = draw(texture.value()->set(), extent);
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.name);
+    const vkc::Status made =
+        pipelines::HybridMeshTextureSet::create(device(), allocator(),
+                                                *pipeline_, c.pictures, c.count)
+            .status();
+    EXPECT_EQ(made.domain(), vkc::Status::Code::InvalidArgument);
+    EXPECT_NE(made.message().find(c.says), std::string::npos) << made.message();
+    const vkc::Status rebound = texture.value()->rebind(c.pictures, c.count);
+    EXPECT_EQ(rebound.domain(), vkc::Status::Code::InvalidArgument);
+    EXPECT_NE(rebound.message().find(c.says), std::string::npos)
+        << rebound.message();
+  }
+  expect_near(draw(texture.value()->set(), extent), before, 0);
+
+  // Pictures are sampled CLAMP_TO_EDGE alone, however many.
+  Options repeat;
+  repeat.address = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  EXPECT_EQ(pipelines::HybridMeshTextureSet::create(
+                device(), allocator(), *pipeline_, two.pictures, 2, repeat)
                 .status()
                 .domain(),
             vkc::Status::Code::InvalidArgument);
