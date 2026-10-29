@@ -241,11 +241,11 @@ void ImagePanel::draw_chrome(const char* title) {
       drag_from_ = current;
       drag_share_ = current;
     }
-    if (ImGui::IsItemActive()) {
+    const float length = right ? safe_[2] - safe_[0] : safe_[3] - safe_[1];
+    if (ImGui::IsItemActive() && length > 0.0f) {
       // The share under the pointer, of the safe length along the dock axis.
-      drag_share_ =
-          right ? (safe_[2] - io.MousePos.x * s.x) / (safe_[2] - safe_[0])
-                : (safe_[3] - io.MousePos.y * s.y) / (safe_[3] - safe_[1]);
+      drag_share_ = right ? (safe_[2] - io.MousePos.x * s.x) / length
+                          : (safe_[3] - io.MousePos.y * s.y) / length;
       current = std::clamp(drag_share_, kMinShare, kMaxShare);
     }
     if (ImGui::IsItemDeactivated()) {

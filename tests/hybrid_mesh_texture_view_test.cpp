@@ -595,6 +595,11 @@ TEST_F(TextureViewTest, DegenerateDrawsDrawNothing) {
     draws.push_back(draw_of(picture.set->set(), size, bad));
     draws.push_back(draw_of(picture.set->set(), {bad, size.y}, 1.0f));
   }
+  // A part outside the target draws nothing, whatever its v.
+  pipelines::TextureViewDraw away =
+      draw_of(picture.set->set(), size, 1.0f, {-100.0f, 0.0f});
+  away.uv.y = NAN;
+  draws.push_back(away);
   for (pipelines::TextureViewDraw& d : draws) {
     d.viewport = {{0, 0}, kSize};
   }

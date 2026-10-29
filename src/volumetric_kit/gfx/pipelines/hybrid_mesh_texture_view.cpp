@@ -240,10 +240,11 @@ void HybridMeshTextureView::submit(VkCommandBuffer cmd, VkExtent2D extent,
     const glm::vec2 uv_lo = uv0 + (uv1 - uv0) * ((lo - draw.origin) / size);
     const glm::vec2 uv_hi = uv0 + (uv1 - uv0) * ((hi - draw.origin) / size);
 
-    // The picture the part lies in, and its pyramid's levels, if built.
-    const auto picture = static_cast<uint32_t>(
-        std::clamp(std::floor(draw.uv.y), 0.0f,
-                   static_cast<float>(HybridMeshTextureSet::kMaxPictures - 1)));
+    // The picture the part lies in (0 for a v that is not a number), and
+    // its pyramid's levels, if built.
+    const float v = std::isfinite(draw.uv.y) ? std::floor(draw.uv.y) : 0.0f;
+    const auto picture = static_cast<uint32_t>(std::clamp(
+        v, 0.0f, static_cast<float>(HybridMeshTextureSet::kMaxPictures - 1)));
     const PicturePyramid* pyramid = draw.pyramid;
     const uint32_t levels =
         pyramid != nullptr && pyramid->built() && picture < pyramid->count()
