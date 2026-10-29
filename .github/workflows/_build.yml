@@ -76,7 +76,10 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git sudo
           mkdir -p "$__GL_SHADER_DISK_CACHE_PATH"
 
+      # Other repositories share the host; leave no token in the checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every build/test step below is gated on this, so a false here means the
       # job compiles nothing, runs no tests, and still reports success — which
