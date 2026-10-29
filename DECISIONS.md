@@ -187,12 +187,14 @@ edge is what one picture has always drawn past its own edge.
 added when a caller needs it.
 
 **The cost.** Measured A/B against the shaders before, Release, 600 interleaved iterations
-in 3 runs, a 1.26 M-triangle unshared mesh over 8192x4352 pictures, paired medians. One
-picture draws byte for byte the frame before. It costs +0.000-0.003 ms on an Apple M5 Max,
-a 0.68-0.88 ms frame at 1280x720 and 2560x1440, and +0.000 ms on an RTX 4090, a 0.30-0.33
-ms frame. Two pictures, each read by its own region of the mesh, cost +0.000-0.002 ms more.
-The worst case, a checkerboard where nearly every group of fragments reads both, costs
-+0.026-0.032 ms on the M5 Max and +0.013-0.014 ms on the RTX 4090.
+in 3 runs over 8192x4352 pictures, paired medians. On a 1.26 M-triangle unshared mesh at
+1280x720 and 2560x1440, one picture costs +0.001-0.004 ms on an Apple M5 Max, a 0.68-0.87 ms
+frame, and +0.000 ms on an RTX 4090, a 0.30-0.33 ms frame. Where 4,608 large triangles leave
+the frame to the fragment stage, at 2560x1440 and 3840x2160, it costs the M5 Max
++0.001-0.003 ms, 2-5 % of a 0.04-0.12 ms frame, and the RTX 4090 -0.002 ms at 2560x1440. On
+the mesh, two pictures, each read by its own region, cost +0.000-0.005 ms more than one. The
+worst case, a checkerboard where nearly every group of fragments reads both, costs
++0.027-0.037 ms more than one picture on the M5 Max and +0.013-0.014 ms on the RTX 4090.
 
 ## 2026-10-27 — A hybrid mesh blends a second atlas view
 
