@@ -322,11 +322,6 @@ core::Result<PlaneFormats> texture_formats(const char* call,
   return plane_formats(desc);
 }
 
-// `value` held in [lo, hi]; NaN goes to lo.
-double hold(double value, double lo, double hi) noexcept {
-  return value >= lo ? std::min(value, hi) : lo;
-}
-
 core::Result<ShaderModule> embedded_module(VkDevice device,
                                            const unsigned char* spv,
                                            std::size_t size) {
@@ -966,23 +961,9 @@ void ImageTexture::discard() noexcept {
 ImageDraw image_draw(const ImageTexture& texture,
                      const camera::ImageView2D& view,
                      ImageFilter magnify) noexcept {
-  // In double, which holds 2^31 - 1 exactly, so the casts below are in range
-  // whatever the view's floats are.
-  constexpr double kMax = std::numeric_limits<int32_t>::max();
-  const glm::vec2 origin = view.viewport_origin();
-  const glm::vec2 size = view.viewport_size();
-  const double x0 = hold(std::round(double{origin.x}), 0.0, kMax);
-  const double y0 = hold(std::round(double{origin.y}), 0.0, kMax);
-  const double x1 =
-      hold(std::round(double{origin.x} + double{size.x}), x0, kMax);
-  const double y1 =
-      hold(std::round(double{origin.y} + double{size.y}), y0, kMax);
-
   ImageDraw draw;
   draw.texture = &texture;
-  draw.viewport.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
-  draw.viewport.extent = {static_cast<uint32_t>(x1 - x0),
-                          static_cast<uint32_t>(y1 - y0)};
+  draw.viewport = view_viewport(view);
   draw.origin = view.origin();
   draw.scale = view.scale();
   draw.magnify = magnify;

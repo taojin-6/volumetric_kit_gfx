@@ -8,9 +8,14 @@
 ///        `submit()` paths. Internal -- not part of the public technique API.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
+
+#include <glm/vec2.hpp>
 
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/camera/image_view_2d.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 
@@ -80,6 +85,34 @@ inline VkRect2D clip_to_target(const VkRect2D& viewport, VkExtent2D target) {
 /// @param extent  The target's pixel dimensions; an empty one records nothing.
 inline void set_full_viewport_scissor(VkCommandBuffer cmd, VkExtent2D extent) {
   static_cast<void>(set_viewport_scissor(cmd, {{0, 0}, extent}, extent));
+}
+
+/// @brief @p view's viewport, its edges rounded to whole target pixels and
+///        held inside `[0, 2^31 - 1]` (NaN at 0), its right and bottom edges
+///        no lower than its left and top: bounded whatever the view holds, and
+///        empty for a negative or NaN size.
+/// @param view  The pan-and-zoom view, in target pixels.
+/// @return The rectangle.
+inline VkRect2D view_viewport(const camera::ImageView2D& view) noexcept {
+  // In double, which holds 2^31 - 1 exactly, so the casts below are in range
+  // whatever the view's floats are. NaN goes to the low end.
+  constexpr double kMax = std::numeric_limits<int32_t>::max();
+  const auto hold = [](double value, double lo, double hi) {
+    return value >= lo ? std::min(value, hi) : lo;
+  };
+  const glm::vec2 origin = view.viewport_origin();
+  const glm::vec2 size = view.viewport_size();
+  const double x0 = hold(std::round(double{origin.x}), 0.0, kMax);
+  const double y0 = hold(std::round(double{origin.y}), 0.0, kMax);
+  const double x1 =
+      hold(std::round(double{origin.x} + double{size.x}), x0, kMax);
+  const double y1 =
+      hold(std::round(double{origin.y} + double{size.y}), y0, kMax);
+  VkRect2D rect{};
+  rect.offset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0)};
+  rect.extent = {static_cast<uint32_t>(x1 - x0),
+                 static_cast<uint32_t>(y1 - y0)};
+  return rect;
 }
 
 }  // namespace volumetric_kit::gfx::pipelines

@@ -220,6 +220,7 @@ add_executable(
   gpu_mesh_test.cpp
   hybrid_mesh_pipeline_test.cpp
   hybrid_mesh_texture_set_test.cpp
+  hybrid_mesh_texture_view_test.cpp
   ibl_test.cpp
   image_pipeline_test.cpp
   image_write_test.cpp
@@ -231,11 +232,15 @@ add_executable(
   pipeline_cache_test.cpp
   primitive_pipeline_test.cpp
   shader_common_test.cpp
-  streamed_atlas_test.cpp)
+  streamed_atlas_test.cpp
+  texture_map_screens_test.cpp)
+# texture_map_screens_test assembles the texture view with gfx_ui's ImagePanel,
+# as an app does: a test-only link.
 target_link_libraries(
   vg_pipelines_test
   PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io
-          volumetric_kit::core_test_support volumetric_kit::core_test_main)
+          volumetric_kit::gfx_ui volumetric_kit::core_test_support
+          volumetric_kit::core_test_main)
 vg_target_warnings(vg_pipelines_test)
 # image_pipeline_test's producer: a compute pass writing a source plane, so the
 # update's barriers are checked against a writer in a stage of its own;
@@ -297,16 +302,16 @@ vg_discover_tests(vg_io_test TEST_PREFIX "io.")
 
 # ui tier: ImGuiOverlay driven headlessly -- create + new_frame + render into an
 # offscreen target (dynamic rendering), the move-only lifecycle, and argument
-# validation; and ImageOverlay's marks and ImGuiTouch's input on CPU-only ImGui
-# frames. The GPU cases skip where no Vulkan device is available; the test links
-# gfx_ui (which exposes imgui.h for the UI-building calls). It compiles
-# imgui_demo.cpp itself for ShowDemoWindow (the tier keeps the demo out of the
-# library), and links Vulkan::Vulkan directly because it records vkCmd*/
-# vkQueueSubmit (the loader does not propagate through a shared gfx_ui for the
-# test's own calls).
+# validation; and ImageOverlay's marks, ImagePanel's layout and chrome, and
+# ImGuiTouch's input on CPU-only ImGui frames. The GPU cases skip where no
+# Vulkan device is available; the test links gfx_ui (which exposes imgui.h for
+# the UI-building calls). It compiles imgui_demo.cpp itself for ShowDemoWindow
+# (the tier keeps the demo out of the library), and links Vulkan::Vulkan
+# directly because it records vkCmd*/ vkQueueSubmit (the loader does not
+# propagate through a shared gfx_ui for the test's own calls).
 add_executable(
-  vg_ui_test ui_test.cpp image_overlay_test.cpp imgui_touch_test.cpp
-             "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
+  vg_ui_test ui_test.cpp image_overlay_test.cpp image_panel_test.cpp
+             imgui_touch_test.cpp "${VG_IMGUI_SOURCE_DIR}/imgui_demo.cpp")
 target_link_libraries(
   vg_ui_test PRIVATE volumetric_kit::gfx_ui volumetric_kit::core_test_support
                      volumetric_kit::core_test_main Vulkan::Vulkan)

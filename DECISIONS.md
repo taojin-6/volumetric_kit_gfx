@@ -149,6 +149,37 @@ what has landed since then. Record amendments when a contract changes.
   vertex's `uv0.y` names. One picture draws as before, byte for byte. See the dated entry
   below.
 
+## 2026-10-29 — A mesh's texture drawn flat, beside the scene
+
+**The pieces.** `HybridMeshTextureView` draws what a mesh samples as
+pictures; `PicturePyramid` holds their levels from 1; `ui::ImagePanel` docks
+them beside the scene, which `HybridMeshFrame::viewport` confines the mesh
+to. The view's set 0 is the mesh pipeline's, so a frame's own set binds, and
+its level 0 is read through `common/hybrid_mesh_set0.glsl`, the mesh shader's
+own sampling.
+
+**An area box, not bilinear taps.** A tap between pixels of a Y'CbCr picture
+mixes codes before the conversion, which is not linear. Against the exact box
+mean in linear light, on a test card at a sub-pixel origin, `ceil(F)` x
+`ceil(F)` bilinear taps were 45 codes off at the most (11.2 on average) at
+1/2 and 37 (7.4) at 1/3; reading whole pixels at their centres, each by its
+area inside the footprint, is within 1 (0.05). An RGBA image's taps were
+already exact, as the hardware filters an `_SRGB` image in linear light.
+
+**A pyramid below 1/4.** The box's reads grow with the footprint, so a
+smaller draw reads the level where its footprint spans 4 pixels at most,
+about 5 x 5 reads. A pyramid pixel the footprint's edge cuts counts whole:
+off the pyramid's grid, at 1/5 to 1/12, that is 0.4-1.4 codes off on average
+and 26 at a sharp edge.
+
+**One `_SRGB` RGBA image a picture.** The view sees a set, not its form, so
+the pyramid holds what a draw shows, in one form: level 1 drawn by the view
+at 1/2, then linear blits. It takes about 4/3 of a byte a picture pixel, and
+is rebuilt only when the pictures change, so a paused picture costs no build.
+
+**Docked, not floating.** The panel and the scene split the drawable, so
+nothing covers the mesh; `ImagePanel` says which side it docks at.
+
 ## 2026-10-28 — A mesh samples two pictures in place
 
 **The contract.** `HybridMeshTextureSet::create` and `rebind` take 1 to `kMaxPictures` (2)

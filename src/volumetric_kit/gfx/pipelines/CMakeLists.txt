@@ -20,6 +20,7 @@ target_sources(
           gpu_mesh.cpp
           hybrid_mesh_pipeline.cpp
           hybrid_mesh_texture_set.cpp
+          hybrid_mesh_texture_view.cpp
           ibl.cpp
           image_pipeline.cpp
           live_mesh.cpp
@@ -105,6 +106,21 @@ vkc_embed_shaders(
   SHADERS
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.vert"
   "${PROJECT_SOURCE_DIR}/shaders/hybrid_mesh.frag")
+
+# --- Embedded texture view shader ------------------------------------------
+# HybridMeshTextureView draws a mesh's set-0 texture flat with
+# texture_view.frag, over ImagePipeline's image_draw.vert
+# (hybrid_mesh_texture_view.cpp #includes texture_view_frag.spv.hpp).
+vkc_embed_shaders(
+  gfx_pipelines
+  SYMBOL_PREFIX
+  vg_
+  TARGET_ENV
+  vulkan1.3
+  INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/shaders"
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/shaders/texture_view.frag")
 
 # --- Embedded 2D image shaders ----------------------------------------------
 # ImagePipeline embeds its two stages: image_convert.{vert,frag} turns a source

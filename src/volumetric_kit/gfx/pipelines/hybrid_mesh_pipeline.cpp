@@ -272,8 +272,16 @@ HybridMeshPipeline& HybridMeshPipeline::operator=(
 
 void HybridMeshPipeline::submit(VkCommandBuffer cmd,
                                 const HybridMeshFrame& frame) const {
-  // A default-constructed or moved-from pipeline has nothing to record.
+  // A default-constructed or moved-from pipeline has nothing to record, nor
+  // does a frame whose rectangle misses the target.
   if (!valid()) {
+    return;
+  }
+  const bool whole =
+      frame.viewport.extent.width == 0 || frame.viewport.extent.height == 0;
+  const VkRect2D viewport =
+      whole ? VkRect2D{{0, 0}, frame.extent} : frame.viewport;
+  if (clip_to_target(viewport, frame.extent).extent.width == 0) {
     return;
   }
 
@@ -285,7 +293,7 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   vkCmdBindPipeline(
       cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
       second_view_bound ? second_view_.handle() : pipeline_.handle());
-  set_full_viewport_scissor(cmd, frame.extent);
+  static_cast<void>(set_viewport_scissor(cmd, viewport, frame.extent));
 
   // Set 0 (the atlas) binds once for the frame. The fragment shader samples
   // it unconditionally, so a frame without an atlas binds the fallback and
