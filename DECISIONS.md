@@ -194,7 +194,7 @@ the frame to the fragment stage, at 2560x1440 and 3840x2160, it costs the M5 Max
 +0.001-0.003 ms, 2-5 % of a 0.04-0.12 ms frame, and the RTX 4090 -0.002 ms at 2560x1440. On
 the mesh, two pictures, each read by its own region, cost +0.000-0.005 ms more than one. The
 worst case, a checkerboard where nearly every group of fragments reads both, costs
-+0.027-0.037 ms more than one picture on the M5 Max and +0.013-0.014 ms on the RTX 4090.
++0.026-0.037 ms more than one picture on the M5 Max and +0.013-0.014 ms on the RTX 4090.
 
 ## 2026-10-27 — A hybrid mesh blends a second atlas view
 
