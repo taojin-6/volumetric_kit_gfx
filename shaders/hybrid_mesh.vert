@@ -10,8 +10,9 @@
 // 128-byte guaranteed maxPushConstantsSize: a per-draw model + normal matrix
 // alongside the light would not fit.)
 //
-// Each vertex's uv0 is either a valid atlas coordinate in [0, 1] (projective
-// texturing won that triangle a camera) or carries a negative x -- recon emits
+// Each vertex's uv0 is either a valid atlas coordinate -- in [0, 1], or over
+// two pictures uv0.y in [0, 2) (HybridMeshTextureSet) -- where projective
+// texturing won that triangle a camera, or carries a negative x -- recon emits
 // the (-1, -1) sentinel -- meaning "use the per-vertex color" (the TSDF
 // vertex-color fallback). The choice is resolved HERE and forwarded as a `flat`
 // selector, so the fragment stage never branches on an interpolated value: a
@@ -20,7 +21,8 @@
 // uniformly rather than split mid-triangle by an interpolated uv crossing zero.
 // Sentinel vertices forward an in-range uv (0, 0) so a fragment quad straddling
 // an atlas/color seam never derives the atlas LOD from the out-of-range
-// sentinel.
+// sentinel. The picture is resolved here too, from the decoded uv0.y: from 1
+// up, picture 1, so a triangle takes its provoking vertex's picture as well.
 //
 // The tangent slot carries a second atlas view, (uv_B.x, uv_B.y, w_B, unused),
 // which the fragment stage blends with uv0's by the weight w_B. It is
@@ -32,7 +34,7 @@
 
 layout(location = 0) in vec3 in_position;  // world space
 layout(location = 1) in vec3 in_normal;    // world space
-layout(location = 2) in vec2 in_uv0;       // atlas uv in [0,1], or x<0 = vertex color
+layout(location = 2) in vec2 in_uv0;       // atlas uv, or x<0 = vertex color
 layout(location = 3) in vec4 in_color;     // per-vertex color (TSDF fallback)
 layout(location = 4) in vec4 in_tangent;   // (uv_B, w_B, unused): second view
 
@@ -46,7 +48,8 @@ pc;
 layout(location = 0) out vec3 frag_normal;
 layout(location = 1) out vec2 frag_uv;
 layout(location = 2) out vec4 frag_color;
-layout(location = 3) flat out uint frag_use_vertex_color;
+// Bit 0: the vertex color; bit 1: picture 1.
+layout(location = 3) flat out uint frag_select;
 layout(location = 4) out vec3 frag_second;  // (uv_B, w_B): the second view
 
 void main() {
@@ -55,7 +58,6 @@ void main() {
 
   // Negative x means "no atlas for this vertex" -> vertex color.
   bool use_vertex_color = in_uv0.x < 0.0;
-  frag_use_vertex_color = use_vertex_color ? 1u : 0u;
   // A negative uv0 CARRIES its atlas coordinate as -uv - 1, so decode rather
   // than substitute. Both forms are handled by the one expression: the classic
   // (-1, -1) sentinel decodes to (0, 0), which is exactly the stand-in this
@@ -76,6 +78,7 @@ void main() {
   // Still in range for the LOD derivative reason the substitution existed for:
   // a decoded uv is a real atlas coordinate, not the out-of-range sentinel.
   frag_uv = use_vertex_color ? (-in_uv0 - 1.0) : in_uv0;
+  frag_select = (use_vertex_color ? 1u : 0u) | (frag_uv.y >= 1.0 ? 2u : 0u);
   frag_color = in_color;
   frag_second = in_tangent.xyz;
 }

@@ -97,7 +97,8 @@ what has landed since then. Record amendments when a contract changes.
   streamed atlas", below). *Amended 2026-10-26:* set 0 may instead hold a camera picture's two
   Y'CbCr 4:2:0 planes, with a uniform saying which ("A mesh samples a 4:2:0 picture", below).
   *Amended 2026-10-27:* the pipeline binds `tangent` too, as a second atlas view ("A hybrid mesh
-  blends a second atlas view", below).
+  blends a second atlas view", below). *Amended 2026-10-28:* set 0 may hold two pictures, and a
+  triangle takes its provoking vertex's picture ("A mesh samples two pictures in place", below).
 - **2026-10-05 — 2D images are converted, then mip-mapped, then drawn.**
   `pipelines::ImagePipeline` copies a picture's planes into an `ImageTexture`, renders them to
   display color in level 0 of an `R8G8B8A8_SRGB` image (sRGB decode, NV12's matrix and siting, or
@@ -147,6 +148,57 @@ what has landed since then. Record amendments when a contract changes.
   an `OffscreenLoopDesc` in place of a swapchain: one `OffscreenTarget` per slot, a frame
   interval in place of the display's pace, and the swapchain loop's protocol otherwise. See
   the dated entry below.
+- **2026-10-28 — A mesh samples two pictures in place.** `HybridMeshTextureSet` binds one or
+  two `YcbcrPicture`s, each in its own images; a triangle takes the picture its provoking
+  vertex's `uv0.y` names. One picture draws as before, byte for byte. See the dated entry
+  below.
+
+## 2026-10-28 — A mesh samples two pictures in place
+
+**The contract.** `HybridMeshTextureSet::create` and `rebind` take 1 to `kMaxPictures` (2)
+`YcbcrPicture`s. Picture `p`'s point `(x, y)` in texels is at
+`uv0 = (x / width, p + y / height)`. A triangle takes the picture `p` its provoking vertex's
+`uv0.y` names, as it takes its albedo class, and samples it at `(uv0.x, uv0.y - p)`, held to
+its edge. A provoking `uv0.y` outside the pictures takes the nearest: picture 0 below 0, the
+last from the count up. Over one picture `uv0` is used as it is. Each picture has its own
+extent and coding. Set 0 gains bindings 3 and 4, picture 1's luma and chroma, and its uniform
+grows to 80 bytes: the form or count, then a coding per picture. A plane the form does not
+read binds the pipeline's fallback texel. The pipeline, `HybridMeshFrame` and
+`StreamedAtlas`'s API do not change.
+
+**Why separate images.** A hardware decoder (VideoToolbox, NVDEC) leaves each picture in its
+own surfaces, and a set binds them where they are. A layered image or one tall image would
+take a copy per picture.
+
+**Why two fixed bindings, not an array.** Neighbouring triangles may name different
+pictures, so indexing an array of samplers would need
+`shaderSampledImageArrayNonUniformIndexing`, which gfx's device requirements do not include.
+The shader branches between two fixed pairs of bindings instead. Each branch samples at an
+explicit level, so it needs no derivatives, and a group of fragments takes both branches
+only where it spans triangles of both pictures. Four combined image samplers fit every
+target's per-stage limits.
+
+**Why per triangle.** Chosen per fragment from the interpolated `uv0.y`, the picture flipped
+at an integer `uv0.y`. In perspective, a mesh of picture 1 at `uv0.y = 1` drew 47 % of its
+pixels from picture 0 on an RTX 4090 and 13 % on lavapipe, and an edge at 1 flipped a few
+pixels on every GPU. The vertex stage decides once, beside the albedo class, in the same flat
+value, so no interpolant is added.
+
+**Why clamped, not refused.** A shader cannot refuse a coordinate, and the nearest picture's
+edge is what one picture has always drawn past its own edge.
+
+**Why two.** It meets the caller's need. A third picture is two more bindings and a branch,
+added when a caller needs it.
+
+**The cost.** Measured A/B against the shaders before, Release, 600 interleaved iterations
+in 3 runs over 8192x4352 pictures, paired medians. On a 1.26 M-triangle unshared mesh at
+1280x720 and 2560x1440, one picture costs +0.001-0.004 ms on an Apple M5 Max, a 0.68-0.87 ms
+frame, and +0.000 ms on an RTX 4090, a 0.30-0.33 ms frame. Where 4,608 large triangles leave
+the frame to the fragment stage, at 2560x1440 and 3840x2160, it costs the M5 Max
++0.001-0.003 ms, 2-5 % of a 0.04-0.12 ms frame, and the RTX 4090 -0.002 ms at 2560x1440. On
+the mesh, two pictures, each read by its own region, cost +0.000-0.005 ms more than one. The
+worst case, a checkerboard where nearly every group of fragments reads both, costs
++0.026-0.037 ms more than one picture on the M5 Max and +0.013-0.014 ms on the RTX 4090.
 
 ## 2026-10-27 — The frame loop also drives offscreen targets
 
@@ -269,7 +321,10 @@ device without that memory takes RGBA sets alone. For a picture,
 `hybrid_mesh.frag` filters each plane at level 0, held to the picture,
 converts, then decodes sRGB. The pipeline, `HybridMeshFrame` and
 `StreamedAtlas`'s API do not change; the set's `create` takes an allocator
-for its uniform.
+for its uniform. *Amended 2026-10-28:* set 0 holds four planes and an
+80-byte uniform, for up to two pictures, and a set binds the fallback texel
+at every plane its form does not read ("A mesh samples two pictures in
+place").
 
 **Why.** A camera picture arrives as two planes -- ARKit's `capturedImage`
 is '420f' -- and `ImagePipeline` already draws NV12. Sampling the planes where
