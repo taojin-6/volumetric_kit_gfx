@@ -42,6 +42,8 @@ RenderTarget::RenderTarget(VkExtent2D extent,
       // colour's format.
       VKC_CHECK(resolve[i].format == color[i].format,
                 "RenderTarget resolve format differs from its color's");
+      VKC_CHECK(resolve[i].view != VK_NULL_HANDLE,
+                "RenderTarget resolve attachment has no view");
       resolve_[i] = resolve[i];
     }
   }

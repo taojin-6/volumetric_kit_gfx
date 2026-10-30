@@ -6,8 +6,8 @@
 // clear-and-readback through dynamic rendering -- the headless path
 // golden-image render tests build on. The clear-and-readback absorbs the former
 // render_readback_test, now expressed through the RenderTarget/OffscreenTarget
-// abstraction. A multisampled target is laid out, read back and reused under
-// synchronization validation.
+// abstraction. A multisampled target is laid out, read back and reused, and
+// one multisampled set serves two targets, under synchronization validation.
 
 #include <gtest/gtest.h>
 
@@ -18,9 +18,12 @@
 #include <vector>
 
 #include "gfx_test_support.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 
 namespace {
@@ -273,7 +276,7 @@ TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
             VK_FORMAT_D32_SFLOAT);
 }
 
-// --- Multisampled --------------------------------------------------------
+// --- Multisampled ----------------------------------------------------------
 
 // offscreen_desc lays a target out as a layout, samples included; any other
 // field keeps its default.
@@ -290,6 +293,28 @@ TEST(OffscreenDescTest, CopiesTheLayoutsFormatsAndSamples) {
   EXPECT_EQ(desc.depth_format, VK_FORMAT_D32_SFLOAT);
   EXPECT_EQ(desc.samples, vg::kWindowSamples);
   EXPECT_TRUE(desc.readback);
+}
+
+// An offscreen target has one colour attachment, so offscreen_desc takes a
+// layout of one; any other is a programmer error.
+TEST(OffscreenDescDeathTest, TakesOneColorAttachment) {
+  vg::RenderTargetLayout layout;
+  layout.color_formats[0] = kFormat;
+  layout.color_formats[1] = kFormat;
+  layout.color_count = 2;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});  // route the abort message to stderr
+        vg::offscreen_desc(layout, {8, 8});
+      },
+      "one color attachment");
+  layout.color_count = 0;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        vg::offscreen_desc(layout, {8, 8});
+      },
+      "one color attachment");
 }
 
 class MultisampledOffscreenTargetTest : public vg_test::RendererDeviceTest {
@@ -395,6 +420,16 @@ TEST_F(MultisampledOffscreenTargetTest, OtherSampleCountsAreUnsupported) {
   }
 }
 
+// A value that is no sample count is the caller's error, not a limit.
+TEST_F(MultisampledOffscreenTargetTest, NoSampleCountIsAnInvalidArgument) {
+  for (const uint32_t bits : {0u, 3u, 128u}) {
+    auto target = create(static_cast<VkSampleCountFlagBits>(bits));
+    ASSERT_FALSE(target.ok()) << bits;
+    EXPECT_EQ(target.status().domain(), vkc::Status::Code::InvalidArgument)
+        << bits;
+  }
+}
+
 // An integer colour has no averaging resolve.
 TEST_F(MultisampledOffscreenTargetTest, AnIntegerColourIsUnsupported) {
   auto target = create(vg::kWindowSamples, VK_FORMAT_R8G8B8A8_UINT);
@@ -408,15 +443,116 @@ TEST_F(MultisampledOffscreenTargetTest, MoveCarriesTheSamples) {
   vg::OffscreenTarget source = std::move(created).value();
   vg::OffscreenTarget moved(std::move(source));
   EXPECT_EQ(moved.layout().samples, vg::kWindowSamples);
-  EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
+  // NOLINTBEGIN(bugprone-use-after-move): the moved-from source is empty,
+  // its multisampled colour included, which layout() reports as 1 sample.
+  EXPECT_FALSE(source.valid());
   EXPECT_EQ(source.depth_image(), VK_NULL_HANDLE);
+  EXPECT_EQ(source.layout().samples, VK_SAMPLE_COUNT_1_BIT);
+  // NOLINTEND(bugprone-use-after-move)
 
   auto other = create(vg::kWindowSamples);
   ASSERT_TRUE(other.ok()) << other.status().message();
   vg::OffscreenTarget dst = std::move(other).value();
   dst = std::move(moved);  // frees dst's images, then adopts moved's
   EXPECT_EQ(dst.layout().samples, vg::kWindowSamples);
-  EXPECT_FALSE(moved.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(moved.valid());       // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(moved.layout().samples,  // NOLINT(bugprone-use-after-move)
+            VK_SAMPLE_COUNT_1_BIT);
+
+  // Self-move, laundered through a pointer to dodge -Wself-move, keeps the
+  // multisampled target whole.
+  vg::OffscreenTarget* self = &dst;
+  dst = std::move(*self);
+  EXPECT_TRUE(dst.valid());
+  EXPECT_EQ(dst.layout().samples, vg::kWindowSamples);
+  EXPECT_NE(dst.depth_image(), VK_NULL_HANDLE);
+}
+
+// One multisampled colour and depth set serves two targets that resolve into
+// different images, as a swapchain's images share one: three scopes (the
+// first target, the second, the first again), each in its own command buffer,
+// submitted back to back with no wait, as frames in flight are. Each
+// begin() orders its scope after the previous one's on the shared set, which
+// synchronization validation checks across the submissions.
+TEST_F(MultisampledOffscreenTargetTest, SharedSetAcrossSubmissions) {
+  const VkExtent2D extent{kSize, kSize};
+  vkc::ImageDesc color_desc;
+  color_desc.extent = extent;
+  color_desc.format = kFormat;
+  color_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  color_desc.samples = vg::kWindowSamples;
+  auto msaa = allocator().create_image(color_desc);
+  ASSERT_TRUE(msaa.ok()) << msaa.status().message();
+  vkc::ImageDesc depth_desc = color_desc;
+  depth_desc.format = VK_FORMAT_D32_SFLOAT;
+  depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  auto depth = allocator().create_image(depth_desc);
+  ASSERT_TRUE(depth.ok()) << depth.status().message();
+  vkc::ImageDesc resolve_desc;
+  resolve_desc.extent = extent;
+  resolve_desc.format = kFormat;
+  resolve_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  auto resolve0 = allocator().create_image(resolve_desc);
+  ASSERT_TRUE(resolve0.ok()) << resolve0.status().message();
+  auto resolve1 = allocator().create_image(resolve_desc);
+  ASSERT_TRUE(resolve1.ok()) << resolve1.status().message();
+
+  const auto attachment = [](const vkc::Image& image) {
+    return vg::RenderTargetAttachment{image.handle(), image.view(),
+                                      image.format()};
+  };
+  const vg::RenderTargetAttachment color = attachment(msaa.value());
+  const vg::RenderTargetAttachment depth_attachment = attachment(depth.value());
+  const vg::RenderTargetAttachment resolves[2] = {attachment(resolve0.value()),
+                                                  attachment(resolve1.value())};
+  const vg::RenderTarget targets[2] = {
+      vg::RenderTarget(extent, &color, 1, vg::kWindowSamples, &depth_attachment,
+                       &resolves[0]),
+      vg::RenderTarget(extent, &color, 1, vg::kWindowSamples, &depth_attachment,
+                       &resolves[1])};
+
+  auto pool =
+      vkc::CommandPool::create(device().handle(), device().queue_family());
+  ASSERT_TRUE(pool.ok()) << pool.status().message();
+  std::vector<vkc::CommandBuffer> cmds;
+  for (const int t : {0, 1, 0}) {
+    auto cmd = pool.value().allocate_primary();
+    ASSERT_TRUE(cmd.ok()) << cmd.status().message();
+    ASSERT_TRUE(
+        cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+    const VkCommandBuffer raw = cmd.value().handle();
+    // The resolve image's transition, as the frame loop records it for a
+    // swapchain image.
+    vg::ImageBarrierDesc to_color;
+    to_color.image = resolves[t].image;
+    to_color.src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    to_color.dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    to_color.src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to_color.dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vg::cmd_image_barrier(raw, to_color);
+    vg::RenderTargetBeginInfo begin;
+    begin.clear_color.float32[t] = 1.0f;
+    begin.clear_color.float32[3] = 1.0f;
+    targets[t].begin(raw, begin);
+    targets[t].end(raw);
+    ASSERT_TRUE(cmd.value().end().ok());
+    cmds.push_back(std::move(cmd).value());
+  }
+  for (const vkc::CommandBuffer& cmd : cmds) {
+    const VkCommandBuffer raw = cmd.handle();
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &raw;
+    EXPECT_EQ(vkQueueSubmit(device().queue(), 1, &submit, VK_NULL_HANDLE),
+              VK_SUCCESS);
+  }
+  // Waits even after a failed submit, so no command buffer is freed in use.
+  EXPECT_EQ(vkQueueWaitIdle(device().queue()), VK_SUCCESS);
 }
 
 }  // namespace

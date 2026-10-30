@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 
+#include <cstdint>
 #include <utility>
 
 #include "volumetric_kit/core/base/check.hpp"
@@ -10,64 +11,18 @@
 #include "volumetric_kit/core/vulkan/format.hpp"
 #include "volumetric_kit/gfx/core/buffer_barrier.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
+#include "volumetric_kit/gfx/core/impl/color_attachment.hpp"
 #include "volumetric_kit/gfx/core/impl/depth_attachment.hpp"
 
 namespace volumetric_kit::gfx {
 
 namespace {
 
-// Whether `format` is a core-Vulkan integer colour format: one whose resolve
-// cannot average, and whose multisampling a device need not support (its
-// framebufferIntegerColorSampleCounts may be 1 alone). No KHR extension adds
-// an integer colour format.
-bool is_integer_color(VkFormat format) noexcept {
-  switch (format) {
-    case VK_FORMAT_R8_UINT:
-    case VK_FORMAT_R8_SINT:
-    case VK_FORMAT_R8G8_UINT:
-    case VK_FORMAT_R8G8_SINT:
-    case VK_FORMAT_R8G8B8_UINT:
-    case VK_FORMAT_R8G8B8_SINT:
-    case VK_FORMAT_B8G8R8_UINT:
-    case VK_FORMAT_B8G8R8_SINT:
-    case VK_FORMAT_R8G8B8A8_UINT:
-    case VK_FORMAT_R8G8B8A8_SINT:
-    case VK_FORMAT_B8G8R8A8_UINT:
-    case VK_FORMAT_B8G8R8A8_SINT:
-    case VK_FORMAT_A8B8G8R8_UINT_PACK32:
-    case VK_FORMAT_A8B8G8R8_SINT_PACK32:
-    case VK_FORMAT_A2R10G10B10_UINT_PACK32:
-    case VK_FORMAT_A2R10G10B10_SINT_PACK32:
-    case VK_FORMAT_A2B10G10R10_UINT_PACK32:
-    case VK_FORMAT_A2B10G10R10_SINT_PACK32:
-    case VK_FORMAT_R16_UINT:
-    case VK_FORMAT_R16_SINT:
-    case VK_FORMAT_R16G16_UINT:
-    case VK_FORMAT_R16G16_SINT:
-    case VK_FORMAT_R16G16B16_UINT:
-    case VK_FORMAT_R16G16B16_SINT:
-    case VK_FORMAT_R16G16B16A16_UINT:
-    case VK_FORMAT_R16G16B16A16_SINT:
-    case VK_FORMAT_R32_UINT:
-    case VK_FORMAT_R32_SINT:
-    case VK_FORMAT_R32G32_UINT:
-    case VK_FORMAT_R32G32_SINT:
-    case VK_FORMAT_R32G32B32_UINT:
-    case VK_FORMAT_R32G32B32_SINT:
-    case VK_FORMAT_R32G32B32A32_UINT:
-    case VK_FORMAT_R32G32B32A32_SINT:
-    case VK_FORMAT_R64_UINT:
-    case VK_FORMAT_R64_SINT:
-    case VK_FORMAT_R64G64_UINT:
-    case VK_FORMAT_R64G64_SINT:
-    case VK_FORMAT_R64G64B64_UINT:
-    case VK_FORMAT_R64G64B64_SINT:
-    case VK_FORMAT_R64G64B64A64_UINT:
-    case VK_FORMAT_R64G64B64A64_SINT:
-      return true;
-    default:
-      return false;
-  }
+// Whether `samples` is one VkSampleCountFlagBits value (1 to 64).
+bool is_sample_count(VkSampleCountFlagBits samples) noexcept {
+  const auto bits = static_cast<uint32_t>(samples);
+  return bits != 0 && (bits & (bits - 1)) == 0 &&
+         bits <= VK_SAMPLE_COUNT_64_BIT;
 }
 
 }  // namespace
@@ -99,6 +54,11 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
     VKC_TRY(validate_depth_only_format(desc.depth_format,
                                        "OffscreenTarget::create"));
   }
+  if (!is_sample_count(desc.samples)) {
+    return core::Status::invalid_argument(
+        "OffscreenTarget::create: samples must be one VkSampleCountFlagBits "
+        "value");
+  }
   // The allocator cannot reach the device's limits, so only the counts Vulkan
   // guarantees are taken: kWindowSamples for depth and any colour that
   // averages.
@@ -107,7 +67,7 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
     return core::Status::unsupported(
         "OffscreenTarget::create: samples must be 1 or kWindowSamples");
   }
-  if (multisampled && is_integer_color(desc.color_format)) {
+  if (multisampled && is_integer_attachment(desc.color_format)) {
     return core::Status::unsupported(
         "OffscreenTarget::create: an integer color format cannot be "
         "multisampled and resolved");
