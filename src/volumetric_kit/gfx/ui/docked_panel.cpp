@@ -15,6 +15,8 @@ namespace {
 // How much larger the content must show on one side to dock there.
 constexpr float kPreference = 1.25f;
 constexpr float kBackgroundAlpha = 0.6f;
+// The handle's bar, drawn across the panel's inner edge, in points.
+constexpr float kBarPoints = 6.0f;
 
 // A rectangle of whole pixels from [x0, x1) x [y0, y1), rounded; empty where
 // it is inverted.
@@ -107,8 +109,7 @@ Metrics metrics(VkExtent2D drawable, float min_points) {
   m.safe[3] =
       std::clamp(std::round((viewport->WorkPos.y + viewport->WorkSize.y) * s.y),
                  m.safe[1], height);
-  m.bar = {std::round(DockedPanel::kBarPoints * s.x),
-           std::round(DockedPanel::kBarPoints * s.y)};
+  m.bar = {std::round(kBarPoints * s.x), std::round(kBarPoints * s.y)};
   m.least = {min_points * s.x, min_points * s.y};
   m.header =
       std::round((ImGui::GetFrameHeight() + 2.0f * style.FramePadding.y) * s.y);
@@ -177,10 +178,11 @@ const PanelLayout& DockedPanel::layout(VkExtent2D drawable) {
   return layout_;
 }
 
-void DockedPanel::draw_chrome(const char* title,
-                              const std::function<void()>& items) {
+bool DockedPanel::begin_chrome(const char* title) {
+  header_begun_ = false;
+  header_drawn_ = false;
   if (!state_.open || !laid_out_open_) {
-    return;
+    return false;
   }
   ImGuiIO& io = ImGui::GetIO();
   const ImGuiStyle& style = ImGui::GetStyle();
@@ -284,18 +286,24 @@ void DockedPanel::draw_chrome(const char* title,
   ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
   // Kept behind the handle: a press on the header never raises it over the
   // handle's reach.
-  const bool header_drawn =
-      ImGui::Begin(header_name, nullptr,
-                   kFlags | ImGuiWindowFlags_NoScrollbar |
-                       ImGuiWindowFlags_NoBringToFrontOnFocus);
+  header_drawn_ = ImGui::Begin(header_name, nullptr,
+                               kFlags | ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+  header_begun_ = true;
   ImGui::PopStyleVar(2);
-  if (header_drawn) {
+  if (header_drawn_) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(title);
-    if (items) {
-      ImGui::SameLine();
-      items();
-    }
+    ImGui::SameLine();
+  }
+  return header_drawn_;
+}
+
+void DockedPanel::end_chrome() {
+  if (!header_begun_) {
+    return;
+  }
+  if (header_drawn_) {
     const float frame = ImGui::GetFrameHeight();
     ImGui::SameLine();
     const float room = ImGui::GetContentRegionAvail().x - frame;
@@ -317,10 +325,13 @@ void DockedPanel::draw_chrome(const char* title,
                   ImVec2(hi.x - inset, lo.y + inset), ink, 1.5f);
   }
   ImGui::End();
+  header_begun_ = false;
+  header_drawn_ = false;
 }
 
 bool DockedPanel::over_content(glm::vec2 point) const noexcept {
-  if (!state_.open || !laid_out_open_) {
+  // A layout that found the panel closed left the content empty.
+  if (!state_.open) {
     return false;
   }
   const VkRect2D& r = layout_.content;

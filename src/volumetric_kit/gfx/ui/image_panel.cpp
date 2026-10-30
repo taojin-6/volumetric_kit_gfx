@@ -54,25 +54,26 @@ bool fitted(const camera::ImageView2D& view) {
 
 }  // namespace
 
-ImagePanel::ImagePanel(const DockedPanelConfig& config) : dock_(config) {}
-
 void ImagePanel::set_pictures(glm::vec2 size, uint32_t count) noexcept {
   picture_size_ = size;
   picture_count_ = count;
-  // The pictures' arrangement at each side is the dock's content.
-  const bool has_pictures = count > 0 && size.x > 0.0f && size.y > 0.0f;
-  dock_.set_content_size(
-      has_pictures ? DockedContentSize{composite(DockSide::Right, size, count),
-                                       composite(DockSide::Bottom, size, count)}
-                   : DockedContentSize{});
 }
 
-const PanelLayout& ImagePanel::layout(VkExtent2D drawable) {
-  const PanelLayout& laid = dock_.layout(drawable);
-  if (!dock_.open()) {
-    return laid;
+DockedContentSize ImagePanel::content_size() const noexcept {
+  const bool has_pictures =
+      picture_count_ > 0 && picture_size_.x > 0.0f && picture_size_.y > 0.0f;
+  if (!has_pictures) {
+    return {};
   }
-  const VkRect2D& content = laid.content;
+  return {composite(DockSide::Right, picture_size_, picture_count_),
+          composite(DockSide::Bottom, picture_size_, picture_count_)};
+}
+
+void ImagePanel::arrange(const VkRect2D& content, DockSide side) noexcept {
+  if (content.extent.width == 0 || content.extent.height == 0) {
+    return;
+  }
+  side_ = side;
   // The viewport first, so a new image fits the panel as it is now.
   view_.set_viewport({static_cast<float>(content.offset.x),
                       static_cast<float>(content.offset.y)},
@@ -80,59 +81,58 @@ const PanelLayout& ImagePanel::layout(VkExtent2D drawable) {
                       static_cast<float>(content.extent.height)});
   const bool has_pictures =
       picture_count_ > 0 && picture_size_.x > 0.0f && picture_size_.y > 0.0f;
-  if (has_pictures) {
-    const glm::vec2 image = composite(laid.side, picture_size_, picture_count_);
-    if (image != image_size_) {
-      // New pictures, or a fitted view of the same ones, fit again.
-      const bool kept = picture_size_ == view_picture_size_ &&
-                        picture_count_ == view_count_ && !fitted(view_);
-      const float zoom = view_.zoom();
-      const glm::vec2 centre =
-          kept ? moved(view_.center(), view_side_, laid.side, picture_size_,
-                       picture_count_)
-               : glm::vec2(0.0f, 0.0f);
-      view_.set_image_size(image);  // fitted
-      if (kept) {
-        // The same pictures along the other side, zoomed: the zoom, and the
-        // centre's point moved with its picture.
-        view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
-                         zoom);
-        view_.pan((view_.center() - centre) * view_.scale());
-      }
-      image_size_ = image;
-      view_picture_size_ = picture_size_;
-      view_count_ = picture_count_;
-      view_side_ = laid.side;
-    }
+  if (!has_pictures) {
+    return;
   }
-  return laid;
+  const glm::vec2 image = composite(side, picture_size_, picture_count_);
+  if (image == image_size_) {
+    return;
+  }
+  // New pictures, or a fitted view of the same ones, fit again.
+  const bool kept = picture_size_ == view_picture_size_ &&
+                    picture_count_ == view_count_ && !fitted(view_);
+  const float zoom = view_.zoom();
+  const glm::vec2 centre = kept ? moved(view_.center(), view_side_, side,
+                                        picture_size_, picture_count_)
+                                : glm::vec2(0.0f, 0.0f);
+  view_.set_image_size(image);  // fitted
+  if (kept) {
+    // The same pictures along the other side, zoomed: the zoom, and the
+    // centre's point moved with its picture.
+    view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
+                     zoom);
+    view_.pan((view_.center() - centre) * view_.scale());
+  }
+  image_size_ = image;
+  view_picture_size_ = picture_size_;
+  view_count_ = picture_count_;
+  view_side_ = side;
 }
 
-void ImagePanel::draw_chrome(const char* title) {
-  dock_.draw_chrome(title, [this]() {
-    // Fit and 1:1, right-aligned before the dock's close button.
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float buttons = ImGui::CalcTextSize("Fit").x +
-                          ImGui::CalcTextSize("1:1").x +
-                          4.0f * style.FramePadding.x +
-                          ImGui::GetFrameHeight() + 2.0f * style.ItemSpacing.x;
-    const float room = ImGui::GetContentRegionAvail().x - buttons;
-    if (room > 0.0f) {
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room);
-    }
-    if (ImGui::Button("Fit")) {
-      view_.fit();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("1:1") && view_.scale() > 0.0f) {
-      view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
-                       1.0f / view_.scale());
-    }
-  });
+void ImagePanel::header_items() {
+  // Right-aligned before the dock's close button, a frame height square an
+  // item spacing on.
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float buttons = ImGui::CalcTextSize("Fit").x +
+                        ImGui::CalcTextSize("1:1").x +
+                        4.0f * style.FramePadding.x + ImGui::GetFrameHeight() +
+                        2.0f * style.ItemSpacing.x;
+  const float room = ImGui::GetContentRegionAvail().x - buttons;
+  if (room > 0.0f) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room);
+  }
+  if (ImGui::Button("Fit")) {
+    view_.fit();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("1:1") && view_.scale() > 0.0f) {
+    view_.zoom_about(view_.viewport_origin() + 0.5f * view_.viewport_size(),
+                     1.0f / view_.scale());
+  }
 }
 
 glm::vec2 ImagePanel::picture_origin(uint32_t i) const noexcept {
-  return origin_of(dock_.laid_out().side, picture_size_, i);
+  return origin_of(side_, picture_size_, i);
 }
 
 void ImagePanel::double_tap(glm::vec2 point) noexcept {

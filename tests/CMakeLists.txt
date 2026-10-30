@@ -234,8 +234,8 @@ add_executable(
   shader_common_test.cpp
   streamed_atlas_test.cpp
   texture_map_screens_test.cpp)
-# texture_map_screens_test assembles the texture view with gfx_ui's ImagePanel,
-# as an app does: a test-only link.
+# texture_map_screens_test assembles the texture view with gfx_ui's DockedPanel
+# and ImagePanel, as an app does: a test-only link.
 target_link_libraries(
   vg_pipelines_test
   PRIVATE volumetric_kit::gfx_pipelines volumetric_kit::gfx_io

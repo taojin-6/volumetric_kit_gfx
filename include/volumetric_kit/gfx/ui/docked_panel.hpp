@@ -9,7 +9,7 @@
 ///        the caller's.
 
 #include <cstdint>
-#include <functional>
+#include <utility>
 #include <vector>
 
 #include <glm/vec2.hpp>
@@ -79,7 +79,7 @@ struct PanelLayout {
 /// - **Share** of the safe area along the dock axis, held to 25-60 % and at
 ///   least @ref DockedPanelConfig::min_points across (60 % at most).
 /// - **Chrome** (@ref draw_chrome), ImGui windows that take the pointer: the
-///   handle, a bar on the panel's inner edge, drawn @ref kBarPoints and
+///   handle, a bar on the panel's inner edge, drawn 6 points across and
 ///   taking the pointer over a frame height (44 points on a touch overlay);
 ///   and the header across the panel's top: the title, the caller's items
 ///   and a close button.
@@ -102,8 +102,6 @@ class VG_UI_API DockedPanel {
   /// The least and the most share of the safe area along the dock axis.
   static constexpr float kMinShare = 0.25f;
   static constexpr float kMaxShare = 0.6f;
-  /// The handle's bar, drawn across the panel's inner edge, in points.
-  static constexpr float kBarPoints = 6.0f;
 
   /// @brief A panel in @p config 's state, with no content size.
   explicit DockedPanel(const DockedPanelConfig& config = {});
@@ -133,13 +131,26 @@ class VG_UI_API DockedPanel {
   ///        close button closes it. Closed, it draws nothing.
   /// @param title  The header's text, its first 64 characters unique among
   ///               windows.
-  /// @param items  The caller's items, in the header's window on the
-  ///               title's line; the close button follows them, a frame
-  ///               height square, an item spacing on, at the header's right
-  ///               end. Empty, none.
+  /// @param items  A callable, `void()`, that draws the caller's items in
+  ///               the header's window on the title's line. It is called in
+  ///               place, never stored or copied, so its captures cost
+  ///               nothing. The close button, a frame height square, follows
+  ///               them at the header's right end.
   /// @pre @ref layout ran this frame; a panel it found closed draws nothing.
-  void draw_chrome(const char* title,
-                   const std::function<void()>& items = nullptr);
+  template <typename Items>
+  void draw_chrome(const char* title, Items&& items) {
+    if (begin_chrome(title)) {
+      std::forward<Items>(items)();
+    }
+    end_chrome();
+  }
+  /// @brief Draw the handle and the header, with no items of the caller's.
+  /// @param title  The header's text, its first 64 characters unique among
+  ///               windows.
+  /// @pre @ref layout ran this frame; a panel it found closed draws nothing.
+  void draw_chrome(const char* title) {
+    draw_chrome(title, [] {});
+  }
 
   /// @return Whether @p point, in drawable pixels, is in the content of the
   ///         last layout, with the panel open.
@@ -148,6 +159,11 @@ class VG_UI_API DockedPanel {
  private:
   // The share the panel takes on `side`.
   float& share(DockSide side) noexcept;
+  // draw_chrome's halves. The first draws the handle and opens the header's
+  // window with the title, and returns whether the caller's items go in it;
+  // the second draws the close button and closes the window.
+  bool begin_chrome(const char* title);
+  void end_chrome();
 
   DockedPanelConfig config_;
   DockedPanelState state_;
@@ -162,6 +178,10 @@ class VG_UI_API DockedPanel {
   float edge_ = 0.0f;
   float header_ = 0.0f;
   bool laid_out_open_ = false;  // whether the last layout was of it open
+  // Whether begin_chrome opened the header's window, and whether ImGui draws
+  // it.
+  bool header_begun_ = false;
+  bool header_drawn_ = false;
   // A drag on the handle: the share it started from, and that share moved
   // by the pointer.
   float drag_from_ = 0.0f;
