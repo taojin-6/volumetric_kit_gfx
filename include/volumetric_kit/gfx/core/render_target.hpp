@@ -110,10 +110,10 @@ struct RenderTargetBeginInfo {
 /// today; a swapchain (windowing) and an OpenXR swapchain (xr) later.
 ///
 /// Layout transitions are the caller's responsibility (dynamic rendering does
-/// not perform them): transition each attachment image into its attachment
-/// layout before @ref begin, and out of it (to present / transfer / sampled)
-/// after @ref end. @ref RenderTargetAttachment::image is exposed for exactly
-/// those barriers — record them with @ref cmd_image_barrier
+/// not perform them): at one sample, transition each attachment image into
+/// its attachment layout before @ref begin, and out of it (to present /
+/// transfer / sampled) after @ref end. @ref RenderTargetAttachment::image is
+/// exposed for exactly those barriers — record them with @ref cmd_image_barrier
 /// (core/image_barrier.hpp), or let the producing target do it (e.g.
 /// @ref OffscreenTarget::prepare).
 ///
@@ -154,8 +154,8 @@ class VG_CORE_API RenderTarget {
   ///                     color-only target.
   /// @param resolve      Required when @p samples is above one, and `nullptr`
   ///                     otherwise: @p color_count single-sample attachments
-  ///                     the colours resolve into, each of its colour's
-  ///                     format (all three checked with `VKC_CHECK`).
+  ///                     the colours resolve into, each with a view and of
+  ///                     its colour's format (all checked with `VKC_CHECK`).
   RenderTarget(VkExtent2D extent, const RenderTargetAttachment* color,
                uint32_t color_count, VkSampleCountFlagBits samples,
                const RenderTargetAttachment* depth = nullptr,

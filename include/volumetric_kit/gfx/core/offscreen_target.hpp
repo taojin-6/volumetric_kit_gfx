@@ -55,7 +55,7 @@ struct OffscreenTargetDesc {
 /// @code
 /// VKC_ASSIGN(OffscreenTarget target,
 ///            OffscreenTarget::create(allocator, offscreen_desc(
-///                                                   view.target_layout(),
+///                                                   swapchain.layout(),
 ///                                                   {256, 256})));
 /// @endcode
 VG_CORE_API OffscreenTargetDesc offscreen_desc(const RenderTargetLayout& layout,
@@ -117,8 +117,10 @@ class VG_CORE_API OffscreenTarget {
   ///           `core::Status::Code::InvalidArgument`, and a combined
   ///           depth/stencil one `core::Status::Code::Unsupported` (depth-only
   ///           for now);
-  ///         - @ref OffscreenTargetDesc::samples other than 1 and
-  ///           @ref kWindowSamples, or @ref kWindowSamples with an integer
+  ///         - @ref OffscreenTargetDesc::samples that is not one
+  ///           `VkSampleCountFlagBits` value (such as 0) returns
+  ///           `core::Status::Code::InvalidArgument`; a count other than 1
+  ///           and @ref kWindowSamples, or @ref kWindowSamples with an integer
   ///           (`_UINT` / `_SINT`) color format, which has no averaging
   ///           resolve, returns `core::Status::Code::Unsupported`;
   ///         - a failed image/buffer allocation propagates its `core::Status`.

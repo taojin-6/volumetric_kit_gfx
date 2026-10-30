@@ -32,6 +32,14 @@ vg::RenderTargetLayout color_layout(
   return layout;
 }
 
+// A resolve attachment for `color`: its format, and a placeholder view no
+// test here passes to Vulkan.
+vg::RenderTargetAttachment resolve_of(const vg::RenderTargetAttachment& color) {
+  vg::RenderTargetAttachment resolve = color;
+  resolve.view = reinterpret_cast<VkImageView>(uintptr_t{2});
+  return resolve;
+}
+
 TEST(RenderTargetLayoutTest, IdenticalLayoutsAreCompatible) {
   EXPECT_TRUE(color_layout(kColor).compatible_with(color_layout(kColor)));
 }
@@ -105,7 +113,7 @@ TEST(RenderTargetTest, MultisampledTargetDerivesItsLayout) {
   vg::RenderTargetAttachment depth{};
   depth.view = reinterpret_cast<VkImageView>(uintptr_t{1});
   depth.format = VK_FORMAT_D32_SFLOAT;
-  const vg::RenderTargetAttachment resolve = color;
+  const vg::RenderTargetAttachment resolve = resolve_of(color);
   const vg::RenderTarget target({64, 48}, &color, 1, vg::kWindowSamples, &depth,
                                 &resolve);
   const vg::RenderTargetLayout layout = target.layout();
@@ -120,7 +128,7 @@ TEST(RenderTargetTest, MultisampledTargetDerivesItsLayout) {
 TEST(RenderTargetDeathTest, ResolvesGoWithMultisamplingAlone) {
   vg::RenderTargetAttachment color{};
   color.format = kColor;
-  const vg::RenderTargetAttachment resolve = color;
+  const vg::RenderTargetAttachment resolve = resolve_of(color);
   EXPECT_DEATH(
       {
         vkc::set_log_handler({});  // route the abort message to stderr
@@ -139,7 +147,7 @@ TEST(RenderTargetDeathTest, ResolvesGoWithMultisamplingAlone) {
 TEST(RenderTargetDeathTest, AResolveKeepsItsColorsFormat) {
   vg::RenderTargetAttachment color{};
   color.format = kColor;
-  vg::RenderTargetAttachment resolve{};
+  vg::RenderTargetAttachment resolve = resolve_of(color);
   resolve.format = VK_FORMAT_B8G8R8A8_UNORM;
   EXPECT_DEATH(
       {
@@ -150,12 +158,27 @@ TEST(RenderTargetDeathTest, AResolveKeepsItsColorsFormat) {
       "resolve format differs");
 }
 
+// A resolve is written through its view, so it must have one.
+TEST(RenderTargetDeathTest, AResolveHasAView) {
+  vg::RenderTargetAttachment color{};
+  color.format = kColor;
+  vg::RenderTargetAttachment resolve = resolve_of(color);
+  resolve.view = VK_NULL_HANDLE;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        vg::RenderTarget({8, 8}, &color, 1, vg::kWindowSamples, nullptr,
+                         &resolve);
+      },
+      "resolve attachment has no view");
+}
+
 // The samples never outlive a multisampled scope: nothing loads them, and
 // depth is never stored.
 TEST(RenderTargetDeathTest, AMultisampledScopeNeitherLoadsNorStoresDepth) {
   vg::RenderTargetAttachment color{};
   color.format = kColor;
-  const vg::RenderTargetAttachment resolve = color;
+  const vg::RenderTargetAttachment resolve = resolve_of(color);
   const vg::RenderTarget target({8, 8}, &color, 1, vg::kWindowSamples, nullptr,
                                 &resolve);
   vg::RenderTargetBeginInfo load;

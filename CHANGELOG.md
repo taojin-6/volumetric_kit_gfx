@@ -49,7 +49,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   (the default) or `kWindowSamples` (4), which draws into `TRANSIENT`
   multisampled colour and depth images resolved into `color_image()`, the
   image readback reads. Other counts, and an integer colour format at 4x,
-  are `Unsupported`. `offscreen_desc(layout, extent)` describes a target
+  are `Unsupported`; a value that is no sample count, such as 0, is
+  `InvalidArgument`. `offscreen_desc(layout, extent)` describes a target
   laid out as a pipeline's layout, samples included.
 - `pipelines`: `ImagePipeline` and `HybridMeshTextureView` draw into
   multisampled targets; they refused them. Their pyramids and convert passes
@@ -289,6 +290,12 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `core`: **a `RenderTarget` above one sample needs its resolves.** One
+  built without them, or a scope on one that loads or stores depth, used to
+  be accepted and now aborts (`VKC_CHECK`). `ImagePipeline::create` and
+  `HybridMeshTextureView::create` accept a multisampled layout; they
+  returned `InvalidArgument`. No family consumer constructs a
+  `RenderTarget` or asks for `LOAD` or a stored depth.
 - `pipelines`: **`HybridMeshTextureSet::create` takes an allocator**, after
   the device, for the uniform a Y'CbCr picture's coding goes in. It takes
   host-mapped device memory; on a device without it, a set binds RGBA images
