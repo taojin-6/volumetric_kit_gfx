@@ -48,9 +48,15 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   change) below 1/4.
 - `pipelines`: `HybridMeshFrame::viewport` draws a mesh into a rectangle of
   the target; empty, the whole target, as before.
-- `ui`: **`ImagePanel`**, pictures docked at the right or the bottom of a
-  window beside its scene, through one pan-and-zoom view, with a header (Fit,
-  1:1, close) and a handle that resizes it, inside the safe area.
+- `ui`: **`DockedPanel`**, a panel docked at the right or the bottom of a
+  window beside its scene, around content of the caller's: the side (where
+  `set_content_size` shows larger, else the long axis), the share, a handle
+  that resizes it, and a header with the caller's items and close, inside the
+  safe area.
+- `ui`: **`ImagePanel`**, pictures in a `DockedPanel`'s content, a
+  program's own or a host's, through one pan-and-zoom view: their size at
+  each side for the dock's side, their arrangement along the panel, and Fit
+  and 1:1 for its header.
 - `pipelines`: **a mesh samples two pictures where they are.**
   `HybridMeshTextureSet::create` and `rebind` take up to `kMaxPictures` (2)
   `YcbcrPicture`s, each bound in its own images, with its own extent and

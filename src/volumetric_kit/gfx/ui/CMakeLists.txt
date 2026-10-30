@@ -108,8 +108,14 @@ add_library(gfx_ui)
 add_library(volumetric_kit::gfx_ui ALIAS gfx_ui)
 
 target_sources(
-  gfx_ui PRIVATE collapsible_panel.cpp image_overlay.cpp image_panel.cpp
-                 imgui_overlay.cpp imgui_touch.cpp metrics_panel.cpp)
+  gfx_ui
+  PRIVATE collapsible_panel.cpp
+          docked_panel.cpp
+          image_overlay.cpp
+          image_panel.cpp
+          imgui_overlay.cpp
+          imgui_touch.cpp
+          metrics_panel.cpp)
 
 generate_export_header(
   gfx_ui

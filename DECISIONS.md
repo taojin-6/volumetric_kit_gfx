@@ -152,11 +152,11 @@ what has landed since then. Record amendments when a contract changes.
 ## 2026-10-29 — A mesh's texture drawn flat, beside the scene
 
 **The pieces.** `HybridMeshTextureView` draws what a mesh samples as
-pictures; `PicturePyramid` holds their levels from 1; `ui::ImagePanel` docks
-them beside the scene, which `HybridMeshFrame::viewport` confines the mesh
-to. The view's set 0 is the mesh pipeline's, so a frame's own set binds, and
-its level 0 is read through `common/hybrid_mesh_set0.glsl`, the mesh shader's
-own sampling.
+pictures; `PicturePyramid` holds their levels from 1; `ui::ImagePanel` shows
+them in a `ui::DockedPanel` beside the scene, which
+`HybridMeshFrame::viewport` confines the mesh to. The view's set 0 is the
+mesh pipeline's, so a frame's own set binds, and its level 0 is read through
+`common/hybrid_mesh_set0.glsl`, the mesh shader's own sampling.
 
 **An area box, not bilinear taps.** A tap between pixels of a Y'CbCr picture
 mixes codes before the conversion, which is not linear. Against the exact box
@@ -178,7 +178,13 @@ at 1/2, then linear blits. It takes about 4/3 of a byte a picture pixel, and
 is rebuilt only when the pictures change, so a paused picture costs no build.
 
 **Docked, not floating.** The panel and the scene split the drawable, so
-nothing covers the mesh; `ImagePanel` says which side it docks at.
+nothing covers the mesh; `DockedPanel` says which side it docks at.
+
+**One docked panel for any content.** `DockedPanel` holds the layout, the
+handle and the header; `ImagePanel` holds the pictures and their view, and no
+dock. A program whose panel shows content of its own docks by the same rules,
+and one that shows pictures in a host's panel arranges them by the same
+rules, with no copy of either.
 
 ## 2026-10-28 — A mesh samples two pictures in place
 

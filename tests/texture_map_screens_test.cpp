@@ -2,13 +2,13 @@
 // Copyright (c) 2026 Tao Jin
 
 // The pieces together, as an app assembles them: a mesh in the scene's
-// rectangle beside an ImagePanel of its texture's pictures, drawn by
-// HybridMeshTextureView through a PicturePyramid, with the panel's chrome
-// over them -- on the panel's design screens, one tall picture and two wide
-// ones, and on a desktop at fit, 1:1 and 4:1. Each frame checks that the
-// mesh stays in the scene, the pictures in their places and nothing else in
-// the panel. With VG_TEST_DUMP_DIR set, each frame is also written there as a
-// PPM, to look at.
+// rectangle beside a DockedPanel of its texture's pictures (ImagePanel),
+// drawn by HybridMeshTextureView through a PicturePyramid, with the panel's
+// chrome over them -- on the panel's design screens, one tall picture and
+// two wide ones, and on a desktop at fit, 1:1 and 4:1. Each frame checks
+// that the mesh stays in the scene, the pictures in their places and nothing
+// else in the panel. With VG_TEST_DUMP_DIR set, each frame is also written
+// there as a PPM, to look at.
 
 #include <gtest/gtest.h>
 
@@ -40,6 +40,7 @@
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_view.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/image_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
@@ -189,11 +190,13 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
     return t;
   }
 
-  // Two frames of `panel` beside `texture`'s mesh on `screen`, the view set
-  // by `zoom` (on the panel, after its first layout) before the second, which
-  // is checked and, with VG_TEST_DUMP_DIR set, written as `name`.ppm.
-  void show(const Screen& screen, ui::ImagePanel& panel, Texture& texture,
-            VkExtent2D size, uint32_t count, const std::string& name,
+  // Two frames of `dock`, with `pictures` in it, beside `texture`'s mesh on
+  // `screen`, the view set by `zoom` (on the pictures, after their first
+  // arrangement) before the second, which is checked and, with
+  // VG_TEST_DUMP_DIR set, written as `name`.ppm.
+  void show(const Screen& screen, ui::DockedPanel& dock,
+            ui::ImagePanel& pictures, Texture& texture, VkExtent2D size,
+            uint32_t count, const std::string& name,
             const std::function<void(ui::ImagePanel&)>& zoom = nullptr) {
     ui::ImGuiOverlayConfig config;
     config.layout = layout();
@@ -207,7 +210,7 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
     auto touch = ui::ImGuiTouch::create(overlay.value().context());
     ASSERT_TRUE(touch.ok()) << touch.status().message();
     const VkExtent2D pixels = screen.pixels();
-    panel.set_pictures(
+    pictures.set_pictures(
         {static_cast<float>(size.width), static_cast<float>(size.height)},
         count);
 
@@ -223,11 +226,13 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
       touch.value()->new_frame(
           {pixels, screen.scale, screen.safe, (f + 1) / 60.0});
       overlay.value().new_frame();
-      laid = panel.layout(pixels);
+      dock.set_content_size(pictures.content_size());
+      laid = dock.layout(pixels);
+      pictures.arrange(laid.content, laid.side);
       if (f == 1 && zoom) {
-        zoom(panel);
+        zoom(pictures);
       }
-      panel.draw_chrome(kTitle);
+      dock.draw_chrome(kTitle, [&pictures] { pictures.header_items(); });
       const vkc::Status s = submit([&](VkCommandBuffer cmd) {
         texture.pyramid->record(cmd, texture.set->set());
         target.value().prepare(cmd);
@@ -255,10 +260,10 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
         frame.draw_count = 1;
         mesh_->submit(cmd, frame);
         std::vector<pipelines::TextureViewDraw> draws;
-        for (uint32_t p = 0; panel.open() && p < count; ++p) {
+        for (uint32_t p = 0; dock.open() && p < count; ++p) {
           draws.push_back(pipelines::texture_view_draw(
-              texture.set->set(), texture.pyramid.get(), panel.view(),
-              panel.picture_origin(p),
+              texture.set->set(), texture.pyramid.get(), pictures.view(),
+              pictures.picture_origin(p),
               {static_cast<float>(size.width), static_cast<float>(size.height)},
               {0.0f, static_cast<float>(p), 1.0f, p + 1.0f}));
         }
@@ -312,14 +317,14 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
         }
         for (uint32_t i = 0; i < count && !covered; ++i) {
           const glm::vec2 lo =
-              panel.view().image_to_target(panel.picture_origin(i));
-          const glm::vec2 hi = panel.view().image_to_target(
-              panel.picture_origin(i) +
+              pictures.view().image_to_target(pictures.picture_origin(i));
+          const glm::vec2 hi = pictures.view().image_to_target(
+              pictures.picture_origin(i) +
               glm::vec2(static_cast<float>(size.width),
                         static_cast<float>(size.height)));
           // A pixel the picture's edge cuts may be either.
           if (cx > lo.x - 1 && cy > lo.y - 1 && cx < hi.x + 1 &&
-              cy < hi.y + 1 && in(laid.pictures, cx, cy)) {
+              cy < hi.y + 1 && in(laid.content, cx, cy)) {
             covered = true;
             const bool whole = cx > lo.x + 1 && cy > lo.y + 1 &&
                                cx < hi.x - 1 && cy < hi.y - 1;
@@ -361,10 +366,11 @@ TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
     for (const Screen& screen : kScreens) {
       SCOPED_TRACE(::testing::Message()
                    << screen.name << ", " << pictures.name);
-      ui::ImagePanelConfig config;
+      ui::DockedPanelConfig config;
       config.state = {true, screen.share, screen.share};
-      ui::ImagePanel panel(config);
-      show(screen, panel, *texture, pictures.size, pictures.count,
+      ui::DockedPanel dock(config);
+      ui::ImagePanel shown;
+      show(screen, dock, shown, *texture, pictures.size, pictures.count,
            std::string(screen.name) + "_" + pictures.name);
     }
   }
@@ -379,19 +385,21 @@ TEST_F(TextureMapScreensTest, FitOneToOneAndMagnified) {
   const Screen& screen = kScreens[0];
   for (const float scale : {0.0f, 1.0f, 4.0f}) {
     SCOPED_TRACE(::testing::Message() << "scale " << scale);
-    ui::ImagePanelConfig config;
+    ui::DockedPanelConfig config;
     config.state = {true, 0.4f, 0.4f};
-    ui::ImagePanel panel(config);
+    ui::DockedPanel dock(config);
+    ui::ImagePanel pictures;
     const std::string name = scale == 0.0f   ? "zoom_fit"
                              : scale == 1.0f ? "zoom_1to1"
                                              : "zoom_4to1";
-    show(screen, panel, *texture, kSize, 2, name, [&](ui::ImagePanel& p) {
-      if (scale > 0.0f) {
-        // About the point of the first picture's checker, near its middle.
-        const glm::vec2 at = p.view().image_to_target({1400.0f, 400.0f});
-        p.view().zoom_about(at, scale / p.view().scale());
-      }
-    });
+    show(screen, dock, pictures, *texture, kSize, 2, name,
+         [&](ui::ImagePanel& p) {
+           if (scale > 0.0f) {
+             // About the point of the first picture's checker, near its middle.
+             const glm::vec2 at = p.view().image_to_target({1400.0f, 400.0f});
+             p.view().zoom_about(at, scale / p.view().scale());
+           }
+         });
   }
 }
 

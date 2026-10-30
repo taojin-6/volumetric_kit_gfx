@@ -5,7 +5,7 @@
 
 /// @file ui_test_support.hpp
 /// A CPU-only Dear ImGui context for the ui tests that build widgets or draw
-/// lists without a device.
+/// lists without a device, and the mouse's clicks and drags on it.
 
 #include "imgui.h"
 
@@ -35,5 +35,35 @@ class HeadlessImGui {
  private:
   ImGuiContext* context_;
 };
+
+// The mouse to `at` (points), then pressed and released, a call of `frame`
+// (one ImGui frame) each.
+template <typename Frame>
+void click(ImVec2 at, Frame&& frame) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(at.x, at.y);
+  frame();
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+  frame();
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+  frame();
+}
+
+// A drag with the mouse from `from` to `to` (points), through their middle,
+// released there, a call of `frame` (one ImGui frame) each step.
+template <typename Frame>
+void drag(ImVec2 from, ImVec2 to, Frame&& frame) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(from.x, from.y);
+  frame();
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+  frame();
+  io.AddMousePosEvent(0.5f * (from.x + to.x), 0.5f * (from.y + to.y));
+  frame();
+  io.AddMousePosEvent(to.x, to.y);
+  frame();
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+  frame();
+}
 
 }  // namespace vg_test
