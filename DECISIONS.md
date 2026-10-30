@@ -178,7 +178,12 @@ at 1/2, then linear blits. It takes about 4/3 of a byte a picture pixel, and
 is rebuilt only when the pictures change, so a paused picture costs no build.
 
 **Docked, not floating.** The panel and the scene split the drawable, so
-nothing covers the mesh; `ImagePanel` says which side it docks at.
+nothing covers the mesh; `DockedPanel` says which side it docks at.
+
+**One docked panel for any content.** `DockedPanel` holds the layout, the
+handle and the header; `ImagePanel` adds the pictures and their view. A
+program whose panel shows content of its own docks by the same rules, with
+no copy of them.
 
 ## 2026-10-28 — A mesh samples two pictures in place
 

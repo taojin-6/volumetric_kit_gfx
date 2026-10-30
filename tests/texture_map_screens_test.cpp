@@ -319,7 +319,7 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
                         static_cast<float>(size.height)));
           // A pixel the picture's edge cuts may be either.
           if (cx > lo.x - 1 && cy > lo.y - 1 && cx < hi.x + 1 &&
-              cy < hi.y + 1 && in(laid.pictures, cx, cy)) {
+              cy < hi.y + 1 && in(laid.content, cx, cy)) {
             covered = true;
             const bool whole = cx > lo.x + 1 && cy > lo.y + 1 &&
                                cx < hi.x - 1 && cy < hi.y - 1;
@@ -361,7 +361,7 @@ TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
     for (const Screen& screen : kScreens) {
       SCOPED_TRACE(::testing::Message()
                    << screen.name << ", " << pictures.name);
-      ui::ImagePanelConfig config;
+      ui::DockedPanelConfig config;
       config.state = {true, screen.share, screen.share};
       ui::ImagePanel panel(config);
       show(screen, panel, *texture, pictures.size, pictures.count,
@@ -379,7 +379,7 @@ TEST_F(TextureMapScreensTest, FitOneToOneAndMagnified) {
   const Screen& screen = kScreens[0];
   for (const float scale : {0.0f, 1.0f, 4.0f}) {
     SCOPED_TRACE(::testing::Message() << "scale " << scale);
-    ui::ImagePanelConfig config;
+    ui::DockedPanelConfig config;
     config.state = {true, 0.4f, 0.4f};
     ui::ImagePanel panel(config);
     const std::string name = scale == 0.0f   ? "zoom_fit"

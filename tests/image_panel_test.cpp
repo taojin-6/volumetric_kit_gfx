@@ -60,8 +60,8 @@ const Screen kPadPortrait{
 const glm::vec2 kTall{1024.0f, 2048.0f};
 const glm::vec2 kWide{4096.0f, 2176.0f};
 
-ui::ImagePanelConfig open_at(float share) {
-  ui::ImagePanelConfig config;
+ui::DockedPanelConfig open_at(float share) {
+  ui::DockedPanelConfig config;
   config.state.open = true;
   config.state.right_share = share;
   config.state.bottom_share = share;
@@ -172,7 +172,7 @@ TEST_F(ImagePanelTest, ClosedTheSceneIsTheWholeDrawable) {
   EXPECT_EQ(layout.scene.offset.y, 0);
   EXPECT_EQ(layout.scene.extent.width, 3456u);
   EXPECT_EQ(layout.scene.extent.height, 2234u);
-  EXPECT_EQ(layout.pictures.extent.width, 0u);
+  EXPECT_EQ(layout.content.extent.width, 0u);
   EXPECT_FALSE(panel.over_pictures({3000.0f, 1000.0f}));
   EXPECT_FALSE(panel.open());
 }
@@ -222,19 +222,19 @@ TEST_F(ImagePanelTest, TheSideOnTheDesignsScreens) {
     const ui::EdgeInsets& safe = c.screen->safe;
     if (layout.side == R) {
       EXPECT_EQ(layout.scene.extent.height, px.height);
-      EXPECT_GT(static_cast<float>(layout.pictures.offset.x),
+      EXPECT_GT(static_cast<float>(layout.content.offset.x),
                 right_of(layout.scene));
-      EXPECT_FLOAT_EQ(right_of(layout.pictures), px.width - safe.right * s);
+      EXPECT_FLOAT_EQ(right_of(layout.content), px.width - safe.right * s);
     } else {
       EXPECT_EQ(layout.scene.extent.width, px.width);
-      EXPECT_GT(static_cast<float>(layout.pictures.offset.y),
+      EXPECT_GT(static_cast<float>(layout.content.offset.y),
                 bottom_of(layout.scene));
-      EXPECT_FLOAT_EQ(static_cast<float>(layout.pictures.offset.x),
+      EXPECT_FLOAT_EQ(static_cast<float>(layout.content.offset.x),
                       safe.left * s);
     }
-    EXPECT_GE(static_cast<float>(layout.pictures.offset.y), safe.top * s);
-    EXPECT_LE(bottom_of(layout.pictures), px.height - safe.bottom * s);
-    EXPECT_GE(static_cast<float>(layout.pictures.offset.x), safe.left * s);
+    EXPECT_GE(static_cast<float>(layout.content.offset.y), safe.top * s);
+    EXPECT_LE(bottom_of(layout.content), px.height - safe.bottom * s);
+    EXPECT_GE(static_cast<float>(layout.content.offset.x), safe.left * s);
   }
 }
 
@@ -350,10 +350,10 @@ TEST_F(ImagePanelTest, ARotationRefitsAFittedViewAndKeepsAZoomedCentreInside) {
       // Both pictures lie in the viewport.
       const glm::vec2 lo = view.image_to_target({0.0f, 0.0f});
       const glm::vec2 hi = view.image_to_target(view.image_size());
-      EXPECT_GE(lo.x, static_cast<float>(layout.pictures.offset.x) - 0.5f);
-      EXPECT_GE(lo.y, static_cast<float>(layout.pictures.offset.y) - 0.5f);
-      EXPECT_LE(hi.x, right_of(layout.pictures) + 0.5f);
-      EXPECT_LE(hi.y, bottom_of(layout.pictures) + 0.5f);
+      EXPECT_GE(lo.x, static_cast<float>(layout.content.offset.x) - 0.5f);
+      EXPECT_GE(lo.y, static_cast<float>(layout.content.offset.y) - 0.5f);
+      EXPECT_LE(hi.x, right_of(layout.content) + 0.5f);
+      EXPECT_LE(hi.y, bottom_of(layout.content) + 0.5f);
     }
   }
 
@@ -396,14 +396,14 @@ TEST_F(ImagePanelTest, OverPicturesAndDoubleTap) {
   ui::ImagePanel panel(open_at(0.4f));
   panel.set_pictures(kTall, 1);
   const ui::PanelLayout layout = frame(panel, kMacBook);
-  const glm::vec2 inside{static_cast<float>(layout.pictures.offset.x) + 10.0f,
-                         static_cast<float>(layout.pictures.offset.y) + 10.0f};
+  const glm::vec2 inside{static_cast<float>(layout.content.offset.x) + 10.0f,
+                         static_cast<float>(layout.content.offset.y) + 10.0f};
   EXPECT_TRUE(panel.over_pictures(inside));
   EXPECT_FALSE(panel.over_pictures({10.0f, 10.0f}));
   EXPECT_FALSE(panel.over_pictures(
-      {right_of(layout.pictures), bottom_of(layout.pictures) - 1.0f}));
+      {right_of(layout.content), bottom_of(layout.content) - 1.0f}));
 
-  const glm::vec2 at{static_cast<float>(layout.pictures.offset.x) + 300.0f,
+  const glm::vec2 at{static_cast<float>(layout.content.offset.x) + 300.0f,
                      900.0f};
   const glm::vec2 under = panel.view().target_to_image(at);
   panel.double_tap(at);
@@ -466,7 +466,7 @@ TEST_F(ImagePanelTest, TheHeaderAndTheHandleChangeTheState) {
 // With detents, a release snaps to the nearest; between drags the share
 // follows the pointer, held to 25-60 %.
 TEST_F(ImagePanelTest, AReleaseSnapsToTheNearestDetent) {
-  ui::ImagePanelConfig config = open_at(0.45f);
+  ui::DockedPanelConfig config = open_at(0.45f);
   config.detents = {0.45f, 0.6f};
   ui::ImagePanel panel(config);
   panel.set_pictures(kTall, 1);
