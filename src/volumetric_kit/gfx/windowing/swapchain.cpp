@@ -50,12 +50,9 @@ core::Result<Swapchain> Swapchain::create(const core::Device& device,
           "attachment support on this device");
     }
   }
-  // Vulkan requires kWindowSamples in both limits; a portability driver that
-  // reports less is refused here rather than failing at its first pipeline.
-  const VkPhysicalDeviceLimits& limits = device.caps().limits();
-  if ((limits.framebufferColorSampleCounts & kWindowSamples) == 0 ||
-      (has_depth &&
-       (limits.framebufferDepthSampleCounts & kWindowSamples) == 0)) {
+  // A device that reports less is refused here rather than failing at its
+  // first pipeline.
+  if (!window_samples_supported(device.caps().limits(), has_depth)) {
     return core::Status::unsupported(
         "Swapchain::create: the device cannot render kWindowSamples samples "
         "into a framebuffer");
@@ -247,13 +244,8 @@ core::Status Swapchain::create_image_resources(VkExtent2D extent) {
   // One multisampled set for every image, not one per image: a frame's
   // samples live for its one scope, and RenderTarget::begin orders each scope
   // after the previous one on the queue, so frames in flight never need two.
-  core::ImageDesc color_desc;
-  color_desc.extent = extent;
-  color_desc.format = format_;
-  color_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-  color_desc.samples = kWindowSamples;
-  VKC_ASSIGN(msaa_color_, allocator_->create_image(color_desc));
+  VKC_ASSIGN(msaa_color_, make_multisampled_color(*allocator_, extent, format_,
+                                                  kWindowSamples));
   const RenderTargetAttachment msaa{msaa_color_.handle(), msaa_color_.view(),
                                     format_};
   // RenderTarget ignores an empty-view depth, so a colour-only chain passes

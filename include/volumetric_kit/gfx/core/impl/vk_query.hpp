@@ -6,8 +6,9 @@
 /// @file core/impl/vk_query.hpp
 /// Internal helpers for swapchain.cpp: the Vulkan "enumerate (count, then
 /// fill)" idiom for a surface's formats and present modes, each returning a
-/// `core::Result` so a real failure surfaces. The instance and physical-device
-/// queries live in the core's vulkan tier. Not a public header.
+/// `core::Result` so a real failure surfaces, and whether a device's limits
+/// take a window's sample count. The instance and physical-device queries
+/// live in the core's vulkan tier. Not a public header.
 
 #include <cstdint>
 #include <vector>
@@ -15,8 +16,24 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
 
 namespace volumetric_kit::gfx {
+
+/// @brief Whether a device renders @ref kWindowSamples into a framebuffer:
+///        its colour and, with a depth attachment, its depth sample counts.
+///
+/// Vulkan requires the count in both limits; a portability driver may report
+/// less.
+/// @param limits  The device's limits.
+/// @param depth   Whether the framebuffer has a depth attachment.
+/// @return `true` when every attachment the framebuffer has takes the count.
+inline bool window_samples_supported(const VkPhysicalDeviceLimits& limits,
+                                     bool depth) noexcept {
+  return (limits.framebufferColorSampleCounts & kWindowSamples) != 0 &&
+         (!depth ||
+          (limits.framebufferDepthSampleCounts & kWindowSamples) != 0);
+}
 
 /// @return The surface formats @p device offers on @p surface (empty if none),
 ///         or a non-OK `core::Status` if the query fails. `VK_INCOMPLETE` on

@@ -177,8 +177,9 @@ abort at the first pipeline.
 loop submits every frame on one queue, so `RenderTarget::begin`'s barrier orders a frame's
 scope after the previous frame's on the same images; frames in flight never need two sets.
 A set per image would multiply 32 bytes a pixel (4x colour and depth) by the image count.
-Net of the dropped per-image depths, a three-image window with depth costs about +41 MB at
-1080p and +166 MB at 4K.
+Net of the dropped per-image depths (4 bytes a pixel each), a three-image window with depth
+measured +42.4 MB at 1080p and +169.7 MB at 4K (Apple M4); a two-image one costs 24 bytes
+a pixel, about +50 MB at 1080p and +199 MB at 4K.
 
 ## 2026-10-30 — Multisampling: 4x, resolved in the scope, centroid mesh UVs
 

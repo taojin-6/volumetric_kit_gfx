@@ -1308,6 +1308,29 @@ TEST(SwapchainStale, ReadsOutOfDateAndSuboptimalAsStale) {
   EXPECT_FALSE(win::swapchain_stale(vkc::Status{}));
 }
 
+// Swapchain::create refuses a device whose framebuffer limits lack the
+// window's sample count: colour always, depth only when the chain has one.
+TEST(WindowSamplesSupported, NeedsTheCountInEveryAttachmentsLimit) {
+  VkPhysicalDeviceLimits limits{};
+  limits.framebufferColorSampleCounts =
+      VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+  limits.framebufferDepthSampleCounts =
+      VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+  EXPECT_TRUE(vg::window_samples_supported(limits, /*depth=*/false));
+  EXPECT_TRUE(vg::window_samples_supported(limits, /*depth=*/true));
+
+  VkPhysicalDeviceLimits no_color = limits;
+  no_color.framebufferColorSampleCounts =
+      VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT;
+  EXPECT_FALSE(vg::window_samples_supported(no_color, /*depth=*/false));
+  EXPECT_FALSE(vg::window_samples_supported(no_color, /*depth=*/true));
+
+  VkPhysicalDeviceLimits no_depth = limits;
+  no_depth.framebufferDepthSampleCounts = VK_SAMPLE_COUNT_1_BIT;
+  EXPECT_TRUE(vg::window_samples_supported(no_depth, /*depth=*/false));
+  EXPECT_FALSE(vg::window_samples_supported(no_depth, /*depth=*/true));
+}
+
 // FIFO by default: it paces frames to the display, where MAILBOX would render
 // uncapped on a GPU an app may share with compute.
 TEST(SwapchainConfigTest, DefaultsToFifo) {

@@ -48,11 +48,8 @@ struct SwapchainConfig {
   /// Depth attachment format, or `VK_FORMAT_UNDEFINED` (the default) for a
   /// color-only swapchain. When set, the swapchain's multisampled set also
   /// holds a depth image, so each @ref Swapchain::render_target is
-  /// depth-capable.
-  ///
-  /// @note Depth lives for one rendering scope: a multisampled scope neither
-  ///       loads nor stores it (@ref RenderTarget::begin), so clear it every
-  ///       frame (`load_op = CLEAR`, the default).
+  /// depth-capable. Like the colour, it lives for one frame's scope
+  /// (@ref Swapchain).
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
 };
 
@@ -76,9 +73,16 @@ inline bool swapchain_stale(const core::Status& status) noexcept {
 /// Every window renders at @ref kWindowSamples. Each image's
 /// @ref render_target draws into the one shared multisampled set and, when
 /// its scope ends, resolves the colour into that image, so the caller
-/// transitions only the swapchain image, as @ref FrameLoop does. One set
-/// serves every image because @ref RenderTarget::begin orders each scope
-/// after the previous one on the same queue. The set is `TRANSIENT`.
+/// transitions only the swapchain image, as @ref FrameLoop does. The set is
+/// `TRANSIENT`, and a window's frame is one scope on it: a target refuses
+/// `LOAD` and a stored depth (@ref RenderTarget::begin), so every frame
+/// clears colour and depth (`load_op = CLEAR`, the default) and none reuses
+/// the previous frame's.
+///
+/// @warning One set serves every image because @ref RenderTarget::begin
+///          orders each scope after the previous one on the same queue. A
+///          caller that drives the swapchain without @ref FrameLoop submits
+///          every image's frames on one queue.
 ///
 /// Format/color-space/present-mode are chosen once at @ref create and held
 /// stable across @ref recreate, so a pipeline built for @ref layout stays
