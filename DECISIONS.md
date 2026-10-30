@@ -148,6 +148,49 @@ what has landed since then. Record amendments when a contract changes.
   two `YcbcrPicture`s, each in its own images; a triangle takes the picture its provoking
   vertex's `uv0.y` names. One picture draws as before, byte for byte. See the dated entry
   below.
+- **2026-10-30 — Multisampling: 4x, resolved in the scope.** A multisampled `RenderTarget`
+  keeps no samples past its scope: `begin` transitions them, the scope resolves each colour
+  into a single-sample attachment, and the caller's barriers stay those of one sample.
+  `OffscreenTarget` takes 1 or `kWindowSamples` (4); a mesh's texture coordinates are
+  `centroid`. See the dated entry below.
+
+## 2026-10-30 — Multisampling: 4x, resolved in the scope, centroid mesh UVs
+
+**The contract.** A `RenderTarget` above one sample bundles one single-sample resolve
+attachment per colour, of the colour's format. `begin` moves the multisampled colour and
+depth images from `UNDEFINED` to their attachment layouts in one barrier, ordered after any
+earlier scope's clear, stores and resolve read on them; the scope stores them `DONT_CARE`
+and resolves each colour (`AVERAGE`) into its attachment in `COLOR_ATTACHMENT_OPTIMAL`.
+The caller transitions only the resolve images, exactly as it transitions a single-sample
+target's, so `OffscreenTarget::prepare`, `record_readback` and the frame loop's barriers
+are unchanged. `begin` refuses `LOAD` and a stored depth (`VKC_CHECK`).
+
+**Why the scope owns the samples.** Every consumer draws a frame in one scope -- the mesh,
+a panel, then the UI -- so one resolve at its end is all a frame needs; nothing reads the
+samples or the depth afterwards. Never stored, they need no memory traffic on a tile-based
+GPU. Because `begin` orders each scope after the last on the same images, one
+multisampled set can serve several targets that resolve into different images, such as a
+swapchain's. A multisampled frame over several scopes, and a depth resolve, wait for a
+caller that needs them.
+
+**Why 4x alone.** Vulkan guarantees 4 samples for depth and for every colour format that
+averages when resolved, on every device, so an `OffscreenTarget` needs no device query,
+which its allocator cannot make. Another count, or an integer colour (no `AVERAGE`
+resolve), is `Unsupported`. The multisampled images are `TRANSIENT`; the core places no
+memory in lazily allocated types, so they take device memory on every device for now.
+
+**Why centroid texture coordinates.** At 4x a silhouette pixel whose centre lies outside
+the triangle is still shaded at its centre, so its texture coordinates extrapolate past the
+triangle's patch of the texture and show whatever lies beyond it. `centroid` interpolates
+them at the covered samples, inside the triangle. At one sample, and inside a triangle,
+nothing changes. Its derivatives are less exact on those pixels, which matters only to a
+set sampling mips (`HybridMeshTextureSetOptions::max_lod` above 0); pictures are read at
+level 0. `image_draw` and `texture_view` keep exact derivatives: the one selects mips, the
+other holds its reads to the picture.
+
+**What stays single-sample.** `ImagePipeline`'s convert pass and `HybridMeshTextureView`'s
+pyramid write their own images; exports and passes that must hit exact texels draw into
+single-sample offscreen targets.
 
 ## 2026-10-29 — A mesh's texture drawn flat, beside the scene
 

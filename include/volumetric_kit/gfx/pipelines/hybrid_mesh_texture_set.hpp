@@ -42,7 +42,10 @@ struct HybridMeshTextureSetOptions {
   VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   /// The highest mip level sampled; 0 samples the base level alone, and
   /// `VK_LOD_CLAMP_NONE` the whole chain. A Y'CbCr picture's planes are
-  /// sampled at level 0 whatever it says.
+  /// sampled at level 0 whatever it says. Above 0, a multisampled target's
+  /// silhouette pixels may pick a slightly different level: the mesh's texture
+  /// coordinates are interpolated at the covered samples (`centroid`), whose
+  /// derivatives are less exact.
   float max_lod = 0.0f;
 };
 

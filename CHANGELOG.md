@@ -38,6 +38,26 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `core`: **multisampled render targets resolve in the pass.** A
+  `RenderTarget` above one sample takes one single-sample resolve attachment
+  per colour (a new trailing constructor argument). Its `begin` transitions
+  the multisampled images itself, and its scope stores them `DONT_CARE` and
+  resolves each colour (`AVERAGE`), so the caller transitions only the
+  images it reads or presents, as at one sample. Such a scope refuses
+  `LOAD` and a stored depth (`VKC_CHECK`).
+- `core`: **4x offscreen targets.** `OffscreenTargetDesc::samples` takes 1
+  (the default) or `kWindowSamples` (4), which draws into `TRANSIENT`
+  multisampled colour and depth images resolved into `color_image()`, the
+  image readback reads. Other counts, and an integer colour format at 4x,
+  are `Unsupported`. `offscreen_desc(layout, extent)` describes a target
+  laid out as a pipeline's layout, samples included.
+- `pipelines`: `ImagePipeline` and `HybridMeshTextureView` draw into
+  multisampled targets; they refused them. Their pyramids and convert passes
+  stay single-sample.
+- `pipelines`: `HybridMeshPipeline` interpolates a mesh's texture
+  coordinates at the covered samples (`centroid`), so on a multisampled
+  target a silhouette pixel reads the texture inside its triangle, not past
+  it. At one sample nothing changes.
 - `pipelines`: **a mesh's texture drawn flat.** `HybridMeshTextureView` draws
   a `HybridMeshPipeline` set-0 texture -- an RGBA image, or one or two Y'CbCr
   pictures, read where they are through the mesh shader's own sampling --
