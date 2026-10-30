@@ -14,6 +14,76 @@
 
 namespace volumetric_kit::gfx {
 
+namespace {
+
+// Whether `format` is a core-Vulkan integer colour format: one whose resolve
+// cannot average, and whose multisampling a device need not support (its
+// framebufferIntegerColorSampleCounts may be 1 alone). No KHR extension adds
+// an integer colour format.
+bool is_integer_color(VkFormat format) noexcept {
+  switch (format) {
+    case VK_FORMAT_R8_UINT:
+    case VK_FORMAT_R8_SINT:
+    case VK_FORMAT_R8G8_UINT:
+    case VK_FORMAT_R8G8_SINT:
+    case VK_FORMAT_R8G8B8_UINT:
+    case VK_FORMAT_R8G8B8_SINT:
+    case VK_FORMAT_B8G8R8_UINT:
+    case VK_FORMAT_B8G8R8_SINT:
+    case VK_FORMAT_R8G8B8A8_UINT:
+    case VK_FORMAT_R8G8B8A8_SINT:
+    case VK_FORMAT_B8G8R8A8_UINT:
+    case VK_FORMAT_B8G8R8A8_SINT:
+    case VK_FORMAT_A8B8G8R8_UINT_PACK32:
+    case VK_FORMAT_A8B8G8R8_SINT_PACK32:
+    case VK_FORMAT_A2R10G10B10_UINT_PACK32:
+    case VK_FORMAT_A2R10G10B10_SINT_PACK32:
+    case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+    case VK_FORMAT_A2B10G10R10_SINT_PACK32:
+    case VK_FORMAT_R16_UINT:
+    case VK_FORMAT_R16_SINT:
+    case VK_FORMAT_R16G16_UINT:
+    case VK_FORMAT_R16G16_SINT:
+    case VK_FORMAT_R16G16B16_UINT:
+    case VK_FORMAT_R16G16B16_SINT:
+    case VK_FORMAT_R16G16B16A16_UINT:
+    case VK_FORMAT_R16G16B16A16_SINT:
+    case VK_FORMAT_R32_UINT:
+    case VK_FORMAT_R32_SINT:
+    case VK_FORMAT_R32G32_UINT:
+    case VK_FORMAT_R32G32_SINT:
+    case VK_FORMAT_R32G32B32_UINT:
+    case VK_FORMAT_R32G32B32_SINT:
+    case VK_FORMAT_R32G32B32A32_UINT:
+    case VK_FORMAT_R32G32B32A32_SINT:
+    case VK_FORMAT_R64_UINT:
+    case VK_FORMAT_R64_SINT:
+    case VK_FORMAT_R64G64_UINT:
+    case VK_FORMAT_R64G64_SINT:
+    case VK_FORMAT_R64G64B64_UINT:
+    case VK_FORMAT_R64G64B64_SINT:
+    case VK_FORMAT_R64G64B64A64_UINT:
+    case VK_FORMAT_R64G64B64A64_SINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+
+OffscreenTargetDesc offscreen_desc(const RenderTargetLayout& layout,
+                                   VkExtent2D extent) {
+  VKC_CHECK(layout.color_count == 1,
+            "offscreen_desc: the layout must have one color attachment");
+  OffscreenTargetDesc desc;
+  desc.extent = extent;
+  desc.color_format = layout.color_formats[0];
+  desc.depth_format = layout.depth_format;
+  desc.samples = layout.samples;
+  return desc;
+}
+
 core::Result<OffscreenTarget> OffscreenTarget::create(
     core::Allocator& allocator, const OffscreenTargetDesc& desc) {
   if (desc.extent.width == 0 || desc.extent.height == 0) {
@@ -28,6 +98,19 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
     VKC_TRY(validate_depth_only_format(desc.depth_format,
                                        "OffscreenTarget::create"));
+  }
+  // The allocator cannot reach the device's limits, so only the counts Vulkan
+  // guarantees are taken: kWindowSamples for depth and any colour that
+  // averages.
+  const bool multisampled = desc.samples != VK_SAMPLE_COUNT_1_BIT;
+  if (multisampled && desc.samples != kWindowSamples) {
+    return core::Status::unsupported(
+        "OffscreenTarget::create: samples must be 1 or kWindowSamples");
+  }
+  if (multisampled && is_integer_color(desc.color_format)) {
+    return core::Status::unsupported(
+        "OffscreenTarget::create: an integer color format cannot be "
+        "multisampled and resolved");
   }
 
   VkDeviceSize readback_size = 0;
@@ -53,11 +136,25 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
   OffscreenTarget target;
   target.color_ = std::move(color);
 
+  // Multisampled, the colour is drawn here and resolved into color_; its
+  // samples live for one scope, so it is TRANSIENT.
+  if (multisampled) {
+    core::ImageDesc msaa_desc;
+    msaa_desc.extent = desc.extent;
+    msaa_desc.format = desc.color_format;
+    msaa_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    msaa_desc.samples = desc.samples;
+    VKC_ASSIGN(core::Image msaa, allocator.create_image(msaa_desc));
+    target.msaa_color_ = std::move(msaa);
+  }
+
   // Optional depth attachment: device-local, depth-stencil usage. depth_format
   // is validated depth-only above, so create_image derives a DEPTH-aspect view.
   if (desc.depth_format != VK_FORMAT_UNDEFINED) {
-    VKC_ASSIGN(core::Image depth, make_depth_attachment(allocator, desc.extent,
-                                                        desc.depth_format));
+    VKC_ASSIGN(core::Image depth,
+               make_depth_attachment(allocator, desc.extent, desc.depth_format,
+                                     desc.samples));
     target.depth_ = std::move(depth);
   }
 
@@ -77,14 +174,18 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
 }
 
 RenderTarget OffscreenTarget::target() const {
-  const RenderTargetAttachment color{color_.handle(), color_.view(),
-                                     color_.format()};
-  if (depth_.valid()) {
-    const RenderTargetAttachment depth{depth_.handle(), depth_.view(),
-                                       depth_.format()};
-    return RenderTarget(extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT, &depth);
+  const RenderTargetAttachment single{color_.handle(), color_.view(),
+                                      color_.format()};
+  const RenderTargetAttachment depth{depth_.handle(), depth_.view(),
+                                     depth_.format()};
+  const RenderTargetAttachment* with_depth = depth_.valid() ? &depth : nullptr;
+  if (msaa_color_.valid()) {
+    const RenderTargetAttachment msaa{msaa_color_.handle(), msaa_color_.view(),
+                                      msaa_color_.format()};
+    return RenderTarget(extent(), &msaa, 1, msaa_color_.samples(), with_depth,
+                        &single);
   }
-  return RenderTarget(extent(), &color, 1, VK_SAMPLE_COUNT_1_BIT);
+  return RenderTarget(extent(), &single, 1, VK_SAMPLE_COUNT_1_BIT, with_depth);
 }
 
 RenderTargetLayout OffscreenTarget::layout() const {
@@ -95,7 +196,8 @@ RenderTargetLayout OffscreenTarget::layout() const {
   layout.color_formats[0] = color_.format();
   layout.color_count = 1;
   layout.depth_format = depth_.valid() ? depth_.format() : VK_FORMAT_UNDEFINED;
-  layout.samples = VK_SAMPLE_COUNT_1_BIT;
+  layout.samples =
+      msaa_color_.valid() ? msaa_color_.samples() : VK_SAMPLE_COUNT_1_BIT;
   return layout;
 }
 
@@ -123,7 +225,9 @@ void OffscreenTarget::prepare(VkCommandBuffer cmd) const {
   to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
   cmd_image_barrier(cmd, to_color);
 
-  if (depth_.valid()) {
+  // A multisampled target's depth, like its multisampled colour, is
+  // RenderTarget::begin's to transition.
+  if (depth_.valid() && !msaa_color_.valid()) {
     // Depth is never read back; its only prior use is an earlier render's
     // depth write, which the src scope orders before the next clear.
     ImageBarrierDesc to_depth;

@@ -6,13 +6,16 @@
 // clear-and-readback through dynamic rendering -- the headless path
 // golden-image render tests build on. The clear-and-readback absorbs the former
 // render_readback_test, now expressed through the RenderTarget/OffscreenTarget
-// abstraction.
+// abstraction. A multisampled target is laid out, read back and reused under
+// synchronization validation.
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "gfx_test_support.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -268,6 +271,152 @@ TEST_F(OffscreenTargetDeviceTest, DepthFormatAddsDepthAttachment) {
   EXPECT_EQ(target.value().layout().depth_format, VK_FORMAT_D32_SFLOAT);
   EXPECT_EQ(target.value().target().layout().depth_format,
             VK_FORMAT_D32_SFLOAT);
+}
+
+// --- Multisampled --------------------------------------------------------
+
+// offscreen_desc lays a target out as a layout, samples included; any other
+// field keeps its default.
+TEST(OffscreenDescTest, CopiesTheLayoutsFormatsAndSamples) {
+  vg::RenderTargetLayout layout;
+  layout.color_formats[0] = VK_FORMAT_B8G8R8A8_SRGB;
+  layout.color_count = 1;
+  layout.depth_format = VK_FORMAT_D32_SFLOAT;
+  layout.samples = vg::kWindowSamples;
+  const vg::OffscreenTargetDesc desc = vg::offscreen_desc(layout, {40, 30});
+  EXPECT_EQ(desc.extent.width, 40u);
+  EXPECT_EQ(desc.extent.height, 30u);
+  EXPECT_EQ(desc.color_format, VK_FORMAT_B8G8R8A8_SRGB);
+  EXPECT_EQ(desc.depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_EQ(desc.samples, vg::kWindowSamples);
+  EXPECT_TRUE(desc.readback);
+}
+
+class MultisampledOffscreenTargetTest : public vg_test::RendererDeviceTest {
+ protected:
+  // begin() records the multisampled images' barriers itself, so run under
+  // synchronization validation: a scope the barrier fails to order after the
+  // previous one fails the test.
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
+  }
+
+  vkc::Result<vg::OffscreenTarget> create(
+      VkSampleCountFlagBits samples, VkFormat color = kFormat,
+      VkFormat depth = VK_FORMAT_D32_SFLOAT) {
+    vg::OffscreenTargetDesc desc;
+    desc.extent = {kSize, kSize};
+    desc.color_format = color;
+    desc.depth_format = depth;
+    desc.samples = samples;
+    return vg::OffscreenTarget::create(allocator(), desc);
+  }
+
+  // Records one scope per colour in `clears` into `target`, each prepared and
+  // cleared to that opaque colour, then the readback; submits and waits.
+  void clear_scopes(const vg::OffscreenTarget& target,
+                    const std::vector<std::array<float, 3>>& clears) {
+    const vkc::Status s = device().submit_single_time([&](VkCommandBuffer cmd) {
+      for (const std::array<float, 3>& rgb : clears) {
+        target.prepare(cmd);
+        vg::RenderTargetBeginInfo begin;
+        begin.clear_color.float32[0] = rgb[0];
+        begin.clear_color.float32[1] = rgb[1];
+        begin.clear_color.float32[2] = rgb[2];
+        begin.clear_color.float32[3] = 1.0f;
+        const vg::RenderTarget rt = target.target();
+        rt.begin(cmd, begin);
+        rt.end(cmd);
+      }
+      target.record_readback(cmd);
+    });
+    ASSERT_TRUE(s.ok()) << s.message();
+  }
+
+  static constexpr uint32_t kSize = 8;
+};
+
+TEST_F(MultisampledOffscreenTargetTest, IsLaidOutAtTheWindowsSamples) {
+  auto target = create(vg::kWindowSamples);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+  const vg::RenderTargetLayout layout = target.value().layout();
+  EXPECT_EQ(layout.samples, vg::kWindowSamples);
+  EXPECT_EQ(layout.color_formats[0], kFormat);
+  EXPECT_EQ(layout.depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_TRUE(layout.compatible_with(target.value().target().layout()));
+  EXPECT_NE(target.value().color_image(), VK_NULL_HANDLE);
+  EXPECT_NE(target.value().depth_image(), VK_NULL_HANDLE);
+
+  // offscreen_desc of that layout makes a target of the same layout.
+  auto same = vg::OffscreenTarget::create(
+      allocator(), vg::offscreen_desc(layout, {kSize, kSize}));
+  ASSERT_TRUE(same.ok()) << same.status().message();
+  EXPECT_TRUE(same.value().layout().compatible_with(layout));
+}
+
+// The scope resolves into color_image(), which readback reads.
+TEST_F(MultisampledOffscreenTargetTest, ReadsBackTheClearColour) {
+  auto target = create(vg::kWindowSamples);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+  ASSERT_NO_FATAL_FAILURE(clear_scopes(target.value(), {{1.0f, 0.0f, 0.0f}}));
+  const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+  ASSERT_NE(px, nullptr);
+  for (size_t i = 0; i < size_t{kSize} * kSize; ++i) {
+    ASSERT_EQ(px[4 * i + 0], 255) << "texel " << i;
+    ASSERT_EQ(px[4 * i + 1], 0) << "texel " << i;
+    ASSERT_EQ(px[4 * i + 2], 0) << "texel " << i;
+    ASSERT_EQ(px[4 * i + 3], 255) << "texel " << i;
+  }
+}
+
+// Two scopes on one target in one command buffer reuse its multisampled
+// colour and depth: begin()'s barrier orders the second scope's transition and
+// clear after the first's resolve and stores, which synchronization
+// validation checks. The second clear is what reads back.
+TEST_F(MultisampledOffscreenTargetTest, BackToBackScopesAreOrdered) {
+  auto target = create(vg::kWindowSamples);
+  ASSERT_TRUE(target.ok()) << target.status().message();
+  ASSERT_NO_FATAL_FAILURE(
+      clear_scopes(target.value(), {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}));
+  const auto* px = static_cast<const uint8_t*>(target.value().pixels());
+  ASSERT_NE(px, nullptr);
+  EXPECT_EQ(px[0], 0);
+  EXPECT_EQ(px[1], 255);
+  EXPECT_EQ(px[2], 0);
+}
+
+// Only the counts Vulkan guarantees: 1 and kWindowSamples.
+TEST_F(MultisampledOffscreenTargetTest, OtherSampleCountsAreUnsupported) {
+  for (const VkSampleCountFlagBits samples :
+       {VK_SAMPLE_COUNT_2_BIT, VK_SAMPLE_COUNT_8_BIT}) {
+    auto target = create(samples);
+    ASSERT_FALSE(target.ok()) << samples;
+    EXPECT_EQ(target.status().domain(), vkc::Status::Code::Unsupported);
+  }
+}
+
+// An integer colour has no averaging resolve.
+TEST_F(MultisampledOffscreenTargetTest, AnIntegerColourIsUnsupported) {
+  auto target = create(vg::kWindowSamples, VK_FORMAT_R8G8B8A8_UINT);
+  ASSERT_FALSE(target.ok());
+  EXPECT_EQ(target.status().domain(), vkc::Status::Code::Unsupported);
+}
+
+TEST_F(MultisampledOffscreenTargetTest, MoveCarriesTheSamples) {
+  auto created = create(vg::kWindowSamples);
+  ASSERT_TRUE(created.ok()) << created.status().message();
+  vg::OffscreenTarget source = std::move(created).value();
+  vg::OffscreenTarget moved(std::move(source));
+  EXPECT_EQ(moved.layout().samples, vg::kWindowSamples);
+  EXPECT_FALSE(source.valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source.depth_image(), VK_NULL_HANDLE);
+
+  auto other = create(vg::kWindowSamples);
+  ASSERT_TRUE(other.ok()) << other.status().message();
+  vg::OffscreenTarget dst = std::move(other).value();
+  dst = std::move(moved);  // frees dst's images, then adopts moved's
+  EXPECT_EQ(dst.layout().samples, vg::kWindowSamples);
+  EXPECT_FALSE(moved.valid());  // NOLINT(bugprone-use-after-move)
 }
 
 }  // namespace

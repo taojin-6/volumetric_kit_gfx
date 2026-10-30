@@ -4,13 +4,18 @@
 // RenderTargetLayout compatibility + RenderTarget attachment/layout plumbing.
 // These are pure value-type checks needing no device: RenderTarget is a
 // non-owning view (no handle ownership), so there is no move-only lifecycle to
-// exercise -- only its construction and the layout it derives.
+// exercise -- only its construction, the layout it derives, and the checks
+// on a multisampled target and scope.
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 
 namespace {
 
@@ -90,6 +95,85 @@ TEST(RenderTargetTest, DerivesLayoutAndExtentFromAttachments) {
   EXPECT_EQ(layout.color_count, 1u);
   EXPECT_EQ(layout.color_formats[0], kColor);
   EXPECT_EQ(layout.depth_format, VK_FORMAT_UNDEFINED);
+}
+
+// A multisampled target reports its samples and its colours' format, which
+// its resolves share.
+TEST(RenderTargetTest, MultisampledTargetDerivesItsLayout) {
+  vg::RenderTargetAttachment color{};
+  color.format = kColor;
+  vg::RenderTargetAttachment depth{};
+  depth.view = reinterpret_cast<VkImageView>(uintptr_t{1});
+  depth.format = VK_FORMAT_D32_SFLOAT;
+  const vg::RenderTargetAttachment resolve = color;
+  const vg::RenderTarget target({64, 48}, &color, 1, vg::kWindowSamples, &depth,
+                                &resolve);
+  const vg::RenderTargetLayout layout = target.layout();
+  EXPECT_EQ(layout.samples, vg::kWindowSamples);
+  EXPECT_EQ(layout.color_formats[0], kColor);
+  EXPECT_EQ(layout.depth_format, VK_FORMAT_D32_SFLOAT);
+}
+
+// What a multisampled target cannot be are programmer errors, caught before
+// any Vulkan call, so no device is needed; the "DeathTest" suffix runs them
+// isolated.
+TEST(RenderTargetDeathTest, ResolvesGoWithMultisamplingAlone) {
+  vg::RenderTargetAttachment color{};
+  color.format = kColor;
+  const vg::RenderTargetAttachment resolve = color;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});  // route the abort message to stderr
+        vg::RenderTarget({8, 8}, &color, 1, vg::kWindowSamples);
+      },
+      "resolve attachments exactly when samples > 1");
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        vg::RenderTarget({8, 8}, &color, 1, VK_SAMPLE_COUNT_1_BIT, nullptr,
+                         &resolve);
+      },
+      "resolve attachments exactly when samples > 1");
+}
+
+TEST(RenderTargetDeathTest, AResolveKeepsItsColorsFormat) {
+  vg::RenderTargetAttachment color{};
+  color.format = kColor;
+  vg::RenderTargetAttachment resolve{};
+  resolve.format = VK_FORMAT_B8G8R8A8_UNORM;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        vg::RenderTarget({8, 8}, &color, 1, vg::kWindowSamples, nullptr,
+                         &resolve);
+      },
+      "resolve format differs");
+}
+
+// The samples never outlive a multisampled scope: nothing loads them, and
+// depth is never stored.
+TEST(RenderTargetDeathTest, AMultisampledScopeNeitherLoadsNorStoresDepth) {
+  vg::RenderTargetAttachment color{};
+  color.format = kColor;
+  const vg::RenderTargetAttachment resolve = color;
+  const vg::RenderTarget target({8, 8}, &color, 1, vg::kWindowSamples, nullptr,
+                                &resolve);
+  vg::RenderTargetBeginInfo load;
+  load.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        target.begin(VK_NULL_HANDLE, load);
+      },
+      "cannot LOAD");
+  vg::RenderTargetBeginInfo store_depth;
+  store_depth.depth_store_op = VK_ATTACHMENT_STORE_OP_STORE;
+  EXPECT_DEATH(
+      {
+        vkc::set_log_handler({});
+        target.begin(VK_NULL_HANDLE, store_depth);
+      },
+      "cannot STORE depth");
 }
 
 }  // namespace

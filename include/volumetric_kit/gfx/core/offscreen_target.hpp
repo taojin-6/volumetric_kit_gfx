@@ -32,10 +32,34 @@ struct OffscreenTargetDesc {
   /// depth/stencil formats are not yet supported. The chosen format is reported
   /// by @ref layout.
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
+  /// 1, or @ref kWindowSamples to draw as a multisampled window does. At
+  /// @ref kWindowSamples the target draws into multisampled colour (and
+  /// depth) images, `TRANSIENT`, that its scope resolves into
+  /// @ref OffscreenTarget::color_image, the image readback reads. Use 1 for
+  /// passes that must hit exact texels, and for exports.
+  VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
   /// Allocate a host-visible buffer sized to the color attachment so the render
   /// can be copied back to the CPU (see @ref OffscreenTarget::record_readback).
   bool readback = true;
 };
+
+/// @brief A description of a target laid out as @p layout -- its colour
+///        format, depth format and samples -- at @p extent, with readback:
+///        an offscreen target that draws as a target of @p layout does, such
+///        as a window's.
+/// @param layout  The layout to match; one colour attachment.
+/// @param extent  The target's size in texels.
+/// @return The description, for @ref OffscreenTarget::create.
+/// @pre `layout.color_count == 1` (checked with `VKC_CHECK`).
+///
+/// @code
+/// VKC_ASSIGN(OffscreenTarget target,
+///            OffscreenTarget::create(allocator, offscreen_desc(
+///                                                   view.target_layout(),
+///                                                   {256, 256})));
+/// @endcode
+VG_CORE_API OffscreenTargetDesc offscreen_desc(const RenderTargetLayout& layout,
+                                               VkExtent2D extent);
 
 /// @brief Owns the images a headless render draws into, plus the staging buffer
 ///        it is read back through — the no-window path for golden-image tests
@@ -50,6 +74,12 @@ struct OffscreenTargetDesc {
 /// readback path needs. This is the headless sibling of the windowing tier's
 /// swapchain; both produce a @ref RenderTarget, so a pass renders into either
 /// unchanged.
+///
+/// At @ref kWindowSamples (@ref OffscreenTargetDesc::samples) the target also
+/// owns a multisampled colour image, and its depth image is multisampled; the
+/// @ref RenderTarget's scope transitions both and resolves the colour into
+/// the single-sample colour image, which @ref prepare, @ref record_readback
+/// and @ref color_image keep serving as at one sample.
 ///
 /// @warning The device the @p allocator passed to @ref create allocates on
 ///          must outlive the target: the owned `core::Image` / `core::Buffer`
@@ -87,6 +117,10 @@ class VG_CORE_API OffscreenTarget {
   ///           `core::Status::Code::InvalidArgument`, and a combined
   ///           depth/stencil one `core::Status::Code::Unsupported` (depth-only
   ///           for now);
+  ///         - @ref OffscreenTargetDesc::samples other than 1 and
+  ///           @ref kWindowSamples, or @ref kWindowSamples with an integer
+  ///           (`_UINT` / `_SINT`) color format, which has no averaging
+  ///           resolve, returns `core::Status::Code::Unsupported`;
   ///         - a failed image/buffer allocation propagates its `core::Status`.
   static core::Result<OffscreenTarget> create(core::Allocator& allocator,
                                               const OffscreenTargetDesc& desc);
@@ -108,25 +142,31 @@ class VG_CORE_API OffscreenTarget {
     return {color_.width(), color_.height()};
   }
 
-  /// @return The color `VkImage`, for the caller's pre/post-render barriers.
+  /// @return The single-sample color `VkImage` -- at @ref kWindowSamples, the
+  ///         one the scope resolves into -- for the caller's pre/post-render
+  ///         barriers.
   VkImage color_image() const noexcept { return color_.handle(); }
 
-  /// @return The depth `VkImage` for the caller's barriers, or `VK_NULL_HANDLE`
-  ///         when the target has no depth attachment.
+  /// @return The depth `VkImage`, multisampled at @ref kWindowSamples, or
+  ///         `VK_NULL_HANDLE` when the target has no depth attachment. The
+  ///         caller transitions it at one sample; at @ref kWindowSamples the
+  ///         scope does.
   VkImage depth_image() const noexcept { return depth_.handle(); }
 
   /// @brief Record the transitions into the attachment layouts (dynamic
   ///        rendering performs none itself): the color image
   ///        `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` and, when the target has a
-  ///        depth attachment, the depth image
-  ///        `UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL`.
+  ///        single-sample depth attachment, the depth image
+  ///        `UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL`. A multisampled target's
+  ///        multisampled images are left to @ref RenderTarget::begin.
   ///
   /// Call before @ref RenderTarget::begin. The `UNDEFINED` source layout
   /// discards any previous contents (a load-op clear rewrites them), so this
   /// also re-prepares the target for another render after a
   /// @ref record_readback left the color image in `TRANSFER_SRC_OPTIMAL`.
-  /// Consumers sequencing their own layouts (e.g. preserving the previous
-  /// render) record @ref cmd_image_barrier directly instead.
+  /// Consumers of a single-sample target sequencing their own layouts (e.g.
+  /// preserving the previous render) record @ref cmd_image_barrier directly
+  /// instead; a multisampled target keeps no samples between scopes.
   /// @param cmd  A command buffer in the recording state.
   /// @pre `valid()`.
   void prepare(VkCommandBuffer cmd) const;
@@ -140,7 +180,8 @@ class VG_CORE_API OffscreenTarget {
   /// @param cmd  A command buffer in the recording state.
   /// @pre `valid()`, the target was created with readback, and the color image
   ///      is currently in `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL` (the state
-  ///      a stored dynamic-rendering scope leaves it in).
+  ///      a dynamic-rendering scope that stores or resolves into it leaves it
+  ///      in).
   void record_readback(VkCommandBuffer cmd) const;
 
   /// @return The mapped readback buffer (the rendered pixels once the
@@ -152,9 +193,10 @@ class VG_CORE_API OffscreenTarget {
   bool valid() const noexcept { return color_.valid(); }
 
  private:
-  core::Image color_;
-  core::Image depth_;      // empty when created without a depth_format
-  core::Buffer readback_;  // empty when created without readback
+  core::Image color_;       // single-sample: rendered, or resolved, into
+  core::Image msaa_color_;  // empty at one sample
+  core::Image depth_;       // empty when created without a depth_format
+  core::Buffer readback_;   // empty when created without readback
 };
 
 }  // namespace volumetric_kit::gfx
