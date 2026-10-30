@@ -134,16 +134,6 @@ class WindowingTest : public vg_test::RendererTest {
     return sc.ok() ? std::move(sc).value() : win::Swapchain{};
   }
 
-  // The bytes the fixture's allocator holds, over every heap.
-  uint64_t allocated_bytes() const {
-    const vkc::MemoryStats stats = allocator_->memory_stats();
-    uint64_t total = 0;
-    for (uint32_t h = 0; h < stats.heap_count; ++h) {
-      total += stats.heaps[h].allocation_bytes;
-    }
-    return total;
-  }
-
   // Record a clear of the frame's image, as every frame here draws.
   static void record_clear(const win::Frame& frame) {
     vg::RenderTargetBeginInfo begin;
@@ -205,16 +195,6 @@ class WindowingTest : public vg_test::RendererTest {
 
 // The frame-timeline tests that order work across submits.
 class FrameTimelineTest : public WindowingTest {
- protected:
-  vkc::test::Validation validation() const override {
-    return vkc::test::Validation::Sync;
-  }
-};
-
-// The tests of the one multisampled set every image renders through. Their
-// frames run under synchronization validation, which reports a scope that is
-// not ordered after an earlier frame's on the same samples.
-class WindowSamplesTest : public WindowingTest {
  protected:
   vkc::test::Validation validation() const override {
     return vkc::test::Validation::Sync;
@@ -541,6 +521,26 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
   ASSERT_FALSE(sc.ok());
   EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
 }
+
+// The tests of the one multisampled set every image renders through. Their
+// frames run under synchronization validation, which reports a scope that is
+// not ordered after an earlier frame's on the same samples.
+class WindowSamplesTest : public WindowingTest {
+ protected:
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
+  }
+
+  // The bytes the fixture's allocator holds, over every heap.
+  uint64_t allocated_bytes() const {
+    const vkc::MemoryStats stats = allocator_->memory_stats();
+    uint64_t total = 0;
+    for (uint32_t h = 0; h < stats.heap_count; ++h) {
+      total += stats.heaps[h].allocation_bytes;
+    }
+    return total;
+  }
+};
 
 // Every window renders at kWindowSamples, colour-only or with depth: the
 // layout pipelines are built for, and every image's target.
