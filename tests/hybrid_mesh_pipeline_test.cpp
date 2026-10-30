@@ -10,8 +10,10 @@
 // directional term darkens the albedo, and in the normal debug view to prove it
 // encodes the stored normal instead. The second atlas view the tangent slot
 // carries is drawn over two solid tiles, by weight and alpha, and only for a
-// draw that says its mesh carries one. Runs under the validation layer with
-// teeth. Skips when the runner exposes no Vulkan device.
+// draw that says its mesh carries one. Multisampled, the interior draws as at
+// one sample, and silhouette pixels read the texture inside the triangle.
+// Runs under the validation layer with teeth. Skips when the runner exposes no
+// Vulkan device.
 
 #include <gtest/gtest.h>
 
@@ -375,16 +377,19 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
   // texel, or 16 for R32G32B32A32_SFLOAT). Each draw names either a static
   // GpuMesh or a live indirect mesh -- the harness is agnostic, and a
   // draw_count > 1 list exercises submit()'s per-draw dispatch.
-  // `color_format` must match the layout `pipeline` was created for.
+  // `color_format` and `samples` must match the layout `pipeline` was created
+  // for.
   std::vector<uint8_t> render(
       vkc::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
       const std::vector<pipelines::HybridMeshDraw>& draws,
       VkDescriptorSet atlas, uint32_t flags,
-      VkFormat color_format = kColorFormat) {
+      VkFormat color_format = kColorFormat,
+      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
     vg::OffscreenTargetDesc td;
     td.extent = {kSize, kSize};
     td.color_format = color_format;
     td.depth_format = kDepthFormat;
+    td.samples = samples;
     auto target = vg::OffscreenTarget::create(allocator, td);
     EXPECT_TRUE(target.ok()) << target.status().message();
     if (!target.ok()) {
@@ -445,14 +450,14 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
   }
 
   // Single-draw convenience -- the common case is one mesh per frame.
-  std::vector<uint8_t> render(vkc::Allocator& allocator,
-                              const pipelines::HybridMeshPipeline& pipeline,
-                              const pipelines::HybridMeshDraw& draw,
-                              VkDescriptorSet atlas, uint32_t flags,
-                              VkFormat color_format = kColorFormat) {
+  std::vector<uint8_t> render(
+      vkc::Allocator& allocator, const pipelines::HybridMeshPipeline& pipeline,
+      const pipelines::HybridMeshDraw& draw, VkDescriptorSet atlas,
+      uint32_t flags, VkFormat color_format = kColorFormat,
+      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
     return render(allocator, pipeline,
                   std::vector<pipelines::HybridMeshDraw>{draw}, atlas, flags,
-                  color_format);
+                  color_format, samples);
   }
 
   // Uploads `pixels` (`extent`, `format`, `size` bytes) as a NEAREST atlas
@@ -1364,6 +1369,209 @@ TEST_F(HybridMeshRenderTest, ZeroInstanceCountCommandDrawsNothing) {
   ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
   EXPECT_TRUE(all_pixels_cleared(px))
       << "instanceCount = 0 draws no instances -- the frame stays cleared";
+}
+
+// --- Multisampled ------------------------------------------------------------
+
+// color_depth_layout() at vg::kWindowSamples.
+vg::RenderTargetLayout multisampled_layout() {
+  vg::RenderTargetLayout layout = color_depth_layout();
+  layout.samples = vg::kWindowSamples;
+  return layout;
+}
+
+// One triangle at target pixels `a`, `b`, `c` (kSize x kSize, identity
+// view_proj), each vertex's uv0 `uv(p)`, white.
+template <typename Uv>
+assets::Mesh make_pixel_triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, Uv uv) {
+  assets::Mesh mesh;
+  for (const glm::vec2 p : {a, b, c}) {
+    assets::Vertex v;
+    const glm::vec2 ndc = p * (2.0f / kSize) - 1.0f;
+    v.position = {ndc.x, ndc.y, 0.5f};
+    v.normal = {0.0f, 0.0f, 1.0f};
+    v.uv0 = uv(p);
+    v.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    mesh.vertices.push_back(v);
+  }
+  mesh.indices = {0, 1, 2};
+  return mesh;
+}
+
+// At kWindowSamples a pixel whose 3 x 3 neighbourhood is all mesh or all
+// background at one sample draws as at one sample, and the silhouette blends:
+// some pixels lie strictly between the white mesh and the black clear.
+TEST_F(HybridMeshRenderTest, MultisampledInteriorDrawsAsSingleSample) {
+  auto one = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                   color_depth_layout());
+  ASSERT_TRUE(one.ok()) << one.status().message();
+  auto four = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                    multisampled_layout());
+  ASSERT_TRUE(four.ok()) << four.status().message();
+
+  const assets::Mesh mesh_cpu = make_pixel_triangle(
+      {9.3f, 12.6f}, {53.1f, 25.4f}, {20.7f, 57.2f},
+      [](glm::vec2) { return glm::vec2{-1.0f, -1.0f}; });  // vertex colour
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+
+  const std::vector<uint8_t> single =
+      render(allocator(), one.value(), draw, VK_NULL_HANDLE, 0u);
+  const std::vector<uint8_t> multi =
+      render(allocator(), four.value(), draw, VK_NULL_HANDLE, 0u, kColorFormat,
+             vg::kWindowSamples);
+  ASSERT_EQ(single.size(), static_cast<size_t>(kSize) * kSize * 4);
+  ASSERT_EQ(multi.size(), single.size());
+
+  int interior_mesh = 0;
+  int between = 0;
+  for (uint32_t y = 1; y + 1 < kSize; ++y) {
+    for (uint32_t x = 1; x + 1 < kSize; ++x) {
+      const uint8_t* s = pixel_at(single, x, y);
+      const uint8_t* m = pixel_at(multi, x, y);
+      if (m[0] > 0 && m[0] < 255) {
+        ++between;
+      }
+      bool uniform = true;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          uniform = uniform && pixel_at(single, x + dx, y + dy)[0] == s[0];
+        }
+      }
+      if (!uniform) {
+        continue;
+      }
+      interior_mesh += s[0] == 255 ? 1 : 0;
+      for (int c = 0; c < 3; ++c) {
+        ASSERT_NEAR(m[c], s[c], 1) << "pixel " << x << ", " << y;
+      }
+    }
+  }
+  EXPECT_GT(interior_mesh, 200) << "the mesh's interior was compared";
+  EXPECT_GT(between, 40) << "the silhouette blends at kWindowSamples";
+}
+
+// The centroid tests' triangle, in a 32 x 32 pixel square at (16, 16) of the
+// target; a vertex's footprint coordinates are its position in that square,
+// over a 1024 x 1024 texture: 32 texels a pixel.
+constexpr float kSquareOrigin = 16.0f;
+constexpr float kSquare = 32.0f;
+constexpr uint32_t kFootprintTexels = 1024;
+const glm::vec2 kCorners[3] = {{1.3f, 2.7f}, {30.6f, 7.9f}, {5.1f, 29.4f}};
+
+glm::vec2 footprint_uv(glm::vec2 p) { return (p - kSquareOrigin) / kSquare; }
+
+// The triangle, its uv0 its footprint coordinates.
+assets::Mesh make_footprint_triangle() {
+  return make_pixel_triangle(kCorners[0] + kSquareOrigin,
+                             kCorners[1] + kSquareOrigin,
+                             kCorners[2] + kSquareOrigin, footprint_uv);
+}
+
+// The footprint texture: red where a texel's centre lies inside the triangle
+// grown by one texel on each edge, green elsewhere; opaque.
+std::vector<uint8_t> make_footprint_texture() {
+  glm::vec2 t[3];
+  for (int i = 0; i < 3; ++i) {
+    t[i] = kCorners[i] * (kFootprintTexels / kSquare);
+  }
+  const auto cross = [](glm::vec2 u, glm::vec2 v) {
+    return u.x * v.y - u.y * v.x;
+  };
+  const float winding = cross(t[1] - t[0], t[2] - t[0]) > 0.0f ? 1.0f : -1.0f;
+  std::vector<uint8_t> texture(size_t{kFootprintTexels} * kFootprintTexels * 4);
+  for (uint32_t ty = 0; ty < kFootprintTexels; ++ty) {
+    for (uint32_t tx = 0; tx < kFootprintTexels; ++tx) {
+      const glm::vec2 p{tx + 0.5f, ty + 0.5f};
+      float inside = 1e9f;
+      for (int i = 0; i < 3; ++i) {
+        const glm::vec2 edge = t[(i + 1) % 3] - t[i];
+        inside = std::min(inside,
+                          winding * cross(edge, p - t[i]) / glm::length(edge));
+      }
+      uint8_t* texel = &texture[(size_t{ty} * kFootprintTexels + tx) * 4];
+      texel[0] = inside >= -1.0f ? 255 : 0;
+      texel[1] = inside >= -1.0f ? 0 : 255;
+      texel[2] = 0;
+      texel[3] = 255;
+    }
+  }
+  return texture;
+}
+
+// No pixel of `px` reads green, the triangle reads red, and the silhouette
+// has partly covered pixels, which the first check then covered.
+void expect_reads_inside_the_triangle(const std::vector<uint8_t>& px) {
+  ASSERT_EQ(px.size(), static_cast<size_t>(kSize) * kSize * 4);
+  int silhouette = 0;
+  for (uint32_t y = 0; y < kSize; ++y) {
+    for (uint32_t x = 0; x < kSize; ++x) {
+      const uint8_t* p = pixel_at(px, x, y);
+      ASSERT_LE(p[1], 2) << "pixel " << x << ", " << y
+                         << " read past the triangle's patch of the texture";
+      silhouette += p[0] > 0 && p[0] < 255 ? 1 : 0;
+    }
+  }
+  EXPECT_EQ(pixel_at(px, 28, 28)[0], 255) << "the triangle reads red";
+  EXPECT_GT(silhouette, 40) << "the silhouette's pixels were checked";
+}
+
+// The texture coordinates are centroid-sampled: at kWindowSamples a
+// silhouette pixel whose centre lies outside the triangle still reads inside
+// the triangle's patch of the texture. The footprint texture is read NEAREST
+// at 32 texels a pixel, so a coordinate extrapolated to a pixel centre more
+// than about 1/20 pixel outside the triangle reads green. The edges' slopes
+// put pixel centres all across the 0 - 0.5 pixel band outside them, where a
+// pixel can still have covered samples.
+TEST_F(HybridMeshRenderTest, MultisampledSilhouetteReadsInsideTheTriangle) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        multisampled_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+  auto mesh =
+      pipelines::upload_mesh(device(), allocator(), make_footprint_triangle());
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const std::vector<uint8_t> texture = make_footprint_texture();
+  std::vector<AtlasResources> keep;
+  const VkDescriptorSet set =
+      make_atlas(allocator(), pipeline.value(), texture.data(),
+                 {kFootprintTexels, kFootprintTexels}, texture.size(), keep);
+  ASSERT_NE(set, VK_NULL_HANDLE);
+
+  ASSERT_NO_FATAL_FAILURE(expect_reads_inside_the_triangle(render(
+      allocator(), pipeline.value(), pipelines::HybridMeshDraw{&mesh.value()},
+      set, 0u, kColorFormat, vg::kWindowSamples)));
+}
+
+// The second view's coordinates are centroid-sampled too. The mesh carries a
+// second view at weight 1 whose uv_B is the footprint mapping, and every uv0
+// is the triangle's centre, inside the red patch, so the blend shows the
+// second view alone and only uv_B can read green.
+TEST_F(HybridMeshRenderTest,
+       MultisampledSilhouetteReadsTheSecondViewInsideTheTriangle) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        multisampled_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+  assets::Mesh mesh_cpu = make_footprint_triangle();
+  const glm::vec2 centre = footprint_uv(
+      (kCorners[0] + kCorners[1] + kCorners[2]) / 3.0f + kSquareOrigin);
+  for (assets::Vertex& v : mesh_cpu.vertices) {
+    v.tangent = {v.uv0.x, v.uv0.y, 1.0f, 1.0f};
+    v.uv0 = centre;
+  }
+  auto mesh = pipelines::upload_mesh(device(), allocator(), mesh_cpu);
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const std::vector<uint8_t> texture = make_footprint_texture();
+  std::vector<AtlasResources> keep;
+  const VkDescriptorSet set =
+      make_atlas(allocator(), pipeline.value(), texture.data(),
+                 {kFootprintTexels, kFootprintTexels}, texture.size(), keep);
+  ASSERT_NE(set, VK_NULL_HANDLE);
+
+  ASSERT_NO_FATAL_FAILURE(expect_reads_inside_the_triangle(
+      render(allocator(), pipeline.value(),
+             pipelines::HybridMeshDraw{&mesh.value(), true}, set, 0u,
+             kColorFormat, vg::kWindowSamples)));
 }
 
 }  // namespace

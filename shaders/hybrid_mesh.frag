@@ -26,10 +26,11 @@
 #include "common/srgb.glsl"
 
 layout(location = 0) in vec3 frag_normal;  // world space
-layout(location = 1) in vec2 frag_uv;      // atlas uv (0,0 on the vertex-color path)
+// The texture coordinates are centroid-sampled (see hybrid_mesh.vert).
+layout(location = 1) centroid in vec2 frag_uv;  // texture coordinates
 layout(location = 2) in vec4 frag_color;
 layout(location = 3) flat in uint frag_select;  // as hybrid_mesh.vert sets it
-layout(location = 4) in vec3 frag_second;  // (uv_B, w_B): the second view
+layout(location = 4) centroid in vec3 frag_second;  // (uv_B, w_B): the second view
 
 layout(push_constant) uniform Push {
   mat4 view_proj;

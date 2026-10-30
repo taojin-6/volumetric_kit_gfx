@@ -100,12 +100,65 @@ TEST_F(ImagePipelineDeviceTest, CreateRejectsALayoutWithoutColor) {
   EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
 }
 
-TEST_F(ImagePipelineDeviceTest, CreateRejectsAMultisampledLayout) {
+// At kWindowSamples an image's interior draws as at one sample, and its edge
+// blends with the clear: the image, 4 x 4 texels magnified 8x from y = 4.25,
+// covers row 4 by three quarters.
+TEST_F(ImagePipelineDeviceTest, DrawsMultisampledAsSingleSampleInside) {
   vg::RenderTargetLayout layout = color_layout(kUnorm);
-  layout.samples = VK_SAMPLE_COUNT_4_BIT;
-  auto pipeline = pipelines::ImagePipeline::create(device(), layout);
-  ASSERT_FALSE(pipeline.ok());
-  EXPECT_EQ(pipeline.status().domain(), vkc::Status::Code::InvalidArgument);
+  layout.samples = vg::kWindowSamples;
+  auto multi = pipelines::ImagePipeline::create(device(), layout);
+  ASSERT_TRUE(multi.ok()) << multi.status().message();
+  const pipelines::ImagePipeline single = make_pipeline();
+  ASSERT_TRUE(single.valid());
+
+  std::vector<uint8_t> grey(16);
+  for (size_t i = 0; i < grey.size(); ++i) {
+    grey[i] = static_cast<uint8_t>(30 + 13 * i);
+  }
+  const vkc::Buffer buffer = source_buffer(grey);
+  pipelines::ImageUpdate update;
+  update.planes[0].buffer = &buffer;
+  constexpr VkExtent2D kExtent{40, 40};
+  const glm::vec2 origin{4.0f, 4.25f};
+
+  const auto draw = [&](const pipelines::ImagePipeline& pipeline,
+                        VkSampleCountFlagBits samples) {
+    pipelines::ImageTexture texture = make_texture(
+        pipeline, {4, 4}, pipelines::ImageMapping::Grey, VK_FORMAT_R8_UNORM);
+    EXPECT_TRUE(texture.valid());
+    Pass pass;
+    pass.before = [&](VkCommandBuffer cmd) {
+      const vkc::Status s = pipeline.record_update(cmd, texture, update);
+      EXPECT_TRUE(s.ok()) << s.message();
+    };
+    pass.draws = {draw_of(texture, kExtent, 8.0f, origin)};
+    std::vector<Pixels> out =
+        render_passes(pipeline, {pass}, kExtent, kUnorm, samples);
+    return out.empty() ? Pixels{} : std::move(out.front());
+  };
+  const Pixels one = draw(single, VK_SAMPLE_COUNT_1_BIT);
+  const Pixels four = draw(multi.value(), vg::kWindowSamples);
+  ASSERT_EQ(one.bytes.size(), size_t{kExtent.width} * kExtent.height * 4);
+  ASSERT_EQ(four.bytes.size(), one.bytes.size());
+
+  // Whole pixels inside or outside the image: x in [4, 36), y in [5, 36).
+  for (uint32_t y = 0; y < kExtent.height; ++y) {
+    for (uint32_t x = 0; x < kExtent.width; ++x) {
+      if (y == 4 || y == 36) {
+        continue;  // the edges the image covers in part
+      }
+      for (int c = 0; c < 3; ++c) {
+        ASSERT_NEAR(four.at(x, y)[c], one.at(x, y)[c], 1) << x << ", " << y;
+      }
+    }
+  }
+  // Row 4 is the image's top row blended with the blue clear.
+  const uint8_t* edge = four.at(20, 4);
+  const uint8_t* image = one.at(20, 4);
+  EXPECT_GT(edge[0], 0);
+  EXPECT_LT(edge[0], image[0]);
+  EXPECT_GT(edge[2], image[2]);
+  EXPECT_LT(edge[2], 255);
 }
 
 // The draw writes one attachment; more would be left undefined under it.

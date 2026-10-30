@@ -71,11 +71,13 @@ class ImGuiOverlayDeviceTest : public vg_test::RendererDeviceTest {
     return config;
   }
 
-  vg::OffscreenTarget make_target(VkExtent2D extent = {64, 64},
-                                  VkFormat format = kFormat) {
+  vg::OffscreenTarget make_target(
+      VkExtent2D extent = {64, 64}, VkFormat format = kFormat,
+      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = format;
+    desc.samples = samples;
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     return std::move(target).value();
@@ -414,6 +416,34 @@ TEST_F(ImGuiOverlayDeviceTest, RendersIntoOffscreenTargetDynamicRendering) {
 
   // Idle before the overlay (and its backend pipeline/pool) tears down at scope
   // exit, per ImGuiOverlay's teardown contract.
+  vkDeviceWaitIdle(device().handle());
+}
+
+// The overlay draws into a multisampled target, validation-clean: whole
+// pixels as at one sample, and a rectangle's edge through the middle of a
+// pixel blends.
+TEST_F(ImGuiOverlayDeviceTest, RendersIntoAMultisampledTarget) {
+  vg::OffscreenTarget target =
+      make_target({64, 64}, kFormat, vg::kWindowSamples);
+  ASSERT_EQ(target.layout().samples, vg::kWindowSamples);
+  ui::ImGuiOverlay overlay = make_overlay(target.layout());
+  ImGui::GetIO().DisplaySize = ImVec2(64.0f, 64.0f);
+  overlay.new_frame();
+  ImDrawList* draw = ImGui::GetBackgroundDrawList();
+  draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(64.0f, 64.0f), IM_COL32_WHITE);
+  draw->AddRectFilled(ImVec2(10.5f, 0.0f), ImVec2(64.0f, 64.0f),
+                      IM_COL32(255, 0, 0, 255));
+  ASSERT_NO_FATAL_FAILURE(render(target, overlay));
+
+  const auto* px = static_cast<const uint8_t*>(target.pixels());
+  ASSERT_NE(px, nullptr);
+  const auto green = [&](uint32_t x) {
+    return px[(size_t{32} * 64 + x) * 4 + 1];
+  };
+  EXPECT_EQ(green(5), 255) << "white";
+  EXPECT_EQ(green(32), 0) << "red";
+  EXPECT_GT(green(10), 0) << "the edge pixel blends";
+  EXPECT_LT(green(10), 255) << "the edge pixel blends";
   vkDeviceWaitIdle(device().handle());
 }
 

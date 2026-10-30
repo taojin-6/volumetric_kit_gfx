@@ -362,10 +362,6 @@ core::Result<ImagePipeline> ImagePipeline::create(
         "ImagePipeline::create: the layout has more than one color "
         "attachment");
   }
-  if (layout.samples != VK_SAMPLE_COUNT_1_BIT) {
-    return core::Status::invalid_argument(
-        "ImagePipeline::create: the layout is multisampled");
-  }
   if (!device.caps().format_supports(kDisplayFormat, VK_IMAGE_TILING_OPTIMAL,
                                      kDisplayFeatures)) {
     return core::Status::unsupported(

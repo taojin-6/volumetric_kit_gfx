@@ -31,6 +31,12 @@
 // float. The slot's placeholder, (1, 0, 0, 1), has w_B = 0: no second view.
 // Only the pipeline for meshes that carry one reads frag_second
 // (hybrid_mesh.frag's kSecondView).
+//
+// Both texture coordinates are `centroid`: on a multisampled target a
+// silhouette pixel whose centre lies outside the triangle is interpolated at
+// its covered samples, not extrapolated past the triangle's patch of the
+// texture, which would show whatever lies beyond it. At one sample, and inside
+// a triangle, it changes nothing.
 
 layout(location = 0) in vec3 in_position;  // world space
 layout(location = 1) in vec3 in_normal;    // world space
@@ -46,11 +52,11 @@ layout(push_constant) uniform Push {
 pc;
 
 layout(location = 0) out vec3 frag_normal;
-layout(location = 1) out vec2 frag_uv;
+layout(location = 1) centroid out vec2 frag_uv;
 layout(location = 2) out vec4 frag_color;
 // Bit 0: the vertex color; bit 1: picture 1.
 layout(location = 3) flat out uint frag_select;
-layout(location = 4) out vec3 frag_second;  // (uv_B, w_B): the second view
+layout(location = 4) centroid out vec3 frag_second;  // (uv_B, w_B): the second view
 
 void main() {
   gl_Position = pc.view_proj * vec4(in_position, 1.0);

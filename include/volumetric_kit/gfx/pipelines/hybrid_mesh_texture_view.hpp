@@ -133,11 +133,13 @@ class VG_PIPELINES_API HybridMeshTextureView {
   /// @param device    The device @p pipeline was created on.
   /// @param pipeline  The mesh pipeline whose sets the view draws.
   /// @param layout    The target's format/sample signature: one color
-  ///                  attachment, single-sample; a depth format is allowed
-  ///                  and left untested.
+  ///                  attachment, at any sample count; a depth format is
+  ///                  allowed and left untested. Multisampled, a picture's
+  ///                  interior draws as at one sample and the edges of its
+  ///                  rectangle blend; its pyramid stays single-sample.
   /// @return The view; or `core::Status::Code::InvalidArgument` for an empty
-  ///         @p pipeline or a layout without exactly one color attachment or
-  ///         with multisampling; `core::Status::Code::Unsupported` for a
+  ///         @p pipeline or a layout without exactly one color attachment;
+  ///         `core::Status::Code::Unsupported` for a
   ///         device that cannot render, blit and filter `R8G8B8A8_SRGB`, a
   ///         pyramid's format; or a backend failure.
   static core::Result<std::unique_ptr<HybridMeshTextureView>> create(

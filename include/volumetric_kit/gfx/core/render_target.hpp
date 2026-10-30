@@ -16,6 +16,12 @@
 
 namespace volumetric_kit::gfx {
 
+/// The sample count gfx multisamples at: the one count besides 1 an
+/// @ref OffscreenTarget takes. Vulkan guarantees it for depth and for every
+/// colour format that averages when resolved (UNORM, sRGB and float), on
+/// every device, so a target of this count needs no device query.
+inline constexpr VkSampleCountFlagBits kWindowSamples = VK_SAMPLE_COUNT_4_BIT;
+
 /// @brief The format + sample signature of a render target: the compatibility
 ///        currency between a @ref GraphicsPipeline and a @ref RenderTarget.
 ///
@@ -59,10 +65,11 @@ struct RenderTargetLayout {
 ///
 /// The @ref image is carried alongside the @ref view so the caller can issue
 /// the layout-transition barriers dynamic rendering leaves to the application
-/// (e.g. `UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL` before a draw); @ref
-/// RenderTarget::begin uses only the @ref view.
+/// (e.g. `UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL` before a draw). At one sample
+/// @ref RenderTarget::begin uses only the @ref view; above one it also
+/// transitions the multisampled attachments' @ref image itself.
 struct RenderTargetAttachment {
-  VkImage image = VK_NULL_HANDLE;         ///< For the caller's layout barriers.
+  VkImage image = VK_NULL_HANDLE;         ///< For the layout barriers.
   VkImageView view = VK_NULL_HANDLE;      ///< Fed to `vkCmdBeginRendering`.
   VkFormat format = VK_FORMAT_UNDEFINED;  ///< The attachment's format.
 };
@@ -74,6 +81,11 @@ struct RenderTargetAttachment {
 /// color attachment, and @ref clear_depth by the depth attachment, when @ref
 /// load_op is `VK_ATTACHMENT_LOAD_OP_CLEAR`. Per-attachment clears arrive with
 /// multi-attachment (MRT) support.
+///
+/// On a multisampled target the samples never outlive the scope: the colours
+/// resolve into the target's resolve attachments, which always store, so
+/// @ref store_op is ignored, and a @ref load_op of `LOAD` or a
+/// @ref depth_store_op of `STORE` is a programmer error (`VKC_CHECK`).
 struct RenderTargetBeginInfo {
   VkAttachmentLoadOp load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
   /// The color attachments' store op.
@@ -98,12 +110,21 @@ struct RenderTargetBeginInfo {
 /// today; a swapchain (windowing) and an OpenXR swapchain (xr) later.
 ///
 /// Layout transitions are the caller's responsibility (dynamic rendering does
-/// not perform them): transition each attachment image into its attachment
-/// layout before @ref begin, and out of it (to present / transfer / sampled)
-/// after @ref end. @ref RenderTargetAttachment::image is exposed for exactly
-/// those barriers — record them with @ref cmd_image_barrier
+/// not perform them): at one sample, transition each attachment image into
+/// its attachment layout before @ref begin, and out of it (to present /
+/// transfer / sampled) after @ref end. @ref RenderTargetAttachment::image is
+/// exposed for exactly those barriers — record them with @ref cmd_image_barrier
 /// (core/image_barrier.hpp), or let the producing target do it (e.g.
 /// @ref OffscreenTarget::prepare).
+///
+/// A multisampled target (samples above one) also bundles one single-sample
+/// resolve attachment per colour. Its scope keeps no samples: @ref begin
+/// transitions the multisampled colour and depth images itself, and @ref end
+/// resolves each colour (`AVERAGE`) into its resolve attachment. So the caller
+/// transitions only the resolve images, exactly as it transitions a
+/// single-sample target's images; one multisampled set may then serve every
+/// target that resolves into a different image, such as each image of a
+/// swapchain.
 ///
 /// @warning The images/views this references are owned by the producing target,
 ///          which must outlive every `RenderTarget` it hands out; the views
@@ -131,15 +152,29 @@ class VG_CORE_API RenderTarget {
   /// @param samples      Sample count shared by every attachment.
   /// @param depth        Optional depth attachment, or `nullptr` for a
   ///                     color-only target.
+  /// @param resolve      Required when @p samples is above one, and `nullptr`
+  ///                     otherwise: @p color_count single-sample attachments
+  ///                     the colours resolve into, each with a view and of
+  ///                     its colour's format (all checked with `VKC_CHECK`).
   RenderTarget(VkExtent2D extent, const RenderTargetAttachment* color,
                uint32_t color_count, VkSampleCountFlagBits samples,
-               const RenderTargetAttachment* depth = nullptr);
+               const RenderTargetAttachment* depth = nullptr,
+               const RenderTargetAttachment* resolve = nullptr);
 
   /// @brief Begin a dynamic-rendering scope over these attachments.
+  ///
+  /// Above one sample it first records one barrier that moves the
+  /// multisampled colour and depth images from `UNDEFINED` to their
+  /// attachment layouts, after any earlier scope's attachment work on them,
+  /// and the scope stores them `DONT_CARE` and resolves each colour into its
+  /// resolve attachment.
   /// @param cmd   A command buffer in the recording state.
   /// @param info  Load/store ops and clear values for this scope.
-  /// @pre `valid()`; every attachment image is already in its attachment
-  /// layout.
+  /// @pre `valid()`; at one sample every attachment image, and above one every
+  ///      resolve image, is already in its attachment layout
+  ///      (`COLOR_ATTACHMENT_OPTIMAL` for a resolve image); above one,
+  ///      @p info's `load_op` is not `LOAD` and its `depth_store_op` not
+  ///      `STORE` (checked with `VKC_CHECK`).
   void begin(VkCommandBuffer cmd, const RenderTargetBeginInfo& info) const;
 
   /// @brief End the dynamic-rendering scope opened by @ref begin.
@@ -164,6 +199,9 @@ class VG_CORE_API RenderTarget {
       color_{};
   uint32_t color_count_ = 0;
   RenderTargetAttachment depth_{};  ///< Null view for a color-only target.
+  /// The colours' resolve attachments; only above one sample.
+  std::array<RenderTargetAttachment, RenderTargetLayout::kMaxColorAttachments>
+      resolve_{};
   VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
 };
 

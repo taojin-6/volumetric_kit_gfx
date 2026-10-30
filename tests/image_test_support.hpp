@@ -226,17 +226,18 @@ class ImageHelpers {
     std::vector<pipelines::ImageDraw> draws;
   };
 
-  // Records every pass into one command buffer -- each into its own target --
-  // submits it, and returns each target's pixels.
-  std::vector<Pixels> render_passes(const pipelines::ImagePipeline& pipeline,
-                                    const std::vector<Pass>& passes,
-                                    VkExtent2D extent,
-                                    VkFormat format = kUnorm) {
+  // Records every pass into one command buffer -- each into its own target of
+  // `samples` -- submits it, and returns each target's pixels.
+  std::vector<Pixels> render_passes(
+      const pipelines::ImagePipeline& pipeline, const std::vector<Pass>& passes,
+      VkExtent2D extent, VkFormat format = kUnorm,
+      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
     std::vector<vg::OffscreenTarget> targets;
     for (size_t i = 0; i < passes.size(); ++i) {
       vg::OffscreenTargetDesc desc;
       desc.extent = extent;
       desc.color_format = format;
+      desc.samples = samples;
       auto target = vg::OffscreenTarget::create(image_allocator(), desc);
       EXPECT_TRUE(target.ok()) << target.status().message();
       if (!target.ok()) {

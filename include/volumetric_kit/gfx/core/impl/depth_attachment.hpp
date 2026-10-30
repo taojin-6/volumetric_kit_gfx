@@ -56,13 +56,20 @@ inline core::Status validate_depth_only_format(VkFormat format,
 /// @param extent     Attachment size in texels.
 /// @param format     A depth-only format (validate with @ref
 ///                   validate_depth_only_format first).
+/// @param samples    Its sample count. A multisampled one lives for a
+///                   rendering scope alone, so it is also `TRANSIENT`.
 /// @return The depth `core::Image`, or a propagated allocation failure.
 inline core::Result<core::Image> make_depth_attachment(
-    core::Allocator& allocator, VkExtent2D extent, VkFormat format) {
+    core::Allocator& allocator, VkExtent2D extent, VkFormat format,
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
   core::ImageDesc desc;
   desc.extent = extent;
   desc.format = format;
   desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  if (samples != VK_SAMPLE_COUNT_1_BIT) {
+    desc.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  }
+  desc.samples = samples;
   return allocator.create_image(desc);
 }
 
