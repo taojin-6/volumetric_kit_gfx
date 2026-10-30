@@ -111,7 +111,7 @@ class WindowingTest : public vg_test::RendererTest {
                                    VkExtent2D extent = {256, 256}) {
     win::SwapchainConfig cfg;
     cfg.extent = extent;
-    auto sc = win::Swapchain::create(*device_, surface, cfg);
+    auto sc = win::Swapchain::create(*device_, surface, cfg, *allocator_);
     EXPECT_TRUE(sc.ok()) << sc.status().message();
     // Return empty on failure rather than aborting via Result::value()
     // (VKC_CHECK): callers assert on validity, so the test fails cleanly.
@@ -122,14 +122,26 @@ class WindowingTest : public vg_test::RendererTest {
     return make_swapchain_on(surface_.handle(), extent);
   }
 
-  win::Swapchain make_depth_swapchain(VkExtent2D extent = {256, 256}) {
+  win::Swapchain make_depth_swapchain(VkExtent2D extent = {256, 256},
+                                      uint32_t min_image_count = 0) {
     win::SwapchainConfig cfg;
     cfg.extent = extent;
     cfg.depth_format = VK_FORMAT_D32_SFLOAT;  // mandatory depth-attach format
-    auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
-                                     &allocator_.value());
+    cfg.min_image_count = min_image_count;
+    auto sc =
+        win::Swapchain::create(*device_, surface_.handle(), cfg, *allocator_);
     EXPECT_TRUE(sc.ok()) << sc.status().message();
     return sc.ok() ? std::move(sc).value() : win::Swapchain{};
+  }
+
+  // The bytes the fixture's allocator holds, over every heap.
+  uint64_t allocated_bytes() const {
+    const vkc::MemoryStats stats = allocator_->memory_stats();
+    uint64_t total = 0;
+    for (uint32_t h = 0; h < stats.heap_count; ++h) {
+      total += stats.heaps[h].allocation_bytes;
+    }
+    return total;
   }
 
   // Record a clear of the frame's image, as every frame here draws.
@@ -199,6 +211,16 @@ class FrameTimelineTest : public WindowingTest {
   }
 };
 
+// The tests of the one multisampled set every image renders through. Their
+// frames run under synchronization validation, which reports a scope that is
+// not ordered after an earlier frame's on the same samples.
+class WindowSamplesTest : public WindowingTest {
+ protected:
+  vkc::test::Validation validation() const override {
+    return vkc::test::Validation::Sync;
+  }
+};
+
 // A published frame's rows by name, in order.
 std::vector<std::string> row_names(const vg::FrameMetrics& metrics) {
   std::vector<std::string> names;
@@ -258,7 +280,8 @@ TEST_F(WindowingTest, PrefersAnSrgbFormatToTheFirstPair) {
   win::SwapchainConfig cfg;
   cfg.extent = {256, 256};
   cfg.preferred_format = VK_FORMAT_R8_UNORM;
-  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
+  auto sc =
+      win::Swapchain::create(*device_, surface_.handle(), cfg, *allocator_);
   ASSERT_TRUE(sc.ok()) << sc.status().message();
   EXPECT_TRUE(vg::is_srgb_attachment(sc.value().format()))
       << "chose format " << sc.value().format() << "; the first offered is "
@@ -448,16 +471,12 @@ TEST_F(WindowingTest, RecreateZeroExtentLeavesSwapchainUsable) {
   vkDeviceWaitIdle(device_->handle());
 }
 
-// A depth-configured swapchain owns one depth attachment per image: layout()
+// A depth-configured swapchain's multisampled set holds depth: layout()
 // advertises the depth format, every render target is depth-capable, and the
-// loop renders depth-cleared frames at two frames in flight. The fixture's
-// validation capture catches a wrong depth *layout* (the attachment layout not
-// matching the one-time transition). It does NOT catch a missing/incorrect
-// *synchronization* scope — synchronization validation is not enabled — and the
-// per-image "no cross-frame sharing" property is guaranteed by construction
-// (one Image per swapchain image below), not asserted here (RenderTarget hides
-// its depth handle). run_frames only *clears* depth; functional depth *testing*
-// is exercised end-to-end by example_03_model.
+// loop renders depth-cleared frames at two frames in flight, validation clean.
+// The shared set's ordering across frames is WindowSamplesTest's, under
+// synchronization validation. run_frames only *clears* depth; functional depth
+// *testing* is exercised end-to-end by example_03_model.
 TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   win::Swapchain sc = make_depth_swapchain();
   ASSERT_TRUE(sc.valid());
@@ -475,7 +494,7 @@ TEST_F(WindowingTest, DepthSwapchainBuildsDepthCapableTargets) {
   vkDeviceWaitIdle(device_->handle());
 }
 
-// recreate() rebuilds the per-image depth attachments with the chain: the
+// recreate() rebuilds the multisampled depth with the chain: the
 // swapchain stays depth-capable at the new extent, and the same FrameLoop
 // keeps rendering over the rebuilt targets.
 TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
@@ -499,25 +518,14 @@ TEST_F(WindowingTest, DepthSwapchainSurvivesRecreate) {
   vkDeviceWaitIdle(device_->handle());
 }
 
-// A set depth_format without an allocator is rejected up front
-// (validate-before-create), not deferred to a null dereference mid-build.
-TEST_F(WindowingTest, DepthSwapchainRejectsMissingAllocator) {
-  win::SwapchainConfig cfg;
-  cfg.extent = {256, 256};
-  cfg.depth_format = VK_FORMAT_D32_SFLOAT;
-  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg);
-  ASSERT_FALSE(sc.ok());
-  EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
-}
-
 // A combined depth/stencil depth_format is rejected as Unsupported (rendering
 // depth through DEPTH_ATTACHMENT_OPTIMAL needs separateDepthStencilLayouts).
 TEST_F(WindowingTest, DepthSwapchainRejectsStencilFormat) {
   win::SwapchainConfig cfg;
   cfg.extent = {256, 256};
   cfg.depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
-  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
-                                   &allocator_.value());
+  auto sc =
+      win::Swapchain::create(*device_, surface_.handle(), cfg, *allocator_);
   ASSERT_FALSE(sc.ok());
   EXPECT_EQ(sc.status().domain(), vkc::Status::Code::Unsupported);
 }
@@ -528,10 +536,132 @@ TEST_F(WindowingTest, DepthSwapchainRejectsNonDepthFormat) {
   win::SwapchainConfig cfg;
   cfg.extent = {256, 256};
   cfg.depth_format = VK_FORMAT_R8G8B8A8_UNORM;
-  auto sc = win::Swapchain::create(*device_, surface_.handle(), cfg,
-                                   &allocator_.value());
+  auto sc =
+      win::Swapchain::create(*device_, surface_.handle(), cfg, *allocator_);
   ASSERT_FALSE(sc.ok());
   EXPECT_EQ(sc.status().domain(), vkc::Status::Code::InvalidArgument);
+}
+
+// Every window renders at kWindowSamples, colour-only or with depth: the
+// layout pipelines are built for, and every image's target.
+TEST_F(WindowSamplesTest, EveryTargetIsLaidOutAtTheWindowsSamples) {
+  for (const bool depth : {false, true}) {
+    SCOPED_TRACE(depth ? "depth" : "colour-only");
+    win::Swapchain sc = depth ? make_depth_swapchain() : make_swapchain();
+    ASSERT_TRUE(sc.valid());
+    EXPECT_EQ(sc.layout().samples, vg::kWindowSamples);
+    for (uint32_t i = 0; i < sc.image_count(); ++i) {
+      EXPECT_EQ(sc.render_target(i).layout().samples, vg::kWindowSamples);
+    }
+  }
+}
+
+// Two frames in flight over three or more images share the one set: each
+// frame clears the samples and depth the previous frame resolved from, with
+// no hazard between them.
+TEST_F(WindowSamplesTest, FrameLoopRendersAndPresentsThroughTheSharedSet) {
+  win::Swapchain sc = make_depth_swapchain({256, 256}, /*min_image_count=*/3);
+  ASSERT_TRUE(sc.valid());
+  if (sc.image_count() < 3) {
+    GTEST_SKIP() << "the surface gives " << sc.image_count() << " images";
+  }
+  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+
+  const vkc::Status status = run_frames(*loop.value(), /*count=*/8);
+  EXPECT_TRUE(status.ok()) << status.message();
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// One set serves every image: chains of two image counts hold the same bytes,
+// at least the 32 a pixel of a 4x colour and depth. A set, or a depth, per
+// image would grow with the count.
+TEST_F(WindowSamplesTest, OneSetServesEveryImage) {
+  VkSurfaceCapabilitiesKHR caps{};
+  ASSERT_EQ(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+                device_->physical_device(), surface_.handle(), &caps),
+            VK_SUCCESS);
+  const uint32_t fewer = caps.minImageCount;
+  const uint32_t more = fewer + 1;
+  if (caps.maxImageCount != 0 && caps.maxImageCount < more) {
+    GTEST_SKIP() << "the surface gives one image count";
+  }
+
+  const VkExtent2D extent{256, 256};
+  const uint64_t baseline = allocated_bytes();
+  std::vector<uint32_t> counts;
+  std::vector<uint64_t> bytes;
+  for (const uint32_t requested : {fewer, more}) {
+    win::Swapchain sc = make_depth_swapchain(extent, requested);
+    ASSERT_TRUE(sc.valid());
+    counts.push_back(sc.image_count());
+    bytes.push_back(allocated_bytes() - baseline);
+  }
+  if (counts[0] == counts[1]) {
+    GTEST_SKIP() << "the surface gave " << counts[0] << " images for both";
+  }
+  EXPECT_EQ(bytes[0], bytes[1])
+      << counts[0] << " images vs " << counts[1] << " images";
+  EXPECT_GE(bytes[0], uint64_t{32} * extent.width * extent.height);
+}
+
+// recreate() rebuilds the set at the new extent: a larger chain renders with
+// its render area inside the samples, and holds the larger set's bytes.
+TEST_F(WindowSamplesTest, RecreateRebuildsTheSetAtTheNewExtent) {
+  const uint64_t baseline = allocated_bytes();
+  win::Swapchain sc = make_depth_swapchain({128, 128});
+  ASSERT_TRUE(sc.valid());
+  const uint64_t small = allocated_bytes() - baseline;
+  auto loop = win::FrameLoop::create(*device_, sc, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  EXPECT_TRUE(run_frames(*loop.value(), 2).ok());
+
+  ASSERT_TRUE(sc.recreate({512, 384}).ok());
+  EXPECT_EQ(sc.extent().width, 512u);
+  EXPECT_EQ(sc.extent().height, 384u);
+  EXPECT_EQ(sc.layout().samples, vg::kWindowSamples);
+  const uint64_t large = allocated_bytes() - baseline;
+  EXPECT_GT(large, small);
+  EXPECT_GE(large, uint64_t{32} * 512 * 384);
+
+  const vkc::Status status = run_frames(*loop.value(), 3);
+  EXPECT_TRUE(status.ok()) << status.message();
+  vkDeviceWaitIdle(device_->handle());
+}
+
+// A move carries the set: once the source is gone, the destination still
+// holds its bytes and renders through it, and assigning over a live
+// swapchain frees that one's set.
+TEST_F(WindowSamplesTest, MoveKeepsTheSet) {
+  const uint64_t baseline = allocated_bytes();
+  std::optional<win::Swapchain> src(make_depth_swapchain());
+  ASSERT_TRUE(src->valid());
+  const uint64_t one_set = allocated_bytes() - baseline;
+
+  std::optional<win::Swapchain> moved(std::move(*src));
+  EXPECT_FALSE(src->valid());  // NOLINT(bugprone-use-after-move)
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_EQ(src->layout().samples, VK_SAMPLE_COUNT_1_BIT);
+  src.reset();
+  EXPECT_EQ(moved->layout().samples, vg::kWindowSamples);
+  EXPECT_EQ(allocated_bytes() - baseline, one_set);
+
+  // A surface permits only one live swapchain, so dst needs its own surface.
+  win::Surface surface_b = make_headless_surface();
+  ASSERT_TRUE(surface_b.valid());
+  win::Swapchain dst = make_swapchain_on(surface_b.handle());
+  ASSERT_TRUE(dst.valid());
+  EXPECT_GT(allocated_bytes() - baseline, one_set);
+  dst = std::move(*moved);
+  moved.reset();
+  EXPECT_EQ(allocated_bytes() - baseline, one_set);
+  EXPECT_EQ(dst.layout().depth_format, VK_FORMAT_D32_SFLOAT);
+
+  auto loop = win::FrameLoop::create(*device_, dst, /*frames_in_flight=*/2);
+  ASSERT_TRUE(loop.ok()) << loop.status().message();
+  const vkc::Status status = run_frames(*loop.value(), 3);
+  EXPECT_TRUE(status.ok()) << status.message();
+  vkDeviceWaitIdle(device_->handle());
 }
 
 // ui::overlay_config fills an overlay's config from a swapchain: its layout,

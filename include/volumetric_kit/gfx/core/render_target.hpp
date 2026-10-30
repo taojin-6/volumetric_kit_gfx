@@ -16,10 +16,11 @@
 
 namespace volumetric_kit::gfx {
 
-/// The sample count gfx multisamples at: the one count besides 1 an
-/// @ref OffscreenTarget takes. Vulkan guarantees it for depth and for every
-/// colour format that averages when resolved (UNORM, sRGB and float), on
-/// every device, so a target of this count needs no device query.
+/// The sample count of every window gfx presents (windowing::Swapchain), and
+/// the one count besides 1 an @ref OffscreenTarget takes. Vulkan guarantees it
+/// for depth and for every colour format that averages when resolved (UNORM,
+/// sRGB and float), on every device, so an offscreen target of this count
+/// needs no device query.
 inline constexpr VkSampleCountFlagBits kWindowSamples = VK_SAMPLE_COUNT_4_BIT;
 
 /// @brief The format + sample signature of a render target: the compatibility
@@ -107,7 +108,7 @@ struct RenderTargetBeginInfo {
 /// value bundle of attachment handles (like a `std::span` over images held
 /// elsewhere), so it is freely copyable and has no deleter. Producers own the
 /// images and hand out a target per frame: @ref OffscreenTarget (headless)
-/// today; a swapchain (windowing) and an OpenXR swapchain (xr) later.
+/// and windowing::Swapchain today; an OpenXR swapchain (xr) later.
 ///
 /// Layout transitions are the caller's responsibility (dynamic rendering does
 /// not perform them): transition each attachment image into its attachment

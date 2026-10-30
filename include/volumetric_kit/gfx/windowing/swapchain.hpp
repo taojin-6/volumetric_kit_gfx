@@ -46,19 +46,13 @@ struct SwapchainConfig {
   /// surface's supported `[minImageCount, maxImageCount]`.
   uint32_t min_image_count = 0;
   /// Depth attachment format, or `VK_FORMAT_UNDEFINED` (the default) for a
-  /// color-only swapchain. When set, the swapchain owns one depth attachment
-  /// *per swapchain image* — sized with the chain and rebuilt on every
-  /// @ref Swapchain::recreate — so each @ref Swapchain::render_target is
-  /// depth-capable and depth is safe at any frames-in-flight count (no
-  /// cross-frame sharing of one depth image). Requires the @p allocator
-  /// argument of @ref Swapchain::create.
+  /// color-only swapchain. When set, the swapchain's multisampled set also
+  /// holds a depth image, so each @ref Swapchain::render_target is
+  /// depth-capable.
   ///
-  /// @note The depth image is transitioned once into its attachment layout and
-  ///       carries no per-frame barrier; cross-frame correctness relies on each
-  ///       frame *clearing* depth (`load_op = CLEAR`, the default). A consumer
-  ///       that instead loads a prior frame's depth (temporal reuse) must
-  ///       store it (`depth_store_op = STORE`) and insert its own barrier —
-  ///       the swapchain does not synchronize a cross-frame depth read.
+  /// @note Depth lives for one rendering scope: a multisampled scope neither
+  ///       loads nor stores it (@ref RenderTarget::begin), so clear it every
+  ///       frame (`load_op = CLEAR`, the default).
   VkFormat depth_format = VK_FORMAT_UNDEFINED;
 };
 
@@ -74,30 +68,35 @@ inline bool swapchain_stale(const core::Status& status) noexcept {
   return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
 }
 
-/// @brief Owns a `VkSwapchainKHR`, an image view per swapchain image, an
-///        optional depth attachment per image, and a @ref RenderTarget over
-///        each — the windowing-tier sibling of @ref OffscreenTarget, so a pass
-///        renders into either.
+/// @brief Owns a `VkSwapchainKHR`, an image view per swapchain image, one
+///        multisampled colour (+ depth) set, and a @ref RenderTarget over each
+///        image — the windowing-tier sibling of @ref OffscreenTarget, so a
+///        pass renders into either.
+///
+/// Every window renders at @ref kWindowSamples. Each image's
+/// @ref render_target draws into the one shared multisampled set and, when
+/// its scope ends, resolves the colour into that image, so the caller
+/// transitions only the swapchain image, as @ref FrameLoop does. One set
+/// serves every image because @ref RenderTarget::begin orders each scope
+/// after the previous one on the same queue. The set is `TRANSIENT`.
 ///
 /// Format/color-space/present-mode are chosen once at @ref create and held
 /// stable across @ref recreate, so a pipeline built for @ref layout stays
-/// compatible after a resize. With @ref SwapchainConfig::depth_format set, the
-/// per-image depth attachments are likewise rebuilt (and re-transitioned into
-/// their attachment layout) on every @ref recreate. @ref acquire_next_image /
-/// @ref present surface `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK `core::Status`
-/// whose `core::Status::code` is that result, so the caller knows to @ref
-/// recreate. A default-constructed `Swapchain` is empty (`valid()` is false).
+/// compatible after a resize; the multisampled set is rebuilt at the new
+/// extent. @ref acquire_next_image / @ref present surface
+/// `VK_ERROR_OUT_OF_DATE_KHR` as a non-OK `core::Status` whose
+/// `core::Status::code` is that result, so the caller knows to @ref recreate.
+/// A default-constructed `Swapchain` is empty (`valid()` is false).
 ///
-/// @warning The @p device and surface passed to @ref create must outlive the
-///          swapchain (it borrows both), as must the @p allocator when
-///          @ref SwapchainConfig::depth_format is set. Destroy the swapchain
-///          before its surface, allocator, and device.
+/// @warning The @p device, surface and @p allocator passed to @ref create must
+///          outlive the swapchain (it borrows all three). Destroy the
+///          swapchain before its surface, allocator, and device.
 ///
 /// @code
 /// auto sc = windowing::Swapchain::create(
 ///     device, surface.handle(),
 ///     {.extent = {1280, 720}, .depth_format = VK_FORMAT_D32_SFLOAT},
-///     &allocator);
+///     allocator);
 /// if (!sc) return sc.status();
 /// // ... build a pipeline for sc.value().layout(), then drive it via FrameLoop
 /// @endcode
@@ -113,24 +112,25 @@ class VG_WINDOWING_API Swapchain {
   /// @param surface    The surface to present to.
   /// @param config     Size, format/present-mode preferences, and the optional
   ///                   depth attachment format.
-  /// @param allocator  Required when `config.depth_format` is set: it allocates
-  ///                   the per-image depth attachments (and reallocates them on
+  /// @param allocator  Allocates the multisampled set (and reallocates it on
   ///                   every @ref recreate). Borrowed; must outlive the
-  ///                   swapchain. Unused for a color-only swapchain.
+  ///                   swapchain.
   /// @return The swapchain on success, or a non-OK `core::Status`:
-  ///         a null @p surface, a non-present @p device, a non-depth
-  ///         `config.depth_format`, or a set `config.depth_format` without an
-  ///         @p allocator returns `core::Status::Code::InvalidArgument`; a
-  ///         surface with no formats / present modes, or a
-  ///         `config.depth_format` the device cannot render depth through
-  ///         (stencil aspect, or no optimal-tiling depth-attachment support),
-  ///         or a @p device that did not enable the renderer's requirements,
+  ///         a null @p surface, a non-present @p device, or a non-depth
+  ///         `config.depth_format` returns
+  ///         `core::Status::Code::InvalidArgument`; a surface with no formats
+  ///         / present modes, a `config.depth_format` the device cannot render
+  ///         depth through (stencil aspect, or no optimal-tiling
+  ///         depth-attachment support), a @p device whose
+  ///         `framebufferColorSampleCounts` (or, with a depth format,
+  ///         `framebufferDepthSampleCounts`) lacks @ref kWindowSamples, or a
+  ///         @p device that did not enable the renderer's requirements,
   ///         returns `core::Status::Code::Unsupported`; a failed Vulkan call
-  ///         carries its `VkResult`.
+  ///         or allocation propagates its status.
   static core::Result<Swapchain> create(const core::Device& device,
                                         VkSurfaceKHR surface,
                                         const SwapchainConfig& config,
-                                        core::Allocator* allocator = nullptr);
+                                        core::Allocator& allocator);
 
   ~Swapchain();
   // TODO: an aggregate (DECISIONS.md, 2026-10-10): delete the move pair and
@@ -171,10 +171,11 @@ class VG_WINDOWING_API Swapchain {
   /// @return OK on success. A zero @p extent (minimized window) fails with
   ///         `core::Status::Code::InvalidArgument` *without touching the
   ///         current swapchain*, which stays valid for a later retry. A failed
-  ///         rebuild (`vkCreateSwapchainKHR`, or the image-view creation that
-  ///         follows) empties the object (`valid()` false) but keeps its
-  ///         device / surface / format, so a later @ref recreate can retry it
-  ///         once the transient failure clears. Called on a moved-from or
+  ///         rebuild (`vkCreateSwapchainKHR`, or the image-view creation or
+  ///         multisampled-set allocation that follows) empties the object
+  ///         (`valid()` false) but keeps its device / surface / format, so a
+  ///         later @ref recreate can retry it once the transient failure
+  ///         clears. Called on a moved-from or
   ///         default-constructed swapchain (no device to rebuild on), fails
   ///         with `core::Status::Code::InvalidArgument`.
   core::Status recreate(VkExtent2D extent);
@@ -190,16 +191,15 @@ class VG_WINDOWING_API Swapchain {
   VkImage image(uint32_t image_index) const;
 
   /// @return The color `VkImageView` for swapchain image @p image_index — the
-  ///         view `vkCmdBeginRendering` draws through. Exposed so a caller can
-  ///         assemble its own @ref RenderTarget over this image (e.g. pairing
-  ///         it with externally-owned attachments) instead of using
-  ///         @ref render_target.
+  ///         view @ref render_target resolves into. A @ref RenderTarget a
+  ///         caller assembles over it alone is single-sample, so it does not
+  ///         match @ref layout: build its pipelines for its own layout.
   /// @pre @p image_index < @ref image_count.
   VkImageView image_view(uint32_t image_index) const;
 
-  /// @return The format + sample signature shared by every image, for building
-  /// a
-  ///         compatible pipeline.
+  /// @return The format + sample signature shared by every image's
+  ///         @ref render_target (`samples` is @ref kWindowSamples), for
+  ///         building a compatible pipeline.
   RenderTargetLayout layout() const noexcept;
 
   /// @return The current image extent in texels (as clamped/overridden by the
@@ -224,21 +224,23 @@ class VG_WINDOWING_API Swapchain {
  private:
   core::Status select_surface_properties(const SwapchainConfig& config);
   core::Status build(VkExtent2D extent);
-  // Image views + optional per-image depth attachments + render targets.
+  // Image views + the multisampled set + render targets.
   core::Status create_image_resources(VkExtent2D extent);
-  void destroy_resources() noexcept;  // views + depth + swapchain
+  void destroy_resources() noexcept;  // targets + set + views + swapchain
   void reset_state() noexcept;        // null handles + zero metadata to empty
   void destroy() noexcept;
 
   const core::Device* device_ = nullptr;   // borrowed; outlives this
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  // borrowed; outlives this
-  // Borrowed; outlives this. Non-null only when depth_format_ is set.
-  core::Allocator* allocator_ = nullptr;
+  core::Allocator* allocator_ = nullptr;   // borrowed; outlives this
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
   std::vector<VkImage> images_;  // owned by the swapchain, not freed by us
   std::vector<VkImageView> views_;
-  std::vector<core::Image>
-      depth_images_;  // one per image when depth_format_ set
+  // The multisampled set every target draws into: the swapchain's format,
+  // COLOR_ATTACHMENT | TRANSIENT; and DEPTH_STENCIL | TRANSIENT depth, empty
+  // when depth_format_ is not set.
+  core::Image msaa_color_;
+  core::Image msaa_depth_;
   std::vector<RenderTarget> targets_;
   VkFormat format_ = VK_FORMAT_UNDEFINED;
   VkFormat depth_format_ = VK_FORMAT_UNDEFINED;

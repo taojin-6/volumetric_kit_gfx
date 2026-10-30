@@ -153,6 +153,32 @@ what has landed since then. Record amendments when a contract changes.
   into a single-sample attachment, and the caller's barriers stay those of one sample.
   `OffscreenTarget` takes 1 or `kWindowSamples` (4); a mesh's texture coordinates are
   `centroid`. See the dated entry below.
+- **2026-10-30 — Windows are 4x; one shared multisampled set.** Every `Swapchain` renders
+  at `kWindowSamples`, with no setting: its images' targets draw into one multisampled
+  colour (+ depth) set and resolve into their own image. See the dated entry below.
+
+## 2026-10-30 — Windows are 4x; one shared multisampled set
+
+**The contract.** `Swapchain::layout().samples` is `kWindowSamples`. The swapchain owns
+one multisampled colour image of its format and, with `depth_format`, one multisampled
+depth image, both `TRANSIENT`, sized with the chain and rebuilt on every `recreate`;
+`render_target(i)` draws into them and resolves into swapchain image `i`. `create` takes
+the allocator by reference, since every swapchain allocates, and returns `Unsupported` for
+a device whose `framebufferColorSampleCounts` (or, with depth, `framebufferDepthSampleCounts`)
+lacks 4. The per-image single-sample depth images and their one-time transition are gone.
+
+**Why no setting.** Every window gfx presents wants antialiased edges, and Vulkan requires
+4x on every device. A per-application sample count would repeat the 4 in each application
+and keep alive a single-sample window path nothing exercises. The device check stays
+because a portability driver may report less, and a clean `Unsupported` beats a validation
+abort at the first pipeline.
+
+**Why one set.** A frame's samples live for its one scope (the next entry), and the frame
+loop submits every frame on one queue, so `RenderTarget::begin`'s barrier orders a frame's
+scope after the previous frame's on the same images; frames in flight never need two sets.
+A set per image would multiply 32 bytes a pixel (4x colour and depth) by the image count.
+Net of the dropped per-image depths, a three-image window with depth costs about +41 MB at
+1080p and +166 MB at 4K.
 
 ## 2026-10-30 — Multisampling: 4x, resolved in the scope, centroid mesh UVs
 

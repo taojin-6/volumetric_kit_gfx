@@ -22,14 +22,9 @@ core::Status WindowedApp::finish_bring_up(State& state,
              core::Allocator::create(state.instance_handle, *state.device));
   state.allocator.emplace(std::move(allocator));
 
-  // A depth-configured swapchain allocates its per-image depth attachments
-  // through the allocator; a color-only one takes none.
-  core::Allocator* depth_allocator =
-      config.swapchain.depth_format != VK_FORMAT_UNDEFINED ? &*state.allocator
-                                                           : nullptr;
   VKC_ASSIGN(windowing::Swapchain swapchain,
              windowing::Swapchain::create(*state.device, state.surface.handle(),
-                                          config.swapchain, depth_allocator));
+                                          config.swapchain, *state.allocator));
   state.swapchain = std::move(swapchain);
 
   VKC_ASSIGN(state.frame_loop,

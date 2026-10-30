@@ -238,6 +238,8 @@ TEST_F(WindowedAppTest, CreateBuildsFullChainAndRendersFrames) {
   EXPECT_TRUE(app.device().has_present());
   EXPECT_GE(app.allocator().memory_stats().heap_count, 1u);
   EXPECT_TRUE(app.swapchain().valid());
+  // The window renders multisampled, colour-only as with depth.
+  EXPECT_EQ(app.swapchain().layout().samples, vg::kWindowSamples);
   EXPECT_EQ(app.frame_loop().frames_in_flight(), 2u);
 
   const vkc::Status status = run_frames(app, 3);
@@ -263,6 +265,7 @@ TEST_F(WindowedAppTest, DepthConfigBuildsDepthCapableSwapchain) {
   vg::app::WindowedApp app = make_app(surface_config(VK_FORMAT_D32_SFLOAT));
   ASSERT_TRUE(app.valid());
   EXPECT_EQ(app.swapchain().layout().depth_format, VK_FORMAT_D32_SFLOAT);
+  EXPECT_EQ(app.swapchain().layout().samples, vg::kWindowSamples);
   for (uint32_t i = 0; i < app.swapchain().image_count(); ++i) {
     EXPECT_EQ(app.swapchain().render_target(i).layout().depth_format,
               VK_FORMAT_D32_SFLOAT);

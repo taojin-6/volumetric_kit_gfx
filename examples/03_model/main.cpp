@@ -871,7 +871,7 @@ int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
     glfwPollEvents();
 
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
-    // (which rebuilds its per-image depth attachments) after a resize, and
+    // (which rebuilds its multisampled colour and depth) after a resize, and
     // skips ticks while the window is minimized.
     auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
