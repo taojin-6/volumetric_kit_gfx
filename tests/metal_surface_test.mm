@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include "gfx_test_support.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
@@ -61,10 +62,13 @@ TEST_F(MetalSurfaceTest, MakesASurfaceSizedByTheLayer) {
   auto device = vkc::Device::create(instance.value(), physical.value(),
                                     requirements, surface.handle());
   ASSERT_TRUE(device.ok()) << device.status().message();
+  auto allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
+  ASSERT_TRUE(allocator.ok()) << allocator.status().message();
   win::SwapchainConfig config;
   config.extent = pixels;
-  auto swapchain =
-      win::Swapchain::create(device.value(), surface.handle(), config);
+  auto swapchain = win::Swapchain::create(device.value(), surface.handle(),
+                                          config, allocator.value());
   ASSERT_TRUE(swapchain.ok()) << swapchain.status().message();
   EXPECT_EQ(swapchain.value().extent().width, pixels.width);
   EXPECT_EQ(swapchain.value().extent().height, pixels.height);

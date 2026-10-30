@@ -45,9 +45,8 @@ struct WindowedAppConfig {
   /// window-system-agnostic, so the consumer supplies them.
   std::vector<const char*> instance_extensions;
   /// Swapchain preferences: extent, color/depth formats, present mode, image
-  /// count. With @ref windowing::SwapchainConfig::depth_format set, the app
-  /// passes its allocator through so the swapchain owns a depth attachment per
-  /// image.
+  /// count. The app passes its allocator to the swapchain, which renders at
+  /// @ref kWindowSamples (@ref windowing::Swapchain).
   windowing::SwapchainConfig swapchain{};
   /// CPU-ahead depth of the frame loop (>= 1; see @ref
   /// windowing::FrameLoop::create).
@@ -130,7 +129,7 @@ class VG_APP_API WindowedApp {
   /// @brief Run the whole bring-up chain: instance (app name / validation /
   ///        @p config extensions) → @p create_surface → present-capable
   ///        physical-device selection → device (`needs_present`) → allocator →
-  ///        swapchain (with per-image depth when
+  ///        swapchain (multisampled, with depth when
   ///        `config.swapchain.depth_format` is set) → frame loop.
   /// @param config          App identity, instance extensions, swapchain
   ///                        preferences, and frames-in-flight depth.

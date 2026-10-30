@@ -4,11 +4,12 @@
 #pragma once
 
 /// @file core/impl/depth_attachment.hpp
-/// Shared depth-attachment helpers for the two render-target owners that grow
-/// an optional depth image — @ref OffscreenTarget (core) and @ref
-/// windowing::Swapchain — so the depth-only format validation (and its
-/// combined-depth/stencil TODO) and the depth `Image` build live in one
-/// place instead of being copied per owner. Not a public header.
+/// Shared attachment helpers for the two render-target owners that grow an
+/// optional depth image and a multisampled colour image — @ref
+/// OffscreenTarget (core) and @ref windowing::Swapchain — so the depth-only
+/// format validation (and its combined-depth/stencil TODO) and the depth and
+/// multisampled colour `Image` builds live in one place instead of being
+/// copied per owner. Not a public header.
 
 #include <string>
 #include <string_view>
@@ -69,6 +70,27 @@ inline core::Result<core::Image> make_depth_attachment(
   if (samples != VK_SAMPLE_COUNT_1_BIT) {
     desc.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
   }
+  desc.samples = samples;
+  return allocator.create_image(desc);
+}
+
+/// @brief Allocate the multisampled colour image a target draws into and
+///        resolves from. Its samples live for a rendering scope alone, so it
+///        is `TRANSIENT`.
+/// @param allocator  Allocates the image + its view.
+/// @param extent     Attachment size in texels.
+/// @param format     The colour format, its resolve attachment's.
+/// @param samples    Its sample count.
+/// @pre @p samples is above `VK_SAMPLE_COUNT_1_BIT`.
+/// @return The colour `core::Image`, or a propagated allocation failure.
+inline core::Result<core::Image> make_multisampled_color(
+    core::Allocator& allocator, VkExtent2D extent, VkFormat format,
+    VkSampleCountFlagBits samples) {
+  core::ImageDesc desc;
+  desc.extent = extent;
+  desc.format = format;
+  desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+               VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
   desc.samples = samples;
   return allocator.create_image(desc);
 }

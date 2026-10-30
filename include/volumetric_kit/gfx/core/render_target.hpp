@@ -16,10 +16,11 @@
 
 namespace volumetric_kit::gfx {
 
-/// The sample count gfx multisamples at: the one count besides 1 an
-/// @ref OffscreenTarget takes. Vulkan guarantees it for depth and for every
-/// colour format that averages when resolved (UNORM, sRGB and float), on
-/// every device, so a target of this count needs no device query.
+/// The sample count of every window gfx presents (windowing::Swapchain), and
+/// the one count besides 1 an @ref OffscreenTarget takes. Vulkan guarantees it
+/// for depth and for every colour format that averages when resolved (UNORM,
+/// sRGB and float), on every device, so an offscreen target of this count
+/// needs no device query.
 inline constexpr VkSampleCountFlagBits kWindowSamples = VK_SAMPLE_COUNT_4_BIT;
 
 /// @brief The format + sample signature of a render target: the compatibility

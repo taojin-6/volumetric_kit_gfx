@@ -296,6 +296,19 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   `HybridMeshTextureView::create` accept a multisampled layout; they
   returned `InvalidArgument`. No family consumer constructs a
   `RenderTarget` or asks for `LOAD` or a stored depth.
+- `windowing`: **windows render at 4x.** Every `Swapchain` owns one
+  multisampled colour (+ depth) set at `kWindowSamples`, `TRANSIENT`, that
+  each image's render target draws into and resolves into its image, so
+  `layout().samples` is 4 and pipelines built for it draw multisampled.
+  It replaces the per-image depth images. A window's frame is one scope:
+  its target refuses `LOAD` and a stored depth (`VKC_CHECK`), so a frame
+  cannot reuse the previous frame's depth. **`Swapchain::create` takes the
+  allocator by reference** (`core::Allocator&`, was an optional pointer)
+  and refuses a device whose framebuffer sample counts lack 4
+  (`Unsupported`); `WindowedApp` always passes its own. Migrating: pass
+  `allocator`, not `&allocator` or nothing; a target built around
+  `image_view(i)` alone is single-sample, so its pipelines need their own
+  layout.
 - `pipelines`: **`HybridMeshTextureSet::create` takes an allocator**, after
   the device, for the uniform a Y'CbCr picture's coding goes in. It takes
   host-mapped device memory; on a device without it, a set binds RGBA images

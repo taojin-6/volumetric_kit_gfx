@@ -96,16 +96,11 @@ core::Result<OffscreenTarget> OffscreenTarget::create(
   OffscreenTarget target;
   target.color_ = std::move(color);
 
-  // Multisampled, the colour is drawn here and resolved into color_; its
-  // samples live for one scope, so it is TRANSIENT.
+  // Multisampled, the colour is drawn here and resolved into color_.
   if (multisampled) {
-    core::ImageDesc msaa_desc;
-    msaa_desc.extent = desc.extent;
-    msaa_desc.format = desc.color_format;
-    msaa_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-    msaa_desc.samples = desc.samples;
-    VKC_ASSIGN(core::Image msaa, allocator.create_image(msaa_desc));
+    VKC_ASSIGN(core::Image msaa,
+               make_multisampled_color(allocator, desc.extent,
+                                       desc.color_format, desc.samples));
     target.msaa_color_ = std::move(msaa);
   }
 

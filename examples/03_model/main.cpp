@@ -734,14 +734,14 @@ int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
     return 1;
   }
 
-  // Two frames in flight: the swapchain keeps depth per image and the scene
-  // UBO rings per slot, so nothing is shared across in-flight frames.
+  // Two frames in flight: the scene UBO rings per slot, and the swapchain's
+  // one multisampled colour and depth set is shared, the frames ordered on it.
   constexpr uint32_t kFramesInFlight = 2;
 
   // The whole bring-up chain in one call; the lambda supplies the GLFW
-  // surface. SwapchainConfig::depth_format makes the swapchain own a depth
-  // attachment per image (rebuilt with the chain on resize), so its render
-  // targets are depth-capable.
+  // surface. SwapchainConfig::depth_format adds a depth image to the
+  // swapchain's one shared multisampled set (rebuilt with the chain on
+  // resize), so its render targets are depth-capable.
   vg::app::WindowedAppConfig app_config;
   app_config.app_name = "03_model";
   app_config.enable_validation = settings.window.validation;
@@ -871,7 +871,7 @@ int run_windowed(GLFWwindow* window, const vkc::config::Config& settings) {
     glfwPollEvents();
 
     // The app's loop owns the staleness protocol: it rebuilds the swapchain
-    // (which rebuilds its per-image depth attachments) after a resize, and
+    // (which rebuilds its multisampled colour and depth) after a resize, and
     // skips ticks while the window is minimized.
     auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
