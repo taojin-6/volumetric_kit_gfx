@@ -8,7 +8,8 @@
 // against what the mesh shows. Magnified, each target pixel is the picture
 // pixel under it; minified, it is checked against the exact box mean, in
 // linear light, of the picture pixels under it. RGBA (sRGB) images and
-// Y'CbCr 4:2:0 pictures, one or two. Runs under the validation layer with
+// Y'CbCr 4:2:0 pictures, one or two; multisampled, the interior draws as at
+// one sample. Runs under the validation layer with
 // synchronization validation, tracking what shaders read through
 // descriptors. And HybridMeshFrame::viewport: a mesh drawn into part of the
 // target.
@@ -241,12 +242,14 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
     return pyramid.ok() ? std::move(pyramid).value() : nullptr;
   }
 
-  std::optional<vg::OffscreenTarget> make_target(VkExtent2D extent,
-                                                 VkFormat format) {
+  std::optional<vg::OffscreenTarget> make_target(
+      VkExtent2D extent, VkFormat format,
+      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
     vg::OffscreenTargetDesc desc;
     desc.extent = extent;
     desc.color_format = format;
     desc.depth_format = kDepth;
+    desc.samples = samples;
     auto target = vg::OffscreenTarget::create(allocator(), desc);
     EXPECT_TRUE(target.ok()) << target.status().message();
     if (!target.ok()) {
@@ -282,11 +285,14 @@ class TextureViewTest : public vg_test::RendererDeviceTest,
   }
 
   // Records `before` (outside the rendering scope), then `inside` into a
-  // fresh `extent` target of `format`, cleared to kClear, and reads it back.
+  // fresh `extent` target of `format` and `samples`, cleared to kClear, and
+  // reads it back.
   Pixels render(VkExtent2D extent, VkFormat format,
                 const std::function<void(VkCommandBuffer)>& before,
-                const std::function<void(VkCommandBuffer)>& inside) {
-    std::optional<vg::OffscreenTarget> target = make_target(extent, format);
+                const std::function<void(VkCommandBuffer)>& inside,
+                VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
+    std::optional<vg::OffscreenTarget> target =
+        make_target(extent, format, samples);
     if (!target) {
       return {};
     }
@@ -785,6 +791,65 @@ TEST_F(TextureViewTest, CreateRefusesWhatItCannotDraw) {
   ASSERT_TRUE(pyramid.ok()) << pyramid.status().message();
   EXPECT_EQ(pyramid.value()->size().width, 640u);
   EXPECT_EQ(pyramid.value()->count(), 2u);
+}
+
+// At kWindowSamples a picture's interior draws as at one sample, and the edge
+// of its rectangle blends with the clear: the picture, at 1:1 from y = 7.25,
+// covers row 7 by three quarters and row 31 by one.
+TEST_F(TextureViewTest, MultisampledInteriorDrawsAsSingleSample) {
+  constexpr VkExtent2D kExtent{48, 40};
+  const Rgb card = make_card(32, 24);
+  RgbaTexture rgba = rgba_texture(card);
+  PictureTexture picture = picture_texture({&card});
+  ASSERT_TRUE(rgba.set && picture.set);
+  vg::RenderTargetLayout four = layout_of(kTarget);
+  four.samples = vg::kWindowSamples;
+  auto multi =
+      pipelines::HybridMeshTextureView::create(device(), *pipeline_, four);
+  ASSERT_TRUE(multi.ok()) << multi.status().message();
+
+  for (const VkDescriptorSet set : {rgba.set->set(), picture.set->set()}) {
+    SCOPED_TRACE(set == rgba.set->set() ? "RGBA" : "Y'CbCr");
+    pipelines::TextureViewDraw draw =
+        draw_of(set, {32.0f, 24.0f}, 1.0f, {6.0f, 7.25f});
+    draw.viewport = {{0, 0}, kExtent};
+    const Pixels one = render(
+        kExtent, kTarget, nullptr,
+        [&](VkCommandBuffer cmd) { view_->submit(cmd, kExtent, &draw, 1); });
+    const Pixels many = render(
+        kExtent, kTarget, nullptr,
+        [&](VkCommandBuffer cmd) {
+          multi.value()->submit(cmd, kExtent, &draw, 1);
+        },
+        vg::kWindowSamples);
+    ASSERT_FALSE(one.bytes.empty());
+    ASSERT_EQ(many.bytes.size(), one.bytes.size());
+    for (uint32_t y = 0; y < kExtent.height; ++y) {
+      if (y == 7 || y == 31) {
+        continue;  // the edges the picture covers in part
+      }
+      for (uint32_t x = 0; x < kExtent.width; ++x) {
+        for (int c = 0; c < 3; ++c) {
+          ASSERT_NEAR(many.at(x, y)[c], one.at(x, y)[c], 1) << x << ", " << y;
+        }
+      }
+    }
+    // Row 7 lies between the picture's top row and the clear.
+    int blended = 0;
+    for (uint32_t x = 6; x < 38; ++x) {
+      for (int c = 0; c < 3; ++c) {
+        const int lo = std::min<int>(one.at(x, 7)[c], kClear[c]);
+        const int hi = std::max<int>(one.at(x, 7)[c], kClear[c]);
+        if (hi - lo < 8) {
+          continue;
+        }
+        EXPECT_GT(many.at(x, 7)[c], lo) << x;
+        EXPECT_LT(many.at(x, 7)[c], hi) << x;
+        ++blended;
+      }
+    }
+    EXPECT_GT(blended, 16);
+  }
 }
 
 // texture_view_draw places the part through the view: its origin, scale and

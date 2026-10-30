@@ -130,10 +130,6 @@ HybridMeshTextureView::create(const core::Device& device,
         ": the layout has no color attachment or more "
         "than one");
   }
-  if (layout.samples != VK_SAMPLE_COUNT_1_BIT) {
-    return core::Status::invalid_argument(std::string(kCall) +
-                                          ": the layout is multisampled");
-  }
   if (!device.caps().format_supports(kPyramidFormat, VK_IMAGE_TILING_OPTIMAL,
                                      kPyramidFeatures)) {
     return core::Status::unsupported(

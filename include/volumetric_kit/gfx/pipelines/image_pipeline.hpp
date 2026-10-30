@@ -454,11 +454,11 @@ class VG_PIPELINES_API ImagePipeline {
   /// @param device  The device; it must have enabled the renderer's
   ///                requirements (@ref device_requirements).
   /// @param layout  The target's format/sample signature: exactly one color
-  ///                attachment, single-sample. A depth format is allowed and
-  ///                left untested.
+  ///                attachment, at any sample count. A depth format is
+  ///                allowed and left untested. Multisampled, an image's
+  ///                interior draws as at one sample and its edges blend.
   /// @return The pipeline, or `core::Status::Code::InvalidArgument` for a
-  ///         layout with no color attachment or more than one, or with
-  ///         multisampling;
+  ///         layout with no color attachment or more than one;
   ///         `core::Status::Code::Unsupported` for a device without the
   ///         renderer's requirements or that cannot render, blit and filter
   ///         `R8G8B8A8_SRGB`; or a backend failure.
