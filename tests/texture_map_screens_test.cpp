@@ -290,6 +290,19 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
           window->Rect().Min.x * s.x - 1.0f, window->Rect().Min.y * s.y - 1.0f,
           window->Rect().Max.x * s.x + 1.0f, window->Rect().Max.y * s.y + 1.0f);
     }
+    // Where the view puts each picture on the target, taken once: every pixel
+    // tests the same rectangles, and per pixel these calls would be most of
+    // the test's time under the sanitizers.
+    std::vector<ImRect> placed;
+    for (uint32_t i = 0; i < count; ++i) {
+      const glm::vec2 lo =
+          pictures.view().image_to_target(pictures.picture_origin(i));
+      const glm::vec2 hi = pictures.view().image_to_target(
+          pictures.picture_origin(i) +
+          glm::vec2(static_cast<float>(size.width),
+                    static_cast<float>(size.height)));
+      placed.emplace_back(lo.x, lo.y, hi.x, hi.y);
+    }
     const auto in = [](const VkRect2D& r, float x, float y) {
       return x >= r.offset.x && y >= r.offset.y &&
              x < r.offset.x + static_cast<float>(r.extent.width) &&
@@ -316,12 +329,8 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
           covered = covered || r.Contains(ImVec2(cx, cy));
         }
         for (uint32_t i = 0; i < count && !covered; ++i) {
-          const glm::vec2 lo =
-              pictures.view().image_to_target(pictures.picture_origin(i));
-          const glm::vec2 hi = pictures.view().image_to_target(
-              pictures.picture_origin(i) +
-              glm::vec2(static_cast<float>(size.width),
-                        static_cast<float>(size.height)));
+          const ImVec2& lo = placed[i].Min;
+          const ImVec2& hi = placed[i].Max;
           // A pixel the picture's edge cuts may be either.
           if (cx > lo.x - 1 && cy > lo.y - 1 && cx < hi.x + 1 &&
               cy < hi.y + 1 && in(laid.content, cx, cy)) {
