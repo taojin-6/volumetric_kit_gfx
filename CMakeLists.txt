@@ -80,18 +80,19 @@ endif()
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject.
 #
-# The pin (core 0.20.0) has what gfx relies on: tiled device time (GpuTimer,
+# The pin (core 0.35.0) has what gfx relies on: tiled device time (GpuTimer,
 # GpuTiles) and the busy, blocked and device halves of a stage row, the device's
-# pipeline cache, the timeline-value checks, the optional JSON configuration
-# component, the test support (core_test_support with its two-family fixture,
-# and core_test_main), and the iOS module (cmake/vkc_ios.cmake) that answers
-# gfx's finds of Vulkan and glm in an iOS build. _build.yml's homebrew-key
-# action runs at the same SHA.
+# pipeline cache, the timeline-value checks, lazily allocated memory for
+# TRANSIENT_ATTACHMENT images (the 4x window set), the optional JSON
+# configuration component, the test support (core_test_support with its
+# two-family fixture, and core_test_main), and the iOS module
+# (cmake/vkc_ios.cmake) that answers gfx's finds of Vulkan and glm in an iOS
+# build. _build.yml's homebrew-key action runs at the same SHA.
 include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 0daced5a3b3ef3b64ad2f8f245aa437367d3ed55)
+  GIT_TAG c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2)
 # gfx builds on the vulkan tier, so it asks for it; both compile against the
 # Vulkan headers the tier's find_package(Vulkan) caches, which gfx's below
 # reads.
