@@ -234,14 +234,14 @@ jobs:
       #
       # The key also hashes the files holding the pins, third_party/CMakeLists.txt
       # and CMakeLists.txt (the core's), and carries the Homebrew key ("none"
-      # on Linux), so the first macOS run after a brew upgrade misses once and
-      # rebuilds on the new versions.
+      # on Linux) and, on Linux, the image, so the first run after a brew
+      # upgrade or on a new image misses once and rebuilds on the new versions.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}${{ inputs.image && format('-{0}', inputs.image) || '' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
           # No restore-keys: a prefix fallback drops the pins' hash, so flipping
           # a dependency's version or build options would restore and relink
           # the archives built from the *previous* pin — a stale-object failure
