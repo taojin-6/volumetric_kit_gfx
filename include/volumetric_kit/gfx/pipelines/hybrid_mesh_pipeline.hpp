@@ -74,11 +74,12 @@ enum HybridMeshFlags : uint32_t {
   kHybridMeshCullBackFaces = 1u << 3,
   /// Draw every triangle's edges over the shaded mesh, one pixel wide and
   /// depth-tested against it: black over a light surface, white over a dark
-  /// one. Composes with the other flags (it outlines what they show, and
-  /// @ref kHybridMeshCullBackFaces culls back faces' edges too). Needs a device
-  /// that enabled `fillModeNonSolid` (@ref
-  /// HybridMeshPipeline::wireframe_supported);
-  /// elsewhere it is ignored.
+  /// one (grey, once a multisampled target resolves a one-pixel edge).
+  /// Composes with the other flags: it outlines what they show, and
+  /// @ref kHybridMeshCullBackFaces culls back faces' edges too. Needs a
+  /// device that enabled `fillModeNonSolid`
+  /// (@ref HybridMeshPipeline::wireframe_supported); elsewhere it is
+  /// ignored.
   kHybridMeshWireframe = 1u << 4,
   // TODO: an on-screen toggle for kHybridMeshNormals once an example draws
   // with HybridMeshPipeline.
@@ -108,10 +109,14 @@ enum HybridMeshFlags : uint32_t {
 /// dynamic state, so the flag switches it per frame with no pipeline rebuilt.
 /// @ref kHybridMeshWireframe adds a second pass that draws the same meshes'
 /// edges (`VK_POLYGON_MODE_LINE`, depth-biased toward the viewer so an edge
-/// is not hidden by the surface it lies on). @ref create builds that pass's
-/// pipeline only on a device that enabled `fillModeNonSolid`: add
-/// `features.fillModeNonSolid = VK_TRUE` to the device's requirements to have
-/// it (MoltenVK, NVIDIA and lavapipe all offer it).
+/// is not hidden by the surface it lies on). The bias grows with the
+/// surface's slope, so on a thin part seen nearly edge-on (a finger, a thin
+/// wall) the far side's edges can show through; culling back faces hides
+/// them. @ref create builds that pass's pipeline only on a device that
+/// enabled `fillModeNonSolid`: where the physical device offers it, add
+/// `features.fillModeNonSolid = VK_TRUE` to the device's requirements
+/// (MoltenVK on macOS and iOS, NVIDIA and lavapipe all do; requiring it
+/// where it is not offered fails the device's creation).
 ///
 /// **A second atlas view.** A draw whose @ref HybridMeshDraw::second_view is
 /// set reads its vertices' `tangent` as a second view of the same RGBA atlas,
@@ -204,11 +209,14 @@ class VG_PIPELINES_API HybridMeshPipeline {
   HybridMeshPipeline& operator=(const HybridMeshPipeline&) = delete;
 
   /// @return The `VkPipeline` for draws without a second view
-  ///         (`VK_NULL_HANDLE` when empty).
+  ///         (`VK_NULL_HANDLE` when empty). Its cull mode is dynamic: a
+  ///         caller that binds it outside @ref submit records
+  ///         `vkCmdSetCullMode` before drawing.
   VkPipeline handle() const noexcept { return pipeline_.handle(); }
 
   /// @return The `VkPipelineLayout` (for push constants + descriptor binding);
-  ///         the second view's pipeline's is alike, so it serves both.
+  ///         the second view's and the wireframe pass's are alike, so it
+  ///         serves all three.
   VkPipelineLayout layout() const noexcept { return pipeline_.layout(); }
 
   /// @return `true` if this owns a pipeline.
@@ -269,8 +277,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
   const core::Device* device_ = nullptr;  // borrowed; outlives this
   GraphicsPipeline pipeline_;             // draws without a second view
   GraphicsPipeline second_view_;          // draws whose mesh carries one
-  GraphicsPipeline
-      wireframe_;  // the edges pass; empty without fillModeNonSolid
+  // The edges pass; empty without fillModeNonSolid.
+  GraphicsPipeline wireframe_;
   // The atlas sampler: bilinear, clamped to the edge, one level. Shared by
   // the fallback and every StreamedAtlas made for the pipeline.
   std::optional<Sampler> sampler_;

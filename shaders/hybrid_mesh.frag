@@ -80,6 +80,14 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
   return (w > 0.0 && sum > 0.0) ? (wa * a.rgb + wb * b.rgb) / sum : a.rgb;
 }
 
+// A wireframe edge's color over a surface that shows `shown` (linear light):
+// black over a light surface, white over a dark one. The split is linear 0.18,
+// mid-grey.
+vec3 wire_color(vec3 shown) {
+  const float luma = dot(shown, vec3(0.2126, 0.7152, 0.0722));
+  return luma > 0.18 ? vec3(0.0) : vec3(1.0);
+}
+
 // Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
 // sampler says (an _SRGB one decodes); a picture is converted, then decoded
 // from sRGB. The form is the same for the whole draw, so that branch does not
@@ -89,14 +97,6 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
 // Over two pictures the vertex stage chose the triangle's picture; picture 1
 // is sampled at (uv.x, uv.y - 1). Each picture's clamp holds a coordinate
 // outside it to its edge. Over one picture uv is used as it is.
-// A wireframe edge's color over a surface that shows `shown` (linear light):
-// black over a light surface, white over a dark one. The split is linear 0.18,
-// mid-grey.
-vec3 wire_color(vec3 shown) {
-  const float luma = dot(shown, vec3(0.2126, 0.7152, 0.0722));
-  return luma > 0.18 ? vec3(0.0) : vec3(1.0);
-}
-
 vec3 atlas_albedo(vec2 uv) {
   if (picture.pictures == 0u) {
     vec4 a = texture(plane0, uv);

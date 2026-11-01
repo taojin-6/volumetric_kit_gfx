@@ -1750,10 +1750,12 @@ class HybridMeshWireframeTest : public HybridMeshRenderTest {
     return reqs;
   }
 
-  // The pipeline, or a skip on a device without the wireframe pass.
-  std::optional<pipelines::HybridMeshPipeline> wire_pipeline() {
-    auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
-                                                          color_depth_layout());
+  // The pipeline for `layout`, or none on a device without the wireframe
+  // pass (the test then skips).
+  std::optional<pipelines::HybridMeshPipeline> wire_pipeline(
+      const vg::RenderTargetLayout& layout = color_depth_layout()) {
+    auto pipeline =
+        pipelines::HybridMeshPipeline::create(device(), allocator(), layout);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
     if (!pipeline.ok() || !pipeline.value().wireframe_supported()) {
       return std::nullopt;
@@ -1816,6 +1818,91 @@ TEST_F(HybridMeshWireframeTest, DrawsWhiteEdgesOverADarkSurface) {
                                VK_NULL_HANDLE, pipelines::kHybridMeshWireframe),
                         view_proj_, 10.0f, 255),
       0.95);
+}
+
+// Nearer geometry hides the edges behind it: a white triangle 0.3 in front
+// of the tilted quad leaves the quad's diagonal unseen where it covers it,
+// though the wireframe outlines the triangle itself. An edge pass that ignored
+// depth, or a bias that reached past the gap, would show it.
+TEST_F(HybridMeshWireframeTest, NearerGeometryHidesTheEdgesBehindIt) {
+  std::optional<pipelines::HybridMeshPipeline> pipeline = wire_pipeline();
+  if (!pipeline) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  view_proj_ = camera_view_proj();
+  constexpr float kDegrees = 60.0f;
+  auto quad = pipelines::upload_mesh(
+      device(), allocator(), make_tilted_quad(glm::vec4(1.0f), kDegrees));
+  ASSERT_TRUE(quad.ok()) << quad.status().message();
+  // One face-on triangle in front of the diagonal's middle (z = 0 there) by
+  // 0.3, whose own edges are far from the samples below.
+  const glm::vec4 white{1.0f};
+  assets::Mesh cover;
+  cover.vertices = {world_vertex({-0.6f, -0.5f, 0.3f}, white),
+                    world_vertex({0.6f, -0.5f, 0.3f}, white),
+                    world_vertex({0.0f, 0.7f, 0.3f}, white)};
+  cover.indices = {0, 1, 2};
+  auto front = pipelines::upload_mesh(device(), allocator(), cover);
+  ASSERT_TRUE(front.ok()) << front.status().message();
+  const std::vector<pipelines::HybridMeshDraw> draws{
+      pipelines::HybridMeshDraw{&front.value()},
+      pipelines::HybridMeshDraw{&quad.value()}};
+  const std::vector<uint8_t> px =
+      render(allocator(), *pipeline, draws, VK_NULL_HANDLE,
+             pipelines::kHybridMeshWireframe);
+  ASSERT_FALSE(px.empty());
+  // The diagonal's middle, well inside the triangle's outline, stays white.
+  int hidden = 0;
+  int sampled = 0;
+  for (int i = 0; i <= 10; ++i) {
+    const float t = -0.1f + 0.02f * static_cast<float>(i);
+    const glm::ivec2 c = to_pixel(view_proj_, tilted(t, t, kDegrees));
+    const uint8_t* q =
+        pixel_at(px, static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y));
+    hidden += (q[0] == 255 && q[1] == 255 && q[2] == 255) ? 1 : 0;
+    ++sampled;
+  }
+  EXPECT_EQ(hidden, sampled) << "an edge showed through the triangle";
+}
+
+// On a 4x target, as every window is, the edges still show over the surface
+// they lie on, tilted: a one-pixel edge resolves to grey, darker than the
+// white surface by over a quarter.
+TEST_F(HybridMeshWireframeTest, EdgesShowOnAMultisampledTarget) {
+  std::optional<pipelines::HybridMeshPipeline> pipeline =
+      wire_pipeline(multisampled_layout());
+  if (!pipeline) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  view_proj_ = camera_view_proj();
+  for (const float degrees : {10.0f, 60.0f}) {
+    SCOPED_TRACE(degrees);
+    auto mesh = pipelines::upload_mesh(
+        device(), allocator(), make_tilted_quad(glm::vec4(1.0f), degrees));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+    const std::vector<uint8_t> px =
+        render(allocator(), *pipeline, pipelines::HybridMeshDraw{&mesh.value()},
+               VK_NULL_HANDLE, pipelines::kHybridMeshWireframe, kColorFormat,
+               vg::kWindowSamples);
+    ASSERT_FALSE(px.empty());
+    // Each sample's darkest pixel at or next to the diagonal.
+    constexpr int kSamples = 32;
+    int shown = 0;
+    for (int i = 0; i < kSamples; ++i) {
+      const float t = -0.42f + 0.84f * static_cast<float>(i) / (kSamples - 1);
+      const glm::ivec2 c = to_pixel(view_proj_, tilted(t, t, degrees));
+      int darkest = 255;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          darkest = std::min<int>(darkest,
+                                  pixel_at(px, static_cast<uint32_t>(c.x + dx),
+                                           static_cast<uint32_t>(c.y + dy))[1]);
+        }
+      }
+      shown += darkest <= 255 - 64 ? 1 : 0;
+    }
+    EXPECT_GE(shown, kSamples * 95 / 100);
+  }
 }
 
 // A culled back face loses its edges too; drawn, it shows both.

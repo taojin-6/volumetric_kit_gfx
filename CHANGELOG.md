@@ -43,8 +43,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   without it both sides draw, as before. `kHybridMeshWireframe` draws each
   triangle's edges over the shaded mesh, black over light surfaces and white
   over dark ones, on a device that enabled `fillModeNonSolid`
-  (`wireframe_supported()`); add `features.fillModeNonSolid = VK_TRUE` to the
-  device's requirements to have it.
+  (`wireframe_supported()`); where the physical device offers it, add
+  `features.fillModeNonSolid = VK_TRUE` to the device's requirements.
 - `core`: `GraphicsPipelineDesc::dynamic_cull_mode` takes the cull mode from
   the command buffer (`vkCmdSetCullMode`), and `depth_bias_constant` /
   `depth_bias_slope` offset a pipeline's depths.
