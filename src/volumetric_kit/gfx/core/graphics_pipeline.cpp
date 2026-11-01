@@ -238,6 +238,11 @@ core::Result<GraphicsPipeline> GraphicsPipeline::create(
   // Y-flipped projection produces for outward-facing geometry (see camera.hpp).
   raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   raster.lineWidth = 1.0f;
+  if (desc.depth_bias_constant != 0.0f || desc.depth_bias_slope != 0.0f) {
+    raster.depthBiasEnable = VK_TRUE;
+    raster.depthBiasConstantFactor = desc.depth_bias_constant;
+    raster.depthBiasSlopeFactor = desc.depth_bias_slope;
+  }
 
   VkPipelineMultisampleStateCreateInfo multisample{};
   multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -276,11 +281,12 @@ core::Result<GraphicsPipeline> GraphicsPipeline::create(
   color_blend.attachmentCount = desc.layout.color_count;
   color_blend.pAttachments = blend_attachments;
 
-  const VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                            VK_DYNAMIC_STATE_SCISSOR};
+  const VkDynamicState dynamic_states[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                            VK_DYNAMIC_STATE_SCISSOR,
+                                            VK_DYNAMIC_STATE_CULL_MODE};
   VkPipelineDynamicStateCreateInfo dynamic_state{};
   dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-  dynamic_state.dynamicStateCount = 2;
+  dynamic_state.dynamicStateCount = desc.dynamic_cull_mode ? 3u : 2u;
   dynamic_state.pDynamicStates = dynamic_states;
 
   // Dynamic rendering: the pipeline carries the attachment formats directly

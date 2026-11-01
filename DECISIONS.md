@@ -156,6 +156,41 @@ what has landed since then. Record amendments when a contract changes.
 - **2026-10-30 — Windows are 4x; one shared multisampled set.** Every `Swapchain` renders
   at `kWindowSamples`, with no setting: its images' targets draw into one multisampled
   colour (+ depth) set and resolve into their own image. See the dated entry below.
+- **2026-11-01 — A hybrid mesh culls back faces and draws edges on request.** Both sides
+  draw unless a frame sets `kHybridMeshCullBackFaces` (dynamic cull mode);
+  `kHybridMeshWireframe` adds a depth-biased line pass where the device enabled
+  `fillModeNonSolid`. See the dated entry below.
+
+## 2026-11-01 — A hybrid mesh culls back faces and draws edges on request
+
+**The contract.** `HybridMeshFrame::flags` takes two more bits. `kHybridMeshCullBackFaces`
+culls triangles wound clockwise on screen; clear, the default, both sides draw as before.
+`kHybridMeshWireframe` draws every mesh again as `VK_POLYGON_MODE_LINE` after the fill,
+black over a surface brighter than linear 0.18 and white over a darker one, depth-tested
+(`LESS_OR_EQUAL`, no depth write) and biased toward the viewer (slope and constant -1).
+`HybridMeshPipeline::create` builds that pass only when the device enabled
+`fillModeNonSolid`; `wireframe_supported()` says so, and elsewhere the bit is ignored.
+
+**Why per frame, and a dynamic cull mode.** Both are viewer toggles, flipped at will, like
+the shading bits beside them. `vkCmdSetCullMode` is core in Vulkan 1.3, which gfx already
+requires, and MoltenVK implements it, so one pipeline serves both modes; a pipeline per mode
+would double the two that exist. Culling is not the default until the two looks have been
+compared on real reconstructions.
+
+**Why the front face holds.** Marching cubes winds a surface counter-clockwise about its
+outward normal (checked on a reconstructed person at 1 cm and 5 mm: winding and normal
+agree on every triangle), and the camera tier's Y flip keeps that counter-clockwise on screen, the
+rasterizer's front face. A test draws an outward and an inside-out triangle through
+`Camera::look_at_perspective` to pin the chain.
+
+**Why a line pass, not barycentrics, and why opt-in.** Line fill is core Vulkan 1.0 and
+every target offers it (MoltenVK on macOS and iOS, NVIDIA, lavapipe), where
+`VK_KHR_fragment_shader_barycentric` needs Apple6 or newer. It stays out of
+`device_requirements()`: a device another library created, such as recon's fusion device a
+viewer adopts, may not have enabled it, and requiring it would refuse that device for every
+gfx type. An edge lies on the surface the fill drew, but its depth is interpolated along the
+edge, so without the bias the fill hides much of it: on MoltenVK the edge tests lose from
+0.5 to 30 degrees of tilt, and pass with it.
 
 ## 2026-10-30 — Windows are 4x; one shared multisampled set
 
