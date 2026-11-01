@@ -38,6 +38,16 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `pipelines`: **back faces and wireframe for `HybridMeshPipeline`,** two
+  `HybridMeshFlags`. `kHybridMeshCullBackFaces` culls back faces for a frame;
+  without it both sides draw, as before. `kHybridMeshWireframe` draws each
+  triangle's edges over the shaded mesh, black over light surfaces and white
+  over dark ones, on a device that enabled `fillModeNonSolid`
+  (`wireframe_supported()`); add `features.fillModeNonSolid = VK_TRUE` to the
+  device's requirements to have it.
+- `core`: `GraphicsPipelineDesc::dynamic_cull_mode` takes the cull mode from
+  the command buffer (`vkCmdSetCullMode`), and `depth_bias_constant` /
+  `depth_bias_slope` offset a pipeline's depths.
 - `core`: **multisampled render targets resolve in the pass.** A
   `RenderTarget` above one sample takes one single-sample resolve attachment
   per colour (a new trailing constructor argument). Its `begin` transitions

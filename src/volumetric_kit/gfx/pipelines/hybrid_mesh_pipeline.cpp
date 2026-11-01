@@ -49,19 +49,29 @@ static_assert(offsetof(PushConstants, light_dir) == 64,
 static_assert(offsetof(PushConstants, flags) == 76,
               "PushConstants layout drift");
 
-// hybrid_mesh.frag's specialization constants, constant_ids 0..4 in order. The
+// hybrid_mesh.frag's specialization constants, constant_ids 0..5 in order. The
 // flag bits it tests come from HybridMeshFlags here, so the enum is their one
 // definition (the shader's defaults are 0, which switches a mode off);
 // linear_target says whether the target takes linear light, which decides
 // what the shader writes; second_view, whether the pipeline reads the tangent
-// slot's second view.
+// slot's second view; wire_pass, whether it is the wireframe pass.
 struct FragmentSpecialization {
   uint32_t flag_lit;
   uint32_t flag_normals;
   VkBool32 linear_target;
   uint32_t flag_vertex_color;
   VkBool32 second_view;
+  VkBool32 wire_pass;
 };
+
+// The wireframe pass's depth bias, toward the viewer: an edge lies on the
+// surface the fill pass drew, and without the bias about half its fragments
+// would lose the depth test to that surface (the line's depth is interpolated
+// along the edge, the fill's across the triangle). The slope term covers the
+// half-pixel the two disagree by on a tilted triangle; the constant one, a
+// face-on one.
+constexpr float kWireBiasSlope = -1.0f;
+constexpr float kWireBiasConstant = -1.0f;
 
 // The vertex ABI, pinned. A LiveMesh's vertices are written by a *separate
 // process* (the reconstruction library, in its own repo) against these exact
@@ -136,18 +146,22 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   // The fragment stage writes color attachment 0 only, so its format alone
   // decides the encoding.
   FragmentSpecialization spec_data{
-      kHybridMeshLit, kHybridMeshNormals,
+      kHybridMeshLit,
+      kHybridMeshNormals,
       takes_linear_light(layout.color_formats[0]) ? VK_TRUE : VK_FALSE,
-      kHybridMeshVertexColor, VK_FALSE};
-  const VkSpecializationMapEntry spec_entries[5] = {
+      kHybridMeshVertexColor,
+      VK_FALSE,
+      VK_FALSE};
+  const VkSpecializationMapEntry spec_entries[6] = {
       {0, offsetof(FragmentSpecialization, flag_lit), sizeof(uint32_t)},
       {1, offsetof(FragmentSpecialization, flag_normals), sizeof(uint32_t)},
       {2, offsetof(FragmentSpecialization, linear_target), sizeof(VkBool32)},
       {3, offsetof(FragmentSpecialization, flag_vertex_color),
        sizeof(uint32_t)},
       {4, offsetof(FragmentSpecialization, second_view), sizeof(VkBool32)},
+      {5, offsetof(FragmentSpecialization, wire_pass), sizeof(VkBool32)},
   };
-  const VkSpecializationInfo spec{5, spec_entries, sizeof(spec_data),
+  const VkSpecializationInfo spec{6, spec_entries, sizeof(spec_data),
                                   &spec_data};
 
   GraphicsPipelineDesc desc;
@@ -160,12 +174,32 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   desc.vertex_attribute_count = 5;
   desc.depth_test = true;
   desc.depth_write = true;
+  desc.dynamic_cull_mode = true;  // kHybridMeshCullBackFaces, per frame
   desc.fragment_specialization = &spec;
   desc.cache = device.pipeline_cache();
   VKC_ASSIGN(GraphicsPipeline pipeline, GraphicsPipeline::create(vk, desc));
   // The same stages with kSecondView set, for draws whose mesh carries one.
   spec_data.second_view = VK_TRUE;
   VKC_ASSIGN(GraphicsPipeline second_view, GraphicsPipeline::create(vk, desc));
+
+  // The wireframe pass: the same stages drawing triangle edges over what the
+  // fill pass drew, which it neither replaces nor occludes, so it tests depth
+  // (equal passes, with the bias) and writes none. Its color does not read
+  // the second view. Line fill needs fillModeNonSolid; without it the pass is
+  // left empty and kHybridMeshWireframe draws nothing.
+  GraphicsPipeline wireframe;
+  core::DeviceRequirements wire_reqs = device_requirements();
+  wire_reqs.features.fillModeNonSolid = VK_TRUE;
+  if (device.check_enabled(wire_reqs).ok()) {
+    spec_data.second_view = VK_FALSE;
+    spec_data.wire_pass = VK_TRUE;
+    desc.polygon_mode = VK_POLYGON_MODE_LINE;
+    desc.depth_write = false;
+    desc.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
+    desc.depth_bias_constant = kWireBiasConstant;
+    desc.depth_bias_slope = kWireBiasSlope;
+    VKC_ASSIGN(wireframe, GraphicsPipeline::create(vk, desc));
+  }
 
   // Atlas tiles meet at their edges, so the sampler clamps rather than wraps
   // into the next tile; the atlas has one level.
@@ -210,6 +244,7 @@ core::Result<HybridMeshPipeline> HybridMeshPipeline::create(
   hybrid.device_ = &device;
   hybrid.pipeline_ = std::move(pipeline);
   hybrid.second_view_ = std::move(second_view);
+  hybrid.wireframe_ = std::move(wireframe);
   hybrid.sampler_.emplace(std::move(sampler));
   hybrid.fallback_ = std::move(fallback);
   hybrid.rgba_picture_ = std::move(rgba_picture);
@@ -231,6 +266,7 @@ HybridMeshPipeline::HybridMeshPipeline(HybridMeshPipeline&& other) noexcept
     : device_(other.device_),
       pipeline_(std::move(other.pipeline_)),
       second_view_(std::move(other.second_view_)),
+      wireframe_(std::move(other.wireframe_)),
       sampler_(std::move(other.sampler_)),
       fallback_(std::move(other.fallback_)),
       rgba_picture_(std::move(other.rgba_picture_)),
@@ -252,12 +288,14 @@ HybridMeshPipeline& HybridMeshPipeline::operator=(
     rgba_picture_ = {};
     fallback_ = {};
     sampler_.reset();
+    wireframe_ = {};
     second_view_ = {};
     pipeline_ = {};
 
     device_ = other.device_;
     pipeline_ = std::move(other.pipeline_);
     second_view_ = std::move(other.second_view_);
+    wireframe_ = std::move(other.wireframe_);
     sampler_ = std::move(other.sampler_);
     fallback_ = std::move(other.fallback_);
     rgba_picture_ = std::move(other.rgba_picture_);
@@ -294,6 +332,10 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
       cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
       second_view_bound ? second_view_.handle() : pipeline_.handle());
   static_cast<void>(set_viewport_scissor(cmd, viewport, frame.extent));
+  // Dynamic in all three pipelines, so set once for the frame's every draw.
+  vkCmdSetCullMode(cmd, (frame.flags & kHybridMeshCullBackFaces) != 0u
+                            ? VK_CULL_MODE_BACK_BIT
+                            : VK_CULL_MODE_NONE);
 
   // Set 0 (the atlas) binds once for the frame. The fragment shader samples
   // it unconditionally, so a frame without an atlas binds the fallback and
@@ -338,6 +380,16 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
           second_view_bound ? second_view_.handle() : pipeline_.handle());
     }
     std::visit(RecordGeometry{cmd}, draw.geometry);
+  }
+
+  // The edges, over every mesh the loop above filled. The set and the push
+  // constant carry over: the wireframe pass's layout is alike.
+  if ((frame.flags & kHybridMeshWireframe) == 0u || !wireframe_.valid()) {
+    return;
+  }
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_.handle());
+  for (uint32_t i = 0; i < frame.draw_count; ++i) {
+    std::visit(RecordGeometry{cmd}, frame.draws[i].geometry);
   }
 }
 

@@ -33,8 +33,10 @@ namespace volumetric_kit::gfx {
 /// function state is sensible defaults: non-blended color attachments and
 /// dynamic viewport + scissor (set at record time); fill mode and face culling
 /// are configurable via @ref polygon_mode / @ref cull_mode (defaulting to solid
-/// fill / no culling). Depth testing is enabled via @ref depth_test, which
-/// requires @ref layout to carry a depth format.
+/// fill / no culling), the cull mode optionally at record time
+/// (@ref dynamic_cull_mode). Depth testing is enabled via @ref depth_test,
+/// which requires @ref layout to carry a depth format; @ref depth_bias_slope
+/// and @ref depth_bias_constant offset a pipeline's depths.
 /// The color/depth formats and sample count come from @ref layout — the
 /// pipeline renders dynamically (`vkCmdBeginRendering`), so there is no
 /// `VkRenderPass`. Blending is added as the pipelines tier grows.
@@ -73,6 +75,11 @@ struct GraphicsPipelineDesc {
   /// camera tier's Y-flipped projection yields for outward geometry), so
   /// `VK_CULL_MODE_BACK_BIT` draws a convex mesh correctly without depth.
   VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
+  /// Take the cull mode from the command buffer instead of @ref cull_mode,
+  /// which is then ignored: the caller records `vkCmdSetCullMode` (core in
+  /// Vulkan 1.3, which @ref device_requirements asks for) before drawing, so
+  /// one pipeline serves both modes.
+  bool dynamic_cull_mode = false;
   /// Enable depth testing; requires @ref layout to carry a depth format.
   bool depth_test = false;
   /// Write passing fragments' depth to the attachment. Requires @ref depth_test
@@ -81,6 +88,16 @@ struct GraphicsPipelineDesc {
   bool depth_write = false;
   /// Depth comparison used when @ref depth_test is set.
   VkCompareOp depth_compare = VK_COMPARE_OP_LESS;
+  /// Depth bias, in units of the depth format's resolution: a fragment's
+  /// depth is offset by `depth_bias_slope * m + depth_bias_constant * r`, `m`
+  /// its polygon's depth slope and `r` the format's minimum resolvable
+  /// difference. Negative moves toward the viewer (for the default
+  /// `VK_COMPARE_OP_LESS`). Both `0` (the default) leave depths unbiased.
+  /// It applies to polygons in every @ref polygon_mode, so it lifts a
+  /// `VK_POLYGON_MODE_LINE` pass's edges off the filled surface they outline.
+  float depth_bias_constant = 0.0f;
+  /// The slope factor of the depth bias (@ref depth_bias_constant).
+  float depth_bias_slope = 0.0f;
   /// Entry-point name used for both stages. Must be non-null.
   const char* entry_point = "main";
   /// Specialization-constant values for the fragment stage, or `nullptr` to

@@ -30,6 +30,7 @@
 
 #include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/trigonometric.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -42,6 +43,7 @@
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/gfx/assets/mesh.hpp"
+#include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
@@ -420,7 +422,7 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
 
     pipelines::HybridMeshFrame frame;
     frame.extent = {kSize, kSize};
-    frame.view_proj = glm::mat4(1.0f);  // clip-space positions
+    frame.view_proj = view_proj_;
     frame.flags = flags;
     frame.atlas = atlas;
     frame.draws = draws.data();
@@ -448,6 +450,10 @@ class HybridMeshRenderTest : public vg_test::RendererDeviceTest {
     return std::vector<uint8_t>(
         px, px + texel * static_cast<size_t>(kSize) * kSize);
   }
+
+  // The frame's view-projection: identity (positions are clip space) unless a
+  // test sets a camera's.
+  glm::mat4 view_proj_{1.0f};
 
   // Single-draw convenience -- the common case is one mesh per frame.
   std::vector<uint8_t> render(
@@ -1572,6 +1578,282 @@ TEST_F(HybridMeshRenderTest,
       render(allocator(), pipeline.value(),
              pipelines::HybridMeshDraw{&mesh.value(), true}, set, 0u,
              kColorFormat, vg::kWindowSamples)));
+}
+
+// --- Back faces and wireframe ----------------------------------------------
+
+// The camera the back-face and wireframe tests draw through: the camera tier's
+// own perspective, so they pin what consumers see, Y flip included.
+glm::mat4 camera_view_proj() {
+  return vg::camera::Camera::look_at_perspective(
+             /*eye=*/{0.0f, 0.0f, 2.0f}, /*center=*/{0.0f, 0.0f, 0.0f},
+             /*up=*/{0.0f, 1.0f, 0.0f}, glm::radians(60.0f), /*aspect=*/1.0f,
+             /*z_near=*/0.1f, /*z_far=*/10.0f)
+      .view_proj();
+}
+
+// A world-space vertex in vertex color `color`, facing +Z.
+assets::Vertex world_vertex(glm::vec3 p, glm::vec4 color) {
+  assets::Vertex v;
+  v.position = p;
+  v.normal = {0.0f, 0.0f, 1.0f};
+  v.uv0 = {-1.0f, -1.0f};  // sentinel -> per-vertex color
+  v.color = color;
+  return v;
+}
+
+// A white triangle about the origin at z = 0, wound counter-clockwise seen
+// from +Z -- the side its right-handed normal points to, as marching cubes
+// winds a surface toward the space it was seen from -- or, `inside_out`, the
+// other way.
+assets::Mesh make_world_triangle(bool inside_out) {
+  const glm::vec4 white{1.0f};
+  assets::Mesh mesh;
+  mesh.vertices = {world_vertex({-0.6f, -0.6f, 0.0f}, white),
+                   world_vertex({0.6f, -0.6f, 0.0f}, white),
+                   world_vertex({0.0f, 0.6f, 0.0f}, white)};
+  mesh.indices = inside_out ? std::vector<uint32_t>{0, 2, 1}
+                            : std::vector<uint32_t>{0, 1, 2};
+  return mesh;
+}
+
+// True if the centre pixel shows the white triangle (unlit).
+bool centre_drawn(const std::vector<uint8_t>& px) {
+  return !px.empty() && pixel_at(px, kSize / 2, kSize / 2)[1] > 128;
+}
+
+// Seen from the camera, an outward triangle is a front face and an inside-out
+// one a back face: both draw by default, and kHybridMeshCullBackFaces culls
+// only the inside-out one. Through the camera tier, so it also pins that the
+// rasterizer's front face, the projection's Y flip and marching cubes'
+// winding agree.
+TEST_F(HybridMeshRenderTest, CullBackFacesKeepsTheOutwardSide) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+  view_proj_ = camera_view_proj();
+  for (const bool inside_out : {false, true}) {
+    SCOPED_TRACE(inside_out ? "inside out" : "outward");
+    auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                       make_world_triangle(inside_out));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+    const pipelines::HybridMeshDraw draw{&mesh.value()};
+    EXPECT_TRUE(centre_drawn(
+        render(allocator(), pipeline.value(), draw, VK_NULL_HANDLE, 0u)))
+        << "both sides draw by default";
+    EXPECT_EQ(
+        centre_drawn(render(allocator(), pipeline.value(), draw, VK_NULL_HANDLE,
+                            pipelines::kHybridMeshCullBackFaces)),
+        !inside_out);
+  }
+}
+
+// The tilted quad's point at (u, v) in its own plane: the square
+// [-0.7, 0.7]^2 turned `degrees` about the vertical axis, so its depth varies
+// across the screen: an edge's depth then differs from the fill's it lies on
+// (interpolated along the edge, not across the triangle), and without the
+// wireframe's depth bias the fill hides much of it (on MoltenVK, from 0.5 to
+// 30 degrees at least).
+glm::vec3 tilted(float u, float v, float degrees) {
+  const float a = glm::radians(degrees);
+  return {u * std::cos(a), v, u * std::sin(a)};
+}
+
+// The tilted quad in vertex color `color`. Its two triangles share the
+// diagonal from tilted(-0.7, -0.7) to tilted(0.7, 0.7); both face the camera.
+assets::Mesh make_tilted_quad(glm::vec4 color, float degrees) {
+  auto at = [&](float u, float v) {
+    return world_vertex(tilted(u, v, degrees), color);
+  };
+  assets::Mesh mesh;
+  mesh.vertices = {at(-0.7f, -0.7f), at(0.7f, -0.7f), at(0.7f, 0.7f),
+                   at(-0.7f, 0.7f)};
+  mesh.indices = {0, 1, 2, 0, 2, 3};
+  return mesh;
+}
+
+// The pixel the world point `p` lands in through `view_proj`.
+glm::ivec2 to_pixel(const glm::mat4& view_proj, glm::vec3 p) {
+  const glm::vec4 clip = view_proj * glm::vec4(p, 1.0f);
+  const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+  return glm::ivec2((ndc * 0.5f + 0.5f) * static_cast<float>(kSize));
+}
+
+// The share of the tilted quad's diagonal, sampled at 32 points along its
+// middle 60% (clear of the corners, where a neighbouring pixel can be the
+// black clear), with a pixel of `edge` (every channel within 40 of it) at or
+// next to each point.
+double diagonal_coverage(const std::vector<uint8_t>& px,
+                         const glm::mat4& view_proj, float degrees,
+                         uint8_t edge) {
+  if (px.empty()) {
+    return 0.0;
+  }
+  constexpr int kSamples = 32;
+  int hit = 0;
+  for (int i = 0; i < kSamples; ++i) {
+    const float t = -0.42f + 0.84f * static_cast<float>(i) / (kSamples - 1);
+    const glm::ivec2 c = to_pixel(view_proj, tilted(t, t, degrees));
+    bool found = false;
+    for (int dy = -1; dy <= 1 && !found; ++dy) {
+      for (int dx = -1; dx <= 1 && !found; ++dx) {
+        const int x = c.x + dx;
+        const int y = c.y + dy;
+        if (x < 0 || y < 0 || x >= static_cast<int>(kSize) ||
+            y >= static_cast<int>(kSize)) {
+          continue;
+        }
+        const uint8_t* q =
+            pixel_at(px, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+        found = std::abs(q[0] - edge) <= 40 && std::abs(q[1] - edge) <= 40 &&
+                std::abs(q[2] - edge) <= 40;
+      }
+    }
+    hit += found ? 1 : 0;
+  }
+  return static_cast<double>(hit) / kSamples;
+}
+
+// Without fillModeNonSolid (this fixture's device does not enable it) there
+// is no wireframe pass, and the flag changes nothing.
+TEST_F(HybridMeshRenderTest, WireframeIsIgnoredWithoutFillModeNonSolid) {
+  auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                        color_depth_layout());
+  ASSERT_TRUE(pipeline.ok()) << pipeline.status().message();
+  EXPECT_FALSE(pipeline.value().wireframe_supported());
+  view_proj_ = camera_view_proj();
+  auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                     make_tilted_quad(glm::vec4(1.0f), 0.0f));
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  const std::vector<uint8_t> plain =
+      render(allocator(), pipeline.value(), draw, VK_NULL_HANDLE, 0u);
+  ASSERT_TRUE(any_pixel_drawn(plain));
+  EXPECT_EQ(render(allocator(), pipeline.value(), draw, VK_NULL_HANDLE,
+                   pipelines::kHybridMeshWireframe),
+            plain);
+}
+
+// A device with fillModeNonSolid where the physical device offers it (every
+// device gfx targets: MoltenVK, NVIDIA, lavapipe); a test skips elsewhere.
+class HybridMeshWireframeTest : public HybridMeshRenderTest {
+ protected:
+  // Asked once to choose the physical device, before there is one to query,
+  // and again for the device made on it.
+  vkc::DeviceRequirements requirements() const override {
+    vkc::DeviceRequirements reqs = HybridMeshRenderTest::requirements();
+    if (physical().handle() != VK_NULL_HANDLE) {
+      VkPhysicalDeviceFeatures supported{};
+      vkGetPhysicalDeviceFeatures(physical().handle(), &supported);
+      reqs.features.fillModeNonSolid = supported.fillModeNonSolid;
+    }
+    return reqs;
+  }
+
+  // The pipeline, or a skip on a device without the wireframe pass.
+  std::optional<pipelines::HybridMeshPipeline> wire_pipeline() {
+    auto pipeline = pipelines::HybridMeshPipeline::create(device(), allocator(),
+                                                          color_depth_layout());
+    EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
+    if (!pipeline.ok() || !pipeline.value().wireframe_supported()) {
+      return std::nullopt;
+    }
+    return std::move(pipeline).value();
+  }
+};
+
+// Over a light surface the edges draw black -- the shared diagonal included,
+// gently turned and steeply -- and the surface between them keeps its color.
+TEST_F(HybridMeshWireframeTest, DrawsBlackEdgesOverALightSurface) {
+  std::optional<pipelines::HybridMeshPipeline> pipeline = wire_pipeline();
+  if (!pipeline) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  view_proj_ = camera_view_proj();
+  for (const float degrees : {10.0f, 60.0f}) {
+    SCOPED_TRACE(degrees);
+    auto mesh = pipelines::upload_mesh(
+        device(), allocator(), make_tilted_quad(glm::vec4(1.0f), degrees));
+    ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+    const pipelines::HybridMeshDraw draw{&mesh.value()};
+    const std::vector<uint8_t> px =
+        render(allocator(), *pipeline, draw, VK_NULL_HANDLE,
+               pipelines::kHybridMeshWireframe);
+    EXPECT_GE(diagonal_coverage(px, view_proj_, degrees, 0), 0.95)
+        << "the edge lost the depth test to the surface it lies on";
+    // Between the diagonal and the quad's border, each triangle shows white.
+    for (const glm::vec3 p :
+         {tilted(0.35f, -0.35f, degrees), tilted(-0.35f, 0.35f, degrees)}) {
+      const glm::ivec2 c = to_pixel(view_proj_, p);
+      const uint8_t* q =
+          pixel_at(px, static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y));
+      EXPECT_EQ(q[0], 255);
+      EXPECT_EQ(q[1], 255);
+      EXPECT_EQ(q[2], 255);
+    }
+    EXPECT_EQ(diagonal_coverage(
+                  render(allocator(), *pipeline, draw, VK_NULL_HANDLE, 0u),
+                  view_proj_, degrees, 0),
+              0.0)
+        << "without the flag no edge draws";
+  }
+}
+
+// Over a dark surface the edges draw white.
+TEST_F(HybridMeshWireframeTest, DrawsWhiteEdgesOverADarkSurface) {
+  std::optional<pipelines::HybridMeshPipeline> pipeline = wire_pipeline();
+  if (!pipeline) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  view_proj_ = camera_view_proj();
+  auto mesh = pipelines::upload_mesh(
+      device(), allocator(),
+      make_tilted_quad(glm::vec4(0.05f, 0.05f, 0.05f, 1.0f), 10.0f));
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  EXPECT_GE(
+      diagonal_coverage(render(allocator(), *pipeline,
+                               pipelines::HybridMeshDraw{&mesh.value()},
+                               VK_NULL_HANDLE, pipelines::kHybridMeshWireframe),
+                        view_proj_, 10.0f, 255),
+      0.95);
+}
+
+// A culled back face loses its edges too; drawn, it shows both.
+TEST_F(HybridMeshWireframeTest, CullingAlsoRemovesBackFaceEdges) {
+  std::optional<pipelines::HybridMeshPipeline> pipeline = wire_pipeline();
+  if (!pipeline) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  view_proj_ = camera_view_proj();
+  auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                     make_world_triangle(/*inside_out=*/true));
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const pipelines::HybridMeshDraw draw{&mesh.value()};
+  EXPECT_TRUE(
+      any_pixel_drawn(render(allocator(), *pipeline, draw, VK_NULL_HANDLE,
+                             pipelines::kHybridMeshWireframe)));
+  EXPECT_TRUE(all_pixels_cleared(render(
+      allocator(), *pipeline, draw, VK_NULL_HANDLE,
+      pipelines::kHybridMeshWireframe | pipelines::kHybridMeshCullBackFaces)));
+}
+
+// The wireframe pass moves with the pipeline: the source is left without it,
+// and an assignment over a live pipeline adopts the source's.
+TEST_F(HybridMeshWireframeTest, MovesCarryTheWireframePass) {
+  std::optional<pipelines::HybridMeshPipeline> source = wire_pipeline();
+  if (!source) {
+    GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
+  }
+  pipelines::HybridMeshPipeline moved(std::move(*source));
+  EXPECT_TRUE(moved.wireframe_supported());
+  EXPECT_FALSE(
+      source->wireframe_supported());  // NOLINT(bugprone-use-after-move)
+
+  std::optional<pipelines::HybridMeshPipeline> live = wire_pipeline();
+  ASSERT_TRUE(live.has_value());
+  *live = std::move(moved);
+  EXPECT_TRUE(live->wireframe_supported());
+  EXPECT_FALSE(moved.wireframe_supported());  // NOLINT(bugprone-use-after-move)
 }
 
 }  // namespace
