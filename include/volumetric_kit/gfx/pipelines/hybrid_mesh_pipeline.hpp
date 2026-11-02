@@ -72,14 +72,15 @@ enum HybridMeshFlags : uint32_t {
   /// (marching cubes winds its triangles so). Clear, the default, draws both
   /// sides, a back face lit with its normal flipped toward the viewer.
   kHybridMeshCullBackFaces = 1u << 3,
-  /// Draw every triangle's edges over the shaded mesh, one pixel wide and
-  /// depth-tested against it: black over a light surface, white over a dark
-  /// one (grey, once a multisampled target resolves a one-pixel edge).
-  /// Composes with the other flags: it outlines what they show, and
+  /// Draw the meshes as their triangles' edges alone, one pixel wide, with no
+  /// fill: the surfaces first lay down their depth and no color, so an edge
+  /// a nearer surface covers stays hidden. Each edge takes the color its
+  /// surface would show there, so the other flags apply (lit, unlit, the
+  /// normals view; a second view is not blended), and
   /// @ref kHybridMeshCullBackFaces culls back faces' edges too. Needs a
   /// device that enabled `fillModeNonSolid`
   /// (@ref HybridMeshPipeline::wireframe_supported); elsewhere it is
-  /// ignored.
+  /// ignored and the meshes draw filled.
   kHybridMeshWireframe = 1u << 4,
   // TODO: an on-screen toggle for kHybridMeshNormals once an example draws
   // with HybridMeshPipeline.
@@ -107,12 +108,13 @@ enum HybridMeshFlags : uint32_t {
 /// **Back faces and wireframe.** Both sides of every triangle are drawn
 /// unless a frame sets @ref kHybridMeshCullBackFaces; the cull mode is
 /// dynamic state, so the flag switches it per frame with no pipeline rebuilt.
-/// @ref kHybridMeshWireframe adds a second pass that draws the same meshes'
-/// edges (`VK_POLYGON_MODE_LINE`, depth-biased toward the viewer so an edge
-/// is not hidden by the surface it lies on). The bias grows with the
+/// @ref kHybridMeshWireframe draws the meshes twice in place of their fill:
+/// a depth-only pass, then their edges (`VK_POLYGON_MODE_LINE`, depth-biased
+/// toward the viewer so an edge is not hidden by the surface it lies on). The
+/// bias grows with the
 /// surface's slope, so on a thin part seen nearly edge-on (a finger, a thin
 /// wall) the far side's edges can show through; culling back faces hides
-/// them. @ref create builds that pass's pipeline only on a device that
+/// them. @ref create builds those passes' pipelines only on a device that
 /// enabled `fillModeNonSolid`: where the physical device offers it, add
 /// `features.fillModeNonSolid = VK_TRUE` to the device's requirements
 /// (MoltenVK on macOS and iOS, NVIDIA and lavapipe all do; requiring it
@@ -135,8 +137,8 @@ enum HybridMeshFlags : uint32_t {
 ///
 /// Wraps two @ref GraphicsPipeline s built from the same SPIR-V, compiled into
 /// the library -- one for draws without a second view, one for draws with
-/// one -- plus the wireframe pass's where the device allows it, so a consumer
-/// gets the technique from @ref create alone. Their
+/// one -- plus the wireframe's two where the device allows them, so a
+/// consumer gets the technique from @ref create alone. Their
 /// reflected layouts are alike and expose **one** descriptor set, **set 0**:
 /// an RGBA atlas -- one a @ref StreamedAtlas made for the pipeline streams, or
 /// an image the consumer owns -- or one or two Y'CbCr 4:2:0 pictures' planes,
@@ -215,15 +217,16 @@ class VG_PIPELINES_API HybridMeshPipeline {
   VkPipeline handle() const noexcept { return pipeline_.handle(); }
 
   /// @return The `VkPipelineLayout` (for push constants + descriptor binding);
-  ///         the second view's and the wireframe pass's are alike, so it
-  ///         serves all three.
+  ///         the second view's and the wireframe's are alike, so it serves
+  ///         them all.
   VkPipelineLayout layout() const noexcept { return pipeline_.layout(); }
 
   /// @return `true` if this owns a pipeline.
   bool valid() const noexcept { return pipeline_.valid(); }
 
   /// @return `true` if @ref kHybridMeshWireframe draws: the device enabled
-  ///         `fillModeNonSolid`, so @ref create built the wireframe pass.
+  ///         `fillModeNonSolid`, so @ref create built the wireframe's
+  ///         passes.
   bool wireframe_supported() const noexcept { return wireframe_.valid(); }
 
   /// @return The number of descriptor sets the embedded shaders declare
@@ -245,8 +248,8 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///        frame's viewport, set the cull mode, bind the atlas set once
   ///        (set 0), push the camera + lighting constants, then draw each
   ///        mesh through the pipeline its @ref HybridMeshDraw::second_view
-  ///        names -- and, for @ref kHybridMeshWireframe, each again through
-  ///        the wireframe pass.
+  ///        names -- or, for @ref kHybridMeshWireframe, each through the
+  ///        depth-only pass and then the edges pass.
   /// @param cmd    A recording-state command buffer, inside a dynamic-rendering
   ///               scope whose target matches the layout @ref create was given.
   /// @param frame  The atlas set, the draw list, the view-projection, and the
@@ -277,7 +280,9 @@ class VG_PIPELINES_API HybridMeshPipeline {
   const core::Device* device_ = nullptr;  // borrowed; outlives this
   GraphicsPipeline pipeline_;             // draws without a second view
   GraphicsPipeline second_view_;          // draws whose mesh carries one
-  // The edges pass; empty without fillModeNonSolid.
+  // The wireframe's passes, the surfaces' depth and then their edges; both
+  // empty without fillModeNonSolid.
+  GraphicsPipeline depth_only_;
   GraphicsPipeline wireframe_;
   // The atlas sampler: bilinear, clamped to the edge, one level. Shared by
   // the fallback and every StreamedAtlas made for the pipeline.

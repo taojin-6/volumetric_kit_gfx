@@ -158,18 +158,26 @@ what has landed since then. Record amendments when a contract changes.
   colour (+ depth) set and resolve into their own image. See the dated entry below.
 - **2026-11-01 — A hybrid mesh culls back faces and draws edges on request.** Both sides
   draw unless a frame sets `kHybridMeshCullBackFaces` (dynamic cull mode);
-  `kHybridMeshWireframe` adds a depth-biased line pass where the device enabled
-  `fillModeNonSolid`. See the dated entry below.
+  `kHybridMeshWireframe` draws the edges alone, a depth-only pass then a depth-biased line
+  pass, where the device enabled `fillModeNonSolid`. See the dated entry below.
 
 ## 2026-11-01 — A hybrid mesh culls back faces and draws edges on request
 
 **The contract.** `HybridMeshFrame::flags` takes two more bits. `kHybridMeshCullBackFaces`
 culls triangles wound clockwise on screen; clear, the default, both sides draw as before.
-`kHybridMeshWireframe` draws every mesh again as `VK_POLYGON_MODE_LINE` after the fill,
-black over a surface brighter than linear 0.18 and white over a darker one, depth-tested
-(`LESS_OR_EQUAL`, no depth write) and biased toward the viewer (slope and constant -1).
-`HybridMeshPipeline::create` builds that pass only when the device enabled
-`fillModeNonSolid`; `wireframe_supported()` says so, and elsewhere the bit is ignored.
+`kHybridMeshWireframe` draws every mesh twice in place of its fill: a depth-only pass (color
+writes masked off, `GraphicsPipelineDesc::color_write`), then `VK_POLYGON_MODE_LINE`,
+depth-tested (`LESS_OR_EQUAL`, no depth write) and biased toward the viewer (slope and
+constant -1), each edge in the color its surface would show. `HybridMeshPipeline::create`
+builds those passes only when the device enabled `fillModeNonSolid`;
+`wireframe_supported()` says so, and elsewhere the bit is ignored and the meshes draw filled.
+
+**Why the edges alone, hidden ones removed.** The first cut drew the edges over the shaded
+fill, black or white by the surface's brightness; tried in the viewers, the owner wanted the
+edges without the fill. All of them at once, the see-through wireframe, turns a dense
+reconstruction into overlapping lines, so the surfaces still lay down their depth: only the
+edges a viewer would see show. The edges keep the surface's shading, so the normals view and
+texture still read through them.
 
 **Why per frame, and a dynamic cull mode.** Both are viewer toggles, flipped at will, like
 the shading bits beside them. `vkCmdSetCullMode` is core in Vulkan 1.3, which gfx already
@@ -188,9 +196,9 @@ every target offers it (MoltenVK on macOS and iOS, NVIDIA, lavapipe), where
 `VK_KHR_fragment_shader_barycentric` needs Apple6 or newer. It stays out of
 `device_requirements()`: a device another library created, such as recon's fusion device a
 viewer adopts, may not have enabled it, and requiring it would refuse that device for every
-gfx type. An edge lies on the surface the fill drew, but its depth is interpolated along the
-edge, so without the bias the fill hides much of it: on MoltenVK the edge tests lose from
-0.5 to 30 degrees of tilt, and pass with it.
+gfx type. An edge lies on the surface the depth pass drew, but its depth is interpolated
+along the edge, so without the bias that depth hides much of it: on MoltenVK the edge tests
+lose at 10 degrees of tilt (and, against a fill, from 0.5 to 30), and pass with it.
 
 ## 2026-10-30 — Windows are 4x; one shared multisampled set
 
