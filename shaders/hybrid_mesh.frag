@@ -20,9 +20,8 @@
 // are drawn unless the frame culls them (kHybridMeshCullBackFaces), and a
 // drawn back face is lit with its normal flipped toward the viewer. The
 // kHybridMeshNormals debug view replaces all of that with the world-space
-// normal encoded as a color. In the wireframe pipeline (kWirePass), which
-// rasterizes triangle edges over the filled mesh, each edge shows black over
-// a light surface and white over a dark one, so it reads on both.
+// normal encoded as a color. The wireframe's edges pass runs this stage as it
+// is, so an edge shows the color its surface would.
 
 #extension GL_GOOGLE_include_directive : require
 #include "common/hybrid_mesh_set0.glsl"
@@ -49,13 +48,12 @@ pc;
 // stores what is written, so it is given the encoding. kSecondView is true
 // only in the pipeline for meshes that carry a second view; false, the shader
 // never reads frag_second, so the driver drops that interpolant (DECISIONS.md,
-// 2026-10-27). kWirePass is true only in the wireframe pipeline.
+// 2026-10-27).
 layout(constant_id = 0) const uint kFlagLit = 0u;      // kHybridMeshLit
 layout(constant_id = 1) const uint kFlagNormals = 0u;  // kHybridMeshNormals
 layout(constant_id = 2) const bool kLinearTarget = false;
 layout(constant_id = 3) const uint kFlagVertexColor = 0u;  // kHybridMeshVertexColor
 layout(constant_id = 4) const bool kSecondView = false;
-layout(constant_id = 5) const bool kWirePass = false;
 
 layout(location = 0) out vec4 out_color;
 
@@ -78,14 +76,6 @@ vec3 blend_views(vec4 a, vec4 b, float w) {
   float wb = w * b.a;
   float sum = wa + wb;
   return (w > 0.0 && sum > 0.0) ? (wa * a.rgb + wb * b.rgb) / sum : a.rgb;
-}
-
-// A wireframe edge's color over a surface that shows `shown` (linear light):
-// black over a light surface, white over a dark one. The split is linear 0.18,
-// mid-grey.
-vec3 wire_color(vec3 shown) {
-  const float luma = dot(shown, vec3(0.2126, 0.7152, 0.0722));
-  return luma > 0.18 ? vec3(0.0) : vec3(1.0);
 }
 
 // Albedo from set 0 at `uv`, in linear light. An RGBA image is sampled as its
@@ -126,11 +116,6 @@ void main() {
   // uniform and the atlas sample below stays in uniform control flow.
   if ((pc.flags & kFlagNormals) != 0u) {
     vec3 encoded = safe_normalize(frag_normal) * 0.5 + 0.5;
-    if (kWirePass) {
-      // White and black encode alike, so no target needs converting.
-      out_color = vec4(wire_color(srgb_to_linear(encoded)), 1.0);
-      return;
-    }
     out_color = vec4(kLinearTarget ? srgb_to_linear(encoded) : encoded, 1.0);
     return;
   }
@@ -151,11 +136,6 @@ void main() {
     // pc.light_dir is the pre-normalized world-space direction to the light.
     const float ambient = 0.25;
     albedo *= ambient + (1.0 - ambient) * max(dot(n, pc.light_dir), 0.0);
-  }
-
-  if (kWirePass) {
-    out_color = vec4(wire_color(albedo), 1.0);
-    return;
   }
 
   // Albedo and shading are linear light; a UNORM target is given them encoded.

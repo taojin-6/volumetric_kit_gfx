@@ -88,6 +88,10 @@ struct GraphicsPipelineDesc {
   bool depth_write = false;
   /// Depth comparison used when @ref depth_test is set.
   VkCompareOp depth_compare = VK_COMPARE_OP_LESS;
+  /// Write the color attachments. `false` masks every component off, so the
+  /// pipeline writes depth alone (a depth prepass); the fragment stage still
+  /// runs.
+  bool color_write = true;
   /// Depth bias, in units of the depth format's resolution: a fragment's
   /// depth is offset by `depth_bias_slope * m + depth_bias_constant * r`, `m`
   /// its polygon's depth slope and `r` the format's minimum resolvable

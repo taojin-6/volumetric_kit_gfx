@@ -272,8 +272,10 @@ core::Result<GraphicsPipeline> GraphicsPipeline::create(
   for (uint32_t i = 0; i < desc.layout.color_count; ++i) {
     blend_attachments[i].blendEnable = VK_FALSE;
     blend_attachments[i].colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        desc.color_write
+            ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+            : 0u;
   }
 
   VkPipelineColorBlendStateCreateInfo color_blend{};
