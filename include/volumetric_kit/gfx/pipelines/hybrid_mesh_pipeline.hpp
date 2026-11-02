@@ -227,7 +227,9 @@ class VG_PIPELINES_API HybridMeshPipeline {
   /// @return `true` if @ref kHybridMeshWireframe draws: the device enabled
   ///         `fillModeNonSolid`, so @ref create built the wireframe's
   ///         passes.
-  bool wireframe_supported() const noexcept { return wireframe_.valid(); }
+  bool wireframe_supported() const noexcept {
+    return depth_only_.valid() && wireframe_.valid();
+  }
 
   /// @return The number of descriptor sets the embedded shaders declare
   ///         (reflected -- set 0 atlas, so 1).
@@ -248,8 +250,9 @@ class VG_PIPELINES_API HybridMeshPipeline {
   ///        frame's viewport, set the cull mode, bind the atlas set once
   ///        (set 0), push the camera + lighting constants, then draw each
   ///        mesh through the pipeline its @ref HybridMeshDraw::second_view
-  ///        names -- or, for @ref kHybridMeshWireframe, each through the
-  ///        depth-only pass and then the edges pass.
+  ///        names -- or, for @ref kHybridMeshWireframe, every mesh through
+  ///        the depth-only pass, then every mesh through the edges pass (so
+  ///        a nearer mesh hides edges wherever it is in the list).
   /// @param cmd    A recording-state command buffer, inside a dynamic-rendering
   ///               scope whose target matches the layout @ref create was given.
   /// @param frame  The atlas set, the draw list, the view-projection, and the

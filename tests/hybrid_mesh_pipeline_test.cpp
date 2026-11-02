@@ -1749,16 +1749,24 @@ class HybridMeshWireframeTest : public HybridMeshRenderTest {
     return reqs;
   }
 
-  // The pipeline for `layout`, or none on a device without the wireframe
-  // pass (the test then skips).
+  // The pipeline for `layout`, or none where the physical device lacks
+  // fillModeNonSolid (the test then skips). Where it has it, the fixture's
+  // device enabled it, so a pipeline without the wireframe's passes fails.
   std::optional<pipelines::HybridMeshPipeline> wire_pipeline(
       const vg::RenderTargetLayout& layout = color_depth_layout()) {
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physical().handle(), &supported);
+    if (supported.fillModeNonSolid != VK_TRUE) {
+      return std::nullopt;
+    }
     auto pipeline =
         pipelines::HybridMeshPipeline::create(device(), allocator(), layout);
     EXPECT_TRUE(pipeline.ok()) << pipeline.status().message();
-    if (!pipeline.ok() || !pipeline.value().wireframe_supported()) {
+    if (!pipeline.ok()) {
       return std::nullopt;
     }
+    EXPECT_TRUE(pipeline.value().wireframe_supported())
+        << "fillModeNonSolid enabled, yet no wireframe passes";
     return std::move(pipeline).value();
   }
 };
@@ -1825,8 +1833,9 @@ TEST_F(HybridMeshWireframeTest, EdgesTakeTheirSurfacesShading) {
 
 // Nearer geometry hides the edges behind it: a triangle 0.3 in front of the
 // tilted quad, drawn as its own edges, leaves the quad's diagonal unseen
-// where it covers it -- the clear shows there. Edges drawn with no depth pass
-// before them, or a bias that reached past the gap, would show it.
+// where it covers it -- the clear shows there -- though it comes later in the
+// draw list. Edges drawn with no depth pass, a mesh's edges drawn before the
+// next mesh's depth, or a bias that reached past the gap would show it.
 TEST_F(HybridMeshWireframeTest, NearerGeometryHidesTheEdgesBehindIt) {
   std::optional<pipelines::HybridMeshPipeline> pipeline = wire_pipeline();
   if (!pipeline) {
@@ -1847,10 +1856,11 @@ TEST_F(HybridMeshWireframeTest, NearerGeometryHidesTheEdgesBehindIt) {
   cover.indices = {0, 1, 2};
   auto front = pipelines::upload_mesh(device(), allocator(), cover);
   ASSERT_TRUE(front.ok()) << front.status().message();
-  // Drawn behind the quad in the list, so only depth can hide its edges.
+  // The triangle comes after the quad in the list, so its depth hides the
+  // quad's edges only if every mesh's depth is laid down before any edge.
   const std::vector<pipelines::HybridMeshDraw> draws{
-      pipelines::HybridMeshDraw{&front.value()},
-      pipelines::HybridMeshDraw{&quad.value()}};
+      pipelines::HybridMeshDraw{&quad.value()},
+      pipelines::HybridMeshDraw{&front.value()}};
   const std::vector<uint8_t> px =
       render(allocator(), *pipeline, draws, VK_NULL_HANDLE,
              pipelines::kHybridMeshWireframe);
@@ -1934,22 +1944,40 @@ TEST_F(HybridMeshWireframeTest, CullingAlsoRemovesBackFaceEdges) {
 }
 
 // The wireframe's passes move with the pipeline: the source is left without
-// them, and an assignment over a live pipeline adopts the source's.
+// them, and an assignment over a live pipeline adopts the source's. Each
+// pipeline moved into still draws the edges alone, so both passes went with
+// it.
 TEST_F(HybridMeshWireframeTest, MovesCarryTheWireframePass) {
   std::optional<pipelines::HybridMeshPipeline> source = wire_pipeline();
   if (!source) {
     GTEST_SKIP() << "no wireframe pass: the device lacks fillModeNonSolid";
   }
+  view_proj_ = camera_view_proj();
+  auto mesh = pipelines::upload_mesh(device(), allocator(),
+                                     make_tilted_quad(glm::vec4(1.0f), 10.0f));
+  ASSERT_TRUE(mesh.ok()) << mesh.status().message();
+  const auto draws_the_edges_alone =
+      [&](const pipelines::HybridMeshPipeline& pipeline) {
+        const std::vector<uint8_t> px = render(
+            allocator(), pipeline, pipelines::HybridMeshDraw{&mesh.value()},
+            VK_NULL_HANDLE, pipelines::kHybridMeshWireframe);
+        EXPECT_GE(diagonal_coverage(px, view_proj_, 10.0f, glm::ivec3(255)),
+                  0.95);
+        EXPECT_TRUE(cleared_at(px, view_proj_, tilted(0.35f, -0.35f, 10.0f)));
+      };
+
   pipelines::HybridMeshPipeline moved(std::move(*source));
   EXPECT_TRUE(moved.wireframe_supported());
   EXPECT_FALSE(
       source->wireframe_supported());  // NOLINT(bugprone-use-after-move)
+  draws_the_edges_alone(moved);
 
   std::optional<pipelines::HybridMeshPipeline> live = wire_pipeline();
   ASSERT_TRUE(live.has_value());
   *live = std::move(moved);
   EXPECT_TRUE(live->wireframe_supported());
   EXPECT_FALSE(moved.wireframe_supported());  // NOLINT(bugprone-use-after-move)
+  draws_the_edges_alone(*live);
 }
 
 }  // namespace

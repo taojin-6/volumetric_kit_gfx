@@ -64,10 +64,10 @@ struct FragmentSpecialization {
   VkBool32 second_view;
 };
 
-// The wireframe pass's depth bias, toward the viewer: an edge lies on the
-// surface the fill pass drew, and without the bias about half its fragments
-// would lose the depth test to that surface (the line's depth is interpolated
-// along the edge, the fill's across the triangle). The slope term covers the
+// The wireframe's edges pass's depth bias, toward the viewer: an edge lies on
+// the depth the depth-only pass laid down, and without the bias about half its
+// fragments would lose the depth test to it (the line's depth is interpolated
+// along the edge, the surface's across the triangle). The slope term covers the
 // half-pixel the two disagree by on a tilted triangle; the constant one, a
 // face-on one.
 constexpr float kWireBiasSlope = -1.0f;
@@ -377,7 +377,7 @@ void HybridMeshPipeline::submit(VkCommandBuffer cmd,
   // The wireframe, in place of the fill: every mesh's depth, then every
   // mesh's edges. The set and the push constant carry over: the two passes'
   // layouts are alike.
-  if ((frame.flags & kHybridMeshWireframe) != 0u && wireframe_.valid()) {
+  if ((frame.flags & kHybridMeshWireframe) != 0u && wireframe_supported()) {
     for (const GraphicsPipeline* pass : {&depth_only_, &wireframe_}) {
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass->handle());
       for (uint32_t i = 0; i < frame.draw_count; ++i) {
