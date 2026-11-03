@@ -3,18 +3,23 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <new>
 #include <utility>
+#include <vector>
 
 #include "allocation_failure.hpp"
 #include "volumetric_kit/core/base/log.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
+#include "volumetric_kit/gfx/pipelines/impl/frame_retirement.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace vg = volumetric_kit::gfx;
+using vg::pipelines::detail::FrameRetirement;
 
 namespace {
 thread_local VkResult wait_result = VK_SUCCESS;
@@ -22,17 +27,28 @@ thread_local std::uint64_t fail_from = 0;
 thread_local std::uint64_t completed = 0;
 thread_local int waits = 0;
 thread_local bool throw_wait = false;
+thread_local VkResult idle_result = VK_SUCCESS;
+thread_local int idles = 0;
+// The newest value a submit that reached a queue sets.
+thread_local std::uint64_t submitted = 0;
+
+void reset_stubs() {
+  wait_result = VK_SUCCESS;
+  fail_from = 0;
+  completed = 0;
+  waits = 0;
+  throw_wait = false;
+  idle_result = VK_SUCCESS;
+  idles = 0;
+  submitted = 0;
+}
 
 class RetireQueueFailure : public testing::Test {
  protected:
-  void SetUp() override {
-    wait_result = VK_SUCCESS;
-    fail_from = 0;
-    completed = 0;
-    waits = 0;
-    throw_wait = false;
-  }
+  void SetUp() override { reset_stubs(); }
   vkc::TimelineSemaphore timeline;
+  vkc::Result<vkc::Device> device =
+      vkc::Device::adopt(vkc::AdoptedDevice{}, vkc::DeviceRequirements{});
 };
 
 struct Capture {
@@ -42,8 +58,10 @@ struct Capture {
 };
 }  // namespace
 
-// This binary compiles the production queue with host-only timeline methods.
-// No device or driver fault is required to exercise its error policy.
+// This binary compiles the production queue with host-only timeline methods,
+// and a host-only device for FrameRetirement's teardown, which reads the
+// record of submitted values and waits for the device's queues. No device or
+// driver fault is required to exercise their error policy.
 namespace volumetric_kit::core {
 Result<std::uint64_t> TimelineSemaphore::value() const { return completed; }
 Status TimelineSemaphore::wait(std::uint64_t value, std::uint64_t) const {
@@ -51,6 +69,28 @@ Status TimelineSemaphore::wait(std::uint64_t value, std::uint64_t) const {
   if (throw_wait) throw std::bad_alloc();
   if (value >= fail_from && wait_result != VK_SUCCESS) {
     return vk_error(wait_result, "wait");
+  }
+  return {};
+}
+// An empty device; only the stubs below act for it.
+Result<Device> Device::adopt(const AdoptedDevice&, const DeviceRequirements&) {
+  return Device();
+}
+Device::Device(Device&&) noexcept {}
+Device::~Device() = default;
+Status Device::wait_idle() const {
+  ++idles;
+  if (idle_result != VK_SUCCESS) return vk_error(idle_result, "wait_idle");
+  return {};
+}
+// As the core's: a value to set at or below a recorded submit's is refused.
+Status check_timeline_points(const Device&, const std::vector<TimelinePoint>&,
+                             const std::vector<TimelinePoint>& signal,
+                             const char*, TimelineWaits) {
+  for (const TimelinePoint& point : signal) {
+    if (point.value <= submitted) {
+      return Status::invalid_argument("check_timeline_points: submitted");
+    }
   }
   return {};
 }
@@ -216,6 +256,99 @@ TEST_F(RetireQueueFailure, TeardownPreservesCapturesWithNoHostAllocation) {
         queue.reset();
         failure.stop();
         std::_Exit(destroyed == 0 ? 0 : 1);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+// FrameRetirement (StreamedAtlas's and DepthCloudPipeline's teardown) waits
+// for frame 5: on the timeline once it reached a queue, else for the device.
+namespace {
+struct Teardown {
+  int ran = 0;
+  int destroyed = 0;
+};
+
+// Fails the wait FrameRetirement makes for frame 5 with `result`.
+void fail_frame_wait(bool reached, VkResult result) {
+  reset_stubs();
+  submitted = reached ? 5 : 4;
+  (reached ? wait_result : idle_result) = result;
+}
+
+// Gives `frames` frame 5 and a deleter for it that counts into `teardown`.
+void use_frame(FrameRetirement& frames, Teardown& teardown) {
+  frames.advance(5);
+  auto capture = std::make_shared<Capture>(teardown.destroyed);
+  frames.retire().push(5, [capture, &teardown] { ++teardown.ran; });
+}
+
+// The one wait the teardown made, and no drain after it.
+bool waited_once(bool reached) {
+  return waits == (reached ? 1 : 0) && idles == (reached ? 0 : 1);
+}
+}  // namespace
+
+TEST_F(RetireQueueFailure,
+       FrameRetirementFreesOnceFramesCompleteOrDeviceIsLost) {
+  for (const bool reached : {true, false}) {
+    for (const VkResult result : {VK_SUCCESS, VK_ERROR_DEVICE_LOST}) {
+      SCOPED_TRACE(testing::Message()
+                   << "reached " << reached << ", " << result);
+      fail_frame_wait(reached, result);
+      Teardown teardown;
+      {
+        FrameRetirement frames(*device, timeline, "FrameRetirementTest");
+        use_frame(frames, teardown);
+      }
+      EXPECT_EQ(teardown.ran, 1);
+      EXPECT_EQ(teardown.destroyed, 1);
+      EXPECT_TRUE(waited_once(reached));
+    }
+  }
+}
+
+TEST_F(RetireQueueFailure,
+       FrameRetirementKeepsItsQueueWhenCompletionIsUnknown) {
+  // The kept queue is unreachable by design: checked in a child, which _Exit
+  // ends before a leak check.
+  EXPECT_EXIT(
+      {
+        bool kept = true;
+        for (const bool reached : {true, false}) {
+          for (const VkResult failure :
+               {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                VK_ERROR_UNKNOWN}) {
+            fail_frame_wait(reached, failure);
+            Teardown teardown;
+            {
+              FrameRetirement frames(*device, timeline, "FrameRetirementTest");
+              use_frame(frames, teardown);
+            }
+            // Neither run nor destroyed; and not drained, as a wait for a
+            // frame that never reached a queue would block forever.
+            kept = kept && teardown.ran == 0 && teardown.destroyed == 0 &&
+                   waited_once(reached);
+          }
+        }
+        // Move-assignment tears down the old frames, then adopts the new.
+        fail_frame_wait(true, VK_ERROR_UNKNOWN);
+        Teardown old;
+        FrameRetirement frames(*device, timeline, "FrameRetirementTest");
+        use_frame(frames, old);
+        frames = FrameRetirement(*device, timeline, "FrameRetirementTest");
+        kept = kept && old.ran == 0 && old.destroyed == 0 &&
+               waited_once(true) && frames.valid() && frames.newest() == 0;
+        // A warning that throws cannot end teardown, nor free the frames.
+        vkc::set_log_handler([](vkc::LogLevel, std::string_view,
+                                std::string_view) { throw std::bad_alloc(); });
+        fail_frame_wait(false, VK_ERROR_OUT_OF_HOST_MEMORY);
+        Teardown logged;
+        {
+          FrameRetirement thrown(*device, timeline, "FrameRetirementTest");
+          use_frame(thrown, logged);
+        }
+        kept = kept && logged.ran == 0 && logged.destroyed == 0;
+        std::_Exit(kept ? 0 : 1);
       },
       testing::ExitedWithCode(0), "");
 }

@@ -11,9 +11,18 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 - **gfx installs nothing.** Its install rules, `VG_INSTALL` and the
   `volumetric_kit_gfx` package config are gone: fetch gfx pinned by commit
   (README.md, "Use it in your project"), as the player and the iOS app do.
+- `RetireList::drain(WaitFn)`, which nothing called. Call `drain_until`
+  with a wait that returns `true`:
+  `list.drain_until([&](const Key& key) { wait(key); return true; })`.
 
 ### Fixed
 
+- `StreamedAtlas` and `DepthCloudPipeline` keep their pending deferred
+  releases when teardown's wait for the newest frame fails other than by
+  device loss (out of memory, `VK_ERROR_UNKNOWN`), rather than freeing them
+  while the GPU may still use them (DECISIONS.md, "Deferred release requires
+  established completion"). They stay allocated until the process exits; a
+  warning names the owner.
 - `HybridMeshPipeline` sRGB-encodes its shaded colour on a UNORM target, so
   a mesh no longer shows about 2x too dark in the midtones there (a mid-grey
   stored byte 55, not 128). Its normal view gives a float target linear light.

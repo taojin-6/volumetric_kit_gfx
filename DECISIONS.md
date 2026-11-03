@@ -1427,6 +1427,15 @@ allocation. This deliberate leak is preferable to destroying a resource whose
 GPU use remains unknown. `reclaim` remains an explicit operation for resources
 known complete or a device known idle/lost.
 
+*Amended 2026-11-03:* `FrameRetirement`, the teardown of `StreamedAtlas` and
+`DepthCloudPipeline`, follows the same rule. It waits for the newest frame, or
+for the device's queues when that frame never reached one, and runs its
+deleters only once that wait succeeds or reports device loss. Any other failure
+keeps the whole queue, closures and captures, and does not drain it: a wait for
+a frame that never reached a queue would never return. Open: the owners' own
+members (`StreamedAtlas`'s images, `DepthCloudPipeline`'s blocks and pipeline)
+are still destroyed after that wait, whatever it returned.
+
 Image upload enrolls staging with the retirement queue before recording its
 copy. All image-update host allocation finishes before the first command, so
 an allocation failure reports `OutOfMemory` without partial recording or a
