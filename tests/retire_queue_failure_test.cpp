@@ -338,17 +338,43 @@ TEST_F(RetireQueueFailure,
         frames = FrameRetirement(*device, timeline, "FrameRetirementTest");
         kept = kept && old.ran == 0 && old.destroyed == 0 &&
                waited_once(true) && frames.valid() && frames.newest() == 0;
-        // A warning that throws cannot end teardown, nor free the frames.
+        std::_Exit(kept ? 0 : 1);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+TEST_F(RetireQueueFailure, FrameRetirementWarnsOnStderrWhenItsWarningThrows) {
+  // A warning that cannot be built or sunk ends neither teardown nor the kept
+  // frames, and fixed text on stderr still names the owner.
+  EXPECT_EXIT(
+      {
         vkc::set_log_handler([](vkc::LogLevel, std::string_view,
                                 std::string_view) { throw std::bad_alloc(); });
         fail_frame_wait(false, VK_ERROR_OUT_OF_HOST_MEMORY);
         Teardown logged;
         {
-          FrameRetirement thrown(*device, timeline, "FrameRetirementTest");
-          use_frame(thrown, logged);
+          FrameRetirement frames(*device, timeline, "SinkThrows");
+          use_frame(frames, logged);
         }
-        kept = kept && logged.ran == 0 && logged.destroyed == 0;
-        std::_Exit(kept ? 0 : 1);
+        std::_Exit(logged.ran == 0 && logged.destroyed == 0 ? 0 : 1);
       },
-      testing::ExitedWithCode(0), "");
+      testing::ExitedWithCode(0),
+      "SinkThrows: completion unknown; keeping its resources");
+  // Under host memory pressure, nothing in teardown can allocate.
+  EXPECT_EXIT(
+      {
+        fail_frame_wait(true, VK_ERROR_OUT_OF_HOST_MEMORY);
+        Teardown starved;
+        FrameRetirement frames(*device, timeline, "NoHostMemory");
+        use_frame(frames, starved);
+        vg_test::AllocationFailure failure(0, true);
+        frames.reset();
+        const bool failed = failure.stop();
+        std::_Exit(failed && starved.ran == 0 && starved.destroyed == 0 &&
+                           !frames.valid()
+                       ? 0
+                       : 1);
+      },
+      testing::ExitedWithCode(0),
+      "NoHostMemory: completion unknown; keeping its resources");
 }

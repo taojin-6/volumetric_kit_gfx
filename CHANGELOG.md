@@ -17,12 +17,14 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Fixed
 
-- `StreamedAtlas` and `DepthCloudPipeline` keep their pending deferred
-  releases when teardown's wait for the newest frame fails other than by
-  device loss (out of memory, `VK_ERROR_UNKNOWN`), rather than freeing them
-  while the GPU may still use them (DECISIONS.md, "Deferred release requires
-  established completion"). They stay allocated until the process exits; a
-  warning names the owner.
+- `StreamedAtlas` keeps its in-flight upload staging buffers when
+  teardown's wait for the newest frame fails other than by device loss (out
+  of memory, `VK_ERROR_UNKNOWN`), rather than freeing them while the GPU may
+  still read them. They stay allocated until the process exits; a warning
+  names the owner. Still open (DECISIONS.md, "Deferred release requires
+  established completion"): its images and descriptor pool, and
+  `DepthCloudPipeline`'s blocks and pipeline, are destroyed after that wait
+  whatever it returned, so `DepthCloudPipeline` gains only the warning.
 - `HybridMeshPipeline` sRGB-encodes its shaded colour on a UNORM target, so
   a mesh no longer shows about 2x too dark in the midtones there (a mid-grey
   stored byte 55, not 128). Its normal view gives a float target linear light.

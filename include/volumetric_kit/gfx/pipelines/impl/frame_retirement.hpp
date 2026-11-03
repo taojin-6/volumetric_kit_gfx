@@ -10,6 +10,7 @@
 /// headers, not a standalone type.
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -130,8 +131,8 @@ class FrameRetirement {
                                           " has not been submitted");
   }
 
-  /// @brief Wait for the newest frame given, run every deleter, and empty
-  ///        this.
+  /// @brief Wait for the newest frame given, run every deleter -- or keep them
+  ///        all when completion is unknown -- and empty this.
   ///
   /// A frame that never reached a queue -- it failed before its submit --
   /// will never set its number, so then this waits for the device's queues
@@ -152,9 +153,9 @@ class FrameRetirement {
       if (retire_) retire_->reclaim();
       retire_.reset();
     } else {
-      // TODO: the owners' own members -- StreamedAtlas's images,
-      // DepthCloudPipeline's blocks and pipeline -- are still destroyed after
-      // this, whatever the wait returned.
+      // TODO: the owners' own members -- StreamedAtlas's images and
+      // descriptor pool, DepthCloudPipeline's blocks and pipeline -- are still
+      // destroyed after this, whatever the wait returned.
       (void)retire_.release();
     }
     device_ = nullptr;
@@ -167,7 +168,9 @@ class FrameRetirement {
   // Waits for the newest frame, or for the device's queues when it never
   // reached one. Returns whether its resources may be freed: the wait
   // succeeded or lost the device. A throw, while reading the record or
-  // writing the warning, leaves completion unknown.
+  // writing the warning, leaves completion unknown -- even after a device
+  // loss, when it is the warning that throws: that keeps resources the loss
+  // would have let it free, an intentional leak rather than a free.
   bool wait_for_newest() const noexcept try {
     const core::Status waited = check_submitted(newest_, owner_).ok()
                                     ? timeline_->wait(newest_)
@@ -182,6 +185,12 @@ class FrameRetirement {
                             "resources"));
     return lost;
   } catch (...) {
+    // The message or its sink may allocate, as under the host memory
+    // pressure that can fail the wait. Report the kept resources with fixed
+    // text, which allocates nothing, as RetireQueue's teardown does.
+    std::fputs("[vg warning] ", stderr);
+    std::fputs(owner_, stderr);
+    std::fputs(": completion unknown; keeping its resources\n", stderr);
     return false;
   }
 
