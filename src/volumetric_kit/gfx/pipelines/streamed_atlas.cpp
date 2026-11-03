@@ -319,7 +319,8 @@ void StreamedAtlas::enter(std::uint64_t frame) {
 
 void StreamedAtlas::destroy() noexcept {
   // Waits for the newest frame that used the atlas, or for the queues when
-  // it never reached one, and frees the staging buffers; then the images.
+  // it never reached one, and frees the staging buffers, or keeps them when
+  // that wait leaves completion unknown; then the images, either way.
   frames_.reset();
   slots_.clear();
   pool_ = {};

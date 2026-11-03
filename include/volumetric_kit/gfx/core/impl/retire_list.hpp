@@ -53,15 +53,6 @@ std::size_t RetireList<Key>::poll(ReadyFn is_ready) {
 
 template <class Key>
 template <class WaitFn>
-void RetireList<Key>::drain(WaitFn wait) {
-  drain_until([&wait](const Key& key) {
-    wait(key);
-    return true;
-  });
-}
-
-template <class Key>
-template <class WaitFn>
 bool RetireList<Key>::drain_until(WaitFn wait) {
   std::size_t released = 0;
   const auto compact = [&] {
@@ -91,7 +82,7 @@ bool RetireList<Key>::drain_until(WaitFn wait) {
 template <class Key>
 void RetireList<Key>::run_all() noexcept {
   // Loop until empty so a deleter that re-enters push() is still run (see
-  // drain()).
+  // drain_until()).
   while (!entries_.empty()) {
     std::vector<Entry> pending = std::move(entries_);
     entries_.clear();

@@ -49,14 +49,17 @@ TEST(RetireList, RunAllRunsEverythingThenClears) {
   EXPECT_EQ(list.pending(), 0u);
 }
 
-TEST(RetireList, DrainWaitsEachKeyThenRunsAll) {
+TEST(RetireList, DrainUntilWaitsEachKeyThenRunsAll) {
   vg::RetireList<int> list;
   std::vector<int> waited;
   int ran = 0;
   list.push(7, [&ran]() { ++ran; });
   list.push(8, [&ran]() { ++ran; });
 
-  list.drain([&waited](int key) { waited.push_back(key); });
+  EXPECT_TRUE(list.drain_until([&waited](int key) {
+    waited.push_back(key);
+    return true;
+  }));
 
   EXPECT_EQ(waited, (std::vector<int>{7, 8}));
   EXPECT_EQ(ran, 2);
@@ -66,7 +69,7 @@ TEST(RetireList, DrainWaitsEachKeyThenRunsAll) {
 TEST(RetireList, EmptyPollAndDrainAreNoOps) {
   vg::RetireList<int> list;
   EXPECT_EQ(list.poll([](int) { return true; }), 0u);
-  list.drain([](int) {});
+  EXPECT_TRUE(list.drain_until([](int) { return true; }));
   EXPECT_EQ(list.pending(), 0u);
 }
 
@@ -149,11 +152,11 @@ TEST(RetireList, DrainRunsDeleterThatEnqueuesDuringDrain) {
   int ran = 0;
   list.push(1, [&list, &ran]() {
     ++ran;
-    list.push(2, [&ran]() { ++ran; });  // re-enter push() from within drain()
+    list.push(2, [&ran]() { ++ran; });  // re-enter push() from within a drain
   });
 
-  // drain() promises to run *every* deleter, including one pushed mid-drain.
-  list.drain([](int) {});
+  // A drain runs *every* deleter, including one pushed mid-drain.
+  EXPECT_TRUE(list.drain_until([](int) { return true; }));
   EXPECT_EQ(ran, 2);
   EXPECT_EQ(list.pending(), 0u);
 }

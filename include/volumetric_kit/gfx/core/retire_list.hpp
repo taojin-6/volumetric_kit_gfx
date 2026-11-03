@@ -27,13 +27,14 @@ namespace volumetric_kit::gfx {
 /// @tparam Key  Identifies the work guarding an entry (a timeline value in
 /// practice).
 ///
-/// Each deleter runs once, from @ref poll, @ref drain, or @ref run_all.
+/// Each deleter runs once, from @ref poll, @ref drain_until, or @ref run_all.
 /// Destruction and move-assignment do not run pending deleters; they release
 /// the closures (and so any captured resources) without invoking the deleter
-/// bodies, so call @ref run_all or @ref drain first when a body must execute.
-/// @ref run_all is `noexcept` — a throwing deleter calls `std::terminate`, so
-/// deleters must not throw. The list owns its deleters and is not thread-safe:
-/// serialize @ref push against @ref poll / @ref drain.
+/// bodies, so call @ref run_all or @ref drain_until first when a body must
+/// execute. @ref run_all is `noexcept` — a throwing deleter calls
+/// `std::terminate`, so deleters must not throw. The list owns its deleters
+/// and is not thread-safe: serialize @ref push against @ref poll /
+/// @ref drain_until.
 ///
 /// @code
 /// RetireList<int> list;
@@ -73,12 +74,6 @@ class RetireList {
   /// @return The number of deleters run.
   template <class ReadyFn>
   std::size_t poll(ReadyFn is_ready);
-
-  /// @brief Wait on each entry's key via @p wait, then run every deleter.
-  /// @param wait  Callable `void(const Key&)` that blocks until the key is
-  /// ready.
-  template <class WaitFn>
-  void drain(WaitFn wait);
 
   /// @brief Wait and release entries in order, stopping at the first failure.
   /// @param wait  Callable `bool(const Key&)`: true only when the entry may

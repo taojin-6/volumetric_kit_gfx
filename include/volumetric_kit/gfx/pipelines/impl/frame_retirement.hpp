@@ -10,7 +10,8 @@
 /// headers, not a standalone type.
 
 #include <cstdint>
-#include <optional>
+#include <cstdio>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/core/log.hpp"
 #include "volumetric_kit/gfx/core/retire_queue.hpp"
 
@@ -30,8 +32,9 @@ namespace volumetric_kit::gfx::pipelines::detail {
 /// newest (@ref advance) and pushes what a frame used to @ref retire. At
 /// teardown, @ref reset waits for the newest frame -- or, when that frame
 /// never reached a queue, for the device to go idle, since nothing will set
-/// its number -- and then runs every deleter. Whether a frame reached a queue
-/// is read from the core's record of submitted timeline values.
+/// its number -- and then runs every deleter, or keeps them all when it
+/// cannot tell that the frames completed. Whether a frame reached a queue is
+/// read from the core's record of submitted timeline values.
 class FrameRetirement {
  public:
   /// @brief Construct an empty one (`valid()` is false).
@@ -41,11 +44,13 @@ class FrameRetirement {
   /// @param device    The device; borrowed, it must outlive this.
   /// @param timeline  The frame loop's timeline; borrowed by address.
   /// @param owner     Names the owner in teardown's warning; a literal.
+  /// @throws std::bad_alloc when the queue cannot be allocated.
   FrameRetirement(const core::Device& device,
                   const core::TimelineSemaphore& timeline, const char* owner)
-      : device_(&device), timeline_(&timeline), owner_(owner) {
-    retire_.emplace(timeline);
-  }
+      : device_(&device),
+        timeline_(&timeline),
+        owner_(owner),
+        retire_(std::make_unique<RetireQueue>(timeline)) {}
 
   ~FrameRetirement() { reset(); }
 
@@ -126,32 +131,33 @@ class FrameRetirement {
                                           " has not been submitted");
   }
 
-  /// @brief Wait for the newest frame given, run every deleter, and empty
-  ///        this.
+  /// @brief Wait for the newest frame given, run every deleter -- or keep them
+  ///        all when completion is unknown -- and empty this.
   ///
   /// A frame that never reached a queue -- it failed before its submit --
   /// will never set its number, so then this waits for the device's queues
   /// instead: every frame that did reach them has completed, and the one that
-  /// did not never runs. A failed wait (device loss) is logged, and the
-  /// deleters run regardless, as nothing will run again.
+  /// did not never runs. The deleters run once the wait succeeds, or when it
+  /// reports device loss, as nothing will run again. Any other failure is
+  /// logged and leaves completion unknown, so the queue is kept whole -- its
+  /// deleters neither run nor are destroyed -- rather than freed while the
+  /// GPU may still use what they hold (an intentional leak, as
+  /// @ref RetireQueue's destruction does). It is not drained either: a frame
+  /// that never reached a queue would block that wait forever.
   void reset() noexcept {
-    if (timeline_ != nullptr && newest_ != 0) {
-      const core::Status waited = check_submitted(newest_, owner_).ok()
-                                      ? timeline_->wait(newest_)
-                                      : device_->wait_idle();
-      if (!waited.ok()) {
-        log_message(core::LogLevel::Warning,
-                    std::string(owner_) + ": waiting for frame " +
-                        std::to_string(newest_) + " failed (" +
-                        waited.message() +
-                        "); freeing its resources regardless");
-      }
+    const bool complete =
+        timeline_ == nullptr || newest_ == 0 || wait_for_newest();
+    if (complete) {
+      // The frames that used the queued resources have completed, never ran,
+      // or never will.
+      if (retire_) retire_->reclaim();
+      retire_.reset();
+    } else {
+      // TODO: the owners' own members -- StreamedAtlas's images and
+      // descriptor pool, DepthCloudPipeline's blocks and pipeline -- are still
+      // destroyed after this, whatever the wait returned.
+      (void)retire_.release();
     }
-    // The frames that used the queued resources have completed, or never run.
-    if (retire_) {
-      retire_->reclaim();
-    }
-    retire_.reset();
     device_ = nullptr;
     timeline_ = nullptr;
     owner_ = "";
@@ -159,20 +165,50 @@ class FrameRetirement {
   }
 
  private:
+  // Waits for the newest frame, or for the device's queues when it never
+  // reached one. Returns whether its resources may be freed: the wait
+  // succeeded or lost the device. A throw, while reading the record or
+  // writing the warning, leaves completion unknown -- even after a device
+  // loss, when it is the warning that throws: that keeps resources the loss
+  // would have let it free, an intentional leak rather than a free.
+  bool wait_for_newest() const noexcept try {
+    const core::Status waited = check_submitted(newest_, owner_).ok()
+                                    ? timeline_->wait(newest_)
+                                    : device_->wait_idle();
+    if (waited.ok()) return true;
+    const bool lost = core::vk_result(waited) == VK_ERROR_DEVICE_LOST;
+    log_message(core::LogLevel::Warning,
+                std::string(owner_) + ": waiting for frame " +
+                    std::to_string(newest_) + " failed (" + waited.message() +
+                    (lost ? "); the device is lost, freeing its resources"
+                          : "); its completion is unknown, keeping its "
+                            "resources"));
+    return lost;
+  } catch (...) {
+    // The message or its sink may allocate, as under the host memory
+    // pressure that can fail the wait. Report the kept resources with fixed
+    // text, which allocates nothing, as RetireQueue's teardown does.
+    std::fputs("[vg warning] ", stderr);
+    std::fputs(owner_, stderr);
+    std::fputs(": completion unknown; keeping its resources\n", stderr);
+    return false;
+  }
+
   // Takes `other`'s state, leaving it empty; this is empty before.
   void adopt(FrameRetirement& other) noexcept {
     device_ = std::exchange(other.device_, nullptr);
     timeline_ = std::exchange(other.timeline_, nullptr);
     owner_ = std::exchange(other.owner_, "");
     retire_ = std::move(other.retire_);
-    other.retire_.reset();
     newest_ = std::exchange(other.newest_, 0);
   }
 
   const core::Device* device_ = nullptr;               // borrowed
   const core::TimelineSemaphore* timeline_ = nullptr;  // borrowed
   const char* owner_ = "";
-  std::optional<RetireQueue> retire_;
+  // On the heap, so a teardown that cannot tell its frames completed keeps
+  // the whole queue with release(), allocating nothing.
+  std::unique_ptr<RetireQueue> retire_;
   std::uint64_t newest_ = 0;
 };
 
