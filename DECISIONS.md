@@ -161,6 +161,33 @@ what has landed since then. Record amendments when a contract changes.
   `kHybridMeshWireframe` draws the edges alone, a depth-only pass then a depth-biased line
   pass, where the device enabled `fillModeNonSolid`. See the dated entry below.
 
+## 2026-11-04 — The long pipelines tests run less and catch the same bugs
+
+**The rule.** The owner's budget (2026-11-03): a CI entry runs in about 5 s in
+Release and about 30 s under a sanitizer, each entry judged run alone on a
+quiet box. A long case runs less only where every planted bug it caught still
+fails a case that stays. A case left out under a sanitizer skips in its own
+code, on the core's `VKC_TEST_SANITIZED`; a whole binary would take a ctest
+label; the workflows filter no tests.
+
+**What runs less.**
+- `TextureMapScreensTest.OnTheDesignsScreens` checks one frame, two wide
+  pictures on `iphone_landscape`: two pictures in one submit fail one that
+  drops some of its draws, which nothing else does. With `VG_TEST_DUMP_DIR`
+  set it checks and writes every frame (CONTRIBUTING.md), the desktop's fit,
+  1:1 and 4:1 among them, which were `FitOneToOneAndMagnified`. The layouts
+  on every screen are `ImagePanelTest`'s and `DockedPanelTest`'s, and a
+  zoom's placement and clipping `TextureViewTest`'s.
+- `MinifiedEachPixelIsTheMeanOfItsFootprint` runs 1/2 and 1/8 off the grid,
+  of its 10 zooms and origins (the 2026-10-29 entry's figures).
+- `TwoPlanePictureMatchesTheReference` works out the chroma slack's corners
+  only for a texel more than a code off the plain reference, which they hold:
+  every texel passes or fails as before.
+- The centroid tests' footprint texture is 256 x 256, 8 texels a pixel.
+- `ATwoByTwoMosaicOf4KPictures` skips under a sanitizer, where its time is
+  lavapipe's and the same host code runs at the small tiles' sizes. It is the
+  one test of a picture wider than 4096, and every other leg runs it.
+
 ## 2026-11-01 — A hybrid mesh culls back faces and draws edges on request
 
 **The contract.** `HybridMeshFrame::flags` takes two more bits. `kHybridMeshCullBackFaces`
@@ -283,7 +310,9 @@ already exact, as the hardware filters an `_SRGB` image in linear light.
 smaller draw reads the level where its footprint spans 4 pixels at most,
 about 5 x 5 reads. A pyramid pixel the footprint's edge cuts counts whole:
 off the pyramid's grid, at 1/5 to 1/12, that is 0.4-1.4 codes off on average
-and 26 at a sharp edge.
+and 26 at a sharp edge. *Amended 2026-11-04:* these figures are that day's
+measurements. The test holds the view to its bounds at 1/2 and 1/8 off the
+grid, not at 1/3 to 1/12 or from a whole origin (the 2026-11-04 test entry).
 
 **One `_SRGB` RGBA image a picture.** The view sees a set, not its form, so
 the pyramid holds what a draw shows, in one form: level 1 drawn by the view

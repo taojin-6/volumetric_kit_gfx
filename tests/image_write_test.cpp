@@ -31,6 +31,7 @@
 
 #include "gfx_test_support.hpp"
 #include "image_test_support.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"  // VKC_TEST_SANITIZED
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_buffer.hpp"
@@ -792,8 +793,14 @@ TEST_F(ImageWriteTest, AnyNumberOfRegionsOfMixedSizes) {
 // The rig mosaic at full size: four 4K pictures in a 7696 x 4336 picture with
 // a 16-texel gutter, its extent a multiple of 16. Level 4 (481 x 271) holds
 // each tile's color inside and black between. Each 4K picture is flat, filled
-// on the GPU ahead of the write, so none is made on the host.
+// on the GPU ahead of the write, so none is made on the host. It is the one
+// test of a picture wider than 4096. Its time is the device's, so it skips
+// under a sanitizer, where the device is lavapipe and the same host code runs
+// at the small tiles' sizes; every other leg runs it.
 TEST_F(ImageWriteTest, ATwoByTwoMosaicOf4KPictures) {
+#ifdef VKC_TEST_SANITIZED
+  GTEST_SKIP() << "the 4K mosaic runs outside the sanitizers";
+#endif
   const pipelines::ImagePipeline pipeline = make_pipeline();
   constexpr VkExtent2D k4K{3840, 2160};
   const Grid g = grid(4, k4K, kGutter);

@@ -1460,10 +1460,10 @@ TEST_F(HybridMeshRenderTest, MultisampledInteriorDrawsAsSingleSample) {
 
 // The centroid tests' triangle, in a 32 x 32 pixel square at (16, 16) of the
 // target; a vertex's footprint coordinates are its position in that square,
-// over a 1024 x 1024 texture: 32 texels a pixel.
+// over a 256 x 256 texture: 8 texels a pixel.
 constexpr float kSquareOrigin = 16.0f;
 constexpr float kSquare = 32.0f;
-constexpr uint32_t kFootprintTexels = 1024;
+constexpr uint32_t kFootprintTexels = 256;
 const glm::vec2 kCorners[3] = {{1.3f, 2.7f}, {30.6f, 7.9f}, {5.1f, 29.4f}};
 
 glm::vec2 footprint_uv(glm::vec2 p) { return (p - kSquareOrigin) / kSquare; }
@@ -1526,8 +1526,8 @@ void expect_reads_inside_the_triangle(const std::vector<uint8_t>& px) {
 // The texture coordinates are centroid-sampled: at kWindowSamples a
 // silhouette pixel whose centre lies outside the triangle still reads inside
 // the triangle's patch of the texture. The footprint texture is read NEAREST
-// at 32 texels a pixel, so a coordinate extrapolated to a pixel centre more
-// than about 1/20 pixel outside the triangle reads green. The edges' slopes
+// at 8 texels a pixel, so a coordinate extrapolated to a pixel centre more
+// than about 1/5 pixel outside the triangle reads green. The edges' slopes
 // put pixel centres all across the 0 - 0.5 pixel band outside them, where a
 // pixel can still have covered samples.
 TEST_F(HybridMeshRenderTest, MultisampledSilhouetteReadsInsideTheTriangle) {
