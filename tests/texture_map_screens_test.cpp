@@ -7,8 +7,7 @@
 // chrome over them -- on the panel's design screens, one tall picture and
 // two wide ones, and on a desktop at fit, 1:1 and 4:1. Each frame checks
 // that the mesh stays in the scene, the pictures in their places and nothing
-// else in the panel. With VG_TEST_DUMP_DIR set, each frame is also written
-// there as a PPM, to look at.
+// else in the panel; OnTheDesignsScreens says which frames run.
 
 #include <gtest/gtest.h>
 
@@ -118,6 +117,8 @@ void write_ppm(const std::string& path, const uint8_t* rgba, VkExtent2D e) {
   for (size_t i = 0; i < size_t{e.width} * e.height; ++i) {
     out.write(reinterpret_cast<const char*>(rgba + 4 * i), 3);
   }
+  out.close();
+  EXPECT_FALSE(out.fail()) << "could not write " << path;
 }
 
 class TextureMapScreensTest : public vg_test::RendererDeviceTest,
@@ -360,8 +361,18 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
   std::unique_ptr<pipelines::HybridMeshTextureView> view_;
 };
 
-// The design's screens, with one tall picture and with two wide ones.
+// The design's screens, with one tall picture and with two wide ones, then
+// the two wide ones on a desktop at fit (minified through the pyramid), at
+// 1:1 and at 4:1 (sharp squares), each about a point on the pictures.
+//
+// CI checks one frame, two wide pictures on iphone_landscape (a dock at the
+// right, a safe area, the touch overlay): two pictures in one submit catch
+// one that drops some of its draws, which no other test does. Every screen's
+// layout is ImagePanelTest's and DockedPanelTest's to check, and a zoom's
+// placement and clipping TextureViewTest's. With VG_TEST_DUMP_DIR set to a
+// directory, every frame is checked and written there as a PPM, to look at.
 TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
+  const bool every_frame = std::getenv("VG_TEST_DUMP_DIR") != nullptr;
   struct Pictures {
     const char* name;
     VkExtent2D size;
@@ -369,10 +380,16 @@ TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
   };
   for (const Pictures& pictures : {Pictures{"tall", {1024, 2048}, 1},
                                    Pictures{"two_wide", {2048, 1088}, 2}}) {
+    if (!every_frame && pictures.count == 1) {
+      continue;
+    }
     std::unique_ptr<Texture> texture =
         make_texture(pictures.size, pictures.count);
     ASSERT_NE(texture, nullptr);
     for (const Screen& screen : kScreens) {
+      if (!every_frame && std::string(screen.name) != "iphone_landscape") {
+        continue;
+      }
       SCOPED_TRACE(::testing::Message()
                    << screen.name << ", " << pictures.name);
       ui::DockedPanelConfig config;
@@ -382,33 +399,28 @@ TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
       show(screen, dock, shown, *texture, pictures.size, pictures.count,
            std::string(screen.name) + "_" + pictures.name);
     }
-  }
-}
-
-// One desktop at fit (minified through the pyramid), at 1:1 and at 4:1
-// (sharp squares), each about a point on the pictures.
-TEST_F(TextureMapScreensTest, FitOneToOneAndMagnified) {
-  constexpr VkExtent2D kSize{2048, 1088};
-  std::unique_ptr<Texture> texture = make_texture(kSize, 2);
-  ASSERT_NE(texture, nullptr);
-  const Screen& screen = kScreens[0];
-  for (const float scale : {0.0f, 1.0f, 4.0f}) {
-    SCOPED_TRACE(::testing::Message() << "scale " << scale);
-    ui::DockedPanelConfig config;
-    config.state = {true, 0.4f, 0.4f};
-    ui::DockedPanel dock(config);
-    ui::ImagePanel pictures;
-    const std::string name = scale == 0.0f   ? "zoom_fit"
-                             : scale == 1.0f ? "zoom_1to1"
-                                             : "zoom_4to1";
-    show(screen, dock, pictures, *texture, kSize, 2, name,
-         [&](ui::ImagePanel& p) {
-           if (scale > 0.0f) {
-             // About the point of the first picture's checker, near its middle.
-             const glm::vec2 at = p.view().image_to_target({1400.0f, 400.0f});
-             p.view().zoom_about(at, scale / p.view().scale());
-           }
-         });
+    if (!every_frame || pictures.count == 1) {
+      continue;
+    }
+    for (const float scale : {0.0f, 1.0f, 4.0f}) {
+      SCOPED_TRACE(::testing::Message() << "scale " << scale);
+      ui::DockedPanelConfig config;
+      config.state = {true, 0.4f, 0.4f};
+      ui::DockedPanel dock(config);
+      ui::ImagePanel shown;
+      const std::string name = scale == 0.0f   ? "zoom_fit"
+                               : scale == 1.0f ? "zoom_1to1"
+                                               : "zoom_4to1";
+      show(kScreens[0], dock, shown, *texture, pictures.size, pictures.count,
+           name, [&](ui::ImagePanel& p) {
+             if (scale > 0.0f) {
+               // About the point of the first picture's checker, near its
+               // middle.
+               const glm::vec2 at = p.view().image_to_target({1400.0f, 400.0f});
+               p.view().zoom_about(at, scale / p.view().scale());
+             }
+           });
+    }
   }
 }
 

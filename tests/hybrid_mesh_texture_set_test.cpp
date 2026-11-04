@@ -714,7 +714,10 @@ TEST_F(HybridMeshTextureSetTest, TwoPlanePictureMatchesTheReference) {
           ? 1.0
           : 0.0;
 
-  int worst = 0;             // in rounded codes
+  // In rounded codes. A texel within a code of the plain reference counts
+  // against it alone, not the slack's range, so on a CPU device this may read
+  // 1 where the range would read 0; the verdict is the same.
+  int worst = 0;
   double worst_error = 0.0;  // before rounding, in codes, from the exact blend
   for (const Size& size : kSizes) {
     SCOPED_TRACE(size.name);
@@ -748,24 +751,35 @@ TEST_F(HybridMeshTextureSetTest, TwoPlanePictureMatchesTheReference) {
           std::memcpy(rgba, &drawn[(size_t{y} * size.extent.width + x) * 16],
                       sizeof(rgba));
           const std::array<double, 3> want = reference(bytes, coding, x, y);
+          std::array<double, 3> drew{};
+          bool near = true;
+          for (int c = 0; c < 3; ++c) {
+            // The target holds linear light; the reference is R'G'B'.
+            drew[c] = vg_test::linear_to_srgb(
+                std::clamp(static_cast<double>(rgba[c]), 0.0, 1.0));
+            near = near && std::abs(std::lround(drew[c] * 255.0) -
+                                    std::lround(want[c] * 255.0)) <= 1;
+          }
           // The reference's range over the chroma slack: each channel is
-          // monotonic in Cb and Cr, so the corners bound it.
+          // monotonic in Cb and Cr, so the corners bound it. The range holds
+          // `want`, so a texel within a code of `want` is within a code of
+          // the range, and only a texel further off needs the corners.
           std::array<double, 3> low = want;
           std::array<double, 3> high = want;
-          for (double cb : {-chroma_slack, chroma_slack}) {
-            for (double cr : {-chroma_slack, chroma_slack}) {
-              const std::array<double, 3> corner =
-                  reference(bytes, coding, x, y, {cb, cr});
-              for (int c = 0; c < 3; ++c) {
-                low[c] = std::min(low[c], corner[c]);
-                high[c] = std::max(high[c], corner[c]);
+          if (!near && chroma_slack > 0.0) {
+            for (double cb : {-chroma_slack, chroma_slack}) {
+              for (double cr : {-chroma_slack, chroma_slack}) {
+                const std::array<double, 3> corner =
+                    reference(bytes, coding, x, y, {cb, cr});
+                for (int c = 0; c < 3; ++c) {
+                  low[c] = std::min(low[c], corner[c]);
+                  high[c] = std::max(high[c], corner[c]);
+                }
               }
             }
           }
           for (int c = 0; c < 3; ++c) {
-            // The target holds linear light; the reference is R'G'B'.
-            const double got = vg_test::linear_to_srgb(
-                std::clamp(static_cast<double>(rgba[c]), 0.0, 1.0));
+            const double got = drew[c];
             const long drawn_code = std::lround(got * 255.0);
             const long low_code = std::lround(low[c] * 255.0);
             const long high_code = std::lround(high[c] * 255.0);
