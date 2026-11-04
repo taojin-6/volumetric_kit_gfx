@@ -473,17 +473,18 @@ TEST_F(TextureViewTest, MagnifiedEachPictureIsSharpSquares) {
 // --- Minified: the mean of the footprint ------------------------------------
 
 // Each pixel against the exact box mean, in linear light, of the picture
-// pixels under it, held to the picture's edge pixels past it, from an origin
-// off the pixel grid. At 1/2 the view reads the picture itself, and its mean
-// is that mean. At 1/8 it reads the pyramid, where a pyramid pixel the
+// pixels under it, held to the picture's edge pixels past it. At 1/2 the view
+// reads the picture itself, and its mean is that mean at any origin; so it is
+// at 1/16 from a whole origin, on a level the pyramid's blits build, whose
+// pixels the footprint's edges fall between, to the pyramid's 8-bit rounding.
+// Off the pyramid's grid, at 1/8 (level 1, which the view draws) and at 1/12
+// (level 2, a footprint that is not a power of two), a pyramid pixel the
 // footprint's edge cuts is taken as a whole, which shows only at sharp edges,
 // and more at the picture's edge, where the pyramid holds a footprint to its
 // own edge pixels. Each bound sits a little above the view's error on CI's
-// devices (lavapipe rounds the pyramid a little differently); at 1/8, below a
-// view's one level too coarse, and at the edge, below a view's whose reads
-// past the edge are not held. 1/8 alone fails a level too coarse, pyramid
-// reads not held to their level, equal box weights and a blurred level 1;
-// 1/2 also fails the weights, on the picture.
+// devices (lavapipe rounds the pyramid a little differently); off the grid,
+// below a view's one level too coarse, and at the edge, below a view's whose
+// reads past the edge are not held.
 TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
   constexpr VkExtent2D kSize{512, 256};
   const Rgb card = make_card(kSize.width, kSize.height);
@@ -504,10 +505,13 @@ TEST_F(TextureViewTest, MinifiedEachPixelIsTheMeanOfItsFootprint) {
       int edge_max;
       double edge_mean;
     };
+    const glm::vec2 whole{0.0f, 0.0f};
     const glm::vec2 off{0.3f, 0.6f};
     const Case cases[] = {
         {1.0f / 2, off, 2, 0.1, 2, 0.1},
         {1.0f / 8, off, 18, 1.0, 40, 3.4},
+        {1.0f / 16, whole, 1, 0.25, 1, 0.4},
+        {1.0f / 12, off, 15, 1.1, 20, 1.6},
     };
     for (const Case& c : cases) {
       SCOPED_TRACE(::testing::Message()

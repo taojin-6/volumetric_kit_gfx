@@ -795,8 +795,7 @@ TEST_F(ImageWriteTest, AnyNumberOfRegionsOfMixedSizes) {
 // each tile's color inside and black between. Each 4K picture is flat, filled
 // on the GPU ahead of the write, so none is made on the host. It is the one
 // test of a picture wider than 4096. Its time is the device's, so it skips
-// under a sanitizer, where the device is lavapipe and the same host code runs
-// at the small tiles' sizes; every other leg runs it.
+// under a sanitizer, where the same host code runs at the small tiles' sizes.
 TEST_F(ImageWriteTest, ATwoByTwoMosaicOf4KPictures) {
 #ifdef VKC_TEST_SANITIZED
   GTEST_SKIP() << "the 4K mosaic runs outside the sanitizers";

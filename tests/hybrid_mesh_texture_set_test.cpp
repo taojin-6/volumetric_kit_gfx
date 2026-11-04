@@ -714,7 +714,10 @@ TEST_F(HybridMeshTextureSetTest, TwoPlanePictureMatchesTheReference) {
           ? 1.0
           : 0.0;
 
-  int worst = 0;             // in rounded codes
+  // In rounded codes. A texel within a code of the plain reference counts
+  // against it alone, not the slack's range, so on a CPU device this may read
+  // 1 where the range would read 0; the verdict is the same.
+  int worst = 0;
   double worst_error = 0.0;  // before rounding, in codes, from the exact blend
   for (const Size& size : kSizes) {
     SCOPED_TRACE(size.name);

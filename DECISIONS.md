@@ -178,8 +178,10 @@ label; the workflows filter no tests.
   1:1 and 4:1 among them, which were `FitOneToOneAndMagnified`. The layouts
   on every screen are `ImagePanelTest`'s and `DockedPanelTest`'s, and a
   zoom's placement and clipping `TextureViewTest`'s.
-- `MinifiedEachPixelIsTheMeanOfItsFootprint` runs 1/2 and 1/8 off the grid,
-  of its 10 zooms and origins (the 2026-10-29 entry's figures).
+- `MinifiedEachPixelIsTheMeanOfItsFootprint` runs 4 of its 10 zooms and
+  origins: 1/2, 1/8 and 1/12 off the grid and 1/16 from a whole origin. They
+  read the picture, the level the view draws and a level the blits build, at
+  a footprint that is a power of two and one that is not.
 - `TwoPlanePictureMatchesTheReference` works out the chroma slack's corners
   only for a texel more than a code off the plain reference, which they hold:
   every texel passes or fails as before.
@@ -311,8 +313,8 @@ smaller draw reads the level where its footprint spans 4 pixels at most,
 about 5 x 5 reads. A pyramid pixel the footprint's edge cuts counts whole:
 off the pyramid's grid, at 1/5 to 1/12, that is 0.4-1.4 codes off on average
 and 26 at a sharp edge. *Amended 2026-11-04:* these figures are that day's
-measurements. The test holds the view to its bounds at 1/2 and 1/8 off the
-grid, not at 1/3 to 1/12 or from a whole origin (the 2026-11-04 test entry).
+measurements; the zooms the test holds the view to are in the 2026-11-04 test
+entry.
 
 **One `_SRGB` RGBA image a picture.** The view sees a set, not its form, so
 the pyramid holds what a draw shows, in one form: level 1 drawn by the view

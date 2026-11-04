@@ -7,8 +7,7 @@
 // chrome over them -- on the panel's design screens, one tall picture and
 // two wide ones, and on a desktop at fit, 1:1 and 4:1. Each frame checks
 // that the mesh stays in the scene, the pictures in their places and nothing
-// else in the panel. CI checks one of the frames. With VG_TEST_DUMP_DIR set,
-// every frame is checked and written there as a PPM, to look at.
+// else in the panel; OnTheDesignsScreens says which frames run.
 
 #include <gtest/gtest.h>
 
@@ -118,6 +117,8 @@ void write_ppm(const std::string& path, const uint8_t* rgba, VkExtent2D e) {
   for (size_t i = 0; i < size_t{e.width} * e.height; ++i) {
     out.write(reinterpret_cast<const char*>(rgba + 4 * i), 3);
   }
+  out.close();
+  EXPECT_FALSE(out.fail()) << "could not write " << path;
 }
 
 class TextureMapScreensTest : public vg_test::RendererDeviceTest,
@@ -368,7 +369,8 @@ class TextureMapScreensTest : public vg_test::RendererDeviceTest,
 // right, a safe area, the touch overlay): two pictures in one submit catch
 // one that drops some of its draws, which no other test does. Every screen's
 // layout is ImagePanelTest's and DockedPanelTest's to check, and a zoom's
-// placement and clipping TextureViewTest's.
+// placement and clipping TextureViewTest's. With VG_TEST_DUMP_DIR set to a
+// directory, every frame is checked and written there as a PPM, to look at.
 TEST_F(TextureMapScreensTest, OnTheDesignsScreens) {
   const bool every_frame = std::getenv("VG_TEST_DUMP_DIR") != nullptr;
   struct Pictures {

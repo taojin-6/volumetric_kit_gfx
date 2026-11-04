@@ -49,13 +49,14 @@ swapchain on a `CAMetalLayer`. A run that must not, such as an agent's,
 excludes it with `ctest -E metal_surface`; `GTEST_FILTER` does not, as ctest
 passes each test its own `--gtest_filter`.
 
-CI checks one frame of the texture map's design screens
-([DECISIONS.md](DECISIONS.md#2026-11-04--the-long-pipelines-tests-run-less-and-catch-the-same-bugs)).
 When `ImagePanel`, `DockedPanel` or the texture view's layout changes, check
-every frame and look at them, written to a directory of your choice:
+every frame of the texture map's design screens, not only CI's
+([DECISIONS.md](DECISIONS.md#2026-11-04--the-long-pipelines-tests-run-less-and-catch-the-same-bugs)),
+and look at them, written to a directory of your choice:
 
 ```sh
-VG_TEST_DUMP_DIR=<dir> "$gfx_root/build/tests/vg_pipelines_test" \
+mkdir -p <dir> && VG_TEST_DUMP_DIR=<dir> \
+  "$gfx_root/build/tests/vg_pipelines_test" \
   --gtest_filter='TextureMapScreensTest.*'
 ```
 
