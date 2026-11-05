@@ -96,7 +96,7 @@ class VG_CAMERA_API OrbitCamera {
   ///
   /// The deltas are world-unit distances in the current view plane (right / up
   /// derived from the present orientation); @ref drag_pan takes a drag on
-  /// screen instead.
+  /// screen instead. A move that would leave the target non-finite is ignored.
   void pan(float delta_right, float delta_up);
 
   /// @brief Move the eye toward or away from the target along the view ray.
@@ -135,7 +135,9 @@ class VG_CAMERA_API OrbitCamera {
   /// @param target  New world-space target.
   void set_target(const glm::vec3& target) noexcept { target_ = target; }
   /// @brief Set the eye's distance from the target.
-  /// @param distance  New radius; clamped to at least @ref kMinDistance.
+  /// @param distance  New radius; clamped to at least @ref kMinDistance. An
+  ///                  infinite one, here or from @ref dolly or @ref zoom, is
+  ///                  ignored.
   void set_distance(float distance) noexcept;
 
   /// @brief Set the world's up: the axis the camera turns about and keeps
@@ -144,7 +146,7 @@ class VG_CAMERA_API OrbitCamera {
   ///            tag world. Ignored when it has no finite, non-zero length.
   ///
   /// The target, distance and angles are kept, now measured about the new up,
-  /// so the view re-aims level at the same azimuth and elevation and the call
+  /// so the view re-aims at the same azimuth and elevation and the call
   /// commutes with @ref set_azimuth / @ref set_elevation. A target that depends
   /// on the up (a point above the floor) is the caller's to move.
   void set_world_up(const glm::vec3& up) noexcept;

@@ -53,12 +53,15 @@ cam::OrbitCamera oblique_orbit() {
   return orbit;
 }
 
-// oblique_orbit() upright and upside down, about +Y and about +Z.
+// oblique_orbit() upright and upside down, past the top pole and past the
+// bottom one, about +Y and about +Z.
 std::vector<cam::OrbitCamera> start_poses() {
   std::vector<cam::OrbitCamera> poses;
   for (const glm::vec3 up : {glm::vec3(0.0f, 1.0f, 0.0f),  //
                              glm::vec3(0.0f, 0.0f, 1.0f)}) {
-    for (const float elevation : {glm::radians(20.0f), glm::radians(160.0f)}) {
+    for (const float elevation :
+         {glm::radians(20.0f), glm::radians(160.0f), glm::radians(-20.0f),
+          glm::radians(-160.0f)}) {
       cam::OrbitCamera orbit = oblique_orbit();
       orbit.set_world_up(up);
       orbit.set_elevation(elevation);
@@ -572,14 +575,31 @@ TEST(OrbitCamera, ClosedDragLoopsReturnToTheStart) {
   }
 
   constexpr float kSideways = 0.2f;
-  cam::OrbitCamera crossing;
-  crossing.set_world_up({0.0f, 0.0f, 1.0f});
-  crossing.drag_orbit({0.0f, 0.6f});
-  crossing.drag_orbit({kSideways, 0.0f});
-  crossing.drag_orbit({0.0f, -0.6f});
-  crossing.drag_orbit({-kSideways, 0.0f});
-  EXPECT_NEAR(crossing.azimuth(), 2.0f * kSideways * glm::pi<float>(), 1e-5f);
-  EXPECT_NEAR(crossing.elevation(), 0.0f, 1e-5f);
+  for (const float over_a_pole : {0.6f, -0.6f}) {
+    SCOPED_TRACE(over_a_pole);
+    cam::OrbitCamera crossing;
+    crossing.set_world_up({0.0f, 0.0f, 1.0f});
+    crossing.drag_orbit({0.0f, over_a_pole});
+    crossing.drag_orbit({kSideways, 0.0f});
+    crossing.drag_orbit({0.0f, -over_a_pole});
+    crossing.drag_orbit({-kSideways, 0.0f});
+    EXPECT_NEAR(crossing.azimuth(), 2.0f * kSideways * glm::pi<float>(), 1e-5f);
+    EXPECT_NEAR(crossing.elevation(), 0.0f, 1e-5f);
+  }
+}
+
+// The yaw's sign comes from the elevation a call starts at, not the one it ends
+// at, on either way across a pole.
+TEST(OrbitCamera, OrbitTakesItsYawSignFromTheStartingElevation) {
+  cam::OrbitCamera orbit;
+  orbit.set_elevation(1.5f);
+  orbit.orbit(0.2f, 0.2f);
+  EXPECT_FLOAT_EQ(orbit.azimuth(), 0.2f);
+  EXPECT_FLOAT_EQ(orbit.elevation(), 1.7f);
+
+  orbit.orbit(0.2f, -0.2f);
+  EXPECT_NEAR(orbit.azimuth(), 0.0f, 1e-6f);
+  EXPECT_FLOAT_EQ(orbit.elevation(), 1.5f);
 }
 
 // A set up stands the scene upright: unit whatever the length given, the level
@@ -613,6 +633,27 @@ TEST(OrbitCamera, WorldUpStandsTheSceneUpright) {
   up_last.set_world_up(oblique);
   EXPECT_EQ(up_first.view(), up_last.view());
 
+  // The target stays too: one that depends on the up is the caller's to move.
+  cam::OrbitCamera keeps_target;
+  keeps_target.set_target({1.0f, 2.0f, 3.0f});
+  keeps_target.set_world_up(oblique);
+  EXPECT_EQ(keeps_target.target(), glm::vec3(1.0f, 2.0f, 3.0f));
+
+  // The heading off the exact axes: world +X's part across the up, up to where
+  // the up is about 1e-3 rad off X, and inside that the fallback's up x +Z.
+  const auto right_at = [](const glm::vec3& up) {
+    cam::OrbitCamera at;
+    at.set_world_up(up);
+    return view_axes(at).right;
+  };
+  const glm::vec3 tilted = glm::normalize(glm::vec3(0.3f, -0.9f, 0.3f));
+  expect_vec_near(
+      right_at(tilted),
+      glm::normalize(glm::vec3(1.0f, 0.0f, 0.0f) - tilted.x * tilted), 1e-6f);
+  expect_vec_near(right_at({std::cos(0.01f), 0.0f, std::sin(0.01f)}),
+                  {std::sin(0.01f), 0.0f, -std::cos(0.01f)}, 1e-6f);
+  expect_vec_near(right_at({1.0f, 0.0f, 1e-4f}), {0.0f, -1.0f, 0.0f}, 1e-6f);
+
   constexpr float kInf = std::numeric_limits<float>::infinity();
   constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   for (const glm::vec3 bad :
@@ -621,6 +662,21 @@ TEST(OrbitCamera, WorldUpStandsTheSceneUpright) {
     SCOPED_TRACE(testing::Message() << bad.x << ", " << bad.y << ", " << bad.z);
     orbit.set_world_up(bad);
     EXPECT_EQ(orbit.world_up(), glm::vec3(0.0f, 0.0f, 1.0f));
+  }
+
+  // Any length, down to the smallest float and up to the largest.
+  for (const float length :
+       {std::numeric_limits<float>::denorm_min(), 3e-23f, 1e-22f, 1e30f,
+        std::numeric_limits<float>::max()}) {
+    for (const glm::vec3 axis :
+         {glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f),
+          glm::vec3(0.0f, 0.0f, 1.0f)}) {
+      SCOPED_TRACE(testing::Message() << length << " along " << axis.x << ", "
+                                      << axis.y << ", " << axis.z);
+      cam::OrbitCamera any_length;
+      any_length.set_world_up(length * axis);
+      EXPECT_EQ(any_length.world_up(), axis);
+    }
   }
 
   for (const float sign : {1.0f, -1.0f}) {
@@ -636,6 +692,30 @@ TEST(OrbitCamera, WorldUpStandsTheSceneUpright) {
     expect_vec_near(glm::cross(up, glm::vec3(0.0f, 0.0f, 1.0f)), axes.right,
                     1e-6f);
     expect_vec_near(along_x.eye() - along_x.target(), axes.back, 1e-6f);
+  }
+}
+
+// An up near +-X keeps the camera's right across it, also just outside the
+// rule's fallback, where X - up.x * up cancels in float.
+TEST(OrbitCamera, RightStaysAcrossAnUpNearX) {
+  constexpr int kAround = 64;
+  for (const float off_x : {1e-4f, 1.01e-3f, 2e-3f, 1e-2f, 3e-2f}) {
+    for (const float sign : {1.0f, -1.0f}) {
+      for (int step = 0; step < kAround; ++step) {
+        const float around = glm::two_pi<float>() * static_cast<float>(step) /
+                             static_cast<float>(kAround);
+        const glm::vec3 up(sign * std::cos(off_x),
+                           std::sin(off_x) * std::cos(around),
+                           std::sin(off_x) * std::sin(around));
+        SCOPED_TRACE(testing::Message()
+                     << up.x << ", " << up.y << ", " << up.z);
+        cam::OrbitCamera orbit;
+        orbit.set_world_up(up);
+        const Axes axes = view_axes(orbit);
+        EXPECT_NEAR(glm::dot(axes.right, orbit.world_up()), 0.0f, 1e-6f);
+        EXPECT_NEAR(glm::length(axes.back), 1.0f, 1e-6f);
+      }
+    }
   }
 }
 
@@ -747,6 +827,43 @@ TEST(OrbitCamera, DragsIgnoreNonFiniteInput) {
   expect_unchanged(orbit);
   orbit.orbit(1e-25f, 0.0f);
   expect_unchanged(orbit);
+}
+
+// A move that would leave the target or the distance non-finite is ignored, by
+// any verb and also when its deltas are finite, so a later good move still
+// works.
+TEST(OrbitCamera, MovesToANonFiniteStateAreIgnored) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  constexpr float kMax = std::numeric_limits<float>::max();
+  const cam::OrbitCamera start = oblique_orbit();
+  for (const glm::vec2 delta :
+       {glm::vec2(kNan, 0.0f), glm::vec2(0.0f, kNan), glm::vec2(kInf, 0.0f),
+        glm::vec2(0.0f, -kInf)}) {
+    SCOPED_TRACE(testing::Message() << delta.x << ", " << delta.y);
+    cam::OrbitCamera orbit = start;
+    orbit.pan(delta.x, delta.y);
+    EXPECT_EQ(orbit.target(), start.target());
+  }
+
+  cam::OrbitCamera panned;
+  panned.pan(kMax, kMax);
+  const glm::vec3 reached = panned.target();
+  panned.pan(kMax, kMax);
+  EXPECT_EQ(panned.target(), reached);
+  panned.pan(-kMax, -kMax);
+  EXPECT_NE(panned.target(), reached);
+
+  cam::OrbitCamera orbit = start;
+  orbit.set_distance(kInf);
+  EXPECT_EQ(orbit.distance(), start.distance());
+  orbit.dolly(kInf);
+  EXPECT_EQ(orbit.distance(), start.distance());
+  orbit.zoom(kMax);
+  EXPECT_EQ(orbit.distance(), start.distance());
+  EXPECT_TRUE(orbit.view() == start.view());
+  orbit.zoom(0.5f);
+  EXPECT_FLOAT_EQ(orbit.distance(), 0.5f * start.distance());
 }
 
 // A wheel notch in, then one out, returns to the start distance.

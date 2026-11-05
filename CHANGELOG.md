@@ -311,9 +311,11 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
   the scene follows the pointer on both sides, and the view never rolls.
   `orbit` takes a yaw and a pitch, and subtracts the yaw from `azimuth` past a
   pole. `orbit`, `set_azimuth` and `set_elevation` keep both angles in
-  `[-pi, pi]` and ignore a non-finite one. With a +Y up, an elevation under
-  `pi / 2` gives the view it gave; a call site needs no change. A drag loop that
-  crosses a pole does not come back to its heading, and exactly at a pole a
+  `[-pi, pi]` and ignore a non-finite one. `pan` ignores a move that would leave
+  the target non-finite, and `set_distance`, `dolly` and `zoom` one that would
+  leave the distance infinite. With a +Y up, an elevation under the old stop,
+  89.5 deg, gives the view it gave; a call site needs no change. A drag loop
+  that crosses a pole does not come back to its heading, and exactly at a pole a
   sideways drag spins the picture in place.
 - `core`: **a `RenderTarget` above one sample needs its resolves.** One
   built without them, or a scope on one that loads or stores depth, used to
