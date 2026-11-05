@@ -4,12 +4,14 @@
 #pragma once
 
 /// @file orbit_camera.hpp
-/// @brief A turntable controller that orbits, pans, and dollies around a point.
+/// @brief A free turntable that orbits, pans and dollies around a point.
 ///
-/// @ref OrbitCamera holds the *state* a turntable / "arcball-lite" interaction
-/// drives -- a `target` point and a spherical offset `{distance, azimuth,
-/// elevation}` -- and derives the eye position and view matrix from it. It owns
-/// no GPU resources and depends only on glm. Feed drags into @ref drag_orbit /
+/// @ref OrbitCamera holds a `target`, a `distance`, the world's up and two
+/// angles about it, and derives the eye and the view matrix from them. Drags
+/// turn the eye about the world's up (yaw) and about the camera's own right
+/// (pitch) with no stop: the eye passes over the top and under the bottom,
+/// where the picture is upside down, and the view never rolls. It owns no GPU
+/// resources and depends only on glm. Feed drags into @ref drag_orbit /
 /// @ref drag_pan and wheel notches or a pinch into @ref zoom (or angles and
 /// world units into @ref orbit / @ref pan / @ref dolly), then read @ref view or
 /// bake a full @ref to_camera (adding a projection) for submission.
@@ -25,42 +27,39 @@
 
 namespace volumetric_kit::gfx::camera {
 
-/// @brief Turntable camera state: a target plus a spherical offset to the eye.
+/// @brief Free-turntable state: a target, a distance, the world's up and two
+///        angles about it.
 ///
-/// The eye sits on a sphere of radius @ref distance around @ref target, at
-/// @ref azimuth (yaw, radians, around world +Y) and @ref elevation (pitch,
-/// radians, measured from the horizontal plane). At `azimuth == 0,
-/// elevation == 0` the eye is directly in front of the target on +Z, looking
-/// toward -Z, with world +Y up. The offset follows the camera tier's shared
-/// parametrization (@ref spherical_direction) -- the same angles, negated,
-/// that level @ref CameraRig's look ray -- so the two controllers agree on
-/// angle signs by construction.
+/// At `azimuth == 0, elevation == 0` the camera is level and world +X (its
+/// part across the up; `up x +Z` for an up along x) points right on screen.
+/// With the default +Y up the eye is on +Z looking toward -Z; with +Z up, on
+/// the -Y side looking toward +Y; with -Y up, on the -Z side looking toward +Z.
 ///
-/// @ref elevation is clamped just shy of the poles (@ref kMaxElevation) so the
-/// view direction never becomes parallel to world up -- which would collapse
-/// the look-at basis (gimbal flip). The world up is +Y.
+/// Neither angle is clamped; both are kept in `[-pi, pi]`. Past
+/// `|elevation| == pi / 2` the eye has gone over a pole and the picture is
+/// upside down. The camera's right stays across the world's up, so the view
+/// never rolls; the view is built from the angles, not a look-at, so it is
+/// defined at the poles too.
+///
+/// The camera is a value: keep a copy of the start pose and assign it back to
+/// reset the view.
 ///
 /// @code
 /// using namespace volumetric_kit::gfx::camera;
 /// OrbitCamera orbit;
-/// orbit.set_target({0, 0, 0});
-/// orbit.set_distance(5.0f);
+/// orbit.set_world_up({0, 0, 1});     // the stream's world: +z up
+/// orbit.set_target({0, 0, 0.85f});
+/// orbit.set_distance(3.0f);
+/// const OrbitCamera home = orbit;    // the start view
 /// const glm::vec2 drag = (cursor - last_cursor) / viewport_height;
 /// orbit.drag_orbit(drag);                                     // left drag
 /// orbit.drag_pan(drag, fovy);                                 // right drag
 /// orbit.zoom(std::pow(OrbitCamera::kZoomPerNotch, notches));  // wheel
+/// if (double_click) orbit = home;                             // reset
 /// Camera cam = orbit.to_camera(fovy, 16.0f / 9, 0.1f, 100.0f);
 /// @endcode
 class VG_CAMERA_API OrbitCamera {
  public:
-  /// @brief Elevation clamp magnitude: just under a quarter turn (`~89.5°`).
-  ///
-  /// @ref elevation is held in `[-kMaxElevation, +kMaxElevation]` so the eye
-  /// never reaches a pole, where `forward` would align with world up and the
-  /// look-at basis would degenerate. Shares the camera tier's
-  /// @ref kPoleClampRadians with @ref CameraRig::kMaxPitch.
-  static constexpr float kMaxElevation = kPoleClampRadians;
-
   /// @brief Smallest allowed @ref distance, so the eye cannot reach the target.
   ///        Shares the camera tier's @ref kMinPivotDistance with
   ///        @ref CameraRig::kMinFocusDistance.
@@ -72,22 +71,28 @@ class VG_CAMERA_API OrbitCamera {
   /// @brief One wheel notch's zoom: `zoom(std::pow(kZoomPerNotch, notches))`.
   static constexpr float kZoomPerNotch = 0.9f;
 
-  /// Construct a default controller: target at the origin, unit distance,
-  /// azimuth and elevation zero (eye in front on +Z).
+  /// Target at the origin, unit distance, world +Y up, angles zero (eye on +Z).
   OrbitCamera() = default;
 
-  /// @brief Rotate the eye around the target.
-  /// @param delta_azimuth    Yaw change, in radians (added to @ref azimuth).
-  /// @param delta_elevation  Pitch change, in radians; the result is clamped to
-  ///                         `[-kMaxElevation, +kMaxElevation]`.
-  void orbit(float delta_azimuth, float delta_elevation);
+  /// @brief Turn the eye around the target.
+  /// @param delta_yaw    Radians about @ref world_up; `+` swings the eye toward
+  ///                     the camera's right. Past a pole it is subtracted from
+  ///                     @ref azimuth, so that stays true; the sign is chosen
+  ///                     per call from the current elevation.
+  /// @param delta_pitch  Radians about the camera's right, added to
+  ///                     @ref elevation; `+` swings the eye toward the camera's
+  ///                     up. Not clamped.
+  ///
+  /// A non-finite delta is ignored. A zero delta changes nothing.
+  void orbit(float delta_yaw, float delta_pitch);
 
   /// @brief Slide the target (and the eye with it) in the view plane.
   /// @param delta_right  Motion along the camera's right axis, in world units;
   ///                     `+` moves the target right, so the scene appears to
   ///                     move left.
   /// @param delta_up     Motion along the camera's up axis, in world units; `+`
-  ///                     moves the target up.
+  ///                     moves the target up on screen, also when the picture
+  ///                     is upside down.
   ///
   /// The deltas are world-unit distances in the current view plane (right / up
   /// derived from the present orientation); @ref drag_pan takes a drag on
@@ -107,13 +112,15 @@ class VG_CAMERA_API OrbitCamera {
   ///                non-positive factor (a pinch can report 0) is ignored.
   void zoom(float factor);
 
-  /// @brief Orbit by a drag; the scene follows the pointer.
+  /// @brief Orbit by a drag; the scene follows the pointer, upright or upside
+  ///        down.
   /// @param drag  The move in viewport heights, +x right, +y down: a cursor or
   ///              finger delta over the viewport's height in the same unit, so
   ///              window pixels, framebuffer pixels and UIKit points agree.
   ///
-  /// The elevation is clamped as in @ref orbit. A non-finite drag (a delta
-  /// over a zero height) is ignored.
+  /// @ref kDragRadians per height on both axes: a drag down raises the eye;
+  /// half a height from level reaches the top pole, one height the far side. A
+  /// non-finite drag (a delta over a zero height) is ignored.
   void drag_orbit(glm::vec2 drag);
 
   /// @brief Pan by a drag; the point at the target's depth stays under it.
@@ -130,18 +137,32 @@ class VG_CAMERA_API OrbitCamera {
   /// @brief Set the eye's distance from the target.
   /// @param distance  New radius; clamped to at least @ref kMinDistance.
   void set_distance(float distance) noexcept;
-  /// @brief Set the yaw angle.
-  /// @param azimuth  New azimuth, in radians.
-  void set_azimuth(float azimuth) noexcept { azimuth_ = azimuth; }
-  /// @brief Set the pitch angle.
-  /// @param elevation  New elevation, in radians; clamped to
-  ///                   `[-kMaxElevation, +kMaxElevation]`.
+
+  /// @brief Set the world's up: the axis the camera turns about and keeps
+  ///        upright on screen.
+  /// @param up  Any length: +Y for normalized mesh sequences, +Z for a rig's
+  ///            tag world. Ignored when it has no finite, non-zero length.
+  ///
+  /// The target, distance and angles are kept, now measured about the new up,
+  /// so the view re-aims level at the same azimuth and elevation and the call
+  /// commutes with @ref set_azimuth / @ref set_elevation. A target that depends
+  /// on the up (a point above the floor) is the caller's to move.
+  void set_world_up(const glm::vec3& up) noexcept;
+
+  /// @brief Set the yaw about @ref world_up.
+  /// @param azimuth  Radians, kept in `[-pi, pi]`; non-finite is ignored.
+  void set_azimuth(float azimuth) noexcept;
+  /// @brief Set the pitch above the plane across @ref world_up.
+  /// @param elevation  Radians, kept in `[-pi, pi]`; beyond `+-pi / 2` the eye
+  ///                   is past a pole, upside down; non-finite is ignored.
   void set_elevation(float elevation) noexcept;
 
   /// @return The world-space point the camera orbits.
   const glm::vec3& target() const noexcept { return target_; }
   /// @return The eye's distance from the target.
   float distance() const noexcept { return distance_; }
+  /// @return The unit world up.
+  const glm::vec3& world_up() const noexcept { return world_up_; }
   /// @return The yaw angle, in radians.
   float azimuth() const noexcept { return azimuth_; }
   /// @return The pitch angle, in radians.
@@ -150,8 +171,8 @@ class VG_CAMERA_API OrbitCamera {
   /// @return The world-space eye position derived from the current state.
   glm::vec3 eye() const;
 
-  /// @return The world->view matrix looking from @ref eye at @ref target with
-  ///         world +Y up.
+  /// @return The world->view matrix: the camera's right, up and back axes as
+  ///         its rows. Defined at every angle, the poles included.
   glm::mat4 view() const;
 
   /// @brief Bake a @ref Camera by pairing this view with a perspective frustum.
@@ -166,6 +187,7 @@ class VG_CAMERA_API OrbitCamera {
  private:
   glm::vec3 target_ = glm::vec3(0.0f);
   float distance_ = 1.0f;
+  glm::vec3 world_up_ = kWorldUp;
   float azimuth_ = 0.0f;
   float elevation_ = 0.0f;
 };

@@ -67,8 +67,7 @@ class VG_CAMERA_API CameraRig {
   /// The look direction's elevation is held in `[-kMaxPitch, +kMaxPitch]` so it
   /// never reaches a pole, where `forward` would align with world up and the
   /// level-horizon basis would degenerate. Ignored when @ref level_horizon is
-  /// cleared. Shares the camera tier's @ref kPoleClampRadians with
-  /// @ref OrbitCamera::kMaxElevation.
+  /// cleared.
   static constexpr float kMaxPitch = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref focus_distance, so the pivot never reaches

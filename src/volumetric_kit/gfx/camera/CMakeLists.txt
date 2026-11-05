@@ -3,11 +3,11 @@
 
 # --- gfx_camera: camera tier -------------------------------------------------
 # Pure-CPU view + projection math: Camera (Vulkan-clip-space view/projection),
-# OrbitCamera (turntable controls), and CameraRig (6-DoF verb-driven pose). Its
-# only dependency is glm; it links neither gfx_core nor Vulkan, so it is the one
-# tier that builds and tests with no Vulkan device or loader present. The strict
-# tier rule (depend only on tiers to the left) is satisfied trivially: it
-# depends on no other tier.
+# OrbitCamera (free turntable), and CameraRig (6-DoF verb-driven pose). Its only
+# dependency is glm; it links neither gfx_core nor Vulkan, so it is the one tier
+# that builds and tests with no Vulkan device or loader present. The strict tier
+# rule (depend only on tiers to the left) is satisfied trivially: it depends on
+# no other tier.
 include(GenerateExportHeader)
 
 set(_vg_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
