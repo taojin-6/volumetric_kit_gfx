@@ -190,10 +190,9 @@ and -Y, and singular only near +-X. A +Y up keeps the camera's first view; a +Z 
 puts the eye on the -Y side.
 
 **Angles, not a quaternion.** Yaw about the up and pitch about the right are
-additions to two angles: in a float32 prototype one step matched the quaternion
-form to 8.3e-7. Angles have no NaN path on a zero drag and no roll drift (4.5e-7
-against 4-5e-5 after about 1e6 drags), and `set_azimuth` and `set_elevation` stay,
-so call sites compile unchanged.
+additions to two angles. Angles have no NaN path on a zero drag and no roll drift:
+the axes are rebuilt from them on every call, so nothing accumulates. And
+`set_azimuth` and `set_elevation` stay, so call sites compile unchanged.
 
 **A reset is a copy.** The camera is a value, so a caller keeps its start pose and
 assigns it back; there is no reset to name a home.
