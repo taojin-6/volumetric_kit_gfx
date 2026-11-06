@@ -67,8 +67,7 @@ class VG_CAMERA_API CameraRig {
   /// The look direction's elevation is held in `[-kMaxPitch, +kMaxPitch]` so it
   /// never reaches a pole, where `forward` would align with world up and the
   /// level-horizon basis would degenerate. Ignored when @ref level_horizon is
-  /// cleared. Shares the camera tier's @ref kPoleClampRadians with
-  /// @ref OrbitCamera::kMaxElevation.
+  /// cleared.
   static constexpr float kMaxPitch = kPoleClampRadians;
 
   /// @brief Smallest allowed @ref focus_distance, so the pivot never reaches
@@ -91,8 +90,9 @@ class VG_CAMERA_API CameraRig {
   ///
   /// @ref focus_point and @ref focus_distance are preserved: the eye moves
   /// along a sphere around the pivot while the look direction stays aimed at
-  /// it. The yaw/pitch signs are @ref OrbitCamera's by construction: both
-  /// controllers build on the shared @ref spherical_direction parametrization.
+  /// it. The yaw/pitch signs are an upright @ref OrbitCamera's by construction:
+  /// both controllers build on the shared @ref spherical_direction
+  /// parametrization.
   void orbit(float delta_yaw, float delta_pitch);
 
   /// @brief Rotate the look direction in place, leaving @ref position fixed

@@ -4,17 +4,18 @@
 #pragma once
 
 /// @file orientation.hpp
-/// @brief Shared controller math for the camera tier -- the world-up axis, the
-///        pole-clamp and min-gap constants, the roll-free basis, the spherical
-///        parametrization, the pivot-distance clamp, and the Camera baking.
+/// @brief Controller math for the camera tier -- the min-gap constant, the
+///        spherical parametrization, the pivot-distance clamp and the Camera
+///        baking they share, and @ref volumetric_kit::gfx::camera::CameraRig's
+///        world up, pole clamp and roll-free basis.
 ///
 /// @ref volumetric_kit::gfx::camera::CameraRig and @ref
 /// volumetric_kit::gfx::camera::OrbitCamera drive the same motion verbs over
-/// different state (a quaternion pose vs. spherical angles). These are the
-/// pieces they have in common, defined once so the controllers agree on which
-/// axis is "up", how close to the pole they clamp, what the spherical angles
-/// mean, and how a distance write survives a NaN -- structurally, rather than
-/// by keeping two copies of the math in step.
+/// different state (a quaternion pose vs. spherical angles). The shared pieces
+/// are defined once so the controllers agree on what the spherical angles mean
+/// and how a distance write survives a NaN -- structurally, rather than by
+/// keeping two copies of the math in step. They do not share an up or a clamp:
+/// the orbit camera's up is settable and its angles have no stop.
 ///
 /// Internal header (`impl/`); consumers include `camera_rig.hpp` /
 /// `orbit_camera.hpp`, which pull this in.
@@ -31,11 +32,11 @@
 
 namespace volumetric_kit::gfx::camera {
 
-/// World up for the whole camera tier: the axis the level-horizon basis keeps
-/// level and the elevation poles live on.
+/// @ref CameraRig's world up: the axis its level-horizon basis keeps level and
+/// its pitch poles live on. Also the up an @ref OrbitCamera starts with.
 inline constexpr glm::vec3 kWorldUp(0.0f, 1.0f, 0.0f);
 
-/// Pole-clamp magnitude: the vertical angle (pitch / elevation) is held in
+/// @ref CameraRig's pole clamp: its pitch in level-horizon mode is held in
 /// `[-kPoleClampRadians, +kPoleClampRadians]`, just shy of a quarter turn, so
 /// `forward` never aligns with @ref kWorldUp and the level basis never
 /// degenerates.
@@ -58,21 +59,23 @@ inline float clamp_pivot_distance(float distance) noexcept {
   return std::max(kMinPivotDistance, distance);
 }
 
-/// @brief The unit direction at `azimuth` about @ref kWorldUp and `elevation`
-///        above the horizontal, anchored on world +Z.
-/// @param azimuth    Yaw, in radians: 0 points along world +Z; a positive turn
-///                   swings toward world +X.
+/// @brief The unit direction at `azimuth` about +Y and `elevation` above the
+///        horizontal, anchored on +Z.
+/// @param azimuth    Yaw, in radians: 0 points along +Z; a positive turn swings
+///                   toward +X.
 /// @param elevation  Pitch, in radians: 0 is horizontal; positive lifts toward
-///                   @ref kWorldUp.
+///                   +Y.
 /// @return The unit direction for those angles.
 ///
 /// One parametrization serves both controllers, negated between them:
-/// @ref OrbitCamera offsets its eye *along* it (`eye = target + distance *
-/// spherical_direction(azimuth, elevation)`), while @ref CameraRig's level look
-/// ray runs *back down* it (`forward = -spherical_direction(yaw, -elevation)`,
-/// so forward is world -Z at rest). Negating both the vector and the elevation
-/// keeps the vertical sense shared: the pitch that tilts a rig's view down is
-/// the elevation that raises a turntable eye.
+/// @ref OrbitCamera offsets its eye *along* it, in the level frame of its up
+/// (`eye = target + distance * level_frame * spherical_direction(azimuth,
+/// elevation)`; with a +Y up that frame is the identity), while @ref
+/// CameraRig's level look ray runs *back down* it (`forward =
+/// -spherical_direction(yaw, -elevation)`, so forward is world -Z at rest).
+/// Negating both the vector and the elevation keeps the vertical sense shared:
+/// the pitch that tilts a rig's view down is the elevation that raises a
+/// turntable eye.
 inline glm::vec3 spherical_direction(float azimuth, float elevation) {
   const float cos_elevation = std::cos(elevation);
   return glm::vec3(cos_elevation * std::sin(azimuth), std::sin(elevation),
@@ -85,8 +88,8 @@ struct LevelBasis {
   glm::vec3 up;     ///< Up axis completing the right-handed basis.
 };
 
-/// @brief Derive the roll-free @ref LevelBasis for a forward direction, world
-///        +Y up.
+/// @brief Derive @ref CameraRig's roll-free @ref LevelBasis for a forward
+///        direction, world +Y up.
 /// @param forward  View direction; need not be unit length.
 /// @return `right` horizontal (perpendicular to @ref kWorldUp), `up` completing
 ///         the basis. Pole-safe: if @p forward is (anti)parallel to

@@ -160,6 +160,51 @@ what has landed since then. Record amendments when a contract changes.
   draw unless a frame sets `kHybridMeshCullBackFaces` (dynamic cull mode);
   `kHybridMeshWireframe` draws the edges alone, a depth-only pass then a depth-biased line
   pass, where the device enabled `fillModeNonSolid`. See the dated entry below.
+- **2026-11-05 — The orbit camera is a free turntable with a settable up.**
+  `camera::OrbitCamera` turns about the world's up and its own right with no stop and never
+  rolls; the caller sets the up, +Y by default. See the dated entry below.
+
+## 2026-11-05 — The orbit camera is a free turntable with a settable up
+
+**The contract.** `OrbitCamera` holds a target, a distance, a unit up and two
+angles in `[-pi, pi]`. A sideways drag turns the eye about the up and a vertical
+one about the camera's right, with no stop. Past a pole the picture is upside
+down, the scene still follows the pointer, and the view never rolls. The view is
+built from the angles, not a look-at, so it is defined at the poles.
+
+**A turntable, not a trackball.** A trackball turns about the camera's own up,
+so a drag loop rolls the horizon and nothing brings it back. Turning about the
+world's up keeps the camera's right across it, so verticals stay parallel to the
+screen's columns on both sides of a pole.
+
+**The yaw's sign is per call.** Past a pole a rising azimuth moves the eye against
+the camera's right, so `orbit` subtracts the yaw there, choosing from the current
+elevation on each call. A drag stays continuous through a pole. The price: a drag
+loop that crosses a pole does not come back to its heading, as its sideways legs
+add, and exactly at a pole a sideways drag spins the picture in place. A loop
+that crosses no pole returns to its start.
+
+**The heading rule.** At azimuth 0, the part of world +X across the up points
+right on screen (`up x +Z` for an up along x). The rule is continuous near +Y, +Z
+and -Y, and singular only near +-X. A +Y up keeps the camera's first view; a +Z up
+puts the eye on the -Y side.
+
+**Angles, not a quaternion.** Yaw about the up and pitch about the right are
+additions to two angles. Angles have no NaN path on a zero drag and no roll drift:
+the axes are rebuilt from them on every call, so nothing accumulates. And
+`set_azimuth` and `set_elevation` stay, so call sites compile unchanged.
+
+**A reset is a copy.** The camera is a value, so a caller keeps its start pose and
+assigns it back; there is no reset to name a home.
+
+**The up is the caller's.** The camera takes the up as a direction and reads no
+stream or calibration. It keeps the target and the angles when the up changes, and
+a target that depends on the up, such as a point above the floor, is the caller's
+to move.
+
+**`CameraRig` keeps its own.** Its pose, its level mode about `kWorldUp` and its
+pitch clamp do not change, so the two controllers no longer share an up or a
+clamp. Its one user draws +Y glTF models, so a settable up has no second use there.
 
 ## 2026-11-04 — The long pipelines tests run less and catch the same bugs
 
@@ -609,7 +654,9 @@ TODO (`calib_rig.cpp`) records.
 **Why OrbitCamera stays.** It is the turntable controller, no longer waiting
 to fold into `CameraRig`: its users -- calib's 3D view, and the player's --
 set and read a target, a distance and two angles, and a fold would change
-their code for no new behaviour.
+their code for no new behaviour. *Amended 2026-11-05:* it is a free turntable
+now, with a settable up and no pole clamp, which `CameraRig` does not have ("The
+orbit camera is a free turntable", above).
 
 ## 2026-10-19 — ImGui's colours as authored
 

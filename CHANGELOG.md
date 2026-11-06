@@ -8,6 +8,7 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Removed
 
+- `camera`: `OrbitCamera::kMaxElevation`: the camera has no stop.
 - **gfx installs nothing.** Its install rules, `VG_INSTALL` and the
   `volumetric_kit_gfx` package config are gone: fetch gfx pinned by commit
   (README.md, "Use it in your project"), as the player and the iOS app do.
@@ -38,6 +39,8 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Added
 
+- `camera`: `OrbitCamera::set_world_up` and `world_up`: the axis the camera
+  turns about and keeps upright on screen, +Y by default.
 - `pipelines`: **back faces and wireframe for `HybridMeshPipeline`,** two
   `HybridMeshFlags`. `kHybridMeshCullBackFaces` culls back faces for a frame;
   without it both sides draw, as before. `kHybridMeshWireframe` draws the
@@ -303,6 +306,17 @@ All notable changes to `volumetric_kit_gfx` are documented here. The format foll
 
 ### Changed
 
+- `camera`: **`OrbitCamera` is a free turntable.** A drag has no stop: the eye
+  passes over the top and under the bottom, where the picture is upside down,
+  the scene follows the pointer on both sides, and the view never rolls.
+  `orbit` takes a yaw and a pitch, and subtracts the yaw from `azimuth` past a
+  pole. `orbit`, `set_azimuth` and `set_elevation` keep both angles in
+  `[-pi, pi]` and ignore a non-finite one. `pan` ignores a move that would leave
+  the target non-finite, and `set_distance`, `dolly` and `zoom` one that would
+  leave the distance infinite. With a +Y up, an elevation under the old stop,
+  89.5 deg, gives the view it gave; a call site needs no change. A drag loop
+  that crosses a pole does not come back to its heading, and exactly at a pole a
+  sideways drag spins the picture in place.
 - `core`: **a `RenderTarget` above one sample needs its resolves.** One
   built without them, or a scope on one that loads or stores depth, used to
   be accepted and now aborts (`VKC_CHECK`). `ImagePipeline::create` and
